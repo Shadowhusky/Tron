@@ -78,11 +78,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
 
     term.focus();
 
-    // Cmd+K to clear
+    // Custom key handling — intercept before xterm consumes them
     term.attachCustomKeyEventHandler((e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         term.clear();
-        return false; // Prevent default
+        return false;
+      }
+      // Let Cmd+. pass through to window handler (toggle agent panel)
+      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+        return false;
       }
       return true;
     });
@@ -126,7 +130,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
     setTimeout(performResize, 50);
     setTimeout(performResize, 250);
 
-    // Restore History — skip if this session was already initialized (prevents duplication on remount from split)
+    // Restore History from main process (contains full scrollback for reconnected sessions)
     if (window.electron && !initializedSessions.has(sessionId)) {
       initializedSessions.add(sessionId);
       window.electron.ipcRenderer

@@ -122,7 +122,109 @@ class AIService {
     return history;
   }
 
-  async generateCommand(prompt: string): Promise<string> {
+  /** Stream an Ollama /api/generate response, calling onToken for each chunk. Returns full text. */
+  private async streamOllamaGenerate(
+    baseUrl: string,
+    model: string,
+    prompt: string,
+    onToken?: (token: string, thinking?: string) => void,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const response = await fetch(
+      `${baseUrl}/api/generate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, prompt, stream: true, think: true }),
+        signal,
+      },
+    );
+    if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
+    if (!response.body) throw new Error("No response body for streaming");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const chunk = JSON.parse(line);
+          if (chunk.thinking && onToken) onToken("", chunk.thinking);
+          if (chunk.response) {
+            fullText += chunk.response;
+            if (onToken) onToken(chunk.response);
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    return fullText;
+  }
+
+  /** Stream an Ollama /api/chat response. Returns content and thinking text. */
+  private async streamOllamaChat(
+    baseUrl: string,
+    model: string,
+    messages: any[],
+    onToken?: (token: string, thinking?: string) => void,
+    signal?: AbortSignal,
+    format?: string,
+    think: boolean = true,
+  ): Promise<{ content: string; thinking: string }> {
+    const body: any = { model, messages, stream: true, think };
+    if (format) body.format = format;
+
+    const response = await fetch(
+      `${baseUrl}/api/chat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      },
+    );
+    if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
+    if (!response.body) throw new Error("No response body for streaming");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+    let thinkingText = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const chunk = JSON.parse(line);
+          const msg = chunk.message;
+          if (msg?.thinking) {
+            thinkingText += msg.thinking;
+            if (onToken) onToken("", msg.thinking);
+          }
+          if (msg?.content) {
+            fullText += msg.content;
+            if (onToken) onToken(msg.content);
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    return { content: fullText, thinking: thinkingText };
+  }
+
+  async generateCommand(prompt: string, onToken?: (token: string) => void): Promise<string> {
     const { provider, model, apiKey, baseUrl } = this.config;
 
     const systemPrompt = `You are a terminal assistant. The user wants to perform a task. Output ONLY the exact command to run. No markdown, no explanation. If the task is simple, output a single command. If it requires multiple steps, output only the FIRST step. User OS: ${navigator.platform}.`;
@@ -130,36 +232,18 @@ class AIService {
     try {
       if (provider === "ollama") {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout check
+        const timeout = setTimeout(() => controller.abort(), 15000);
 
         try {
-          const response = await fetch(
-            `${baseUrl || "http://localhost:11434"}/api/generate`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: model,
-                prompt: `${systemPrompt}\n\nUser request: ${prompt}\nCommand:`,
-                stream: false,
-              }),
-              signal: controller.signal,
-            },
+          const result = await this.streamOllamaGenerate(
+            baseUrl || "http://localhost:11434",
+            model,
+            `${systemPrompt}\n\nUser request: ${prompt}\nCommand:`,
+            onToken ? (token) => onToken(token) : undefined,
+            controller.signal,
           );
           clearTimeout(timeout);
-
-          if (!response.ok) {
-            throw new Error(
-              `Ollama Error: ${response.status} ${response.statusText}`,
-            );
-          }
-
-          const data = await response.json();
-          if (!data || typeof data.response !== "string") {
-            console.error("Invalid Ollama response:", data);
-            throw new Error("Invalid response format from Ollama");
-          }
-          return data.response.trim();
+          return result.trim();
         } catch (fetchError: any) {
           clearTimeout(timeout);
           if (fetchError.name === "AbortError")
@@ -315,11 +399,10 @@ class AIService {
     onUpdate: (step: string, output: string) => void,
     sessionConfig?: AIConfig,
     signal?: AbortSignal,
+    thinkingEnabled: boolean = true,
   ): Promise<AgentResult> {
     const { provider, model, baseUrl } = sessionConfig || this.config;
 
-    // ... (history setup same as before) ...
-    // Initial system prompt
     const history: any[] = [
       {
         role: "system",
@@ -328,23 +411,25 @@ You can execute commands on the user's machine to achieve the goal.
 User OS: ${navigator.platform}.
 
 TOOLS:
-1. execute_command: Run a shell command in the background to inspect output (e.g. ls, cat, grep).
+1. execute_command: Run a shell command in the background and get output (e.g. ls, cat, grep, writing files).
    Format: {"tool": "execute_command", "command": "ls -la"}
-   Use this when you need to SEE the output to decide what to do next.
+   Use this when you need to SEE the output or CREATE/EDIT files.
+   This runs in a non-interactive shell — heredocs, pipes, and multiline commands all work.
 
-2. run_in_terminal: Run a command in the user's actual terminal (e.g. npm start, cd, nano, vi).
+2. run_in_terminal: Run a command in the user's visible terminal (e.g. npm start, cd, vi).
    Format: {"tool": "run_in_terminal", "command": "npm run dev"}
-   Use this for:
-   - Interactive commands
+   Use this ONLY for:
+   - Interactive commands (editors, REPLs)
    - Long-running processes (servers, watchers)
    - Changing directory (cd)
-   - Opening editors
-   NOTE: You will NOT see the output of this command immediately. It is "fire and forget".
+   - Opening files (open, xdg-open)
+   NOTE: You will NOT see the output. It is "fire and forget".
+   NEVER use this for writing files — no cat heredoc, no echo redirection, no tee.
 
 RESPONSE FORMAT:
 You must respond with valid JSON only.
 Example:
-{"tool": "run_in_terminal", "command": "cd ./src"}
+{"tool": "execute_command", "command": "cat file.txt"}
 
 If you have completed the task or need to answer the user:
 {"tool": "final_answer", "content": "I have started the server."}
@@ -352,7 +437,7 @@ If you have completed the task or need to answer the user:
 If you CANNOT complete the task:
 {"tool": "final_answer", "content": "I cannot do this because..."}
 
-Think step-by-step.
+Be concise and direct.
 `,
       },
     ];
@@ -368,10 +453,12 @@ CRITICAL RULES:
 2. If a command runs successfully but has no output (like 'mkdir' or 'cp'), assume it worked and proceed.
 3. If you are stuck, ask the user for help.
 4. Always use 'run_in_terminal' for 'cd' or starting servers.
-5. Break complex tasks into small, sequential steps. Execute ONE command at a time and verify the result before proceeding.
-6. NEVER chain many commands with && for complex operations. Use separate tool calls instead.
+5. For creating/editing files, ALWAYS use 'execute_command' with cat heredoc or printf. NEVER use 'run_in_terminal' for file operations.
+6. Break complex tasks into small, sequential steps. Execute ONE command at a time.
+7. NEVER chain many commands with && for complex operations. Use separate tool calls instead.
 `;
 
+    let parseFailures = 0;
     for (let i = 0; i < maxSteps; i++) {
       if (signal?.aborted) {
         throw new Error("Agent aborted by user.");
@@ -380,26 +467,30 @@ CRITICAL RULES:
 
       let responseText = "";
 
-      // 1. Get LLM Response
+      // 1. Get LLM Response (streaming for Ollama)
+      let thinkingText = "";
       try {
         if (provider === "ollama") {
-          const response = await fetch(
-            `${baseUrl || "http://localhost:11434"}/api/chat`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: model,
-                messages: history,
-                stream: false,
-                format: "json",
-              }),
-              signal,
-            },
+          let thinkingAccumulated = "";
+          const result = await this.streamOllamaChat(
+            baseUrl || "http://localhost:11434",
+            model,
+            history,
+            thinkingEnabled ? (_token, thinking) => {
+              if (thinking) {
+                thinkingAccumulated += thinking;
+                onUpdate("streaming_thinking", thinkingAccumulated);
+              }
+            } : undefined,
+            signal,
+            "json",
+            thinkingEnabled,
           );
-          if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
-          const data = await response.json();
-          responseText = data.message.content;
+          responseText = result.content;
+          thinkingText = result.thinking;
+          if (thinkingAccumulated) {
+            onUpdate("thinking_complete", thinkingAccumulated);
+          }
         } else {
           // ... (fallback same as before)
           await fetch("https://api.openai.com/v1/chat/completions", {
@@ -428,29 +519,45 @@ CRITICAL RULES:
         };
       }
 
-      // 2. Parse Tool Call
+      // 2. Parse Tool Call — try content first, then extract from thinking
       let action: any;
-      try {
-        action = JSON.parse(responseText);
-      } catch (e) {
-        const match = responseText.match(/```json([\s\S]*?)```/);
-        if (match) {
-          try {
-            action = JSON.parse(match[1]);
-          } catch {}
-        }
+      const tryParseJson = (text: string): any => {
+        if (!text.trim()) return null;
+        // Direct parse
+        try { return JSON.parse(text); } catch {}
+        // Extract from markdown code block
+        const mdMatch = text.match(/```json\s*([\s\S]*?)```/);
+        if (mdMatch) { try { return JSON.parse(mdMatch[1]); } catch {} }
+        // Extract first JSON object containing "tool"
+        const jsonMatch = text.match(/\{[^{}]*"tool"\s*:\s*"[^"]+?"[^{}]*\}/);
+        if (jsonMatch) { try { return JSON.parse(jsonMatch[0]); } catch {} }
+        return null;
+      };
+
+      action = tryParseJson(responseText);
+      // Fallback: model may put JSON in thinking instead of content
+      if (!action?.tool && thinkingText) {
+        action = tryParseJson(thinkingText);
       }
 
       if (!action || !action.tool) {
+        parseFailures++;
+        if (parseFailures >= 3) {
+          return {
+            success: false,
+            message: "Agent stopped: model failed to produce valid tool calls after multiple attempts.",
+          };
+        }
         onUpdate("error", `Failed to parse agent response. Retrying...`);
-        history.push({ role: "assistant", content: responseText });
+        history.push({ role: "assistant", content: responseText || "(empty)" });
         history.push({
           role: "user",
           content:
-            "Error: Invalid JSON format. Please respond with valid JSON.",
+            "Error: Invalid JSON format. You MUST respond with valid JSON containing a \"tool\" field. Example: {\"tool\": \"final_answer\", \"content\": \"Done.\"}",
         });
         continue;
       }
+      parseFailures = 0; // Reset on successful parse
 
       history.push({ role: "assistant", content: JSON.stringify(action) });
 

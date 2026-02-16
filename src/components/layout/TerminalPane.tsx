@@ -27,6 +27,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     setIsOverlayVisible,
     alwaysAllowSession,
     setAlwaysAllowSession,
+    thinkingEnabled,
+    setThinkingEnabled,
     handleCommand,
     handleAgentRun,
     handlePermission,
@@ -99,15 +101,17 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             pendingCommand={pendingCommand}
             autoExecuteEnabled={alwaysAllowSession}
             onToggleAutoExecute={() => setAlwaysAllowSession(!alwaysAllowSession)}
+            thinkingEnabled={thinkingEnabled}
+            onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
             onClose={() => setIsOverlayVisible(false)}
             onPermission={handlePermission}
           />
         )}
       </div>
       <div
-        className={`p-2 border-t z-40 relative ${themeClass(resolvedTheme, {
+        className={`p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
           dark: "bg-[#0a0a0a] border-white/5",
-          modern: "bg-black/60 border-white/5 backdrop-blur-md",
+          modern: "bg-[#080818]/80 border-white/10 backdrop-blur-xl",
           light: "bg-gray-50 border-gray-200",
         })}`}
       >
@@ -119,7 +123,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           sessionId={sessionId}
         />
       </div>
-      <ContextBar sessionId={sessionId} />
+      <div className="relative z-30">
+        <ContextBar sessionId={sessionId} />
+      </div>
     </div>
   );
 };

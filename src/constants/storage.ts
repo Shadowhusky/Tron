@@ -6,4 +6,5 @@ export const STORAGE_KEYS = {
   LAYOUT: "tron_layout_v1",
   THEME: "tron_theme",
   GLOBAL_HISTORY: "tron_global_history",
+  AGENT_STATE: "tron_agent_state",
 } as const;

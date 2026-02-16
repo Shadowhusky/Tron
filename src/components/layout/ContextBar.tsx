@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useLayout } from "../../contexts/LayoutContext";
 import { aiService } from "../../services/ai";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -168,7 +169,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
         theme,
         {
           dark: "bg-[#0a0a0a] border-white/5 text-gray-500",
-          modern: "bg-black/60 border-white/5 text-gray-400 backdrop-blur-md",
+          modern: "bg-white/[0.03] border-white/[0.08] text-gray-400 backdrop-blur-2xl",
           light: "bg-gray-50 border-gray-200 text-gray-500",
         },
       )}`}
@@ -291,15 +292,15 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
         </div>
       </div>
 
-      {/* Context Modal */}
-      {showContextModal && (
+      {/* Context Modal — portal to body to escape stacking contexts */}
+      {showContextModal && createPortal(
         <>
           <div
-            className="fixed inset-0 bg-black/50 z-50"
+            className="fixed inset-0 bg-black/50 z-[999]"
             onClick={() => setShowContextModal(false)}
           />
           <div
-            className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-50 flex flex-col rounded-xl shadow-2xl border overflow-hidden ${themeClass(
+            className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-[999] flex flex-col rounded-xl shadow-2xl border overflow-hidden ${themeClass(
               theme,
               {
                 dark: "bg-[#0e0e0e] border-white/10 text-gray-200",
@@ -385,7 +386,8 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
               {contextText || "(No context yet)"}
             </pre>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );

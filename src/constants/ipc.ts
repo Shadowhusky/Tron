@@ -4,6 +4,7 @@
 export const IPC = {
   // Terminal — invoke (request/response)
   TERMINAL_CREATE: "terminal.create",
+  TERMINAL_SESSION_EXISTS: "terminal.sessionExists",
   TERMINAL_CHECK_COMMAND: "terminal.checkCommand",
   TERMINAL_EXEC: "terminal.exec",
   TERMINAL_GET_CWD: "terminal.getCwd",
