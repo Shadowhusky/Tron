@@ -190,17 +190,19 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 {statusText}
               </span>
             </div>
-            <button
-              onClick={onClose}
-              className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded transition-colors ${
-                isLight
-                  ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
-                  : "text-gray-400 hover:text-white hover:bg-white/10"
-              }`}
-              title="Minimize panel — reopen from footer"
-            >
-              Minimize
-            </button>
+            {panelSteps.length > 0 && (
+              <button
+                onClick={onClose}
+                className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded transition-colors ${
+                  isLight
+                    ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
+                    : "text-gray-400 hover:text-white hover:bg-white/10"
+                }`}
+                title="Minimize panel — reopen from footer"
+              >
+                Minimize
+              </button>
+            )}
           </div>
 
           {/* Thread History */}

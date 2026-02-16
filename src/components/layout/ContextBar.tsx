@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useLayout } from "../../contexts/LayoutContext";
 import { aiService } from "../../services/ai";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -50,13 +50,22 @@ const ContextRing: React.FC<{ percent: number; size?: number }> = ({
   );
 };
 
-// Strip ANSI escape sequences and common terminal control codes
+// Strip ANSI escape sequences, terminal control codes, and clean up output
 function stripAnsi(text: string): string {
   return text
+    // Standard ANSI escape codes (colors, cursor, etc.)
     .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
-    .replace(/\x1b\][^\x07]*\x07/g, "")
+    // OSC sequences (title, etc.)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // Character set switching
     .replace(/\x1b[()][AB012]/g, "")
-    .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f]/g, "");
+    // DEC private modes like [?2004h, [?2004l
+    .replace(/\[?\?[0-9;]*[a-zA-Z]/g, "")
+    // Remaining non-printable control chars (keep \n and \r)
+    .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f]/g, "")
+    // Collapse 3+ blank lines into 2
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 interface ContextBarProps {
@@ -84,6 +93,8 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
   const [showContextInfo, setShowContextInfo] = useState(false);
   const [showContextModal, setShowContextModal] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [isSummarized, setIsSummarized] = useState(false);
+  const isSummarizedRef = useRef(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [availableModels, setAvailableModels] = useState<
     { name: string; provider: string }[]
@@ -102,7 +113,10 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
           sessionId,
         );
         setContextLength(history.length);
-        setContextText(stripAnsi(history));
+        // Only update display text if not currently showing a summary
+        if (!isSummarizedRef.current) {
+          setContextText(stripAnsi(history));
+        }
       }
     };
     pollHistory();
@@ -119,6 +133,8 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
       const input = contextText.slice(0, maxChars * 2);
       const summary = await aiService.summarizeContext(input);
       setContextText(summary);
+      setIsSummarized(true);
+      isSummarizedRef.current = true;
     } catch (e) {
       console.error("Summarization failed", e);
     } finally {
@@ -133,6 +149,8 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
         sessionId,
       );
       setContextText(stripAnsi(history));
+      setIsSummarized(false);
+      isSummarizedRef.current = false;
     }
   };
 
@@ -339,10 +357,13 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
               <div className="flex-1" />
               <button
                 onClick={handleResetContext}
+                disabled={!isSummarized}
                 className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
-                  theme === "light"
-                    ? "border-gray-200 hover:bg-gray-100 text-gray-500"
-                    : "border-white/10 hover:bg-white/5 text-gray-500"
+                  !isSummarized
+                    ? "opacity-30 cursor-not-allowed border-white/5 text-gray-600"
+                    : theme === "light"
+                      ? "border-gray-200 hover:bg-gray-100 text-gray-500"
+                      : "border-white/10 hover:bg-white/5 text-gray-500"
                 }`}
               >
                 Reset to raw

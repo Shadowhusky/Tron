@@ -178,6 +178,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
           isThinking: false,
           pendingCommand: null,
           permissionResolve: null,
+          isOverlayVisible: true, // Keep panel visible so user can see abort result
           agentThread: [
             ...current.agentThread,
             { step: "error", output: "Aborted by user." },

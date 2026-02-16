@@ -278,21 +278,44 @@ const initializeIpcHandlers = () => {
             return null;
         }
     });
-    electron_1.ipcMain.handle("terminal.getCompletions", async (event, { prefix, cwd }) => {
+    electron_1.ipcMain.handle("terminal.getCompletions", async (event, { prefix, cwd, sessionId, }) => {
         const { exec } = await Promise.resolve().then(() => __importStar(require("child_process")));
         const { promisify } = await Promise.resolve().then(() => __importStar(require("util")));
         const execAsync = promisify(exec);
-        const workDir = cwd || process.env.HOME || "/";
+        // Resolve CWD from session if available
+        let workDir = cwd || process.env.HOME || "/";
+        if (!cwd && sessionId) {
+            const session = sessions.get(sessionId);
+            if (session) {
+                try {
+                    const pid = session.pid;
+                    if (os_1.default.platform() === "darwin") {
+                        const { stdout } = await execAsync(`lsof -p ${pid} | grep cwd | awk '{print $NF}'`);
+                        if (stdout.trim())
+                            workDir = stdout.trim();
+                    }
+                }
+                catch { }
+            }
+        }
         try {
             const parts = prefix.trim().split(/\s+/);
-            const cmd = parts.length <= 1
-                ? `bash -c 'compgen -c "${parts[0] || ""}" 2>/dev/null | head -20'`
-                : `bash -c 'compgen -f "${parts[parts.length - 1]}" 2>/dev/null | head -20'`;
-            const { stdout } = await execAsync(cmd, { cwd: workDir });
+            if (parts.length <= 1) {
+                // Command name completion: commands + aliases + builtins + functions
+                const word = parts[0] || "";
+                const { stdout } = await execAsync(`bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`, { cwd: workDir });
+                const results = stdout.trim().split("\n").filter(Boolean);
+                return [...new Set(results)]
+                    .sort((a, b) => a.length - b.length)
+                    .slice(0, 15);
+            }
+            // Argument completion: files + directories
+            const lastWord = parts[parts.length - 1];
+            const { stdout } = await execAsync(`bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`, { cwd: workDir });
             const results = stdout.trim().split("\n").filter(Boolean);
             return [...new Set(results)]
                 .sort((a, b) => a.length - b.length)
-                .slice(0, 10);
+                .slice(0, 15);
         }
         catch (e) {
             return [];

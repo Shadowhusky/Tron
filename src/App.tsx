@@ -18,6 +18,8 @@ const AppContent = () => {
     reorderTabs,
   } = useLayout();
   const dragTabRef = useRef<number | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const { resolvedTheme } = useTheme();
   const [showOnboarding, setShowOnboarding] = useState(false);
 
@@ -78,70 +80,104 @@ const AppContent = () => {
           style={{ WebkitAppRegion: "drag" } as any}
         >
           {tabs.map((tab, tabIndex) => (
-            <div
-              key={tab.id}
-              onClick={() => selectTab(tab.id)}
-              draggable
-              onDragStart={(e) => {
-                dragTabRef.current = tabIndex;
-                e.dataTransfer.effectAllowed = "move";
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (dragTabRef.current !== null && dragTabRef.current !== tabIndex) {
-                  reorderTabs(dragTabRef.current, tabIndex);
-                }
-                dragTabRef.current = null;
-              }}
-              onDragEnd={() => {
-                dragTabRef.current = null;
-              }}
-              style={{ WebkitAppRegion: "no-drag" } as any}
-              className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-grab active:cursor-grabbing transition-all border max-w-[200px] min-w-[100px] ${
-                tab.id === activeTabId
-                  ? resolvedTheme === "dark"
-                    ? "bg-gray-800 text-white border-white/10 shadow-sm"
-                    : resolvedTheme === "modern"
-                      ? "bg-purple-900/20 text-white border-purple-500/20 shadow-[0_0_10px_rgba(168,85,247,0.1)] backdrop-blur-md"
-                      : "bg-white text-gray-900 border-gray-300 shadow-sm"
-                  : resolvedTheme === "light"
-                    ? "border-transparent hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-                    : "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300"
-              }`}
-            >
-              <span className="truncate flex-1">{tab.title}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (
-                    tab.title === "Settings" ||
-                    window.confirm(
-                      "Are you sure you want to close this session?",
-                    )
-                  ) {
-                    closeTab(tab.id);
-                  }
+            <div key={tab.id} className="relative flex items-center">
+              {/* Drop indicator — left edge */}
+              {dragOverIndex === tabIndex && draggingIndex !== null && draggingIndex !== tabIndex && (
+                <div className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 -translate-x-0.5 animate-pulse" />
+              )}
+              <div
+                onClick={() => selectTab(tab.id)}
+                draggable
+                onDragStart={(e) => {
+                  dragTabRef.current = tabIndex;
+                  setDraggingIndex(tabIndex);
+                  e.dataTransfer.effectAllowed = "move";
+                  // Custom ghost: clone the tab element with styling
+                  const ghost = e.currentTarget.cloneNode(true) as HTMLElement;
+                  ghost.style.position = "absolute";
+                  ghost.style.top = "-1000px";
+                  ghost.style.opacity = "0.85";
+                  ghost.style.transform = "scale(0.95)";
+                  ghost.style.borderRadius = "6px";
+                  ghost.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
+                  ghost.style.background = resolvedTheme === "light" ? "#fff" : "#1a1a2e";
+                  ghost.style.border = "1px solid rgba(168,85,247,0.4)";
+                  ghost.style.pointerEvents = "none";
+                  document.body.appendChild(ghost);
+                  e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
+                  requestAnimationFrame(() => document.body.removeChild(ghost));
                 }}
-                className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm hover:bg-white/20 transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setDragOverIndex(tabIndex);
+                }}
+                onDragLeave={() => {
+                  setDragOverIndex((prev) => (prev === tabIndex ? null : prev));
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragTabRef.current !== null && dragTabRef.current !== tabIndex) {
+                    reorderTabs(dragTabRef.current, tabIndex);
+                  }
+                  dragTabRef.current = null;
+                  setDraggingIndex(null);
+                  setDragOverIndex(null);
+                }}
+                onDragEnd={() => {
+                  dragTabRef.current = null;
+                  setDraggingIndex(null);
+                  setDragOverIndex(null);
+                }}
+                style={{ WebkitAppRegion: "no-drag" } as any}
+                className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-grab active:cursor-grabbing transition-all border max-w-[200px] min-w-[100px] ${
+                  draggingIndex === tabIndex ? "opacity-30 scale-95" : ""
+                } ${
+                  tab.id === activeTabId
+                    ? resolvedTheme === "dark"
+                      ? "bg-gray-800 text-white border-white/10 shadow-sm"
+                      : resolvedTheme === "modern"
+                        ? "bg-purple-900/20 text-white border-purple-500/20 shadow-[0_0_10px_rgba(168,85,247,0.1)] backdrop-blur-md"
+                        : "bg-white text-gray-900 border-gray-300 shadow-sm"
+                    : resolvedTheme === "light"
+                      ? "border-transparent hover:bg-gray-100 text-gray-500 hover:text-gray-700"
+                      : "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300"
+                }`}
               >
-                <svg
-                  className="w-3 h-3"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+                <span className="truncate flex-1">{tab.title}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (
+                      tab.title === "Settings" ||
+                      window.confirm(
+                        "Are you sure you want to close this session?",
+                      )
+                    ) {
+                      closeTab(tab.id);
+                    }
+                  }}
+                  className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm hover:bg-white/20 transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""}`}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
+                  <svg
+                    className="w-3 h-3"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+              {/* Drop indicator — right edge of last tab */}
+              {tabIndex === tabs.length - 1 && dragOverIndex === tabs.length && draggingIndex !== null && (
+                <div className="absolute right-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 translate-x-0.5 animate-pulse" />
+              )}
             </div>
           ))}
           <button

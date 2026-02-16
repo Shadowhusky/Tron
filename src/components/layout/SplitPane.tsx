@@ -229,6 +229,8 @@ Task: ${prompt}
       } finally {
         setIsAgentRunning(false);
         setIsThinking(false);
+        // Keep panel visible so user can review the execution history
+        setIsOverlayVisible(true);
       }
     };
 

@@ -20,7 +20,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         // Typed helpers for specific IPC calls
         checkCommand: (command) => electron_1.ipcRenderer.invoke("terminal.checkCommand", command),
         getCwd: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getCwd", sessionId),
-        getCompletions: (prefix, cwd) => electron_1.ipcRenderer.invoke("terminal.getCompletions", { prefix, cwd }),
+        getCompletions: (prefix, cwd, sessionId) => electron_1.ipcRenderer.invoke("terminal.getCompletions", { prefix, cwd, sessionId }),
         getHistory: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getHistory", sessionId),
         exec: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.exec", { sessionId, command }),
         // System
