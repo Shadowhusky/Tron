@@ -1,0 +1,278 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import type { LayoutNode, Tab, TerminalSession, SplitDirection } from '../types';
+
+// --- Mock UUID if crypto not avail in browser (though we use electron) ---
+function uuid() {
+    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
+}
+
+interface LayoutContextType {
+    tabs: Tab[];
+    activeTabId: string;
+    sessions: Map<string, TerminalSession>;
+    activeSessionId: string | null;
+    createTab: () => Promise<void>;
+    closeTab: (tabId: string) => void;
+    selectTab: (tabId: string) => void;
+    splitUserAction: (direction: SplitDirection) => Promise<void>;
+    closeSession: (sessionId: string) => void;
+    registerSession: (id: string) => void;
+}
+
+const LayoutContext = createContext<LayoutContextType | null>(null);
+
+export const useLayout = () => {
+    const context = useContext(LayoutContext);
+    if (!context) throw new Error('useLayout must be used within LayoutProvider');
+    return context;
+};
+
+export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const [tabs, setTabs] = useState<Tab[]>([]);
+    const [activeTabId, setActiveTabId] = useState<string>('');
+    const [sessions, setSessions] = useState<Map<string, TerminalSession>>(new Map());
+
+    // Helper: Create a new PTY and return its ID
+    const createPTY = async (): Promise<string> => {
+        if (window.electron) {
+            return await window.electron.ipcRenderer.invoke('terminal.create', { cols: 80, rows: 30 });
+        } else {
+            console.warn('Mocking PTY creation');
+            return `mock-${uuid()}`;
+        }
+    };
+
+    const createTab = async () => {
+        const sessionId = await createPTY();
+        const newTabId = uuid();
+
+        // Register session
+        setSessions(prev => new Map(prev).set(sessionId, { id: sessionId, title: 'Terminal' }));
+
+        const newTab: Tab = {
+            id: newTabId,
+            title: 'New Tab',
+            root: { type: 'leaf', sessionId },
+            activeSessionId: sessionId
+        };
+
+        setTabs(prev => [...prev, newTab]);
+        setActiveTabId(newTabId);
+    };
+
+    const closeTab = (tabId: string) => {
+        // Find tab to close
+        const tab = tabs.find(t => t.id === tabId);
+        if (tab) {
+            // Clean up all sessions in this tab
+            const closeNodeSessions = (node: LayoutNode) => {
+                if (node.type === 'leaf') {
+                    closeSession(node.sessionId);
+                } else {
+                    node.children.forEach(closeNodeSessions);
+                }
+            };
+            closeNodeSessions(tab.root);
+        }
+
+        setTabs(prev => {
+            const newTabs = prev.filter(t => t.id !== tabId);
+            if (tabId === activeTabId && newTabs.length > 0) {
+                setActiveTabId(newTabs[newTabs.length - 1].id);
+            }
+            return newTabs;
+        });
+    };
+
+    const selectTab = (tabId: string) => setActiveTabId(tabId);
+
+    const getActiveTab = () => tabs.find(t => t.id === activeTabId);
+
+    // Split Logic
+    const splitUserAction = async (direction: SplitDirection) => {
+        const tab = getActiveTab();
+        if (!tab || !tab.activeSessionId) return;
+
+        const newSessionId = await createPTY();
+        setSessions(prev => new Map(prev).set(newSessionId, { id: newSessionId, title: 'Terminal' }));
+
+        // Recursive function to find and split the active leaf
+        const splitNode = (node: LayoutNode, targetId: string): LayoutNode => {
+            if (node.type === 'leaf') {
+                if (node.sessionId === targetId) {
+                    return {
+                        type: 'split',
+                        direction,
+                        children: [
+                            node, // Existing
+                            { type: 'leaf', sessionId: newSessionId } // New
+                        ],
+                        sizes: [50, 50]
+                    };
+                }
+                return node;
+            } else {
+                return {
+                    ...node,
+                    children: node.children.map(child => splitNode(child, targetId))
+                };
+            }
+        };
+
+        setTabs(prev => prev.map(t => {
+            if (t.id === activeTabId) {
+                return {
+                    ...t,
+                    root: splitNode(t.root, t.activeSessionId!),
+                    activeSessionId: newSessionId // focus new split
+                };
+            }
+            return t;
+        }));
+    };
+
+    // Close Active Pane Logic
+    const closeActivePane = () => {
+        const tab = getActiveTab();
+        if (!tab || !tab.activeSessionId) return;
+
+        const targetId = tab.activeSessionId;
+
+        // Recursive removal
+        // Returns null if node should be removed
+        const removeNode = (node: LayoutNode): LayoutNode | null => {
+            if (node.type === 'leaf') {
+                return node.sessionId === targetId ? null : node;
+            }
+            // Split
+            const newChildren = node.children
+                .map(removeNode)
+                .filter((c): c is LayoutNode => c !== null);
+
+            if (newChildren.length === 0) return null;
+            if (newChildren.length === 1) return newChildren[0]; // Collapse split
+
+            // Recalculate sizes (simple equal distribution for now)
+            return {
+                ...node,
+                children: newChildren,
+                sizes: newChildren.map(() => 100 / newChildren.length)
+            };
+        };
+
+        const newRoot = removeNode(tab.root);
+
+        // Kill the session process
+        closeSession(targetId);
+
+        if (!newRoot) {
+            // Tab is empty, close it
+            closeTab(tab.id);
+        } else {
+            // Find new active session (first available leaf)
+            const findFirstSession = (n: LayoutNode): string => {
+                if (n.type === 'leaf') return n.sessionId;
+                return findFirstSession(n.children[0]);
+            };
+            const newActiveId = findFirstSession(newRoot);
+
+            setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, root: newRoot, activeSessionId: newActiveId } : t));
+        }
+    };
+
+    // Called when xterm connects or session is valid
+    const registerSession = () => {
+        // already handled in create methods for now
+    };
+
+    const closeSession = (sessionId: string) => {
+        if (window.electron) {
+            window.electron.ipcRenderer.send('terminal.close', sessionId);
+        }
+        setSessions(prev => {
+            const next = new Map(prev);
+            next.delete(sessionId);
+            return next;
+        });
+    };
+
+    // Update a session's CWD
+    const updateSessionCwd = (sessionId: string, cwd: string) => {
+        setSessions(prev => {
+            const next = new Map(prev);
+            const session = next.get(sessionId);
+            if (session) {
+                next.set(sessionId, { ...session, cwd });
+            }
+            return next;
+        });
+    };
+
+    // Initial tab
+    useEffect(() => {
+        if (tabs.length === 0) {
+            createTab();
+        }
+    }, [tabs.length]);
+
+    const activeSessionId = getActiveTab()?.activeSessionId || null;
+
+    // Poll CWD for the active session every 2 seconds
+    useEffect(() => {
+        if (!activeSessionId || !window.electron) return;
+
+        const pollCwd = async () => {
+            try {
+                const cwd = await window.electron.ipcRenderer.getCwd(activeSessionId);
+                if (cwd) {
+                    updateSessionCwd(activeSessionId, cwd);
+                }
+            } catch (e) {
+                // Silently ignore errors (session may have been closed)
+            }
+        };
+
+        // Poll immediately, then on interval
+        pollCwd();
+        const interval = setInterval(pollCwd, 2000);
+        return () => clearInterval(interval);
+    }, [activeSessionId]);
+
+    // Keyboard Shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Cmd/Ctrl + T: New Tab
+            if ((e.metaKey || e.ctrlKey) && e.key === 't') {
+                e.preventDefault();
+                createTab();
+            }
+            // Cmd/Ctrl + W: Close Pane
+            if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+                e.preventDefault(); // FIX: Prevent window close
+                closeActivePane();
+            }
+            // Cmd/Ctrl + D: Split Vertical (Side-by-side)
+            if ((e.metaKey || e.ctrlKey) && e.key === 'd' && !e.shiftKey) {
+                e.preventDefault();
+                splitUserAction('vertical');
+            }
+            // Cmd/Ctrl + Shift + D: Split Horizontal (Stacked)
+            if ((e.metaKey || e.ctrlKey) && e.key === 'd' && e.shiftKey) {
+                e.preventDefault();
+                splitUserAction('horizontal');
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [tabs, activeTabId, activeSessionId]);
+
+    return (
+        <LayoutContext.Provider value={{
+            tabs, activeTabId, sessions, activeSessionId,
+            createTab, closeTab, selectTab, splitUserAction, closeSession, registerSession
+        }}>
+            {children}
+        </LayoutContext.Provider>
+    );
+};
