@@ -1,24 +1,38 @@
-export interface TerminalSession {
-    id: string; // PTY Session ID
-    title: string;
-    cwd?: string;
+export interface AIConfig {
+  provider: "ollama" | "openai" | "anthropic" | "gemini";
+  model: string;
+  apiKey?: string;
+  baseUrl?: string;
+  contextWindow?: number; // Max context chars, default 4000
 }
 
-export type SplitDirection = 'horizontal' | 'vertical';
+export interface TerminalSession {
+  id: string; // PTY Session ID
+  title: string;
+  cwd?: string;
+  aiConfig?: AIConfig;
+}
+
+export type SplitDirection = "horizontal" | "vertical";
 
 export type LayoutNode =
-    | { type: 'leaf'; sessionId: string }
-    | { type: 'split'; direction: SplitDirection; children: LayoutNode[]; sizes: number[] };
+  | { type: "leaf"; sessionId: string; contentType?: "terminal" | "settings" }
+  | {
+      type: "split";
+      direction: SplitDirection;
+      children: LayoutNode[];
+      sizes: number[];
+    };
 
 export interface Tab {
-    id: string;
-    title: string;
-    root: LayoutNode;
-    activeSessionId: string | null; // Which session is active in this tab
+  id: string;
+  title: string;
+  root: LayoutNode;
+  activeSessionId: string | null; // Which session is active in this tab
 }
 
 export interface TerminalState {
-    tabs: Tab[];
-    activeTabId: string;
-    sessions: Map<string, TerminalSession>;
+  tabs: Tab[];
+  activeTabId: string;
+  sessions: Map<string, TerminalSession>;
 }

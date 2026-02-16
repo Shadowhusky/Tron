@@ -6,7 +6,11 @@ export default {
     ],
     darkMode: 'class', // Use 'class' strategy for manual toggle
     theme: {
-        extend: {},
+        extend: {
+            zIndex: {
+                '100': '100',
+            }
+        },
     },
     plugins: [],
 }

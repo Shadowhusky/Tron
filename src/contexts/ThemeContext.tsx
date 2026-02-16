@@ -1,40 +1,92 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from "react";
 
-type Theme = 'dark' | 'light';
+type Theme = "dark" | "light" | "system" | "modern";
+type ResolvedTheme = "dark" | "light" | "modern";
 
 interface ThemeContextType {
-    theme: Theme;
-    toggleTheme: () => void;
+  theme: Theme;
+  resolvedTheme: ResolvedTheme; // The actual visual theme after resolving "system"
+  toggleTheme: () => void;
+  setTheme: (theme: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | null>(null);
 
 export const useTheme = () => {
-    const context = useContext(ThemeContext);
-    if (!context) throw new Error('useTheme must be used within ThemeProvider');
-    return context;
+  const context = useContext(ThemeContext);
+  if (!context) throw new Error("useTheme must be used within ThemeProvider");
+  return context;
 };
 
-export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [theme, setTheme] = useState<Theme>(() => {
-        const stored = localStorage.getItem('tron_theme');
-        return (stored as Theme) || 'dark';
-    });
+export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [theme, setTheme] = useState<Theme>(() => {
+    const stored = localStorage.getItem("tron_theme");
+    return (stored as Theme) || "system";
+  });
 
-    useEffect(() => {
-        const root = window.document.documentElement;
-        root.classList.remove('light', 'dark');
-        root.classList.add(theme);
-        localStorage.setItem('tron_theme', theme);
-    }, [theme]);
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("dark");
 
-    const toggleTheme = () => {
-        setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  useEffect(() => {
+    const root = window.document.documentElement;
+    root.classList.remove("light", "dark", "modern");
+
+    let effective: ResolvedTheme;
+
+    if (theme === "system") {
+      const systemDark = window.matchMedia(
+        "(prefers-color-scheme: dark)",
+      ).matches;
+      effective = systemDark ? "dark" : "light";
+    } else if (theme === "modern") {
+      effective = "modern";
+      root.classList.add("modern");
+    } else {
+      effective = theme;
+    }
+
+    root.classList.add(effective === "modern" ? "dark" : effective);
+    setResolvedTheme(effective);
+    localStorage.setItem("tron_theme", theme);
+  }, [theme]);
+
+  // Listener for system theme changes if mode is 'system'
+  useEffect(() => {
+    if (theme !== "system") return;
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => {
+      const root = window.document.documentElement;
+      root.classList.remove("light", "dark");
+      const newResolved = mediaQuery.matches ? "dark" : "light";
+      root.classList.add(newResolved);
+      setResolvedTheme(newResolved);
     };
 
-    return (
-        <ThemeContext.Provider value={{ theme, toggleTheme }}>
-            {children}
-        </ThemeContext.Provider>
-    );
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    // Cycle: dark -> light -> modern -> system -> dark
+    setTheme((prev) => {
+      if (prev === "dark") return "light";
+      if (prev === "light") return "modern";
+      if (prev === "modern") return "system";
+      return "dark";
+    });
+  };
+
+  const setThemeValue = (newTheme: Theme) => {
+    setTheme(newTheme);
+  };
+
+  return (
+    <ThemeContext.Provider
+      value={{ theme, resolvedTheme, toggleTheme, setTheme: setThemeValue }}
+    >
+      {children}
+    </ThemeContext.Provider>
+  );
 };
