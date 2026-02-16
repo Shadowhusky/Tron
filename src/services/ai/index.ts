@@ -125,7 +125,7 @@ class AIService {
   async generateCommand(prompt: string): Promise<string> {
     const { provider, model, apiKey, baseUrl } = this.config;
 
-    const systemPrompt = `You are a terminal assistant. The user wants to perform a task. Output ONLY the exact command to run. No markdown, no explanation. If multiple commands are needed, join them with &&. User OS: ${navigator.platform}.`;
+    const systemPrompt = `You are a terminal assistant. The user wants to perform a task. Output ONLY the exact command to run. No markdown, no explanation. If the task is simple, output a single command. If it requires multiple steps, output only the FIRST step. User OS: ${navigator.platform}.`;
 
     try {
       if (provider === "ollama") {
@@ -222,6 +222,92 @@ class AIService {
     }
   }
 
+  async generatePlaceholder(context: string): Promise<string> {
+    const { provider, model, apiKey, baseUrl } = this.config;
+    if (!model) return "";
+
+    const systemPrompt = `You predict what the user will type next in a terminal. Based on the recent terminal output, suggest a short one-line command or action. Output ONLY the suggestion text, nothing else. Keep it under 60 characters. If unsure, output an empty string.`;
+
+    try {
+      if (provider === "ollama") {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        try {
+          const response = await fetch(
+            `${baseUrl || "http://localhost:11434"}/api/generate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model,
+                prompt: `${systemPrompt}\n\nRecent terminal output:\n${context.slice(-500)}\n\nSuggestion:`,
+                stream: false,
+              }),
+              signal: controller.signal,
+            },
+          );
+          clearTimeout(timeout);
+          if (!response.ok) return "";
+          const data = await response.json();
+          const result = (data.response || "").trim();
+          return result.length <= 80 ? result : "";
+        } catch {
+          clearTimeout(timeout);
+          return "";
+        }
+      }
+
+      if (provider === "openai" && apiKey) {
+        const response = await fetch(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Recent terminal output:\n${context.slice(-500)}` },
+              ],
+              max_tokens: 30,
+            }),
+          },
+        );
+        const data = await response.json();
+        const result = (data.choices?.[0]?.message?.content || "").trim();
+        return result.length <= 80 ? result : "";
+      }
+
+      if (provider === "anthropic" && apiKey) {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 30,
+            system: systemPrompt,
+            messages: [
+              { role: "user", content: `Recent terminal output:\n${context.slice(-500)}` },
+            ],
+          }),
+        });
+        const data = await response.json();
+        const result = (data.content?.[0]?.text || "").trim();
+        return result.length <= 80 ? result : "";
+      }
+    } catch {
+      // Silently fail — placeholder is non-critical
+    }
+    return "";
+  }
+
   async runAgent(
     prompt: string,
     executeCommand: (cmd: string) => Promise<string>,
@@ -282,6 +368,8 @@ CRITICAL RULES:
 2. If a command runs successfully but has no output (like 'mkdir' or 'cp'), assume it worked and proceed.
 3. If you are stuck, ask the user for help.
 4. Always use 'run_in_terminal' for 'cd' or starting servers.
+5. Break complex tasks into small, sequential steps. Execute ONE command at a time and verify the result before proceeding.
+6. NEVER chain many commands with && for complex operations. Use separate tool calls instead.
 `;
 
     for (let i = 0; i < maxSteps; i++) {

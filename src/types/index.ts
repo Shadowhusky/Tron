@@ -30,6 +30,7 @@ export interface TerminalSession {
   title: string;
   cwd?: string;
   aiConfig?: AIConfig;
+  dirty?: boolean; // true once user has entered commands
 }
 
 export type SplitDirection = "horizontal" | "vertical";

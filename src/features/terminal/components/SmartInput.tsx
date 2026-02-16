@@ -16,6 +16,7 @@ interface SmartInputProps {
   onRunAgent: (prompt: string) => Promise<void>;
   isAgentRunning: boolean;
   pendingCommand: string | null;
+  sessionId?: string;
 }
 
 const SmartInput: React.FC<SmartInputProps> = ({
@@ -23,6 +24,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   onRunAgent,
   isAgentRunning,
   pendingCommand,
+  sessionId,
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId } = useLayout();
@@ -46,8 +48,34 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState("");
 
+  // AI-generated placeholder
+  const [aiPlaceholder, setAiPlaceholder] = useState("");
+  const placeholderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fetch AI placeholder when input is empty
+  useEffect(() => {
+    if (placeholderTimerRef.current) clearTimeout(placeholderTimerRef.current);
+    if (value.trim() !== "" || !sessionId || isAgentRunning) {
+      return;
+    }
+    placeholderTimerRef.current = setTimeout(async () => {
+      try {
+        if (!window.electron?.ipcRenderer?.getHistory) return;
+        const history = await window.electron.ipcRenderer.getHistory(sessionId);
+        if (!history || history.length < 10) return;
+        const suggestion = await aiService.generatePlaceholder(history);
+        if (suggestion) setAiPlaceholder(suggestion);
+      } catch {
+        // Non-critical, silently ignore
+      }
+    }, 3000);
+    return () => {
+      if (placeholderTimerRef.current) clearTimeout(placeholderTimerRef.current);
+    };
+  }, [value, sessionId, isAgentRunning]);
 
   // Clear feedback after delay
   useEffect(() => {
@@ -525,19 +553,21 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   : "text-gray-100 placeholder-gray-500"
               }`}
               placeholder={
-                isAuto
+                aiPlaceholder ||
+                (isAuto
                   ? "Type a command or ask a question..."
                   : mode === "command"
                     ? "Type a command..."
                     : mode === "agent"
                       ? "Describe a task for the agent..."
-                      : "Ask AI for advice..."
+                      : "Ask AI for advice...")
               }
               value={value}
               onChange={(e) => {
                 setValue(e.target.value);
                 setHistoryIndex(-1);
                 setSuggestedCommand(null);
+                if (e.target.value.trim() !== "") setAiPlaceholder("");
               }}
               onKeyDown={handleKeyDown}
               autoFocus
@@ -576,14 +606,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
       {/* Hints bar */}
       <div
         className={`flex items-center justify-between px-2 h-5 text-[10px] select-none ${
-          theme === "light" ? "text-gray-400" : "text-gray-500"
+          theme === "light" ? "text-gray-500" : "text-gray-400"
         }`}
       >
         {/* Left: mode indicator + feedback */}
         <div className="flex items-center gap-2">
           {isAuto ? (
             <span
-              className={`font-medium ${mode === "agent" ? "text-purple-400/80" : "text-teal-400/80"}`}
+              className={`font-medium ${mode === "agent" ? "text-purple-400" : "text-teal-400"}`}
               title="Auto-detects command vs natural language"
             >
               auto · {mode}
@@ -592,9 +622,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
             <span
               className={`font-medium ${
                 mode === "agent"
-                  ? "text-purple-400/80"
+                  ? "text-purple-400"
                   : mode === "advice"
-                    ? "text-blue-400/80"
+                    ? "text-blue-400"
                     : ""
               }`}
             >
@@ -608,16 +638,18 @@ const SmartInput: React.FC<SmartInputProps> = ({
           )}
         </div>
 
-        {/* Right: shortcuts — dimmed, spaced with middots */}
-        <div className="flex items-center gap-0.5 opacity-50">
+        {/* Right: shortcuts */}
+        <div className={`flex items-center gap-0.5 ${
+          theme === "light" ? "opacity-70" : "opacity-80"
+        }`}>
           <span>⇥ cycle mode</span>
-          <span className="opacity-30 mx-1">·</span>
+          <span className="opacity-40 mx-1">·</span>
           <span>⇧↵ agent</span>
-          <span className="opacity-30 mx-1">·</span>
+          <span className="opacity-40 mx-1">·</span>
           <span>⌘0-3 mode</span>
-          <span className="opacity-30 mx-1">·</span>
+          <span className="opacity-40 mx-1">·</span>
           <span>⌘T tab</span>
-          <span className="opacity-30 mx-1">·</span>
+          <span className="opacity-40 mx-1">·</span>
           <span>⌘D split</span>
         </div>
       </div>

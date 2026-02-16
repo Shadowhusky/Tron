@@ -7,6 +7,9 @@ import { useAgent } from "../../../contexts/AgentContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import "@xterm/xterm/css/xterm.css";
 
+// Track sessions that have already restored history to prevent duplication on remount (e.g. split)
+const initializedSessions = new Set<string>();
+
 interface TerminalProps {
   className?: string;
   sessionId: string;
@@ -123,14 +126,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
     setTimeout(performResize, 50);
     setTimeout(performResize, 250);
 
-    // Restore History
-    if (window.electron) {
+    // Restore History — skip if this session was already initialized (prevents duplication on remount from split)
+    if (window.electron && !initializedSessions.has(sessionId)) {
+      initializedSessions.add(sessionId);
       window.electron.ipcRenderer
         .getHistory(sessionId)
         .then((history: string) => {
           if (history && xtermRef.current) {
             term.write(history);
-            // Fit again after content loaded?
             setTimeout(performResize, 10);
           }
         });
