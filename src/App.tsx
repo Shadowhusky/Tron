@@ -48,7 +48,7 @@ const AppContent = () => {
   // Global Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === ",") {
         e.preventDefault();
         openSettingsTab();
       }
@@ -65,7 +65,7 @@ const AppContent = () => {
         resolvedTheme,
         {
           dark: "bg-[#0a0a0a] text-white",
-          modern: "bg-[#050510] text-white",
+          modern: "bg-gradient-to-br from-[#030014] via-[#050520] to-[#0a0a2e] text-white",
           light: "bg-gray-50 text-gray-900",
         },
       )}`}

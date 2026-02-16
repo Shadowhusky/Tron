@@ -1,13 +1,36 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Command,
   Check,
   X,
   AlertTriangle,
   Terminal as TerminalIcon,
+  Brain,
 } from "lucide-react";
+import { marked } from "marked";
 import { useTheme } from "../../../contexts/ThemeContext";
 import type { AgentStep } from "../../../types";
+
+// Configure marked for minimal, safe output
+marked.setOptions({ breaks: true, gfm: true });
+
+/** Renders markdown string as HTML. Memoized to avoid re-parsing identical content. */
+const MarkdownContent: React.FC<{ content: string; className?: string }> = ({ content, className }) => {
+  const html = useMemo(() => {
+    try {
+      return marked.parse(content, { async: false }) as string;
+    } catch {
+      return content;
+    }
+  }, [content]);
+
+  return (
+    <div
+      className={`markdown-content ${className || ""}`}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+};
 
 interface AgentOverlayProps {
   isThinking: boolean;
@@ -16,6 +39,8 @@ interface AgentOverlayProps {
   pendingCommand: string | null;
   autoExecuteEnabled: boolean;
   onToggleAutoExecute: () => void;
+  thinkingEnabled: boolean;
+  onToggleThinking: () => void;
   onClose: () => void;
   onPermission: (choice: "allow" | "always" | "deny") => void;
 }
@@ -70,6 +95,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   pendingCommand,
   autoExecuteEnabled,
   onToggleAutoExecute,
+  thinkingEnabled,
+  onToggleThinking,
   onClose,
   onPermission,
 }) => {
@@ -114,10 +141,12 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     }
   }, [agentThread.length]);
 
-  // Auto-scroll thread to bottom
+  // Auto-scroll thread to bottom — also triggers during streaming thinking updates
+  const lastEntry = agentThread[agentThread.length - 1];
+  const scrollTrigger = `${agentThread.length}:${lastEntry?.output?.length || 0}`;
   useEffect(() => {
     scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-  }, [agentThread.length]);
+  }, [scrollTrigger]);
 
   // Reset toasts on new run
   useEffect(() => {
@@ -169,11 +198,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       {/* Agent Panel */}
       {showPanel && (
         <div
-          className={`w-full max-h-[50%] overflow-hidden border-t flex flex-col shadow-lg z-20 transition-all animate-in slide-in-from-bottom-2 ${
+          className={`w-full max-h-[60%] overflow-hidden border-t flex flex-col shadow-lg z-20 transition-all animate-in slide-in-from-bottom-2 ${
             isLight
               ? "bg-white/95 border-gray-200 text-gray-900"
               : resolvedTheme === "modern"
-                ? "bg-[#0a0a20]/95 border-purple-500/20 text-white"
+                ? "bg-[#0a0a1a]/80 border-white/[0.08] text-white backdrop-blur-2xl"
                 : "bg-[#0a0a0a]/95 border-white/10 text-white"
           }`}
         >
@@ -198,6 +227,22 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
               </span>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={onToggleThinking}
+                className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center gap-1 ${
+                  thinkingEnabled
+                    ? isLight
+                      ? "border-purple-300 text-purple-600 bg-purple-50 hover:bg-purple-100"
+                      : "border-purple-500/30 text-purple-400 bg-purple-500/10 hover:bg-purple-500/20"
+                    : isLight
+                      ? "border-gray-300 text-gray-500 bg-gray-50 hover:bg-gray-100"
+                      : "border-white/10 text-gray-500 bg-white/5 hover:bg-white/10"
+                }`}
+                title={thinkingEnabled ? "Disable thinking (faster responses)" : "Enable thinking (more thorough reasoning)"}
+              >
+                <Brain className="w-3 h-3" />
+                Think {thinkingEnabled ? "ON" : "OFF"}
+              </button>
               {autoExecuteEnabled && (
                 <button
                   onClick={onToggleAutoExecute}
@@ -234,9 +279,24 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
               className="flex-1 overflow-y-auto p-3 space-y-1.5 font-mono text-xs scrollbar-thin scrollbar-thumb-gray-700"
             >
               {panelSteps.map((step, i) => {
+                // Run separator
+                if (step.step === "separator") {
+                  return (
+                    <div key={i} className="flex items-center gap-2 py-2 my-1">
+                      <div className={`flex-1 h-px ${isLight ? "bg-gray-200" : "bg-white/10"}`} />
+                      <span className={`text-[9px] uppercase tracking-wider font-semibold px-2 ${isLight ? "text-gray-400" : "text-gray-500"}`}>
+                        New Run: {step.output.slice(0, 40)}{step.output.length > 40 ? "..." : ""}
+                      </span>
+                      <div className={`flex-1 h-px ${isLight ? "bg-gray-200" : "bg-white/10"}`} />
+                    </div>
+                  );
+                }
+
                 const isError = step.step === "error" || step.step === "failed";
                 const isDone = step.step === "done";
                 const isExecuted = step.step === "executed";
+                const isThinkingStep = step.step === "thinking";
+                const isThought = step.step === "thought";
 
                 return (
                   <div
@@ -248,7 +308,9 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           ? isLight ? "border-green-300" : "border-green-500/30"
                           : isExecuted
                             ? isLight ? "border-blue-300" : "border-blue-500/30"
-                            : isLight ? "border-gray-200" : "border-white/10"
+                            : (isThinkingStep || isThought)
+                              ? isLight ? "border-purple-300" : "border-purple-500/30"
+                              : isLight ? "border-gray-200" : "border-white/10"
                     }`}
                   >
                     <div className="flex items-center gap-1.5 mb-0.5">
@@ -258,6 +320,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                         <Check className="w-3 h-3 text-green-400" />
                       ) : isExecuted ? (
                         <Check className="w-3 h-3 text-blue-400" />
+                      ) : (isThinkingStep || isThought) ? (
+                        <Brain className={`w-3 h-3 text-purple-400 ${isThinkingStep ? "animate-pulse" : ""}`} />
                       ) : (
                         <TerminalIcon className="w-3 h-3 text-gray-400 opacity-60" />
                       )}
@@ -266,14 +330,33 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           isExecuted ? "text-blue-400"
                             : isError ? "text-red-400"
                             : isDone ? "text-green-400"
+                            : (isThinkingStep || isThought) ? "text-purple-400"
                             : "text-gray-500"
                         }`}
                       >
-                        {step.step}
+                        {isThinkingStep ? "thinking..." : step.step}
                       </span>
+                      {isThinkingStep && (
+                        <div className="flex gap-0.5 ml-1">
+                          <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                          <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                          <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                        </div>
+                      )}
                     </div>
-                    {/* Output: collapsible if long */}
-                    {step.output.length > 120 ? (
+                    {/* Output: markdown for thinking/thought, collapsible for long content */}
+                    {(isThinkingStep || isThought) ? (
+                      <div className={`mt-1 rounded border p-2 ${
+                        isLight
+                          ? "bg-purple-50/50 border-purple-200/50"
+                          : "bg-purple-950/20 border-purple-500/10"
+                      }`}>
+                        <MarkdownContent
+                          content={step.output}
+                          className={`text-[11px] leading-relaxed ${isLight ? "text-gray-700" : "text-gray-300"}`}
+                        />
+                      </div>
+                    ) : step.output.length > 120 ? (
                       <details className="group">
                         <summary
                           className={`cursor-pointer text-[11px] truncate select-none list-none flex items-center gap-1.5 ${

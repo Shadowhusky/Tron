@@ -1,3 +1,4 @@
+import { useRef, useEffect } from "react";
 import type { TerminalSession } from "../types";
 import { aiService } from "../services/ai";
 import { useHistory } from "../contexts/HistoryContext";
@@ -25,8 +26,39 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
     setAlwaysAllowSession,
     isOverlayVisible,
     setIsOverlayVisible,
+    thinkingEnabled,
+    setThinkingEnabled,
     registerAbortController,
   } = useAgent(sessionId);
+
+  // Ref to track latest alwaysAllowSession inside async closures
+  const alwaysAllowRef = useRef(alwaysAllowSession);
+  useEffect(() => {
+    alwaysAllowRef.current = alwaysAllowSession;
+  }, [alwaysAllowSession]);
+
+  /**
+   * Write a command to the terminal, aborting any pending input state first
+   * (heredoc, multiline, etc.) by sending Ctrl+C, then the command after a delay.
+   */
+  const writeCommandToTerminal = (cmd: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (!window.electron) { resolve(); return; }
+      // Ctrl+C aborts heredocs, multiline input, or hung foreground processes
+      window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+        id: sessionId,
+        data: "\x03",
+      });
+      // Brief delay for shell to process interrupt and show a new prompt
+      setTimeout(() => {
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+          id: sessionId,
+          data: "\x15" + cmd + "\r",
+        });
+        resolve();
+      }, 80);
+    });
+  };
 
   const handleCommand = async (cmd: string, queueCallback?: (item: { type: "command"; content: string }) => void) => {
     if (isAgentRunning && queueCallback) {
@@ -34,13 +66,8 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
       return;
     }
 
-    if (window.electron) {
-      window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-        id: sessionId,
-        data: "\x15" + cmd + "\r",
-      });
-      addToHistory(cmd);
-    }
+    await writeCommandToTerminal(cmd);
+    addToHistory(cmd);
   };
 
   const handleAgentRun = async (prompt: string, queueCallback?: (item: { type: "agent"; content: string }) => void) => {
@@ -56,7 +83,13 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
     setIsAgentRunning(true);
     setIsThinking(true);
     setIsOverlayVisible(true);
-    setAgentThread([]);
+
+    // Add a run separator instead of clearing history
+    setAgentThread((prev) =>
+      prev.length > 0
+        ? [...prev, { step: "separator", output: prompt }]
+        : [],
+    );
 
     try {
       // 1. Fetch Session History
@@ -90,8 +123,8 @@ Task: ${prompt}
       const finalAnswer = await aiService.runAgent(
         augmentedPrompt,
         async (cmd) => {
-          // Check Permissions
-          if (!alwaysAllowSession) {
+          // Check Permissions — use ref for latest value
+          if (!alwaysAllowRef.current) {
             setPendingCommand(cmd);
             const allowed = await new Promise<boolean>((resolve) => {
               setPermissionResolve(resolve);
@@ -108,13 +141,8 @@ Task: ${prompt}
             throw new Error("No terminal session found.");
           }
 
-          // Clear any partial user input, then write command
-          if (window.electron) {
-            window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-              id: sessionId,
-              data: "\x15" + cmd + "\r",
-            });
-          }
+          // Abort any pending input state, then write command
+          await writeCommandToTerminal(cmd);
 
           addToHistory(cmd.trim());
 
@@ -140,24 +168,46 @@ Task: ${prompt}
           );
         },
         (cmd) => {
-          // writeToTerminal: clear line first, then fire & forget
-          if (window.electron) {
-            const cleaned = cmd.endsWith("\n") ? cmd.slice(0, -1) : cmd;
-            window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-              id: sessionId,
-              data: "\x15" + cleaned + "\r",
-            });
-          }
+          // writeToTerminal: abort pending input, then fire & forget
+          const cleaned = cmd.endsWith("\n") ? cmd.slice(0, -1) : cmd;
+          writeCommandToTerminal(cleaned);
           addToHistory(cmd.trim());
         },
         (step, output) => {
-          if (step !== "thinking") {
+          if (step === "streaming_thinking") {
+            // Update or append an in-progress thinking entry
+            setAgentThread((prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
+                const updated = [...prev];
+                updated[lastIdx] = { step: "thinking", output };
+                return updated;
+              }
+              return [...prev, { step: "thinking", output }];
+            });
+            setIsThinking(true);
+          } else if (step === "thinking_complete") {
+            // Replace streaming entry with finalized thought
+            setAgentThread((prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
+                const updated = [...prev];
+                updated[lastIdx] = { step: "thought", output };
+                return updated;
+              }
+              return [...prev, { step: "thought", output }];
+            });
+            setIsThinking(false);
+          } else if (step !== "thinking") {
             setAgentThread((prev) => [...prev, { step, output }]);
+            setIsThinking(false);
+          } else {
+            setIsThinking(true);
           }
-          setIsThinking(step === "thinking");
         },
         session?.aiConfig,
         controller.signal,
+        thinkingEnabled,
       );
       // Ensure successful completion clears active state
       setIsAgentRunning(false);
@@ -206,6 +256,8 @@ Task: ${prompt}
     setIsOverlayVisible,
     alwaysAllowSession,
     setAlwaysAllowSession,
+    thinkingEnabled,
+    setThinkingEnabled,
     // Actions
     handleCommand,
     handleAgentRun,

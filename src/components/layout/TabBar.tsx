@@ -35,7 +35,7 @@ const TabBar: React.FC<TabBarProps> = ({
         {
           dark: "bg-gray-900/50 border-white/5",
           modern:
-            "bg-black/40 border-purple-500/10 backdrop-blur-md shadow-[0_1px_0_rgba(168,85,247,0.1)]",
+            "bg-white/[0.03] border-white/[0.08] backdrop-blur-2xl shadow-[0_1px_0_rgba(168,85,247,0.08),inset_0_1px_0_rgba(255,255,255,0.05)]",
           light: "bg-white border-gray-200",
         },
       )}`}
@@ -125,7 +125,7 @@ const TabBar: React.FC<TabBarProps> = ({
                     ? themeClass(resolvedTheme, {
                         dark: "bg-gray-800 text-white border-white/10 shadow-sm",
                         modern:
-                          "bg-purple-900/20 text-white border-purple-500/20 shadow-[0_0_10px_rgba(168,85,247,0.1)] backdrop-blur-md",
+                          "bg-white/[0.08] text-white border-white/[0.12] shadow-[0_0_15px_rgba(168,85,247,0.12)] backdrop-blur-xl",
                         light:
                           "bg-white text-gray-900 border-gray-300 shadow-sm",
                       })

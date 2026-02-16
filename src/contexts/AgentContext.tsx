@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import type { AgentStep } from "../types";
+import { STORAGE_KEYS } from "../constants/storage";
 
 interface AgentState {
   agentThread: AgentStep[];
@@ -9,6 +10,7 @@ interface AgentState {
   permissionResolve: ((allowed: boolean) => void) | null;
   alwaysAllowSession: boolean;
   isOverlayVisible: boolean;
+  thinkingEnabled: boolean;
 }
 
 const defaultState: AgentState = {
@@ -19,6 +21,7 @@ const defaultState: AgentState = {
   permissionResolve: null,
   alwaysAllowSession: false,
   isOverlayVisible: false,
+  thinkingEnabled: true,
 };
 
 interface AgentContextType {
@@ -38,6 +41,7 @@ interface AgentContextType {
   ) => void;
   setAlwaysAllowSession: (sessionId: string, allow: boolean) => void;
   setIsOverlayVisible: (sessionId: string, visible: boolean) => void;
+  setThinkingEnabled: (sessionId: string, enabled: boolean) => void;
   // Abort Control
   registerAbortController: (
     sessionId: string,
@@ -49,11 +53,31 @@ interface AgentContextType {
 
 const AgentContext = createContext<AgentContextType | null>(null);
 
+/** Load persisted agent threads from localStorage */
+function loadPersistedAgentState(): Map<string, AgentState> {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.AGENT_STATE);
+    if (saved) {
+      const parsed: Record<string, { agentThread: AgentStep[] }> = JSON.parse(saved);
+      const map = new Map<string, AgentState>();
+      for (const [id, data] of Object.entries(parsed)) {
+        if (data.agentThread?.length > 0) {
+          map.set(id, { ...defaultState, agentThread: data.agentThread });
+        }
+      }
+      return map;
+    }
+  } catch (e) {
+    console.warn("Failed to load persisted agent state:", e);
+  }
+  return new Map();
+}
+
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [agentStates, setAgentStates] = useState<Map<string, AgentState>>(
-    new Map(),
+    () => loadPersistedAgentState(),
   );
 
   // Store abort controllers in ref since they aren't needed for rendering
@@ -61,6 +85,28 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
   const abortControllers = React.useRef<Map<string, AbortController>>(
     new Map(),
   );
+
+  // Persist agent threads to localStorage (debounced)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const serializable: Record<string, { agentThread: AgentStep[] }> = {};
+      for (const [id, state] of agentStates) {
+        if (state.agentThread.length > 0) {
+          // Only persist completed steps, not transient ones like "thinking"
+          const persistableThread = state.agentThread.filter(
+            (s) => s.step !== "thinking",
+          );
+          if (persistableThread.length > 0) {
+            serializable[id] = { agentThread: persistableThread };
+          }
+        }
+      }
+      localStorage.setItem(STORAGE_KEYS.AGENT_STATE, JSON.stringify(serializable));
+    }, 500); // 500ms debounce to avoid thrashing during streaming
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [agentStates]);
 
   const getAgentState = useCallback(
     (sessionId: string) => {
@@ -143,6 +189,13 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
     [updateAgentState],
   );
 
+  const setThinkingEnabled = useCallback(
+    (sessionId: string, enabled: boolean) => {
+      updateAgentState(sessionId, { thinkingEnabled: enabled });
+    },
+    [updateAgentState],
+  );
+
   const registerAbortController = useCallback(
     (sessionId: string, controller: AbortController) => {
       const existing = abortControllers.current.get(sessionId);
@@ -215,6 +268,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
         setPermissionResolve,
         setAlwaysAllowSession,
         setIsOverlayVisible,
+        setThinkingEnabled,
         registerAbortController,
         stopAgent,
         resetSession,
@@ -255,6 +309,11 @@ export const useAgent = (sessionId: string) => {
     isOverlayVisible: state.isOverlayVisible,
     setIsOverlayVisible: (visible: boolean) =>
       context.updateAgentState(sessionId, { isOverlayVisible: visible }),
+
+    // Thinking
+    thinkingEnabled: state.thinkingEnabled,
+    setThinkingEnabled: (enabled: boolean) =>
+      context.setThinkingEnabled(sessionId, enabled),
 
     // Abort
     registerAbortController: (controller: AbortController) =>

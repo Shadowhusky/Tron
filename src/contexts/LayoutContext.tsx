@@ -52,12 +52,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   // Helper: Create a new PTY and return its ID
-  const createPTY = async (cwd?: string): Promise<string> => {
+  const createPTY = async (cwd?: string, reconnectId?: string): Promise<string> => {
     if (window.electron) {
       return await window.electron.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
         cols: 80,
         rows: 30,
         cwd,
+        reconnectId,
       });
     } else {
       console.warn("Mocking PTY creation");
@@ -121,12 +122,15 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                   return node;
                 }
 
-                // Found a session, recreate process
+                // Found a session — try to reconnect to existing PTY, else create new
                 const oldId = node.sessionId;
                 const cwd = savedCwds[oldId];
                 const aiConfig = (parsed.sessionConfigs || {})[oldId];
-                const newId = await createPTY(cwd);
-                // Restore config if available, else default
+                const newId = await createPTY(cwd, oldId);
+                const reconnected = newId === oldId;
+                if (reconnected) {
+                  console.log(`Reconnected to PTY session: ${oldId}`);
+                }
                 const config = aiConfig || aiService.getConfig();
                 newSessions.set(newId, {
                   id: newId,
@@ -479,13 +483,14 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
       // Cmd/Ctrl + T: New Tab
-      if ((e.metaKey || e.ctrlKey) && e.key === "t") {
+      if ((e.metaKey || e.ctrlKey) && key === "t") {
         e.preventDefault();
         createTab();
       }
       // Cmd/Ctrl + W: Close Pane (with confirmation for dirty sessions)
-      if ((e.metaKey || e.ctrlKey) && e.key === "w") {
+      if ((e.metaKey || e.ctrlKey) && key === "w") {
         e.preventDefault();
         const tab = tabs.find((t) => t.id === activeTabId);
         if (
@@ -501,12 +506,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         }
       }
       // Cmd/Ctrl + D: Split Horizontal (Side-by-side)
-      if ((e.metaKey || e.ctrlKey) && e.key === "d" && !e.shiftKey) {
+      if ((e.metaKey || e.ctrlKey) && key === "d" && !e.shiftKey) {
         e.preventDefault();
         splitUserAction("horizontal");
       }
       // Cmd/Ctrl + Shift + D: Split Vertical (Stacked)
-      if ((e.metaKey || e.ctrlKey) && e.key === "d" && e.shiftKey) {
+      if ((e.metaKey || e.ctrlKey) && key === "d" && e.shiftKey) {
         e.preventDefault();
         splitUserAction("vertical");
       }

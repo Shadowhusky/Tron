@@ -379,18 +379,21 @@ const SmartInput: React.FC<SmartInputProps> = ({
         setShowCompletions(false);
         setCompletions([]);
         setGhostText("");
+        setSuggestedCommand("");
         try {
-          const cmd = await aiService.generateCommand(value);
+          const cmd = await aiService.generateCommand(value, (token) => {
+            setSuggestedCommand((prev) => (prev || "") + token);
+          });
           setSuggestedCommand(cmd);
           setFeedbackMsg("");
         } catch (err) {
           console.error(err);
           setFeedbackMsg("AI Error");
+          setSuggestedCommand(null);
         } finally {
           setIsLoading(false);
         }
-        return; // Don't clear value for advice yet? Or do we? Logic above cleared it.
-        // Wait, advice logic keeps value to show suggestion.
+        return;
       }
 
       // Cleanup
@@ -422,7 +425,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
               : theme === "light"
                 ? "bg-white border-gray-200 shadow-sm text-black"
                 : theme === "modern"
-                  ? "bg-gray-950/60 border-white/10 text-gray-100 backdrop-blur-md shadow-xl"
+                  ? "bg-white/[0.04] border-white/[0.1] text-gray-100 backdrop-blur-2xl shadow-[0_0_30px_rgba(168,85,247,0.05)]"
                   : "bg-[#0e0e0e] border-white/10 text-gray-200 shadow-xl"
         }`}
       >
@@ -678,16 +681,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
       )}
 
       {/* Advice/Command Suggestion Output */}
-      {suggestion && mode !== "agent" && (
+      {suggestion !== null && mode !== "agent" && (
         <div className="absolute bottom-full left-0 mb-2 w-full bg-[#1a1a1a]/90 backdrop-blur border border-purple-500/20 rounded-lg p-3 shadow-xl z-10 animate-in fade-in slide-in-from-bottom-1">
           <div className="flex items-start gap-3">
-            <Sparkles className="w-4 h-4 text-purple-400 mt-0.5 shrink-0" />
+            <Sparkles className={`w-4 h-4 text-purple-400 mt-0.5 shrink-0 ${isLoading ? "animate-pulse" : ""}`} />
             <div className="flex-1">
               <div className="text-purple-200 text-sm font-medium mb-1">
                 AI Suggestion
               </div>
-              <div className="text-gray-300 text-xs leading-relaxed">
-                {suggestion}
+              <div className="text-gray-300 text-xs leading-relaxed font-mono">
+                {suggestion || (isLoading ? <span className="text-gray-500 italic">Generating...</span> : "")}
+                {isLoading && suggestion && <span className="inline-block w-1.5 h-3 bg-purple-400/60 animate-pulse ml-0.5 align-middle" />}
               </div>
             </div>
           </div>

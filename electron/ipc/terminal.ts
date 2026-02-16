@@ -15,18 +15,32 @@ export function getSessionHistory() {
 }
 
 export function registerTerminalHandlers(getMainWindow: () => BrowserWindow | null) {
-  // Create Session
-  ipcMain.handle("terminal.create", (_event, { cols, rows, cwd }) => {
-    const shell = os.platform() === "win32" ? "powershell.exe" : "/bin/zsh";
+  // Check if a PTY session is still alive (for reconnection after renderer refresh)
+  ipcMain.handle("terminal.sessionExists", (_event, sessionId: string) => {
+    return sessions.has(sessionId);
+  });
+
+  // Create Session (or reconnect to existing one)
+  ipcMain.handle("terminal.create", (_event, { cols, rows, cwd, reconnectId }) => {
+    // If reconnectId is provided and a PTY with that ID exists, reuse it
+    if (reconnectId && sessions.has(reconnectId)) {
+      const existing = sessions.get(reconnectId)!;
+      try { existing.resize(cols || 80, rows || 30); } catch {}
+      return reconnectId;
+    }
+
+    const isWin = os.platform() === "win32";
+    const shell = isWin ? "powershell.exe" : "/bin/zsh";
+    const shellArgs = isWin ? [] : ["+o", "PROMPT_SP"];
     const sessionId = randomUUID();
 
     try {
-      const ptyProcess = pty.spawn(shell, [], {
+      const ptyProcess = pty.spawn(shell, shellArgs, {
         name: "xterm-256color",
         cols: cols || 80,
         rows: rows || 30,
         cwd: cwd || process.env.HOME,
-        env: process.env,
+        env: { ...process.env, PROMPT_EOL_MARK: "" },
       });
 
       sessionHistory.set(sessionId, "");
