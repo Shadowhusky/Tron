@@ -1,73 +1,61 @@
-# React + TypeScript + Vite
+# Tron
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Self-hosted AI-powered terminal. Run shells, use local or cloud LLMs (Ollama, OpenAI, Claude), and get agent-assisted commands from your desktop.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Prerequisites
 
-## React Compiler
+- **Node.js** 18+ and npm
+- **Ollama** (optional, for local AI): [ollama.ai](https://ollama.ai) — install and run `ollama pull <model>` for models like `llama3` or `mistral`
+- For cloud AI: OpenAI or Anthropic API key
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## Install
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+git clone <repo-url>
+cd tron
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+---
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Run
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| Command | Description |
+|--------|-------------|
+| `npm run dev` | Development (Electron + Vite). Default port 5173. |
+| `PORT=3000 npm run dev` | Development on port 3000. |
+| `npm run build` | Production build and Electron app package. |
+
+---
+
+## Usage
+
+### Terminal
+
+- **New tab:** `Cmd+T` (Mac) / `Ctrl+T` (Windows/Linux)
+- **Close pane/tab:** `Cmd+W` / `Ctrl+W`
+- **Split vertical:** `Cmd+D` / `Ctrl+D`
+- **Split horizontal:** `Cmd+Shift+D` / `Ctrl+Shift+D`
+
+### Input modes (SmartInput)
+
+| Mode | Shortcut | Use |
+|------|----------|-----|
+| Command | `Cmd+1` | Type shell commands; Tab for completions, history. |
+| Advice | `Cmd+2` | Ask AI for command suggestions or explanations. |
+| Agent | `Cmd+3` | Ask agent to run commands (Ollama only, beta). |
+
+### Settings
+
+- **Open:** `Cmd+,` / `Ctrl+,` or gear icon in the UI.
+- **AI:** Choose provider (Ollama, OpenAI, Anthropic), model, and API key (for cloud). For Ollama, ensure the service is running and the chosen model is pulled.
+
+---
+
+## Tech
+
+Electron, React, Vite, xterm.js, Tailwind. AI: Ollama (local), OpenAI, Anthropic (cloud).

@@ -45,38 +45,99 @@ const crypto_1 = require("crypto");
 if (require('electron-squirrel-startup')) {
     electron_1.app.quit();
 }
+// --- Global State ---
 let mainWindow = null;
-// Store multiple PTY sessions: ID -> IPty
 const sessions = new Map();
+const sessionHistory = new Map();
+// --- Menu Helper ---
+const createMenu = (win) => {
+    const isMac = process.platform === 'darwin';
+    const template = [
+        ...(isMac ? [{
+                label: electron_1.app.name,
+                submenu: [
+                    { role: 'about' },
+                    { type: 'separator' },
+                    { role: 'services' },
+                    { type: 'separator' },
+                    { role: 'hide' },
+                    { role: 'hideOthers' },
+                    { role: 'unhide' },
+                    { type: 'separator' },
+                    { role: 'quit' }
+                ]
+            }] : []),
+        {
+            label: 'File',
+            submenu: [
+                {
+                    label: 'New Tab',
+                    accelerator: 'CmdOrCtrl+T',
+                    click: () => {
+                        win.webContents.send('menu.createTab');
+                    }
+                },
+                {
+                    label: 'Close Tab',
+                    accelerator: 'CmdOrCtrl+W',
+                    click: () => {
+                        win.webContents.send('menu.closeTab');
+                    }
+                },
+                { type: 'separator' },
+                { role: 'close' }
+            ]
+        },
+        { role: 'editMenu' },
+        { role: 'viewMenu' },
+        { role: 'windowMenu' },
+        {
+            role: 'help',
+            submenu: [
+                {
+                    label: 'Learn More',
+                    click: async () => {
+                        const { shell } = await Promise.resolve().then(() => __importStar(require('electron')));
+                        await shell.openExternal('https://electronjs.org');
+                    }
+                }
+            ]
+        }
+    ];
+    const menu = electron_1.Menu.buildFromTemplate(template);
+    electron_1.Menu.setApplicationMenu(menu);
+};
+// --- Window Creation ---
 const createWindow = () => {
-    // Create the browser window.
+    const preloadPath = path_1.default.join(__dirname, 'preload.js');
+    console.log('Preload Path:', preloadPath);
     mainWindow = new electron_1.BrowserWindow({
         width: 1000,
         height: 700,
         webPreferences: {
-            preload: path_1.default.join(__dirname, 'preload.js'),
+            preload: preloadPath,
             nodeIntegration: false,
             contextIsolation: true,
         },
         titleBarStyle: 'hiddenInset',
         vibrancy: 'under-window',
         visualEffectState: 'active',
-        backgroundColor: '#00000000', // Transparent for vibrancy
+        backgroundColor: '#00000000',
     });
-    // Check if we are in dev mode
+    createMenu(mainWindow);
     const isDev = !electron_1.app.isPackaged;
+    const devPort = process.env.PORT || 5173;
     if (isDev) {
-        mainWindow.loadURL('http://localhost:5173');
+        mainWindow.loadURL(`http://localhost:${devPort}`);
         mainWindow.webContents.openDevTools();
     }
     else {
         mainWindow.loadFile(path_1.default.join(__dirname, '../dist-react/index.html'));
     }
 };
-// --- IPC Handlers for Multi-Session ---
-const sessionHistory = new Map(); // Simple in-memory buffer for restore
+// --- IPC Handlers ---
 const initializeIpcHandlers = () => {
-    // Create a new PTY session
+    // Create Session
     electron_1.ipcMain.handle('terminal.create', (event, { cols, rows, cwd }) => {
         const shell = os_1.default.platform() === 'win32' ? 'powershell.exe' : '/bin/zsh';
         const sessionId = (0, crypto_1.randomUUID)();
@@ -88,23 +149,20 @@ const initializeIpcHandlers = () => {
                 cwd: cwd || process.env.HOME,
                 env: process.env
             });
-            sessionHistory.set(sessionId, ''); // Init history
-            // Handle incoming data
+            sessionHistory.set(sessionId, '');
             ptyProcess.onData((data) => {
-                // Buffer data (limit to ~100KB for performance)
                 const currentHistory = sessionHistory.get(sessionId) || '';
                 if (currentHistory.length < 100000) {
                     sessionHistory.set(sessionId, currentHistory + data);
                 }
                 else {
-                    // Rotate buffer (keep last 80k)
                     sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
                 }
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('terminal.incomingData', { id: sessionId, data });
                 }
             });
-            ptyProcess.onExit(({ exitCode, signal }) => {
+            ptyProcess.onExit(({ exitCode }) => {
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('terminal.exit', { id: sessionId, exitCode });
                 }
@@ -119,21 +177,17 @@ const initializeIpcHandlers = () => {
             throw e;
         }
     });
-    // Write to a specific session
+    // Terminal Input/Output/Resize
     electron_1.ipcMain.on('terminal.write', (event, { id, data }) => {
         const session = sessions.get(id);
-        if (session) {
+        if (session)
             session.write(data);
-        }
     });
-    // Resize a specific session
     electron_1.ipcMain.on('terminal.resize', (event, { id, cols, rows }) => {
         const session = sessions.get(id);
-        if (session) {
+        if (session)
             session.resize(cols, rows);
-        }
     });
-    // Close/Kill a session
     electron_1.ipcMain.on('terminal.close', (event, id) => {
         const session = sessions.get(id);
         if (session) {
@@ -142,7 +196,6 @@ const initializeIpcHandlers = () => {
             sessionHistory.delete(id);
         }
     });
-    // Check if command exists
     electron_1.ipcMain.handle('terminal.checkCommand', async (event, command) => {
         const { exec } = await Promise.resolve().then(() => __importStar(require('child_process')));
         const { promisify } = await Promise.resolve().then(() => __importStar(require('util')));
@@ -156,6 +209,40 @@ const initializeIpcHandlers = () => {
             return false;
         }
     });
+    // Agent Execution
+    electron_1.ipcMain.handle('terminal.exec', async (event, { sessionId, command }) => {
+        const session = sessions.get(sessionId);
+        const { exec } = await Promise.resolve().then(() => __importStar(require('child_process')));
+        const { promisify } = await Promise.resolve().then(() => __importStar(require('util')));
+        const execAsync = promisify(exec);
+        let cwd = process.env.HOME || '/';
+        if (session) {
+            try {
+                const pid = session.pid;
+                if (os_1.default.platform() === 'darwin') {
+                    // Try to get CWD of the process
+                    const { stdout } = await execAsync(`lsof -p ${pid} | grep cwd | awk '{print $9}'`);
+                    if (stdout.trim())
+                        cwd = stdout.trim();
+                }
+                else if (os_1.default.platform() === 'linux') {
+                    const { stdout } = await execAsync(`readlink /proc/${pid}/cwd`);
+                    if (stdout.trim())
+                        cwd = stdout.trim();
+                }
+            }
+            catch (e) {
+                console.error("Error fetching CWD:", e);
+            }
+        }
+        try {
+            const { stdout, stderr } = await execAsync(command, { cwd });
+            return { stdout, stderr, exitCode: 0 };
+        }
+        catch (e) {
+            return { stdout: '', stderr: e.message, exitCode: e.code || 1 };
+        }
+    });
     // Get CWD
     electron_1.ipcMain.handle('terminal.getCwd', async (event, sessionId) => {
         const session = sessions.get(sessionId);
@@ -167,9 +254,8 @@ const initializeIpcHandlers = () => {
         const execAsync = promisify(exec);
         try {
             if (os_1.default.platform() === 'darwin') {
-                const { stdout } = await execAsync(`lsof -d cwd -Fn -p ${pid} 2>/dev/null | grep '^n' | head -1 | cut -c2-`);
-                const cwd = stdout.trim();
-                return cwd || null;
+                const { stdout: lsofOut } = await execAsync(`lsof -p ${pid} | grep cwd | awk '{print $NF}' `);
+                return lsofOut.trim() || null;
             }
             else if (os_1.default.platform() === 'linux') {
                 const { stdout } = await execAsync(`readlink /proc/${pid}/cwd`);
@@ -181,7 +267,6 @@ const initializeIpcHandlers = () => {
             return null;
         }
     });
-    // Get completions
     electron_1.ipcMain.handle('terminal.getCompletions', async (event, { prefix, cwd }) => {
         const { exec } = await Promise.resolve().then(() => __importStar(require('child_process')));
         const { promisify } = await Promise.resolve().then(() => __importStar(require('util')));
@@ -189,43 +274,31 @@ const initializeIpcHandlers = () => {
         const workDir = cwd || process.env.HOME || '/';
         try {
             const parts = prefix.trim().split(/\s+/);
-            if (parts.length <= 1) {
-                const word = parts[0] || '';
-                if (!word)
-                    return [];
-                const { stdout } = await execAsync(`bash -c 'compgen -c "${word}" 2>/dev/null | head -20'`, { cwd: workDir });
-                const results = stdout.trim().split('\n').filter(Boolean);
-                return [...new Set(results)].sort((a, b) => a.length - b.length).slice(0, 10);
-            }
-            else {
-                const lastWord = parts[parts.length - 1];
-                const { stdout } = await execAsync(`bash -c 'compgen -f "${lastWord}" 2>/dev/null | head -20'`, { cwd: workDir });
-                const results = stdout.trim().split('\n').filter(Boolean);
-                return results.slice(0, 10);
-            }
+            const cmd = parts.length <= 1
+                ? `bash -c 'compgen -c "${parts[0] || ''}" 2>/dev/null | head -20'`
+                : `bash -c 'compgen -f "${parts[parts.length - 1]}" 2>/dev/null | head -20'`;
+            const { stdout } = await execAsync(cmd, { cwd: workDir });
+            const results = stdout.trim().split('\n').filter(Boolean);
+            return [...new Set(results)].sort((a, b) => a.length - b.length).slice(0, 10);
         }
         catch (e) {
             return [];
         }
     });
-    // Get session history (for restore on split)
     electron_1.ipcMain.handle('terminal.getHistory', (event, sessionId) => {
         return sessionHistory.get(sessionId) || '';
     });
 };
-// Initialize handlers ONCE
 initializeIpcHandlers();
 electron_1.app.whenReady().then(() => {
     createWindow();
     electron_1.app.on('activate', () => {
-        if (electron_1.BrowserWindow.getAllWindows().length === 0) {
+        if (electron_1.BrowserWindow.getAllWindows().length === 0)
             createWindow();
-        }
     });
 });
 electron_1.app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    if (process.platform !== 'darwin')
         electron_1.app.quit();
-    }
 });
 //# sourceMappingURL=main.js.map

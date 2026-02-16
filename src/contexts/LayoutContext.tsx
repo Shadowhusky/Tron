@@ -33,14 +33,102 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [sessions, setSessions] = useState<Map<string, TerminalSession>>(new Map());
 
     // Helper: Create a new PTY and return its ID
-    const createPTY = async (): Promise<string> => {
+    const createPTY = async (cwd?: string): Promise<string> => {
         if (window.electron) {
-            return await window.electron.ipcRenderer.invoke('terminal.create', { cols: 80, rows: 30 });
+            return await window.electron.ipcRenderer.invoke('terminal.create', { cols: 80, rows: 30, cwd });
         } else {
             console.warn('Mocking PTY creation');
             return `mock-${uuid()}`;
         }
     };
+
+    // Persistence Logic
+    useEffect(() => {
+        if (tabs.length > 0) {
+            const state = {
+                tabs,
+                activeTabId,
+                sessionCwds: Array.from(sessions.entries()).reduce((acc, [id, session]) => ({
+                    ...acc,
+                    [id]: session.cwd || ''
+                }), {} as Record<string, string>)
+            };
+            localStorage.setItem('tron_layout_v1', JSON.stringify(state));
+        }
+    }, [tabs, activeTabId, sessions]);
+
+    // Hydration / Initialization
+    useEffect(() => {
+        const init = async () => {
+            const saved = localStorage.getItem('tron_layout_v1');
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    const savedTabs: Tab[] = parsed.tabs;
+                    const savedCwds: Record<string, string> = parsed.sessionCwds || {};
+
+                    console.log("Hydrating layout...", savedTabs);
+
+                    if (savedTabs.length === 0) {
+                        createTab();
+                        return;
+                    }
+
+                    const newSessions = new Map<string, TerminalSession>();
+                    const regeneratedTabs: Tab[] = [];
+
+                    for (const tab of savedTabs) {
+                        // Recursively regenerate sessions for this tab
+                        const regenerateNode = async (node: LayoutNode): Promise<LayoutNode> => {
+                            if (node.type === 'leaf') {
+                                // Found a session, recreate process
+                                const oldId = node.sessionId;
+                                const cwd = savedCwds[oldId];
+                                const newId = await createPTY(cwd);
+                                newSessions.set(newId, { id: newId, title: 'Terminal', cwd });
+                                return { ...node, sessionId: newId };
+                            } else {
+                                const newChildren = await Promise.all(node.children.map(c => regenerateNode(c)));
+                                return { ...node, children: newChildren };
+                            }
+                        };
+
+                        const newRoot = await regenerateNode(tab.root);
+
+                        // Fix activeSessionId if it pointed to an old session
+                        // Since we don't track old->new mapping easily across tree, 
+                        // just pick the first leaf's session as active for safety, or try to map it.
+                        // Actually, let's just find the first leaf in the new root.
+                        const findFirstSession = (n: LayoutNode): string => {
+                            if (n.type === 'leaf') return n.sessionId;
+                            return findFirstSession(n.children[0]);
+                        };
+
+                        regeneratedTabs.push({
+                            ...tab,
+                            root: newRoot,
+                            activeSessionId: findFirstSession(newRoot)
+                        });
+                    }
+
+                    setSessions(newSessions);
+                    setTabs(regeneratedTabs);
+                    setActiveTabId(parsed.activeTabId || regeneratedTabs[0].id);
+                    return;
+
+                } catch (e) {
+                    console.error("Failed to hydrate state:", e);
+                    localStorage.removeItem('tron_layout_v1');
+                }
+            }
+
+            // Fallback if no save or error
+            createTab();
+        };
+
+        // Run once
+        init();
+    }, []);
 
     const createTab = async () => {
         const sessionId = await createPTY();
@@ -80,6 +168,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (tabId === activeTabId && newTabs.length > 0) {
                 setActiveTabId(newTabs[newTabs.length - 1].id);
             }
+            // If we closed the last tab, clear specific state or let effect handle it?
+            // If newTabs is empty, the persistence effect will save generic empty state.
+            // But we generally want at least one tab.
+            // The hydration check handles empty array.
             return newTabs;
         });
     };
@@ -93,8 +185,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const tab = getActiveTab();
         if (!tab || !tab.activeSessionId) return;
 
-        const newSessionId = await createPTY();
-        setSessions(prev => new Map(prev).set(newSessionId, { id: newSessionId, title: 'Terminal' }));
+        // Current session CWD
+        const currentSession = sessions.get(tab.activeSessionId);
+        const cwd = currentSession?.cwd;
+
+        const newSessionId = await createPTY(cwd);
+        setSessions(prev => new Map(prev).set(newSessionId, { id: newSessionId, title: 'Terminal', cwd }));
 
         // Recursive function to find and split the active leaf
         const splitNode = (node: LayoutNode, targetId: string): LayoutNode => {
@@ -208,33 +304,27 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
     };
 
-    // Initial tab
-    useEffect(() => {
-        if (tabs.length === 0) {
-            createTab();
-        }
-    }, [tabs.length]);
-
     const activeSessionId = getActiveTab()?.activeSessionId || null;
 
-    // Poll CWD for the active session every 2 seconds
+    // Poll CWD for the active session every 1 second
     useEffect(() => {
         if (!activeSessionId || !window.electron) return;
 
         const pollCwd = async () => {
             try {
                 const cwd = await window.electron.ipcRenderer.getCwd(activeSessionId);
+                // console.log('Parsed CWD:', cwd); // Debug logging
                 if (cwd) {
                     updateSessionCwd(activeSessionId, cwd);
                 }
             } catch (e) {
-                // Silently ignore errors (session may have been closed)
+                console.warn('Error polling CWD:', e);
             }
         };
 
         // Poll immediately, then on interval
         pollCwd();
-        const interval = setInterval(pollCwd, 2000);
+        const interval = setInterval(pollCwd, 1000);
         return () => clearInterval(interval);
     }, [activeSessionId]);
 
@@ -263,9 +353,26 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
         };
 
+
+        // Handle Menu IPC
+        if (window.electron) {
+            const removeCloseListener = window.electron.ipcRenderer.on('menu.closeTab', () => {
+                closeActivePane();
+            });
+            const removeCreateListener = window.electron.ipcRenderer.on('menu.createTab', () => {
+                createTab();
+            });
+
+            return () => {
+                removeCloseListener();
+                removeCreateListener();
+                window.removeEventListener('keydown', handleKeyDown);
+            };
+        }
+
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [tabs, activeTabId, activeSessionId]);
+    }, [tabs, activeTabId, activeSessionId, closeActivePane, createTab]);
 
     return (
         <LayoutContext.Provider value={{

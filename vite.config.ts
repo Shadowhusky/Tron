@@ -10,7 +10,7 @@ export default defineConfig({
     outDir: 'dist-react', // Build React app to dist-react to avoid conflict with Electron main
   },
   server: {
-    port: 5173,
+    port: Number(process.env.PORT) || 5173,
     strictPort: true,
   }
 })

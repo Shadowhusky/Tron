@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
+console.log('Preload script loaded!');
 electron_1.contextBridge.exposeInMainWorld('electron', {
     ipcRenderer: {
         invoke: (channel, data) => electron_1.ipcRenderer.invoke(channel, data),
@@ -21,6 +22,7 @@ electron_1.contextBridge.exposeInMainWorld('electron', {
         getCwd: (sessionId) => electron_1.ipcRenderer.invoke('terminal.getCwd', sessionId),
         getCompletions: (prefix, cwd) => electron_1.ipcRenderer.invoke('terminal.getCompletions', { prefix, cwd }),
         getHistory: (sessionId) => electron_1.ipcRenderer.invoke('terminal.getHistory', sessionId),
+        exec: (sessionId, command) => electron_1.ipcRenderer.invoke('terminal.exec', { sessionId, command }),
     }
 });
 //# sourceMappingURL=preload.js.map

@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+console.log('Preload script loaded!');
+
+
 contextBridge.exposeInMainWorld('electron', {
     ipcRenderer: {
         invoke: (channel: string, data?: any) => ipcRenderer.invoke(channel, data),
