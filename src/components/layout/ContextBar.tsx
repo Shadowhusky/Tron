@@ -192,9 +192,11 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
           <button
             onClick={() => setIsOverlayVisible(true)}
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors animate-in fade-in"
+            title="Show Agent Panel (Cmd+.)"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
             <span className="text-[10px]">Show Agent</span>
+            <span className="text-[9px] opacity-50 ml-0.5">&#8984;.</span>
           </button>
         )}
       </div>

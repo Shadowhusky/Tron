@@ -63,6 +63,21 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node }) => {
       Array<{ type: "command" | "agent"; content: string }>
     >([]);
 
+    // Cmd+. to toggle agent panel
+    useEffect(() => {
+      if (!isActive) return;
+      const handleKey = (e: KeyboardEvent) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+          e.preventDefault();
+          if (agentThread.length > 0) {
+            setIsOverlayVisible(!isOverlayVisible);
+          }
+        }
+      };
+      window.addEventListener("keydown", handleKey);
+      return () => window.removeEventListener("keydown", handleKey);
+    }, [isActive, isOverlayVisible, agentThread.length]);
+
     // Process Queue Effect
     useEffect(() => {
       if (!isAgentRunning && inputQueue.length > 0) {
@@ -86,7 +101,7 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node }) => {
       if (window.electron) {
         window.electron.ipcRenderer.send("terminal.write", {
           id: node.sessionId,
-          data: cmd + "\r",
+          data: "\x15" + cmd + "\r",
         });
         addToHistory(cmd);
       }

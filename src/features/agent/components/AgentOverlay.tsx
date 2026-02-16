@@ -84,8 +84,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   const toastIdRef = useRef(0);
 
   // Watch thread for execution-state steps → spawn toasts
-  const prevLenRef = useRef(0);
+  // Initialize to current length so remount doesn't replay old toasts
+  const prevLenRef = useRef(agentThread.length);
+  const mountedRef = useRef(false);
   useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      prevLenRef.current = agentThread.length;
+      return;
+    }
     if (agentThread.length === 0) {
       prevLenRef.current = 0;
       return;
@@ -198,10 +205,10 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
                     : "text-gray-400 hover:text-white hover:bg-white/10"
                 }`}
-                title="Minimize panel — reopen from footer"
-              >
-                Minimize
-              </button>
+              title="Minimize panel (Cmd+.)"
+            >
+              Minimize <span className="opacity-50 ml-0.5">&#8984;.</span>
+            </button>
             )}
           </div>
 

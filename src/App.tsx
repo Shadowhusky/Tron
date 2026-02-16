@@ -79,11 +79,14 @@ const AppContent = () => {
           className="flex items-center gap-1 flex-1 overflow-x-auto no-scrollbar"
           style={{ WebkitAppRegion: "drag" } as any}
         >
-          {tabs.map((tab, tabIndex) => (
+          {tabs.map((tab, tabIndex) => {
+            const showLeft = dragOverIndex === tabIndex && draggingIndex !== null && draggingIndex > tabIndex;
+            const showRight = dragOverIndex === tabIndex && draggingIndex !== null && draggingIndex < tabIndex;
+            return (
             <div key={tab.id} className="relative flex items-center">
-              {/* Drop indicator — left edge */}
-              {dragOverIndex === tabIndex && draggingIndex !== null && draggingIndex !== tabIndex && (
-                <div className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 -translate-x-0.5 animate-pulse" />
+              {/* Drop indicator — left (dragging leftward) */}
+              {showLeft && (
+                <div className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 -translate-x-0.5" />
               )}
               <div
                 onClick={() => selectTab(tab.id)}
@@ -92,7 +95,6 @@ const AppContent = () => {
                   dragTabRef.current = tabIndex;
                   setDraggingIndex(tabIndex);
                   e.dataTransfer.effectAllowed = "move";
-                  // Custom ghost: clone the tab element with styling
                   const ghost = e.currentTarget.cloneNode(true) as HTMLElement;
                   ghost.style.position = "absolute";
                   ghost.style.top = "-1000px";
@@ -174,12 +176,13 @@ const AppContent = () => {
                   </svg>
                 </button>
               </div>
-              {/* Drop indicator — right edge of last tab */}
-              {tabIndex === tabs.length - 1 && dragOverIndex === tabs.length && draggingIndex !== null && (
-                <div className="absolute right-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 translate-x-0.5 animate-pulse" />
+              {/* Drop indicator — right (dragging rightward) */}
+              {showRight && (
+                <div className="absolute right-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 translate-x-0.5" />
               )}
             </div>
-          ))}
+            );
+          })}
           <button
             onClick={createTab}
             style={{ WebkitAppRegion: "no-drag" } as any}
