@@ -204,6 +204,8 @@ Task: ${prompt}
     pendingCommand,
     isOverlayVisible,
     setIsOverlayVisible,
+    alwaysAllowSession,
+    setAlwaysAllowSession,
     // Actions
     handleCommand,
     handleAgentRun,

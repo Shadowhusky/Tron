@@ -8,17 +8,20 @@ import SplitPane from "./components/layout/SplitPane";
 import TabBar from "./components/layout/TabBar";
 import { STORAGE_KEYS } from "./constants/storage";
 import { themeClass } from "./utils/theme";
+import { aiService } from "./services/ai";
 
 // Inner component to use contexts
 const AppContent = () => {
   const {
     tabs,
     activeTabId,
+    sessions,
     createTab,
     selectTab,
     closeTab,
     openSettingsTab,
     reorderTabs,
+    updateSessionConfig,
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -33,6 +36,13 @@ const AppContent = () => {
   const handleOnboardingComplete = () => {
     localStorage.setItem(STORAGE_KEYS.CONFIGURED, "true");
     setShowOnboarding(false);
+    // Apply the newly saved config to all existing sessions
+    const newConfig = aiService.getConfig();
+    sessions.forEach((_, sessionId) => {
+      if (sessionId !== "settings") {
+        updateSessionConfig(sessionId, newConfig);
+      }
+    });
   };
 
   // Global Shortcuts

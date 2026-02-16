@@ -28,6 +28,8 @@ interface LayoutContextType {
   splitUserAction: (direction: SplitDirection) => Promise<void>;
   closeSession: (sessionId: string) => void;
   updateSessionConfig: (sessionId: string, config: Partial<AIConfig>) => void;
+  markSessionDirty: (sessionId: string) => void;
+  updateSplitSizes: (path: number[], sizes: number[]) => void;
   openSettingsTab: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
 }
@@ -271,13 +273,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     const cwd = currentSession?.cwd;
 
     const newSessionId = await createPTY(cwd);
-    const defaultConfig = aiService.getConfig();
+    const sessionConfig = currentSession?.aiConfig || aiService.getConfig();
     setSessions((prev) =>
       new Map(prev).set(newSessionId, {
         id: newSessionId,
         title: "Terminal",
         cwd,
-        aiConfig: defaultConfig,
+        aiConfig: sessionConfig,
       }),
     );
 
@@ -415,6 +417,40 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  const markSessionDirty = (sessionId: string) => {
+    setSessions((prev) => {
+      const session = prev.get(sessionId);
+      if (!session || session.dirty) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, { ...session, dirty: true });
+      return next;
+    });
+  };
+
+  const updateSplitSizes = (path: number[], newSizes: number[]) => {
+    const updateAtPath = (node: LayoutNode, p: number[]): LayoutNode => {
+      if (p.length === 0) {
+        if (node.type === "split") return { ...node, sizes: newSizes };
+        return node;
+      }
+      if (node.type === "split") {
+        return {
+          ...node,
+          children: node.children.map((child, i) =>
+            i === p[0] ? updateAtPath(child, p.slice(1)) : child,
+          ),
+        };
+      }
+      return node;
+    };
+
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId ? { ...t, root: updateAtPath(t.root, path) } : t,
+      ),
+    );
+  };
+
   const activeSessionId = getActiveTab()?.activeSessionId || null;
 
   // Poll CWD for the active session every 1 second
@@ -448,7 +484,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         e.preventDefault();
         createTab();
       }
-      // Cmd/Ctrl + W: Close Pane (with confirmation)
+      // Cmd/Ctrl + W: Close Pane (with confirmation for dirty sessions)
       if ((e.metaKey || e.ctrlKey) && e.key === "w") {
         e.preventDefault();
         const tab = tabs.find((t) => t.id === activeTabId);
@@ -457,8 +493,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           tab.root.contentType === "settings"
         ) {
           closeActivePane();
-        } else if (window.confirm("Close this terminal session?")) {
-          closeActivePane();
+        } else {
+          const session = sessions.get(tab?.activeSessionId || "");
+          if (!session?.dirty || window.confirm("Close this terminal session?")) {
+            closeActivePane();
+          }
         }
       }
       // Cmd/Ctrl + D: Split Horizontal (Side-by-side)
@@ -513,6 +552,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         splitUserAction,
         closeSession,
         updateSessionConfig,
+        markSessionDirty,
+        updateSplitSizes,
         openSettingsTab,
         reorderTabs,
       }}

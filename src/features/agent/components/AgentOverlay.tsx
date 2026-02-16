@@ -14,6 +14,8 @@ interface AgentOverlayProps {
   isAgentRunning: boolean;
   agentThread: AgentStep[];
   pendingCommand: string | null;
+  autoExecuteEnabled: boolean;
+  onToggleAutoExecute: () => void;
   onClose: () => void;
   onPermission: (choice: "allow" | "always" | "deny") => void;
 }
@@ -66,6 +68,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   isAgentRunning,
   agentThread,
   pendingCommand,
+  autoExecuteEnabled,
+  onToggleAutoExecute,
   onClose,
   onPermission,
 }) => {
@@ -193,19 +197,34 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 {statusText}
               </span>
             </div>
-            {panelSteps.length > 0 && (
-              <button
-                onClick={onClose}
-                className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded transition-colors ${
-                  isLight
-                    ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
-                    : "text-gray-400 hover:text-white hover:bg-white/10"
-                }`}
-              title="Minimize panel (Cmd+.)"
-            >
-              Minimize <span className="opacity-50 ml-0.5">&#8984;.</span>
-            </button>
-            )}
+            <div className="flex items-center gap-2">
+              {autoExecuteEnabled && (
+                <button
+                  onClick={onToggleAutoExecute}
+                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                    isLight
+                      ? "border-orange-300 text-orange-600 bg-orange-50 hover:bg-orange-100"
+                      : "border-orange-500/30 text-orange-400 bg-orange-500/10 hover:bg-orange-500/20"
+                  }`}
+                  title="Disable auto-execute and require permission for each command"
+                >
+                  Auto-Execute ON
+                </button>
+              )}
+              {panelSteps.length > 0 && (
+                <button
+                  onClick={onClose}
+                  className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded transition-colors ${
+                    isLight
+                      ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
+                      : "text-gray-400 hover:text-white hover:bg-white/10"
+                  }`}
+                  title="Minimize panel (Cmd+.)"
+                >
+                  Minimize <span className="opacity-50 ml-0.5">&#8984;.</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Thread History */}

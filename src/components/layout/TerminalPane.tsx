@@ -13,7 +13,7 @@ interface TerminalPaneProps {
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions } = useLayout();
+  const { activeSessionId, sessions, markSessionDirty } = useLayout();
   const { resolvedTheme } = useTheme();
   const isActive = sessionId === activeSessionId;
   const session = sessions.get(sessionId);
@@ -25,6 +25,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     pendingCommand,
     isOverlayVisible,
     setIsOverlayVisible,
+    alwaysAllowSession,
+    setAlwaysAllowSession,
     handleCommand,
     handleAgentRun,
     handlePermission,
@@ -68,6 +70,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     setInputQueue((prev) => [...prev, item]);
   };
 
+  const wrappedHandleCommand = (cmd: string, queueCallback?: any) => {
+    markSessionDirty(sessionId);
+    handleCommand(cmd, queueCallback);
+  };
+
+  const wrappedHandleAgentRun = async (prompt: string, queueCallback?: any) => {
+    markSessionDirty(sessionId);
+    await handleAgentRun(prompt, queueCallback);
+  };
+
   return (
     <div
       className={`w-full h-full relative flex flex-col border border-transparent ${isActive ? "ring-1 ring-purple-500/50 z-10" : "opacity-80 hover:opacity-100"}`}
@@ -85,6 +97,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             isAgentRunning={isAgentRunning}
             agentThread={agentThread}
             pendingCommand={pendingCommand}
+            autoExecuteEnabled={alwaysAllowSession}
+            onToggleAutoExecute={() => setAlwaysAllowSession(!alwaysAllowSession)}
             onClose={() => setIsOverlayVisible(false)}
             onPermission={handlePermission}
           />
@@ -98,10 +112,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         })}`}
       >
         <SmartInput
-          onSend={(cmd) => handleCommand(cmd, queueItem as any)}
-          onRunAgent={(prompt) => handleAgentRun(prompt, queueItem as any)}
+          onSend={(cmd) => wrappedHandleCommand(cmd, queueItem as any)}
+          onRunAgent={(prompt) => wrappedHandleAgentRun(prompt, queueItem as any)}
           isAgentRunning={isAgentRunning}
           pendingCommand={pendingCommand}
+          sessionId={sessionId}
         />
       </div>
       <ContextBar sessionId={sessionId} />
