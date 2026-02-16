@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { STORAGE_KEYS } from '../constants/storage';
 
 interface HistoryContextType {
     history: string[];
@@ -17,7 +18,7 @@ export const useHistory = () => {
 export const HistoryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [history, setHistory] = useState<string[]>(() => {
         try {
-            const stored = localStorage.getItem('tron_global_history');
+            const stored = localStorage.getItem(STORAGE_KEYS.GLOBAL_HISTORY);
             return stored ? JSON.parse(stored) : [];
         } catch {
             return [];
@@ -25,7 +26,7 @@ export const HistoryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     useEffect(() => {
-        localStorage.setItem('tron_global_history', JSON.stringify(history));
+        localStorage.setItem(STORAGE_KEYS.GLOBAL_HISTORY, JSON.stringify(history));
     }, [history]);
 
     const addToHistory = (command: string) => {

@@ -1,9 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from "react";
-
-interface AgentStep {
-  step: string;
-  output: string;
-}
+import type { AgentStep } from "../types";
 
 interface AgentState {
   agentThread: AgentStep[];

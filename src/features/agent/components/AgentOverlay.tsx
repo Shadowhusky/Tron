@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Command,
   Check,
@@ -7,11 +7,7 @@ import {
   Terminal as TerminalIcon,
 } from "lucide-react";
 import { useTheme } from "../../../contexts/ThemeContext";
-
-interface AgentStep {
-  step: string;
-  output: string;
-}
+import type { AgentStep } from "../../../types";
 
 interface AgentOverlayProps {
   isThinking: boolean;

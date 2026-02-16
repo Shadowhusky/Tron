@@ -7,6 +7,8 @@ import type {
   AIConfig,
 } from "../types";
 import { aiService } from "../services/ai";
+import { STORAGE_KEYS } from "../constants/storage";
+import { IPC } from "../constants/ipc";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -25,7 +27,6 @@ interface LayoutContextType {
   selectTab: (tabId: string) => void;
   splitUserAction: (direction: SplitDirection) => Promise<void>;
   closeSession: (sessionId: string) => void;
-  registerSession: (id: string) => void;
   updateSessionConfig: (sessionId: string, config: Partial<AIConfig>) => void;
   openSettingsTab: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
@@ -51,7 +52,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   // Helper: Create a new PTY and return its ID
   const createPTY = async (cwd?: string): Promise<string> => {
     if (window.electron) {
-      return await window.electron.ipcRenderer.invoke("terminal.create", {
+      return await window.electron.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
         cols: 80,
         rows: 30,
         cwd,
@@ -83,14 +84,14 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           {} as Record<string, AIConfig | undefined>,
         ),
       };
-      localStorage.setItem("tron_layout_v1", JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
     }
   }, [tabs, activeTabId, sessions]);
 
   // Hydration / Initialization
   useEffect(() => {
     const init = async () => {
-      const saved = localStorage.getItem("tron_layout_v1");
+      const saved = localStorage.getItem(STORAGE_KEYS.LAYOUT);
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
@@ -161,7 +162,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           return;
         } catch (e) {
           console.error("Failed to hydrate state:", e);
-          localStorage.removeItem("tron_layout_v1");
+          localStorage.removeItem(STORAGE_KEYS.LAYOUT);
         }
       }
 
@@ -372,16 +373,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Called when xterm connects or session is valid
-  const registerSession = () => {
-    // already handled in create methods for now
-  };
-
   const closeSession = (sessionId: string) => {
     if (sessionId === "settings") return; // settings is pseudo-session
 
     if (window.electron) {
-      window.electron.ipcRenderer.send("terminal.close", sessionId);
+      window.electron.ipcRenderer.send(IPC.TERMINAL_CLOSE, sessionId);
     }
     setSessions((prev) => {
       const next = new Map(prev);
@@ -482,13 +478,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     // Handle Menu IPC
     if (window.electron) {
       const removeCloseListener = window.electron.ipcRenderer.on(
-        "menu.closeTab",
+        IPC.MENU_CLOSE_TAB,
         () => {
           closeActivePane();
         },
       );
       const removeCreateListener = window.electron.ipcRenderer.on(
-        "menu.createTab",
+        IPC.MENU_CREATE_TAB,
         () => {
           createTab();
         },
@@ -516,7 +512,6 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         selectTab,
         splitUserAction,
         closeSession,
-        registerSession,
         updateSessionConfig,
         openSettingsTab,
         reorderTabs,

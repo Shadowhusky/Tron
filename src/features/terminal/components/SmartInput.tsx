@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { KeyboardEvent } from "react";
 import {
   isCommand,
@@ -100,7 +100,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       if (debounceRef.current) clearTimeout(debounceRef.current);
       const shouldComplete =
         input.trim().length > 0 &&
-        window.electron?.ipcRenderer?.getCompletions &&
+        !!window.electron?.ipcRenderer?.getCompletions &&
         (mode === "command" || isAuto);
       if (!shouldComplete) {
         setCompletions([]);

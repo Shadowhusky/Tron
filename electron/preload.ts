@@ -2,16 +2,67 @@ import { contextBridge, ipcRenderer } from "electron";
 
 console.log("Preload script loaded!");
 
+// Channel allowlists — only these channels can be used from the renderer
+const ALLOWED_INVOKE_CHANNELS = [
+  "terminal.create",
+  "terminal.checkCommand",
+  "terminal.exec",
+  "terminal.getCwd",
+  "terminal.getCompletions",
+  "terminal.getHistory",
+  "system.fixPermissions",
+  "system.checkPermissions",
+  "system.openPrivacySettings",
+  "ai.testConnection",
+] as const;
+
+const ALLOWED_SEND_CHANNELS = [
+  "terminal.write",
+  "terminal.resize",
+  "terminal.close",
+] as const;
+
+const ALLOWED_RECEIVE_CHANNELS = [
+  "terminal.incomingData",
+  "terminal.exit",
+  "menu.createTab",
+  "menu.closeTab",
+] as const;
+
+type InvokeChannel = (typeof ALLOWED_INVOKE_CHANNELS)[number];
+type SendChannel = (typeof ALLOWED_SEND_CHANNELS)[number];
+
+const invokeSet = new Set<string>(ALLOWED_INVOKE_CHANNELS);
+const sendSet = new Set<string>(ALLOWED_SEND_CHANNELS);
+const receiveSet = new Set<string>(ALLOWED_RECEIVE_CHANNELS);
+
 contextBridge.exposeInMainWorld("electron", {
   ipcRenderer: {
-    invoke: (channel: string, data?: any) => ipcRenderer.invoke(channel, data),
-    send: (channel: string, data: any) => ipcRenderer.send(channel, data),
+    invoke: (channel: InvokeChannel, data?: any) => {
+      if (!invokeSet.has(channel)) {
+        throw new Error(`IPC invoke not allowed: ${channel}`);
+      }
+      return ipcRenderer.invoke(channel, data);
+    },
+    send: (channel: SendChannel, data: any) => {
+      if (!sendSet.has(channel)) {
+        throw new Error(`IPC send not allowed: ${channel}`);
+      }
+      ipcRenderer.send(channel, data);
+    },
     on: (channel: string, func: (...args: any[]) => void) => {
+      // Allow both static receive channels and dynamic terminal.echo:* channels
+      if (!receiveSet.has(channel) && !channel.startsWith("terminal.echo:")) {
+        throw new Error(`IPC on not allowed: ${channel}`);
+      }
       const subscription = (_event: any, ...args: any[]) => func(...args);
       ipcRenderer.on(channel, subscription);
       return () => ipcRenderer.removeListener(channel, subscription);
     },
     once: (channel: string, func: (...args: any[]) => void) => {
+      if (!receiveSet.has(channel) && !channel.startsWith("terminal.echo:")) {
+        throw new Error(`IPC once not allowed: ${channel}`);
+      }
       ipcRenderer.once(channel, (_event, ...args) => func(...args));
     },
     removeListener: (channel: string, func: (...args: any[]) => void) => {
@@ -31,7 +82,8 @@ contextBridge.exposeInMainWorld("electron", {
     // System
     fixPermissions: () => ipcRenderer.invoke("system.fixPermissions"),
     checkPermissions: () => ipcRenderer.invoke("system.checkPermissions"),
-    openPrivacySettings: () => ipcRenderer.invoke("system.openPrivacySettings"),
+    openPrivacySettings: () =>
+      ipcRenderer.invoke("system.openPrivacySettings"),
     testAIConnection: (config: {
       provider: string;
       model: string;
