@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
+import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -97,7 +98,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
           Number.isInteger(cols) &&
           Number.isInteger(rows)
         ) {
-          window.electron.ipcRenderer.send("terminal.resize", {
+          window.electron.ipcRenderer.send(IPC.TERMINAL_RESIZE, {
             id: sessionId,
             cols,
             rows,
@@ -158,7 +159,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
       }
 
       if (window.electron) {
-        window.electron.ipcRenderer.send("terminal.write", {
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
           id: sessionId,
           data,
         });
@@ -171,7 +172,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
 
     if (window.electron) {
       removeIncomingListener = window.electron.ipcRenderer.on(
-        "terminal.incomingData",
+        IPC.TERMINAL_INCOMING_DATA,
         ({ id, data }: { id: string; data: string }) => {
           if (id === sessionId) {
             term.write(data);
@@ -180,7 +181,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
       );
 
       removeEchoListener = window.electron.ipcRenderer.on(
-        `terminal.echo:${sessionId}`,
+        terminalEchoChannel(sessionId),
         handleEcho,
       );
     } else {

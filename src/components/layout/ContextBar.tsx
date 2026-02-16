@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLayout } from "../../contexts/LayoutContext";
 import { aiService } from "../../services/ai";
 import { useTheme } from "../../contexts/ThemeContext";
 import { Folder, X, Loader2 } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
+import { IPC } from "../../constants/ipc";
+import { themeClass } from "../../utils/theme";
 
 // SVG Ring component for context usage visualization
 const ContextRing: React.FC<{ percent: number; size?: number }> = ({
@@ -109,7 +111,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
     const pollHistory = async () => {
       if (window.electron) {
         const history = await window.electron.ipcRenderer.invoke(
-          "terminal.getHistory",
+          IPC.TERMINAL_GET_HISTORY,
           sessionId,
         );
         setContextLength(history.length);
@@ -162,13 +164,14 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
 
   return (
     <div
-      className={`w-full h-8 border-t flex items-center justify-between px-3 transition-all duration-200 select-none shrink-0 ${
-        theme === "dark"
-          ? "bg-[#0a0a0a] border-white/5 text-gray-500"
-          : theme === "modern"
-            ? "bg-black/60 border-white/5 text-gray-400 backdrop-blur-md"
-            : "bg-gray-50 border-gray-200 text-gray-500"
-      }`}
+      className={`w-full h-8 border-t flex items-center justify-between px-3 transition-all duration-200 select-none shrink-0 ${themeClass(
+        theme,
+        {
+          dark: "bg-[#0a0a0a] border-white/5 text-gray-500",
+          modern: "bg-black/60 border-white/5 text-gray-400 backdrop-blur-md",
+          light: "bg-gray-50 border-gray-200 text-gray-500",
+        },
+      )}`}
     >
       {/* Left: Identity + Path */}
       <div className="flex items-center gap-4 max-w-[50%] overflow-hidden">
@@ -296,13 +299,14 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
             onClick={() => setShowContextModal(false)}
           />
           <div
-            className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-50 flex flex-col rounded-xl shadow-2xl border overflow-hidden ${
-              theme === "dark"
-                ? "bg-[#0e0e0e] border-white/10 text-gray-200"
-                : theme === "modern"
-                  ? "bg-[#0a0a20] border-purple-500/20 text-gray-200"
-                  : "bg-white border-gray-200 text-gray-900"
-            }`}
+            className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-50 flex flex-col rounded-xl shadow-2xl border overflow-hidden ${themeClass(
+              theme,
+              {
+                dark: "bg-[#0e0e0e] border-white/10 text-gray-200",
+                modern: "bg-[#0a0a20] border-purple-500/20 text-gray-200",
+                light: "bg-white border-gray-200 text-gray-900",
+              },
+            )}`}
           >
             {/* Modal Header */}
             <div

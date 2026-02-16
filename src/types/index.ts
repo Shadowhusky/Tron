@@ -1,3 +1,5 @@
+// --- AI Types ---
+
 export interface AIConfig {
   provider: "ollama" | "openai" | "anthropic" | "gemini";
   model: string;
@@ -5,6 +7,23 @@ export interface AIConfig {
   baseUrl?: string;
   contextWindow?: number; // Max context chars, default 4000
 }
+
+export interface AIModel {
+  name: string;
+  provider: "ollama" | "openai" | "anthropic" | "gemini";
+}
+
+export interface AgentResult {
+  success: boolean;
+  message: string;
+}
+
+export interface AgentStep {
+  step: string;
+  output: string;
+}
+
+// --- Terminal & Layout Types ---
 
 export interface TerminalSession {
   id: string; // PTY Session ID

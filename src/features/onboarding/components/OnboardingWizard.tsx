@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useTheme } from "../../../contexts/ThemeContext";
-import { aiService, type AIConfig } from "../../../services/ai";
+import type { AIConfig } from "../../../types";
+import { aiService } from "../../../services/ai";
 import { Shield, Monitor, Brain, Check, Gem } from "lucide-react";
 import FeatureIcon from "../../../components/ui/FeatureIcon";
 

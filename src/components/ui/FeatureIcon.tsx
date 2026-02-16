@@ -1,4 +1,3 @@
-import React from "react";
 import type { LucideIcon } from "lucide-react";
 import { useTheme } from "../../contexts/ThemeContext";
 
@@ -15,8 +14,8 @@ const FeatureIcon: React.FC<FeatureIconProps> = ({
   size = "md",
   className = "",
 }) => {
-  const { theme } = useTheme();
-  const isDark = theme === "dark";
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme !== "light";
 
   const colorMap = {
     purple: {

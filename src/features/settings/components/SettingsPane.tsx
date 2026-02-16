@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
-import { aiService, type AIConfig } from "../../../services/ai";
+import { useState, useEffect } from "react";
+import type { AIConfig } from "../../../types";
+import { aiService } from "../../../services/ai";
 import { useTheme } from "../../../contexts/ThemeContext";
 import {
   Gem,
@@ -11,9 +12,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 
-interface SettingsPaneProps {}
-
-const SettingsPane: React.FC<SettingsPaneProps> = () => {
+const SettingsPane = () => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [config, setConfig] = useState<AIConfig>(aiService.getConfig());
   const [initialConfig, setInitialConfig] = useState<string>(

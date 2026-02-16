@@ -1,20 +1,6 @@
-export interface AIModel {
-  name: string;
-  provider: "ollama" | "openai" | "anthropic" | "gemini";
-}
-
-export interface AIConfig {
-  provider: "ollama" | "openai" | "anthropic" | "gemini";
-  model: string;
-  apiKey?: string;
-  baseUrl?: string;
-  contextWindow?: number;
-}
-
-export interface AgentResult {
-  success: boolean;
-  message: string;
-}
+import type { AIConfig, AIModel, AgentResult } from "../../types";
+import { STORAGE_KEYS } from "../../constants/storage";
+export type { AIConfig, AIModel, AgentResult };
 
 class AIService {
   private config: AIConfig = {
@@ -28,7 +14,7 @@ class AIService {
   }
 
   private loadConfig() {
-    const stored = localStorage.getItem("tron_ai_config");
+    const stored = localStorage.getItem(STORAGE_KEYS.AI_CONFIG);
     if (stored) {
       this.config = { ...this.config, ...JSON.parse(stored) };
     }
@@ -36,7 +22,7 @@ class AIService {
 
   saveConfig(config: Partial<AIConfig>) {
     this.config = { ...this.config, ...config };
-    localStorage.setItem("tron_ai_config", JSON.stringify(this.config));
+    localStorage.setItem(STORAGE_KEYS.AI_CONFIG, JSON.stringify(this.config));
   }
 
   getConfig() {

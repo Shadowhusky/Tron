@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { STORAGE_KEYS } from "../constants/storage";
 
 type Theme = "dark" | "light" | "system" | "modern";
-type ResolvedTheme = "dark" | "light" | "modern";
+export type ResolvedTheme = "dark" | "light" | "modern";
 
 interface ThemeContextType {
   theme: Theme;
@@ -22,7 +23,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem("tron_theme");
+    const stored = localStorage.getItem(STORAGE_KEYS.THEME);
     return (stored as Theme) || "system";
   });
 
@@ -48,7 +49,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
 
     root.classList.add(effective === "modern" ? "dark" : effective);
     setResolvedTheme(effective);
-    localStorage.setItem("tron_theme", theme);
+    localStorage.setItem(STORAGE_KEYS.THEME, theme);
   }, [theme]);
 
   // Listener for system theme changes if mode is 'system'
