@@ -8,6 +8,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.sessionExists",
   "terminal.checkCommand",
   "terminal.exec",
+  "terminal.execInTerminal",
   "terminal.getCwd",
   "terminal.getCompletions",
   "terminal.getHistory",
@@ -80,15 +81,17 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("terminal.getHistory", sessionId),
     exec: (sessionId: string, command: string) =>
       ipcRenderer.invoke("terminal.exec", { sessionId, command }),
+    execInTerminal: (sessionId: string, command: string) =>
+      ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
     // System
     fixPermissions: () => ipcRenderer.invoke("system.fixPermissions"),
     checkPermissions: () => ipcRenderer.invoke("system.checkPermissions"),
-    openPrivacySettings: () =>
-      ipcRenderer.invoke("system.openPrivacySettings"),
+    openPrivacySettings: () => ipcRenderer.invoke("system.openPrivacySettings"),
     testAIConnection: (config: {
       provider: string;
       model: string;
       apiKey?: string;
+      baseUrl?: string;
     }) => ipcRenderer.invoke("ai.testConnection", config),
   },
 });

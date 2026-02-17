@@ -8,6 +8,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "terminal.sessionExists",
     "terminal.checkCommand",
     "terminal.exec",
+    "terminal.execInTerminal",
     "terminal.getCwd",
     "terminal.getCompletions",
     "terminal.getHistory",
@@ -68,6 +69,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         getCompletions: (prefix, cwd, sessionId) => electron_1.ipcRenderer.invoke("terminal.getCompletions", { prefix, cwd, sessionId }),
         getHistory: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getHistory", sessionId),
         exec: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.exec", { sessionId, command }),
+        execInTerminal: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
         // System
         fixPermissions: () => electron_1.ipcRenderer.invoke("system.fixPermissions"),
         checkPermissions: () => electron_1.ipcRenderer.invoke("system.checkPermissions"),

@@ -1,5 +1,15 @@
-import type { AIConfig, AIModel, AgentResult } from "../../types";
+import type {
+  AIConfig,
+  AIModel,
+  AgentResult as BaseAgentResult,
+} from "../../types";
 import { STORAGE_KEYS } from "../../constants/storage";
+
+// Extend AgentResult locally if not updating types.d.ts yet, or assume it's there
+interface AgentResult extends BaseAgentResult {
+  type?: "success" | "failure" | "question";
+}
+
 export type { AIConfig, AIModel, AgentResult };
 
 class AIService {
@@ -29,19 +39,77 @@ class AIService {
     return this.config;
   }
 
-  async getModels(): Promise<AIModel[]> {
+  async getModelCapabilities(
+    modelName: string,
+    baseUrl?: string,
+  ): Promise<string[]> {
+    const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
+    try {
+      const response = await fetch(`${url}/api/show`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: modelName }),
+      });
+      if (!response.ok) return [];
+      const data = await response.json();
+      const capabilities: string[] = [];
+
+      // Check model capabilities from model_info and template
+      const modelInfo = data.model_info || {};
+      const template = data.template || "";
+      const parameters = data.parameters || "";
+
+      // Check for thinking/reasoning capability
+      if (
+        template.includes("<think>") ||
+        template.includes("thinking") ||
+        parameters.includes("think")
+      ) {
+        capabilities.push("thinking");
+      }
+
+      // Check for vision capability
+      const projectorKeys = Object.keys(modelInfo).filter(
+        (k) =>
+          k.includes("vision") ||
+          k.includes("projector") ||
+          k.includes("mmproj"),
+      );
+      if (projectorKeys.length > 0) {
+        capabilities.push("vision");
+      }
+
+      // Check for tool use capability
+      if (
+        template.includes("<tool_call>") ||
+        template.includes("tools") ||
+        template.includes("<function")
+      ) {
+        capabilities.push("tools");
+      }
+
+      return capabilities;
+    } catch (e) {
+      console.warn(`Failed to fetch capabilities for ${modelName}`, e);
+      return [];
+    }
+  }
+
+  async getModels(baseUrl?: string): Promise<AIModel[]> {
     const models: AIModel[] = [];
 
     // 1. Ollama — only if reachable
     try {
-      const response = await fetch(
-        `${this.config.baseUrl || "http://localhost:11434"}/api/tags`,
-      );
+      const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
+      const response = await fetch(`${url}/api/tags`);
       if (response.ok) {
         const data = await response.json();
-        data.models?.forEach((m: any) => {
-          models.push({ name: m.name, provider: "ollama" });
-        });
+        const ollamaModels: AIModel[] = (data.models || []).map((m: any) => ({
+          name: m.name,
+          provider: "ollama" as const,
+        }));
+
+        models.push(...ollamaModels);
       }
     } catch (e) {
       console.warn("Failed to fetch Ollama models", e);
@@ -130,15 +198,12 @@ class AIService {
     onToken?: (token: string, thinking?: string) => void,
     signal?: AbortSignal,
   ): Promise<string> {
-    const response = await fetch(
-      `${baseUrl}/api/generate`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, prompt, stream: true, think: true }),
-        signal,
-      },
-    );
+    const response = await fetch(`${baseUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt, stream: true, think: true }),
+      signal,
+    });
     if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
     if (!response.body) throw new Error("No response body for streaming");
 
@@ -162,7 +227,9 @@ class AIService {
             fullText += chunk.response;
             if (onToken) onToken(chunk.response);
           }
-        } catch { /* skip malformed lines */ }
+        } catch {
+          /* skip malformed lines */
+        }
       }
     }
     return fullText;
@@ -181,28 +248,22 @@ class AIService {
     const body: any = { model, messages, stream: true, think };
     if (format) body.format = format;
 
-    let response = await fetch(
-      `${baseUrl}/api/chat`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      },
-    );
+    let response = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
 
     // Retry without format/think if model doesn't support them (400 error)
     if (response.status === 400 && (format || think)) {
       const retryBody: any = { model, messages, stream: true };
-      response = await fetch(
-        `${baseUrl}/api/chat`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(retryBody),
-          signal,
-        },
-      );
+      response = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(retryBody),
+        signal,
+      });
     }
 
     if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
@@ -233,13 +294,18 @@ class AIService {
             fullText += msg.content;
             if (onToken) onToken(msg.content);
           }
-        } catch { /* skip malformed lines */ }
+        } catch {
+          /* skip malformed lines */
+        }
       }
     }
     return { content: fullText, thinking: thinkingText };
   }
 
-  async generateCommand(prompt: string, onToken?: (token: string) => void): Promise<string> {
+  async generateCommand(
+    prompt: string,
+    onToken?: (token: string) => void,
+  ): Promise<string> {
     const { provider, model, apiKey, baseUrl } = this.config;
 
     const systemPrompt = `You are a terminal assistant. The user wants to perform a task. Output ONLY the exact command to run. No markdown, no explanation. If the task is simple, output a single command. If it requires multiple steps, output only the FIRST step. User OS: ${navigator.platform}.`;
@@ -325,7 +391,7 @@ class AIService {
     const { provider, model, apiKey, baseUrl } = this.config;
     if (!model) return "";
 
-    const systemPrompt = `You predict what the user will type next in a terminal. Based on the recent terminal output, suggest a short one-line command or action. Output ONLY the suggestion text, nothing else. Keep it under 60 characters. If unsure, output an empty string.`;
+    const systemPrompt = `You predict what the user will type next in a terminal. Based on the recent terminal output, suggest a short one-line command or action. Output ONLY the suggestion text, nothing else. Do not use backticks. Keep it under 60 characters. If unsure, output an empty string.`;
 
     try {
       if (provider === "ollama") {
@@ -348,7 +414,7 @@ class AIService {
           clearTimeout(timeout);
           if (!response.ok) return "";
           const data = await response.json();
-          const result = (data.response || "").trim();
+          const result = (data.response || "").trim().replace(/^`+|`+$/g, "");
           return result.length <= 80 ? result : "";
         } catch {
           clearTimeout(timeout);
@@ -369,14 +435,19 @@ class AIService {
               model,
               messages: [
                 { role: "system", content: systemPrompt },
-                { role: "user", content: `Recent terminal output:\n${context.slice(-500)}` },
+                {
+                  role: "user",
+                  content: `Recent terminal output:\n${context.slice(-500)}`,
+                },
               ],
               max_tokens: 30,
             }),
           },
         );
         const data = await response.json();
-        const result = (data.choices?.[0]?.message?.content || "").trim();
+        const result = (data.choices?.[0]?.message?.content || "")
+          .trim()
+          .replace(/^`+|`+$/g, "");
         return result.length <= 80 ? result : "";
       }
 
@@ -393,12 +464,17 @@ class AIService {
             max_tokens: 30,
             system: systemPrompt,
             messages: [
-              { role: "user", content: `Recent terminal output:\n${context.slice(-500)}` },
+              {
+                role: "user",
+                content: `Recent terminal output:\n${context.slice(-500)}`,
+              },
             ],
           }),
         });
         const data = await response.json();
-        const result = (data.content?.[0]?.text || "").trim();
+        const result = (data.content?.[0]?.text || "")
+          .trim()
+          .replace(/^`+|`+$/g, "");
         return result.length <= 80 ? result : "";
       }
     } catch {
@@ -426,16 +502,23 @@ class AIService {
 TOOLS:
 1. {"tool":"execute_command","command":"..."} — Run command, get output. Use for ALL file read/write/create operations.
 2. {"tool":"run_in_terminal","command":"..."} — Fire-and-forget in user's terminal. ONLY for: cd, servers, interactive apps, open. NO file writing.
-3. {"tool":"final_answer","content":"..."} — Done or can't do it.
+3. {"tool":"ask_question","question":"..."} — Ask user for clarification or confirmation.
+4. {"tool":"final_answer","content":"..."} — Done or can't do it.
 
-RULES: Act immediately. One command per step. Don't repeat commands. Don't over-analyze — execute and observe.
+RULES:
+1. VERIFY: After running a command, analyze the output. Did it succeed? If not, FIX IT.
+2. RECOVER: If a command fails (e.g. missing dependency), try to install it or use an alternative.
+3. AMBIGUITY: If the user request is unclear (e.g. "run server" but multiple exist), use ask_question.
+4. COMPLETION: Do not say "Done" until you have VERIFIED the task is actually complete based on command output.
+5. CONCISENESS: Keep final_answer short (under 3 lines) if possible. If long, summarize.
+6. JSON: Output ONLY valid JSON.
 `,
       },
     ];
 
     history.push({ role: "user", content: prompt });
 
-    const maxSteps = 15;
+    const maxSteps = sessionConfig?.maxAgentSteps || 100;
     const executedCommands = new Set<string>();
 
     history[0].content += `
@@ -512,14 +595,70 @@ For file operations always use execute_command with cat heredoc or printf. Use r
       let action: any;
       const tryParseJson = (text: string): any => {
         if (!text.trim()) return null;
-        // Direct parse
-        try { return JSON.parse(text); } catch {}
-        // Extract from markdown code block
-        const mdMatch = text.match(/```json\s*([\s\S]*?)```/);
-        if (mdMatch) { try { return JSON.parse(mdMatch[1]); } catch {} }
-        // Extract first JSON object containing "tool"
-        const jsonMatch = text.match(/\{[^{}]*"tool"\s*:\s*"[^"]+?"[^{}]*\}/);
-        if (jsonMatch) { try { return JSON.parse(jsonMatch[0]); } catch {} }
+
+        // 1. Try direct parse first
+        try {
+          return JSON.parse(text);
+        } catch {}
+
+        // 2. Markdown code block extraction
+        const mdMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (mdMatch) {
+          try {
+            return JSON.parse(mdMatch[1]);
+          } catch {}
+        }
+
+        // 3. Robust extraction: find first '{' and count braces
+        const firstOpen = text.indexOf("{");
+        if (firstOpen === -1) return null;
+
+        let balance = 0;
+        let inString = false;
+        let escape = false;
+
+        for (let i = firstOpen; i < text.length; i++) {
+          const char = text[i];
+
+          if (escape) {
+            escape = false;
+            continue;
+          }
+
+          if (char === "\\") {
+            escape = true;
+            continue;
+          }
+
+          if (char === '"') {
+            inString = !inString;
+            continue;
+          }
+
+          if (!inString) {
+            if (char === "{") {
+              balance++;
+            } else if (char === "}") {
+              balance--;
+              if (balance === 0) {
+                const candidate = text.slice(firstOpen, i + 1);
+                try {
+                  const obj = JSON.parse(candidate);
+                  if (obj.tool) return obj;
+                } catch {
+                  // Try fixing trailing commas: ,} → }
+                  const fixed = candidate.replace(/,\s*}/g, "}").replace(/,\s*]/g, "]");
+                  try {
+                    const obj = JSON.parse(fixed);
+                    if (obj.tool) return obj;
+                  } catch {}
+                }
+                break;
+              }
+            }
+          }
+        }
+
         return null;
       };
 
@@ -531,18 +670,25 @@ For file operations always use execute_command with cat heredoc or printf. Use r
 
       if (!action || !action.tool) {
         parseFailures++;
+
+        // After enough failures, treat raw text as a final answer rather than erroring
         if (parseFailures >= 3) {
+          const fallbackText = (responseText || thinkingText || "").trim();
+          if (fallbackText.length > 0) {
+            return { success: true, message: fallbackText, type: "success" };
+          }
           return {
             success: false,
-            message: "Agent stopped: model failed to produce valid tool calls after multiple attempts.",
+            message: "Agent could not complete the task.",
           };
         }
-        onUpdate("error", `Failed to parse agent response. Retrying...`);
+
+        // Silent retry — no visible error step shown to user
         history.push({ role: "assistant", content: responseText || "(empty)" });
         history.push({
           role: "user",
           content:
-            "Error: Invalid JSON format. You MUST respond with valid JSON containing a \"tool\" field. Example: {\"tool\": \"final_answer\", \"content\": \"Done.\"}",
+            'Error: Invalid JSON format. You MUST respond with valid JSON containing a "tool" field. Example: {"tool": "final_answer", "content": "Done."}',
         });
         continue;
       }
@@ -552,7 +698,15 @@ For file operations always use execute_command with cat heredoc or printf. Use r
 
       // 3. Execute Tool
       if (action.tool === "final_answer") {
-        return { success: true, message: action.content };
+        return { success: true, message: action.content, type: "success" };
+      }
+
+      if (action.tool === "ask_question") {
+        return {
+          success: true,
+          message: action.question,
+          type: "question",
+        };
       }
 
       if (action.tool === "run_in_terminal") {
@@ -580,7 +734,7 @@ For file operations always use execute_command with cat heredoc or printf. Use r
           if (!output || output.trim() === "") {
             output = "(Command executed successfully with no output)";
           }
-          onUpdate("executed", action.command);
+          onUpdate("executed", output);
           history.push({ role: "user", content: `Command Output:\n${output}` });
         } catch (err: any) {
           onUpdate("failed", `${action.command}\n${err.message}`);
@@ -595,6 +749,7 @@ For file operations always use execute_command with cat heredoc or printf. Use r
     return {
       success: false,
       message: "Agent reached maximum steps without completion.",
+      type: "failure",
     };
   }
 }

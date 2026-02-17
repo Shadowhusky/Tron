@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import { useLayout } from "../../contexts/LayoutContext";
 import { aiService } from "../../services/ai";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -7,7 +8,8 @@ import { Folder, X, Loader2 } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { themeClass } from "../../utils/theme";
-import { stripAnsi } from "../../utils/contextCleaner";
+import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
+import { slideUp } from "../../utils/motion";
 
 // SVG Ring component for context usage visualization
 const ContextRing: React.FC<{ percent: number; size?: number }> = ({
@@ -59,7 +61,7 @@ interface ContextBarProps {
 }
 
 const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
-  const { sessions, updateSessionConfig } = useLayout();
+  const { sessions, updateSessionConfig, updateSession } = useLayout();
   const { resolvedTheme: theme } = useTheme();
   const { agentThread, isOverlayVisible, setIsOverlayVisible } =
     useAgent(sessionId);
@@ -79,8 +81,8 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
   const [showContextInfo, setShowContextInfo] = useState(false);
   const [showContextModal, setShowContextModal] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
-  const [isSummarized, setIsSummarized] = useState(false);
-  const isSummarizedRef = useRef(false);
+  const [isSummarized, setIsSummarized] = useState(!!session?.contextSummary);
+  const isSummarizedRef = useRef(!!session?.contextSummary);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const modelBtnRef = useRef<HTMLDivElement>(null);
   const [availableModels, setAvailableModels] = useState<
@@ -91,37 +93,83 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
     aiService.getModels().then(setAvailableModels);
   }, []);
 
+  // Update local state when session changes
+  useEffect(() => {
+    if (session) {
+      setIsSummarized(!!session.contextSummary);
+      isSummarizedRef.current = !!session.contextSummary;
+    }
+  }, [session?.contextSummary]);
+
   useEffect(() => {
     if (!sessionId) return;
     const pollHistory = async () => {
       if (window.electron) {
+        // If we have a summary, we only need to show summary + new content
+        // But here we just show raw history if not summarized, or summary if summarized?
+        // Actually, user wants to see what the agent sees.
+
         const history = await window.electron.ipcRenderer.invoke(
           IPC.TERMINAL_GET_HISTORY,
           sessionId,
         );
+
         setContextLength(history.length);
+
+        // Calculate usage percent
+        const percent = (history.length / maxContext) * 100;
+
+        // Auto-summarize at 90%
+        if (percent > 90 && !isSummarizing && !isSummarizedRef.current) {
+          handleSummarize("moderate");
+        }
+
         // Only update display text if not currently showing a summary
         if (!isSummarizedRef.current) {
           setContextText(stripAnsi(history));
+        } else if (session?.contextSummary) {
+          // If summarized, show summary + tail?
+          // For now, just show the summary to prove it exists
+          setContextText(
+            session.contextSummary + "\n\n... (plus recent output)",
+          );
         }
       }
     };
     pollHistory();
     const interval = setInterval(pollHistory, 3000);
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, maxContext, session?.contextSummary]);
 
   const handleOpenContextModal = () => setShowContextModal(true);
 
-  const handleSummarize = async (level: "brief" | "moderate" | "detailed") => {
+  const handleSummarize = async (_level: "brief" | "moderate" | "detailed") => {
+    if (isSummarizing) return;
     setIsSummarizing(true);
     try {
-      const maxChars = level === "brief" ? 500 : level === "moderate" ? 2000 : 4000;
-      const input = contextText.slice(0, maxChars * 2);
-      const summary = await aiService.summarizeContext(input);
+      // Get full history first
+      const history = await window.electron!.ipcRenderer.invoke(
+        IPC.TERMINAL_GET_HISTORY,
+        sessionId,
+      );
+
+      // Summarize everything we have so far
+      // Summarize everything we have so far
+      const cleanedForSummary = cleanContextForAI(history);
+      const summary = await aiService.summarizeContext(
+        cleanedForSummary.slice(-10000),
+      );
+
+      // Update local view
       setContextText(summary);
       setIsSummarized(true);
       isSummarizedRef.current = true;
+
+      // Persist to session
+      updateSession(sessionId, {
+        contextSummary: summary,
+        contextSummarySourceLength: cleanedForSummary.length,
+      });
     } catch (e) {
       console.error("Summarization failed", e);
     } finally {
@@ -130,14 +178,18 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
   };
 
   const handleResetContext = async () => {
+    updateSession(sessionId, {
+      contextSummary: undefined,
+      contextSummarySourceLength: undefined,
+    });
+    setIsSummarized(false);
+    isSummarizedRef.current = false;
     if (window.electron) {
       const history = await window.electron.ipcRenderer.invoke(
         "terminal.getHistory",
         sessionId,
       );
       setContextText(stripAnsi(history));
-      setIsSummarized(false);
-      isSummarizedRef.current = false;
     }
   };
 
@@ -153,18 +205,14 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
         theme,
         {
           dark: "bg-[#0a0a0a] border-white/5 text-gray-500",
-          modern: "bg-white/[0.02] border-white/[0.06] text-gray-400 backdrop-blur-2xl",
+          modern:
+            "bg-white/[0.02] border-white/[0.06] text-gray-400 backdrop-blur-2xl",
           light: "bg-gray-50 border-gray-200 text-gray-500",
         },
       )}`}
     >
       {/* Left: Identity + Path */}
       <div className="flex items-center gap-4 min-w-0 overflow-hidden">
-        <span className="text-[10px] uppercase tracking-wider font-bold opacity-40">
-          Context & Status
-        </span>
-        <div className="h-3 w-px bg-current opacity-20" />
-
         <div
           className="flex items-center gap-1.5 overflow-hidden cursor-default"
           title={`Current directory: ${cwd}`}
@@ -176,17 +224,24 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
         </div>
 
         {/* Agent Toggle Button */}
-        {agentThread.length > 0 && !isOverlayVisible && (
-          <button
-            onClick={() => setIsOverlayVisible(true)}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors animate-in fade-in"
-            title="Show Agent Panel (Cmd+.)"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
-            <span className="text-[10px]">Show Agent</span>
-            <span className="text-[9px] opacity-50 ml-0.5">&#8984;.</span>
-          </button>
-        )}
+        <AnimatePresence>
+          {agentThread.length > 0 && !isOverlayVisible && (
+            <motion.button
+              key="agent-toggle"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => setIsOverlayVisible(true)}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors"
+              title="Show Agent Panel (Cmd+.)"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
+              <span className="text-[10px]">Show Agent</span>
+              <span className="text-[9px] opacity-50 ml-0.5">&#8984;.</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Right: Context Ring + Model */}
@@ -202,8 +257,15 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
           <span className="text-[10px]">{contextPercent}%</span>
 
           {/* Context Popover */}
+          <AnimatePresence>
           {showContextInfo && (
-            <div className="absolute bottom-full right-0 mb-3 w-48 p-2 rounded-lg bg-[#1a1a1a] border border-white/10 shadow-xl z-100 animate-in fade-in slide-in-from-bottom-1">
+            <motion.div
+              key="ctx-popover"
+              variants={slideUp}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              className="absolute bottom-full right-0 mb-3 w-48 p-2 rounded-lg bg-[#1a1a1a] border border-white/10 shadow-xl z-100">
               <div className="text-xs font-semibold text-gray-200 mb-1">
                 Context Usage
               </div>
@@ -221,8 +283,9 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
                   style={{ width: `${contextPercent}%` }}
                 />
               </div>
-            </div>
+            </motion.div>
           )}
+          </AnimatePresence>
         </div>
 
         <div className="h-3 w-px bg-current opacity-20" />
@@ -237,155 +300,191 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
           </div>
 
           {/* Model Menu — portal to escape overflow-hidden */}
-          {showModelMenu && createPortal(
-            <>
-              <div
-                className="fixed inset-0 z-[998]"
-                onClick={() => setShowModelMenu(false)}
-              />
-              <div
-                className={`fixed w-48 py-1 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(theme, {
-                  dark: "bg-[#1a1a1a] border border-white/10",
-                  modern: "bg-[#12122e]/80 border border-white/[0.08] backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-                  light: "bg-white border border-gray-200",
-                })}`}
-                style={{
-                  ...(modelBtnRef.current ? (() => {
-                    const rect = modelBtnRef.current!.getBoundingClientRect();
-                    return { bottom: window.innerHeight - rect.top + 6, right: window.innerWidth - rect.right };
-                  })() : {}),
-                }}
-              >
-                <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-gray-500 font-semibold border-b border-white/5 mb-1">
-                  Select Model
-                </div>
-                {availableModels.map((m) => (
-                  <button
-                    key={`${m.provider}-${m.name}`}
-                    onClick={() => {
-                      updateSessionConfig(sessionId, {
-                        provider: m.provider as any,
-                        model: m.name,
-                      });
-                      setShowModelMenu(false);
-                    }}
-                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center justify-between group ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
-                  >
-                    <span>{m.name}</span>
-                    <span className="text-[9px] opacity-30 uppercase">
-                      {m.provider}
-                    </span>
-                  </button>
-                ))}
-                {availableModels.length === 0 && (
-                  <div className="px-3 py-2 text-gray-500 text-center italic">
-                    No models found
+          {showModelMenu &&
+            createPortal(
+              <>
+                <div
+                  className="fixed inset-0 z-[998]"
+                  onClick={() => setShowModelMenu(false)}
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className={`fixed w-48 py-1 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
+                    theme,
+                    {
+                      dark: "bg-[#1a1a1a] border border-white/10",
+                      modern:
+                        "bg-[#12122e]/80 border border-white/[0.08] backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                      light: "bg-white border border-gray-200",
+                    },
+                  )}`}
+                  style={{
+                    ...(modelBtnRef.current
+                      ? (() => {
+                          const rect =
+                            modelBtnRef.current!.getBoundingClientRect();
+                          return {
+                            bottom: window.innerHeight - rect.top + 6,
+                            right: window.innerWidth - rect.right,
+                          };
+                        })()
+                      : {}),
+                  }}
+                >
+                  <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-gray-500 font-semibold border-b border-white/5 mb-1">
+                    Select Model
                   </div>
-                )}
-              </div>
-            </>,
-            document.body,
-          )}
+                  {availableModels.map((m) => (
+                    <button
+                      key={`${m.provider}-${m.name}`}
+                      onClick={() => {
+                        updateSessionConfig(sessionId, {
+                          provider: m.provider as any,
+                          model: m.name,
+                        });
+                        setShowModelMenu(false);
+                      }}
+                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center justify-between group ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
+                    >
+                      <span>{m.name}</span>
+                      <span className="text-[9px] opacity-30 uppercase">
+                        {m.provider}
+                      </span>
+                    </button>
+                  ))}
+                  {availableModels.length === 0 && (
+                    <div className="px-3 py-2 text-gray-500 text-center italic">
+                      No models found
+                    </div>
+                  )}
+                </motion.div>
+              </>,
+              document.body,
+            )}
         </div>
       </div>
 
       {/* Context Modal — portal to body to escape stacking contexts */}
-      {showContextModal && createPortal(
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-[999]"
-            onClick={() => setShowContextModal(false)}
-          />
-          <div
-            className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-[999] flex flex-col rounded-xl shadow-2xl border overflow-hidden ${themeClass(
-              theme,
-              {
-                dark: "bg-[#0e0e0e] border-white/10 text-gray-200",
-                modern: "bg-[#0a0a1e]/80 border-white/[0.08] text-gray-200 backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-                light: "bg-white border-gray-200 text-gray-900",
-              },
-            )}`}
-          >
-            {/* Modal Header */}
-            <div
-              className={`flex items-center justify-between px-4 py-3 border-b shrink-0 ${
-                theme === "light" ? "border-gray-200 bg-gray-50" : "border-white/5 bg-white/5"
-              }`}
+      {showContextModal &&
+        createPortal(
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 bg-black/50 z-[999]"
+              onClick={() => setShowContextModal(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-[999] flex flex-col rounded-xl shadow-2xl border overflow-hidden ${themeClass(
+                theme,
+                {
+                  dark: "bg-[#0e0e0e] border-white/10 text-gray-200",
+                  modern:
+                    "bg-[#0a0a1e]/80 border-white/[0.08] text-gray-200 backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                  light: "bg-white border-gray-200 text-gray-900",
+                },
+              )}`}
             >
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold">Session Context</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full ${
-                  theme === "light" ? "bg-gray-100 text-gray-500" : "bg-white/10 text-gray-400"
-                }`}>
-                  {contextText.length.toLocaleString()} chars
-                </span>
-              </div>
-              <button
-                onClick={() => setShowContextModal(false)}
-                className={`p-1 rounded-md transition-colors ${
-                  theme === "light" ? "hover:bg-gray-200 text-gray-500" : "hover:bg-white/10 text-gray-400"
+              {/* Modal Header */}
+              <div
+                className={`flex items-center justify-between px-4 py-3 border-b shrink-0 ${
+                  theme === "light"
+                    ? "border-gray-200 bg-gray-50"
+                    : "border-white/5 bg-white/5"
                 }`}
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Summarize Controls */}
-            <div
-              className={`flex items-center gap-2 px-4 py-2 border-b shrink-0 ${
-                theme === "light" ? "border-gray-100 bg-gray-50/50" : "border-white/5 bg-white/2"
-              }`}
-            >
-              <span className={`text-[10px] uppercase tracking-wider font-semibold mr-1 ${
-                theme === "light" ? "text-gray-400" : "text-gray-500"
-              }`}>
-                Summarize:
-              </span>
-              {(["brief", "moderate", "detailed"] as const).map((level) => (
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold">Session Context</span>
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full ${
+                      theme === "light"
+                        ? "bg-gray-100 text-gray-500"
+                        : "bg-white/10 text-gray-400"
+                    }`}
+                  >
+                    {contextText.length.toLocaleString()} chars
+                  </span>
+                </div>
                 <button
-                  key={level}
-                  disabled={isSummarizing}
-                  onClick={() => handleSummarize(level)}
-                  className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
-                    isSummarizing
-                      ? "opacity-50 cursor-not-allowed"
-                      : theme === "light"
-                        ? "border-gray-200 hover:bg-gray-100 text-gray-600"
-                        : "border-white/10 hover:bg-white/5 text-gray-400"
+                  onClick={() => setShowContextModal(false)}
+                  className={`p-1 rounded-md transition-colors ${
+                    theme === "light"
+                      ? "hover:bg-gray-200 text-gray-500"
+                      : "hover:bg-white/10 text-gray-400"
                   }`}
                 >
-                  {level}
+                  <X className="w-4 h-4" />
                 </button>
-              ))}
-              {isSummarizing && <Loader2 className="w-3 h-3 animate-spin text-purple-400 ml-1" />}
-              <div className="flex-1" />
-              <button
-                onClick={handleResetContext}
-                disabled={!isSummarized}
-                className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
-                  !isSummarized
-                    ? "opacity-30 cursor-not-allowed border-white/5 text-gray-600"
-                    : theme === "light"
-                      ? "border-gray-200 hover:bg-gray-100 text-gray-500"
-                      : "border-white/10 hover:bg-white/5 text-gray-500"
+              </div>
+
+              {/* Summarize Controls */}
+              <div
+                className={`flex items-center gap-2 px-4 py-2 border-b shrink-0 ${
+                  theme === "light"
+                    ? "border-gray-100 bg-gray-50/50"
+                    : "border-white/5 bg-white/2"
                 }`}
               >
-                Reset to raw
-              </button>
-            </div>
+                <span
+                  className={`text-[10px] uppercase tracking-wider font-semibold mr-1 ${
+                    theme === "light" ? "text-gray-400" : "text-gray-500"
+                  }`}
+                >
+                  Summarize:
+                </span>
+                {(["brief", "moderate", "detailed"] as const).map((level) => (
+                  <button
+                    key={level}
+                    disabled={isSummarizing}
+                    onClick={() => handleSummarize(level)}
+                    className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
+                      isSummarizing
+                        ? "opacity-50 cursor-not-allowed"
+                        : theme === "light"
+                          ? "border-gray-200 hover:bg-gray-100 text-gray-600"
+                          : "border-white/10 hover:bg-white/5 text-gray-400"
+                    }`}
+                  >
+                    {level}
+                  </button>
+                ))}
+                {isSummarizing && (
+                  <Loader2 className="w-3 h-3 animate-spin text-purple-400 ml-1" />
+                )}
+                <div className="flex-1" />
+                <button
+                  onClick={handleResetContext}
+                  disabled={!isSummarized}
+                  className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
+                    !isSummarized
+                      ? "opacity-30 cursor-not-allowed border-white/5 text-gray-600"
+                      : theme === "light"
+                        ? "border-gray-200 hover:bg-gray-100 text-gray-500"
+                        : "border-white/10 hover:bg-white/5 text-gray-500"
+                  }`}
+                >
+                  Reset to raw
+                </button>
+              </div>
 
-            {/* Context Content */}
-            <pre
-              className={`flex-1 overflow-auto p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap ${
-                theme === "light" ? "text-gray-700" : "text-gray-300"
-              }`}
-            >
-              {contextText || "(No context yet)"}
-            </pre>
-          </div>
-        </>,
-        document.body,
-      )}
+              {/* Context Content */}
+              <pre
+                className={`flex-1 overflow-auto p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap ${
+                  theme === "light" ? "text-gray-700" : "text-gray-300"
+                }`}
+              >
+                {contextText || "(No context yet)"}
+              </pre>
+            </motion.div>
+          </>,
+          document.body,
+        )}
     </div>
   );
 };

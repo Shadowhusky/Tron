@@ -3,18 +3,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerAIHandlers = registerAIHandlers;
 const electron_1 = require("electron");
 function registerAIHandlers() {
-    electron_1.ipcMain.handle("ai.testConnection", async (_event, { provider, model, apiKey }) => {
+    electron_1.ipcMain.handle("ai.testConnection", async (_event, { provider, model, apiKey, baseUrl }) => {
         try {
             if (provider === "ollama") {
-                const response = await fetch("http://localhost:11434/api/generate", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        model: model || "llama3",
-                        prompt: "hi",
-                        stream: false,
-                    }),
+                const url = baseUrl || "http://localhost:11434";
+                const response = await fetch(`${url}/api/tags`, {
+                    method: "GET",
                 });
+                // tags endpoint is better for connectivity check than generate
                 return response.ok;
             }
             if (provider === "openai") {

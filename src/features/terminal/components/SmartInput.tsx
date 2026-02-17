@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { KeyboardEvent } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   isCommand,
   isDefinitelyNaturalLanguage,
+  isKnownExecutable,
 } from "../../../utils/commandClassifier";
 import { aiService } from "../../../services/ai";
 import { useHistory } from "../../../contexts/HistoryContext";
@@ -10,6 +12,7 @@ import { Terminal, Sparkles, Bot, ChevronRight } from "lucide-react";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
 import { useLayout } from "../../../contexts/LayoutContext";
+import { slideDown, fadeScale } from "../../../utils/motion";
 
 interface SmartInputProps {
   onSend: (value: string) => void;
@@ -50,7 +53,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
   // AI-generated placeholder
   const [aiPlaceholder, setAiPlaceholder] = useState("");
-  const placeholderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const placeholderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,7 +78,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
       }
     }, 3000);
     return () => {
-      if (placeholderTimerRef.current) clearTimeout(placeholderTimerRef.current);
+      if (placeholderTimerRef.current)
+        clearTimeout(placeholderTimerRef.current);
     };
   }, [value, sessionId, isAgentRunning]);
 
@@ -84,6 +90,20 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return () => clearTimeout(timer);
     }
   }, [feedbackMsg]);
+
+  // Auto-focus when session becomes active
+  useEffect(() => {
+    // Check if parent container says we are active
+    // We don't have explicit 'isActive' prop, but we can infer from session context if needed or assume mount.
+    // However, user said "switch to tab". If SmartInput is unmounted/remounted, autoFocus works.
+    // If it stays mounted (hidden), we need a signal.
+    // Let's rely on the fact that `sessionId === activeSessionId` in parent prop if we passed it?
+    // We passed `sessionId`. We can check if it matches `activeSessionId`.
+    if (activeSessionId === sessionId && inputRef.current) {
+      // Small timeout to ensure layout is ready
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [activeSessionId, sessionId]);
 
   // Auto-detect mode hierarchy
   useEffect(() => {
@@ -108,16 +128,27 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    // 3. Single-word fallback: check if it's an executable
     const words = value.trim().split(/\s+/);
-    if (words.length === 1 && window.electron?.ipcRenderer?.checkCommand) {
+    const firstWord = words[0];
+
+    // 3. Known Command Fallback (Ambiguous Verbs)
+    // If isCommand returned false BUT it is in the known list (e.g. "find" without flags),
+    // it means we deliberately classified it as Agent. DO NOT check PATH.
+    // "isKnownExecutable" needs to be imported
+    if (isKnownExecutable(firstWord)) {
+      setMode("agent");
+      return;
+    }
+
+    // 4. Unknown Word Fallback: Check PATH dynamically
+    // This covers third-party tools (ollama, aws, etc.) that aren't in the hardcoded list
+    if (words.length >= 1 && window.electron?.ipcRenderer?.checkCommand) {
       window.electron.ipcRenderer
         .checkCommand(words[0])
         .then((exists: boolean) => {
           setMode(exists ? "command" : "agent");
         });
     } else {
-      // Multi-word, unknown first word, no NL detected, no command syntax
       setMode("agent");
     }
   }, [value, isAuto]);
@@ -199,36 +230,73 @@ const SmartInput: React.FC<SmartInputProps> = ({
     handleKeyDown({ key: "Enter", preventDefault: () => {} } as any);
   };
 
-  const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
-    // Tab / Right Arrow: Accept Ghost Text OR Selected Completion
-    if (
-      (e.key === "Tab" || e.key === "ArrowRight") &&
-      (ghostText || (showCompletions && completions.length > 0))
-    ) {
-      e.preventDefault();
-      if (showCompletions && completions[selectedIndex]) {
-        acceptCompletion(completions[selectedIndex]);
-      } else if (ghostText) {
-        setValue((prev) => prev + ghostText);
-        setGhostText("");
+  // Shift Key Logic: Double-tap shift to switch mode
+  // Track shift press state and last tap timestamp for double-tap detection
+  const shiftPressedRef = useRef(false);
+  const otherKeyPressedRef = useRef(false);
+  const lastShiftTapRef = useRef(0);
+  const DOUBLE_TAP_THRESHOLD = 400; // ms
+
+  const handleKeyUp = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Shift") {
+      if (!otherKeyPressedRef.current && shiftPressedRef.current) {
+        // Clean shift tap (no other keys pressed during hold)
+        const now = Date.now();
+        if (now - lastShiftTapRef.current < DOUBLE_TAP_THRESHOLD) {
+          // Double-tap detected -> Switch mode
+          lastShiftTapRef.current = 0; // Reset to prevent triple-tap
+          if (isAuto) {
+            setIsAuto(false);
+            setMode("command");
+          } else if (mode === "command") {
+            setIsAuto(false);
+            setMode("advice");
+          } else if (mode === "advice") {
+            setIsAuto(false);
+            setMode("agent");
+          } else {
+            setIsAuto(true);
+          }
+        } else {
+          lastShiftTapRef.current = now;
+        }
       }
-      return;
+      shiftPressedRef.current = false;
+      otherKeyPressedRef.current = false;
+    }
+  };
+
+  const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
+    // Track Shift key state
+    if (e.key === "Shift") {
+      shiftPressedRef.current = true;
+      return; // Don't do anything else on Shift down
+    }
+    if (shiftPressedRef.current) {
+      otherKeyPressedRef.current = true;
     }
 
-    // Tab (no completions): cycle mode → auto → command → advice → agent → auto
-    if (e.key === "Tab" && !ghostText && !showCompletions) {
-      e.preventDefault();
-      if (isAuto) {
-        setIsAuto(false);
-        setMode("command");
-      } else if (mode === "command") {
-        setIsAuto(false);
-        setMode("advice");
-      } else if (mode === "advice") {
-        setIsAuto(false);
-        setMode("agent");
-      } else {
-        setIsAuto(true);
+    // Tab / Right Arrow: Accept Ghost Text OR Selected Completion OR Placeholder
+    // Strict Tab behavior: Only accept, never cycle
+    if (e.key === "Tab" || e.key === "ArrowRight") {
+      if (ghostText || (showCompletions && completions.length > 0)) {
+        e.preventDefault();
+        if (showCompletions && completions[selectedIndex]) {
+          acceptCompletion(completions[selectedIndex]);
+        } else if (ghostText) {
+          setValue((prev) => prev + ghostText);
+          setGhostText("");
+        }
+      } else if (aiPlaceholder && !value) {
+        // Accept AI placeholder if input is empty
+        e.preventDefault();
+        setValue(aiPlaceholder);
+        setAiPlaceholder("");
+      } else if (e.key === "Tab") {
+        // If nothing to complete, prevent default Tab behavior (blur) to keep focus?
+        // Or let it blur? User said "replace tab hot key for accept... use shift to switch".
+        // Usually better to prevent blur in a terminal input.
+        e.preventDefault();
       }
       return;
     }
@@ -319,6 +387,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
     // Enter
     if (e.key === "Enter") {
+      e.stopPropagation(); // Prevent terminal from also receiving this Enter
       if (e.shiftKey) {
         e.preventDefault();
         setFeedbackMsg("Agent Started");
@@ -334,19 +403,33 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
       if (showCompletions && completions[selectedIndex]) {
         const selected = completions[selectedIndex];
-          if (selected === value.trim()) {
-            if (mode === "command") {
-              setFeedbackMsg("");
-              addToHistory(selected);
-            onSend(selected);
-            setValue("");
-            setCompletions([]);
-            setShowCompletions(false);
-            setHistoryIndex(-1);
-            return;
-          }
+        // Apply completion and EXECUTE immediately
+        const parts = value.trimEnd().split(/\s+/);
+        parts.pop();
+        parts.push(selected);
+        const finalVal = parts.join(" "); // No trailing space for execution
+
+        if (mode === "command") {
+          setFeedbackMsg("");
+          addToHistory(finalVal);
+          onSend(finalVal);
+          setValue("");
+          setCompletions([]);
+          setShowCompletions(false);
+          setHistoryIndex(-1);
+          return;
         }
-        acceptCompletion(selected);
+
+        // If not command mode (unlikely for completions?), fall through or handle similar to above
+        // But completions are currently only for command/auto mode.
+        // If in auto mode and we picked a completion, treat as command.
+        setFeedbackMsg("");
+        addToHistory(finalVal);
+        onSend(finalVal);
+        setValue("");
+        setCompletions([]);
+        setShowCompletions(false);
+        setHistoryIndex(-1);
         return;
       }
 
@@ -573,6 +656,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 if (e.target.value.trim() !== "") setAiPlaceholder("");
               }}
               onKeyDown={handleKeyDown}
+              onKeyUp={handleKeyUp}
               autoFocus
               disabled={
                 isLoading || (isAgentRunning && pendingCommand !== null)
@@ -635,17 +719,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
             </span>
           )}
           {feedbackMsg && (
-            <span className="animate-in fade-in opacity-70">
-              {feedbackMsg}
-            </span>
+            <span className="animate-in fade-in opacity-70">{feedbackMsg}</span>
           )}
         </div>
 
         {/* Right: shortcuts */}
-        <div className={`flex items-center gap-0.5 shrink-0 ${
-          theme === "light" ? "opacity-70" : "opacity-80"
-        }`}>
-          <span>⇥ cycle mode</span>
+        <div
+          className={`flex items-center gap-0.5 shrink-0 ${
+            theme === "light" ? "opacity-70" : "opacity-80"
+          }`}
+        >
+          <span>⇧⇧ next mode</span>
           <span className="opacity-40 mx-1">·</span>
           <span>⇧↵ agent</span>
           <span className="opacity-40 mx-1">·</span>
@@ -658,45 +742,75 @@ const SmartInput: React.FC<SmartInputProps> = ({
       </div>
 
       {/* Completions Dropdown */}
-      {showCompletions && completions.length > 0 && (
-        <div className="absolute bottom-full left-0 mb-1 w-full max-w-md bg-[#1a1a1a] border border-white/10 rounded-lg shadow-xl overflow-hidden z-20">
-          {completions.map((comp, i) => (
-            <div
-              key={i}
-              className={`px-3 py-2 text-xs font-mono cursor-pointer flex items-center gap-2 ${
-                i === selectedIndex
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-400 hover:bg-white/5"
-              }`}
-              onClick={() => {
-                acceptCompletion(comp);
-                setTimeout(() => handleSend(), 0);
-              }}
-            >
-              <Terminal className="w-3 h-3 opacity-50" />
-              {comp}
-            </div>
-          ))}
-        </div>
-      )}
+      <AnimatePresence>
+        {showCompletions && completions.length > 0 && (
+          <motion.div
+            key="completions"
+            variants={slideDown}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="absolute bottom-full left-0 mb-1 w-full max-w-md bg-[#1a1a1a] border border-white/10 rounded-lg shadow-xl overflow-hidden z-20 max-h-60 overflow-y-auto"
+          >
+            {completions.map((comp, i) => (
+              <motion.div
+                key={comp}
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.02, duration: 0.15 }}
+                className={`px-3 py-2 text-xs font-mono cursor-pointer flex items-center gap-2 ${
+                  i === selectedIndex
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-400 hover:bg-white/5"
+                }`}
+                onClick={() => {
+                  acceptCompletion(comp);
+                  setTimeout(() => handleSend(), 0);
+                }}
+              >
+                <Terminal className="w-3 h-3 opacity-50" />
+                {comp}
+              </motion.div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Advice/Command Suggestion Output */}
-      {suggestion !== null && mode !== "agent" && (
-        <div className="absolute bottom-full left-0 mb-2 w-full bg-[#1a1a1a]/90 backdrop-blur border border-purple-500/20 rounded-lg p-3 shadow-xl z-10 animate-in fade-in slide-in-from-bottom-1">
-          <div className="flex items-start gap-3">
-            <Sparkles className={`w-4 h-4 text-purple-400 mt-0.5 shrink-0 ${isLoading ? "animate-pulse" : ""}`} />
-            <div className="flex-1">
-              <div className="text-purple-200 text-sm font-medium mb-1">
-                AI Suggestion
-              </div>
-              <div className="text-gray-300 text-xs leading-relaxed font-mono">
-                {suggestion || (isLoading ? <span className="text-gray-500 italic">Generating...</span> : "")}
-                {isLoading && suggestion && <span className="inline-block w-1.5 h-3 bg-purple-400/60 animate-pulse ml-0.5 align-middle" />}
+      <AnimatePresence>
+        {suggestion !== null && mode !== "agent" && (
+          <motion.div
+            key="suggestion"
+            variants={fadeScale}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="absolute bottom-full left-0 mb-2 w-full bg-[#1a1a1a]/90 backdrop-blur border border-purple-500/20 rounded-lg p-3 shadow-xl z-10 max-h-48 overflow-y-auto"
+          >
+            <div className="flex items-start gap-3">
+              <Sparkles
+                className={`w-4 h-4 text-purple-400 mt-0.5 shrink-0 ${isLoading ? "animate-pulse" : ""}`}
+              />
+              <div className="flex-1">
+                <div className="text-purple-200 text-sm font-medium mb-1">
+                  AI Suggestion
+                </div>
+                <div className="text-gray-300 text-xs leading-relaxed font-mono">
+                  {suggestion ||
+                    (isLoading ? (
+                      <span className="text-gray-500 italic">Generating...</span>
+                    ) : (
+                      ""
+                    ))}
+                  {isLoading && suggestion && (
+                    <span className="inline-block w-1.5 h-3 bg-purple-400/60 animate-pulse ml-0.5 align-middle" />
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -27,6 +27,7 @@
     "@xterm/xterm": "^6.0.0",
     "electron-squirrel-startup": "^1.0.1",
     "express": "^5.2.1",
+    "framer-motion": "^12.34.1",
     "http-proxy-middleware": "^3.0.5",
     "lucide-react": "^0.564.0",
     "marked": "^17.0.2",

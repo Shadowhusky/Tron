@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { LayoutNode } from "../../types";
 import { useLayout } from "../../contexts/LayoutContext";
+import { useTheme } from "../../contexts/ThemeContext";
 import SettingsPane from "../../features/settings/components/SettingsPane";
 import TerminalPane from "./TerminalPane";
 
@@ -13,6 +14,8 @@ const MIN_SIZE_PERCENT = 10; // Minimum panel size as percentage of total
 
 const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
   const { updateSplitSizes } = useLayout();
+  const { resolvedTheme } = useTheme();
+  const isLight = resolvedTheme === "light";
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Drag state
@@ -46,7 +49,10 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
   }
 
   const isHorizontal = node.direction === "horizontal";
-  const sizes = liveSizes || node.sizes || node.children.map(() => 100 / node.children.length);
+  const sizes =
+    liveSizes ||
+    node.sizes ||
+    node.children.map(() => 100 / node.children.length);
   const totalSize = sizes.reduce((a, b) => a + b, 0);
 
   const handleMouseDown = (e: React.MouseEvent, index: number) => {
@@ -75,6 +81,7 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
           isDragging={draggingIndex !== null}
           path={path}
           onMouseDown={handleMouseDown}
+          isLight={isLight}
         />
       ))}
 
@@ -110,7 +117,19 @@ const SplitChild: React.FC<{
   isDragging: boolean;
   path: number[];
   onMouseDown: (e: React.MouseEvent, index: number) => void;
-}> = ({ child, index, totalChildren, size, totalSize, isHorizontal, isDragging, path, onMouseDown }) => {
+  isLight: boolean;
+}> = ({
+  child,
+  index,
+  totalChildren,
+  size,
+  totalSize,
+  isHorizontal,
+  isDragging,
+  path,
+  onMouseDown,
+  isLight,
+}) => {
   return (
     <>
       <div
@@ -124,10 +143,14 @@ const SplitChild: React.FC<{
         <div
           onMouseDown={(e) => onMouseDown(e, index)}
           className={`shrink-0 z-20 group transition-colors ${
-            isHorizontal
-              ? "w-1 cursor-col-resize hover:bg-purple-500/40"
-              : "h-1 cursor-row-resize hover:bg-purple-500/40"
-          } ${isDragging ? "bg-purple-500/40" : "bg-white/5 hover:bg-purple-500/30"}`}
+            isHorizontal ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
+          } ${
+            isDragging
+              ? "bg-purple-500/40"
+              : isLight
+                ? "bg-gray-200 hover:bg-purple-500/40"
+                : "bg-white/5 hover:bg-purple-500/30"
+          }`}
           style={{
             [isHorizontal ? "width" : "height"]: "4px",
           }}
@@ -158,7 +181,14 @@ const DragOverlay: React.FC<{
   totalSize: number;
   onSizeUpdate: (sizes: number[]) => void;
   onDragEnd: (finalSizes: number[] | null) => void;
-}> = ({ isHorizontal, containerRef, dragStartRef, totalSize, onSizeUpdate, onDragEnd }) => {
+}> = ({
+  isHorizontal,
+  containerRef,
+  dragStartRef,
+  totalSize,
+  onSizeUpdate,
+  onDragEnd,
+}) => {
   const finalSizesRef = useRef<number[] | null>(null);
 
   const handleMouseMove = useCallback(
@@ -167,7 +197,9 @@ const DragOverlay: React.FC<{
       const { pos, sizes, index } = dragStartRef.current;
 
       const containerRect = containerRef.current.getBoundingClientRect();
-      const containerSize = isHorizontal ? containerRect.width : containerRect.height;
+      const containerSize = isHorizontal
+        ? containerRect.width
+        : containerRect.height;
       const currentPos = isHorizontal ? e.clientX : e.clientY;
       const deltaPx = currentPos - pos;
       const deltaPercent = (deltaPx / containerSize) * totalSize;

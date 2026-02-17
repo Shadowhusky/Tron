@@ -16,6 +16,10 @@ interface Window {
         sessionId: string,
         command: string,
       ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+      execInTerminal: (
+        sessionId: string,
+        command: string,
+      ) => Promise<{ stdout: string; exitCode: number }>;
       fixPermissions: () => Promise<boolean>;
       checkPermissions: () => Promise<boolean>;
       openPrivacySettings: () => Promise<void>;

@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
@@ -51,6 +52,7 @@ const TabBar: React.FC<TabBarProps> = ({
         className="flex items-center gap-1 flex-1 overflow-x-auto no-scrollbar"
         style={{ WebkitAppRegion: "drag" } as any}
       >
+        <AnimatePresence initial={false}>
         {tabs.map((tab, tabIndex) => {
           const showLeft =
             dragOverIndex === tabIndex &&
@@ -61,7 +63,15 @@ const TabBar: React.FC<TabBarProps> = ({
             draggingIndex !== null &&
             draggingIndex < tabIndex;
           return (
-            <div key={tab.id} className="relative flex items-center">
+            <motion.div
+              key={tab.id}
+              layout
+              initial={{ opacity: 0, scale: 0.9, width: 0 }}
+              animate={{ opacity: 1, scale: 1, width: "auto" }}
+              exit={{ opacity: 0, scale: 0.9, width: 0 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="relative flex items-center"
+            >
               {/* Drop indicator — left (dragging leftward) */}
               {showLeft && (
                 <div className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 -translate-x-0.5" />
@@ -170,10 +180,13 @@ const TabBar: React.FC<TabBarProps> = ({
               {showRight && (
                 <div className="absolute right-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 translate-x-0.5" />
               )}
-            </div>
+            </motion.div>
           );
         })}
-        <button
+        </AnimatePresence>
+        <motion.button
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
           onClick={onCreate}
           style={{ WebkitAppRegion: "no-drag" } as any}
           className="p-1.5 rounded-md hover:bg-white/10 text-gray-500 transition-colors"
@@ -191,7 +204,7 @@ const TabBar: React.FC<TabBarProps> = ({
               d="M12 4v16m8-8H4"
             />
           </svg>
-        </button>
+        </motion.button>
       </div>
 
       {/* Settings Button */}

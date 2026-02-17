@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { LayoutProvider, useLayout } from "./contexts/LayoutContext";
 import type { LayoutNode } from "./types";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
@@ -10,6 +11,7 @@ import TabBar from "./components/layout/TabBar";
 import { STORAGE_KEYS } from "./constants/storage";
 import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
+import { fadeIn, fadeScale } from "./utils/motion";
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -23,6 +25,7 @@ const AppContent = () => {
     openSettingsTab,
     reorderTabs,
     updateSessionConfig,
+    isHydrated,
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -59,22 +62,31 @@ const AppContent = () => {
   }, [openSettingsTab]);
 
   // Check if any session in a tab's tree is dirty
-  const isTabDirty = useCallback((tabId: string) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab) return false;
-    const check = (node: LayoutNode): boolean => {
-      if (node.type === "leaf") {
-        if (node.contentType === "settings") return false;
-        return sessions.get(node.sessionId)?.dirty ?? false;
-      }
-      return node.children.some(check);
-    };
-    return check(tab.root);
-  }, [tabs, sessions]);
+  const isTabDirty = useCallback(
+    (tabId: string) => {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (!tab) return false;
+      const check = (node: LayoutNode): boolean => {
+        if (node.type === "leaf") {
+          if (node.contentType === "settings") return false;
+          return sessions.get(node.sessionId)?.dirty ?? false;
+        }
+        return node.children.some(check);
+      };
+      return check(tab.root);
+    },
+    [tabs, sessions],
+  );
+
+  // Prevent initial flash/blink by waiting for hydration
+  if (!isHydrated) return null;
 
   return (
-    <div
-      className={`flex flex-col h-screen w-full overflow-hidden transition-colors duration-300 ${getTheme(resolvedTheme).appBg}`}
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.4 }}
+      className={`flex flex-col h-screen w-full overflow-hidden ${getTheme(resolvedTheme).appBg}`}
     >
       <TabBar
         tabs={tabs}
@@ -104,25 +116,46 @@ const AppContent = () => {
             </div>
           ))
         ) : (
-          <div className="flex items-center justify-center h-full text-gray-500 flex-col gap-4">
-            <div className="text-xl font-medium">No Open Tabs</div>
-            <button
-              onClick={createTab}
-              className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors shadow-lg shadow-purple-900/20"
+          <AnimatePresence>
+            <motion.div
+              key="empty"
+              variants={fadeScale}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              className="flex items-center justify-center h-full text-gray-500 flex-col gap-4"
             >
-              Create New Terminal
-            </button>
-            <div className="text-xs opacity-50">
-              Press Cmd+T to open a new tab
-            </div>
-          </div>
+              <div className="text-xl font-medium">No Open Tabs</div>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={createTab}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors shadow-lg shadow-purple-900/20"
+              >
+                Create New Terminal
+              </motion.button>
+              <div className="text-xs opacity-50">
+                Press Cmd+T to open a new tab
+              </div>
+            </motion.div>
+          </AnimatePresence>
         )}
       </div>
 
-      {showOnboarding && (
-        <OnboardingWizard onComplete={handleOnboardingComplete} />
-      )}
-    </div>
+      <AnimatePresence>
+        {showOnboarding && (
+          <motion.div
+            key="onboarding"
+            variants={fadeIn}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+          >
+            <OnboardingWizard onComplete={handleOnboardingComplete} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 };
 
