@@ -3,18 +3,14 @@ import { ipcMain } from "electron";
 export function registerAIHandlers() {
   ipcMain.handle(
     "ai.testConnection",
-    async (_event, { provider, model, apiKey }) => {
+    async (_event, { provider, model, apiKey, baseUrl }) => {
       try {
         if (provider === "ollama") {
-          const response = await fetch("http://localhost:11434/api/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: model || "llama3",
-              prompt: "hi",
-              stream: false,
-            }),
+          const url = baseUrl || "http://localhost:11434";
+          const response = await fetch(`${url}/api/tags`, {
+            method: "GET",
           });
+          // tags endpoint is better for connectivity check than generate
           return response.ok;
         }
 

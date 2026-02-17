@@ -221,7 +221,9 @@ function registerTerminalHandlers(getMainWindow) {
                             workDir = stdout.trim();
                     }
                 }
-                catch { /* ignore */ }
+                catch {
+                    /* ignore */
+                }
             }
         }
         try {
@@ -247,6 +249,77 @@ function registerTerminalHandlers(getMainWindow) {
     });
     electron_1.ipcMain.handle("terminal.getHistory", (_event, sessionId) => {
         return sessionHistory.get(sessionId) || "";
+    });
+    // Execute a command visibly in the PTY and capture output via sentinel marker.
+    // The command runs in the user's terminal so they see it, but we also capture
+    // the output to feed back to the agent.
+    electron_1.ipcMain.handle("terminal.execInTerminal", async (_event, { sessionId, command }) => {
+        const session = sessions.get(sessionId);
+        if (!session) {
+            return { stdout: "", exitCode: 1, error: "No PTY session found" };
+        }
+        // Use a unique sentinel so concurrent calls don't collide
+        const nonce = Math.random().toString(36).slice(2, 8);
+        const sentinel = `__TRON_DONE_${nonce}__`;
+        // Wrap: run command, then emit sentinel with exit code.
+        // Use printf (not echo) for portability; the \n ensures it starts on a new line.
+        const wrappedCommand = `${command}; printf '\\n${sentinel}%d\\n' $?`;
+        return new Promise((resolve) => {
+            let output = "";
+            let resolved = false;
+            const disposable = session.onData((data) => {
+                output += data;
+                // Look for the sentinel in accumulated output
+                const sentinelEscaped = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                const match = output.match(new RegExp(`${sentinelEscaped}(\\d+)`));
+                if (match) {
+                    resolved = true;
+                    disposable.dispose();
+                    clearTimeout(timer);
+                    const exitCode = parseInt(match[1], 10);
+                    // --- Clean up captured output ---
+                    let captured = output;
+                    // 1. Strip ANSI escape codes
+                    // eslint-disable-next-line no-control-regex
+                    captured = captured.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+                    // 2. Remove the sentinel line (and everything after it — prompt noise)
+                    const sentinelIdx = captured.indexOf(sentinel);
+                    if (sentinelIdx >= 0) {
+                        captured = captured.slice(0, sentinelIdx);
+                    }
+                    // 3. Remove the echoed command line (first line contains the wrapped command)
+                    //    The shell echoes back what we wrote; strip it.
+                    const firstNewline = captured.indexOf("\n");
+                    if (firstNewline >= 0) {
+                        captured = captured.slice(firstNewline + 1);
+                    }
+                    // 4. Also strip any trailing printf wrapper echo that some shells show
+                    captured = captured.replace(/; printf [^\n]*$/m, "");
+                    captured = captured.trim();
+                    // 5. Truncate very large output
+                    if (captured.length > 8000) {
+                        captured =
+                            captured.slice(0, 4000) +
+                                "\n...(truncated)...\n" +
+                                captured.slice(-4000);
+                    }
+                    resolve({ stdout: captured, exitCode });
+                }
+            });
+            // Write the wrapped command to the PTY
+            session.write(wrappedCommand + "\r");
+            // Timeout after 30s
+            const timer = setTimeout(() => {
+                if (!resolved) {
+                    resolved = true;
+                    disposable.dispose();
+                    resolve({
+                        stdout: output.trim() || "(Command timed out after 30s)",
+                        exitCode: 124,
+                    });
+                }
+            }, 30000);
+        });
     });
 }
 //# sourceMappingURL=terminal.js.map

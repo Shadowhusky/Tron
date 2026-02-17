@@ -134,9 +134,129 @@ function hasCommandSyntax(input: string, words: string[]): boolean {
   return false;
 }
 
+/**
+ * Returns true if the input looks like a pasted error message rather than a command.
+ * Examples: "zsh: command not found: foo", "Error: failed to connect", etc.
+ */
+function isLikelyErrorPaste(input: string): boolean {
+  const lower = input.toLowerCase();
+  const errorPatterns = [
+    "command not found",
+    "no such file or directory",
+    "permission denied",
+    "connection refused",
+    "fatal error",
+    "syntax error",
+    "uncaught exception",
+    "traceback (most recent call last)",
+    "error:",
+    "fatal:",
+    "exception:",
+    "stack trace:",
+  ];
+  return errorPatterns.some((pattern) => lower.includes(pattern));
+}
+
+// Unambiguous commands (never English verbs in common usage)
+const UNAMBIGUOUS_COMMANDS = new Set([
+  "cd",
+  "ls",
+  "pwd",
+  "mkdir",
+  "rm",
+  "cp",
+  "mv",
+  "touch",
+  "cat",
+  "less",
+  "head",
+  "tail",
+  "find",
+  "grep",
+  "git",
+  "npm",
+  "node",
+  "yarn",
+  "pnpm",
+  "bun",
+  "docker",
+  "kubectl",
+  "ssh",
+  "scp",
+  "curl",
+  "wget",
+  "echo",
+  "printf",
+  "history",
+  "clear",
+  "exit",
+  "source",
+  "export",
+  "unset",
+  "env",
+  "vi",
+  "vim",
+  "nano",
+  "code",
+  "python",
+  "python3",
+  "pip",
+  "pip3",
+  "top",
+  "htop",
+  "ps",
+  "kill",
+  "sudo",
+  "chmod",
+  "chown",
+  "tar",
+  "zip",
+  "unzip",
+  "brew",
+  "apt",
+  "which",
+  "man",
+  // Expanded list
+  "ollama",
+  "go",
+  "cargo",
+  "rustc",
+  "ruby",
+  "gem",
+  "rails",
+  "php",
+  "composer",
+  "dotnet",
+  "terraform",
+  "ansible",
+  "npx",
+  "make",
+  "cmake",
+  "gradle",
+  "mvn",
+  "ant",
+  "java",
+  "javac",
+  "perl",
+  "lua",
+  "r",
+  "swift",
+  "scala",
+  "kotlin",
+]);
+
+export function isKnownExecutable(word: string): boolean {
+  return UNAMBIGUOUS_COMMANDS.has(word);
+}
+
 export function isCommand(input: string): boolean {
   const trimmed = input.trim();
   if (!trimmed) return false;
+
+  // If it looks like an error paste, it's definitely for the agent,
+  // even if it starts with a command name (e.g. "docker: command not found")
+  if (isLikelyErrorPaste(trimmed)) return false;
+
   const words = trimmed.split(/\s+/);
   const firstWord = words[0];
 
@@ -149,69 +269,34 @@ export function isCommand(input: string): boolean {
   // If natural language is detected anywhere, it's a prompt
   if (hasNaturalLanguagePattern(words)) return false;
 
-  // Unambiguous commands (never English verbs in common usage)
-  const unambiguousCommands = new Set([
-    "cd",
-    "ls",
-    "pwd",
-    "mkdir",
-    "rm",
-    "cp",
-    "mv",
-    "touch",
-    "cat",
-    "less",
-    "head",
-    "tail",
-    "grep",
-    "git",
-    "npm",
-    "node",
-    "yarn",
-    "pnpm",
-    "bun",
-    "docker",
-    "kubectl",
-    "ssh",
-    "scp",
-    "curl",
-    "wget",
-    "echo",
-    "printf",
-    "history",
-    "clear",
-    "exit",
-    "source",
-    "export",
-    "unset",
-    "env",
-    "vi",
-    "vim",
-    "nano",
-    "code",
-    "python",
-    "python3",
-    "pip",
-    "pip3",
-    "top",
-    "htop",
-    "ps",
-    "kill",
-    "sudo",
-    "chmod",
-    "chown",
-    "tar",
-    "zip",
-    "unzip",
-    "brew",
-    "apt",
-    "which",
-    "man",
-  ]);
-  if (unambiguousCommands.has(firstWord)) return true;
+  if (isKnownExecutable(firstWord)) {
+    // Special handling for ambiguous words that are technically commands but often used as natural language
+    // e.g. "find ollama", "check status", "search for file"
+    const AMBIGUOUS_VERBS = new Set(["find", "check", "search"]);
+
+    if (AMBIGUOUS_VERBS.has(firstWord)) {
+      // If ambiguous verb, ONLY treat as command if it has clear shell syntax (flags or paths)
+      // Otherwise assume it's a natural language query for the agent
+      const hasFlags = words.some((w) => w.startsWith("-"));
+      const hasPaths = words.some(
+        (w) => w.includes("/") || w === "." || w === "~",
+      );
+      if (!hasFlags && !hasPaths) {
+        return false; // Treat as agent prompt
+      }
+    }
+    return true;
+  }
 
   // Single unknown word — could be a command; let shell check decide
-  if (words.length === 1) return false;
+  if (words.length === 1) {
+    // Heuristic: words with dashes (kebab-case) or underscores (snake_case)
+    // or scoped packages (@scope/pkg) are likely commands/tools, not natural language.
+    // e.g. "create-react-app", "docker-compose", "apt-get", "@antigravity/cli"
+    if (/^@?[a-zA-Z0-9]+[-_][a-zA-Z0-9-_]+/.test(firstWord)) return true;
+
+    return false;
+  }
 
   // Multi-word with unknown first word — almost certainly a prompt
   return false;

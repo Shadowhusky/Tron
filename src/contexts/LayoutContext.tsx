@@ -28,11 +28,17 @@ interface LayoutContextType {
   splitUserAction: (direction: SplitDirection) => Promise<void>;
   closeSession: (sessionId: string) => void;
   updateSessionConfig: (sessionId: string, config: Partial<AIConfig>) => void;
+  updateSession: (sessionId: string, updates: Partial<TerminalSession>) => void;
+  addInteraction: (
+    sessionId: string,
+    interaction: { role: "user" | "agent"; content: string; timestamp: number },
+  ) => void;
   markSessionDirty: (sessionId: string) => void;
   updateSplitSizes: (path: number[], sizes: number[]) => void;
   openSettingsTab: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
+  isHydrated: boolean;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -53,7 +59,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   // Helper: Create a new PTY and return its ID
-  const createPTY = async (cwd?: string, reconnectId?: string): Promise<string> => {
+  const createPTY = async (
+    cwd?: string,
+    reconnectId?: string,
+  ): Promise<string> => {
     if (window.electron) {
       return await window.electron.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
         cols: 80,
@@ -86,6 +95,30 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             [id]: session.aiConfig,
           }),
           {} as Record<string, AIConfig | undefined>,
+        ),
+        sessionInteractions: Array.from(sessions.entries()).reduce(
+          (acc, [id, session]) => ({
+            ...acc,
+            [id]: session.interactions,
+          }),
+          {} as Record<
+            string,
+            | { role: "user" | "agent"; content: string; timestamp: number }[]
+            | undefined
+          >,
+        ),
+        sessionSummaries: Array.from(sessions.entries()).reduce(
+          (acc, [id, session]) => ({
+            ...acc,
+            [id]: {
+              summary: session.contextSummary,
+              sourceLength: session.contextSummarySourceLength,
+            },
+          }),
+          {} as Record<
+            string,
+            { summary?: string; sourceLength?: number } | undefined
+          >,
         ),
       };
       localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
@@ -127,6 +160,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 const oldId = node.sessionId;
                 const cwd = savedCwds[oldId];
                 const aiConfig = (parsed.sessionConfigs || {})[oldId];
+                const interactions = (parsed.sessionInteractions || {})[oldId];
+                const summaryConstant = (parsed.sessionSummaries || {})[oldId];
+
                 const newId = await createPTY(cwd, oldId);
                 const reconnected = newId === oldId;
                 if (reconnected) {
@@ -138,6 +174,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                   title: "Terminal",
                   cwd,
                   aiConfig: config,
+                  interactions: interactions || [],
+                  contextSummary: summaryConstant?.summary,
+                  contextSummarySourceLength: summaryConstant?.sourceLength,
                 });
                 return { ...node, sessionId: newId };
               } else {
@@ -178,8 +217,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     };
 
     // Run once
-    init();
+    init().finally(() => setIsHydrated(true));
   }, []);
+
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const createTab = async () => {
     const sessionId = await createPTY();
@@ -422,6 +463,38 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  const updateSession = (
+    sessionId: string,
+    updates: Partial<TerminalSession>,
+  ) => {
+    setSessions((prev) => {
+      const next = new Map(prev);
+      const session = next.get(sessionId);
+      if (session) {
+        next.set(sessionId, { ...session, ...updates });
+      }
+      return next;
+    });
+  };
+
+  const addInteraction = (
+    sessionId: string,
+    interaction: { role: "user" | "agent"; content: string; timestamp: number },
+  ) => {
+    setSessions((prev) => {
+      const next = new Map(prev);
+      const session = next.get(sessionId);
+      if (session) {
+        const existing = session.interactions || [];
+        next.set(sessionId, {
+          ...session,
+          interactions: [...existing, interaction],
+        });
+      }
+      return next;
+    });
+  };
+
   const markSessionDirty = (sessionId: string) => {
     setSessions((prev) => {
       const session = prev.get(sessionId);
@@ -569,11 +642,14 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         splitUserAction,
         closeSession,
         updateSessionConfig,
+        updateSession,
         markSessionDirty,
         updateSplitSizes,
         openSettingsTab,
         reorderTabs,
         focusSession,
+        addInteraction,
+        isHydrated,
       }}
     >
       {children}

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { AnimatePresence } from "framer-motion";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -13,7 +14,8 @@ interface TerminalPaneProps {
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions, markSessionDirty, focusSession } = useLayout();
+  const { activeSessionId, sessions, markSessionDirty, focusSession } =
+    useLayout();
   const { resolvedTheme } = useTheme();
   const isActive = sessionId === activeSessionId;
   const session = sessions.get(sessionId);
@@ -29,6 +31,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     setAlwaysAllowSession,
     thinkingEnabled,
     setThinkingEnabled,
+    modelCapabilities,
     handleCommand,
     handleAgentRun,
     handlePermission,
@@ -92,37 +95,52 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       className={`w-full h-full relative flex flex-col border border-transparent ${isActive ? "ring-1 ring-purple-500/50 z-10" : "opacity-80 hover:opacity-100"}`}
     >
       {/* Top: Terminal Area */}
-      <div className="flex-1 min-h-0 relative flex flex-col">
-        <div className="flex-1 min-h-0 relative">
-          <Terminal className="h-full w-full" sessionId={sessionId} onActivity={() => markSessionDirty(sessionId)} isActive={isActive} />
-        </div>
-
-        {/* Agent Overlay */}
-        {(isOverlayVisible || isAgentRunning) && (
-          <AgentOverlay
-            isThinking={isThinking}
-            isAgentRunning={isAgentRunning}
-            agentThread={agentThread}
-            pendingCommand={pendingCommand}
-            autoExecuteEnabled={alwaysAllowSession}
-            onToggleAutoExecute={() => setAlwaysAllowSession(!alwaysAllowSession)}
-            thinkingEnabled={thinkingEnabled}
-            onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
-            onClose={() => setIsOverlayVisible(false)}
-            onPermission={handlePermission}
-          />
-        )}
+      <div className="flex-1 min-h-0">
+        <Terminal
+          className="h-full w-full"
+          sessionId={sessionId}
+          onActivity={() => markSessionDirty(sessionId)}
+          isActive={isActive}
+        />
       </div>
+
+      {/* Agent Overlay — in flex flow so terminal shrinks to fit */}
+      <AnimatePresence>
+      {(isOverlayVisible || isAgentRunning) && (
+        <AgentOverlay
+          isThinking={isThinking}
+          isAgentRunning={isAgentRunning}
+          agentThread={agentThread}
+          pendingCommand={pendingCommand}
+          autoExecuteEnabled={alwaysAllowSession}
+          onToggleAutoExecute={() =>
+            setAlwaysAllowSession(!alwaysAllowSession)
+          }
+          thinkingEnabled={thinkingEnabled}
+          onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
+          onClose={() => setIsOverlayVisible(false)}
+          onPermission={handlePermission}
+          isExpanded={isOverlayVisible}
+          onExpand={() => setIsOverlayVisible(true)}
+          onRunAgent={(prompt) =>
+            wrappedHandleAgentRun(prompt, queueItem as any)
+          }
+          modelCapabilities={modelCapabilities}
+        />
+      )}
+      </AnimatePresence>
       <div
         className={`p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
           dark: "bg-[#0a0a0a] border-white/5",
-          modern: "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl",
+          modern: "bg-white/2 border-white/6 backdrop-blur-2xl",
           light: "bg-gray-50 border-gray-200",
         })}`}
       >
         <SmartInput
           onSend={(cmd) => wrappedHandleCommand(cmd, queueItem as any)}
-          onRunAgent={(prompt) => wrappedHandleAgentRun(prompt, queueItem as any)}
+          onRunAgent={(prompt) =>
+            wrappedHandleAgentRun(prompt, queueItem as any)
+          }
           isAgentRunning={isAgentRunning}
           pendingCommand={pendingCommand}
           sessionId={sessionId}

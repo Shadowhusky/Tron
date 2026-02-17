@@ -6,11 +6,13 @@ export interface AIConfig {
   apiKey?: string;
   baseUrl?: string;
   contextWindow?: number; // Max context chars, default 4000
+  maxAgentSteps?: number; // Max agent loop iterations, default 100
 }
 
 export interface AIModel {
   name: string;
   provider: "ollama" | "openai" | "anthropic" | "gemini";
+  capabilities?: string[];
 }
 
 export interface AgentResult {
@@ -31,6 +33,13 @@ export interface TerminalSession {
   cwd?: string;
   aiConfig?: AIConfig;
   dirty?: boolean; // true once user has entered commands
+  contextSummary?: string; // Auto-generated summary of older context
+  contextSummarySourceLength?: number; // Length of the original text that was summarized
+  interactions?: {
+    role: "user" | "agent";
+    content: string;
+    timestamp: number;
+  }[];
 }
 
 export type SplitDirection = "horizontal" | "vertical";

@@ -27,7 +27,19 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
     return (stored as Theme) || "system";
   });
 
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("dark");
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => {
+    // Synchronously resolve initial theme to prevent flash
+    const stored = localStorage.getItem(STORAGE_KEYS.THEME) as Theme | null;
+    const pref = stored || "system";
+
+    if (pref === "system") {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    }
+    if (pref === "modern") return "modern";
+    return pref as ResolvedTheme;
+  });
 
   useEffect(() => {
     const root = window.document.documentElement;

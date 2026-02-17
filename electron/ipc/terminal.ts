@@ -14,73 +14,80 @@ export function getSessionHistory() {
   return sessionHistory;
 }
 
-export function registerTerminalHandlers(getMainWindow: () => BrowserWindow | null) {
+export function registerTerminalHandlers(
+  getMainWindow: () => BrowserWindow | null,
+) {
   // Check if a PTY session is still alive (for reconnection after renderer refresh)
   ipcMain.handle("terminal.sessionExists", (_event, sessionId: string) => {
     return sessions.has(sessionId);
   });
 
   // Create Session (or reconnect to existing one)
-  ipcMain.handle("terminal.create", (_event, { cols, rows, cwd, reconnectId }) => {
-    // If reconnectId is provided and a PTY with that ID exists, reuse it
-    if (reconnectId && sessions.has(reconnectId)) {
-      const existing = sessions.get(reconnectId)!;
-      try { existing.resize(cols || 80, rows || 30); } catch {}
-      return reconnectId;
-    }
+  ipcMain.handle(
+    "terminal.create",
+    (_event, { cols, rows, cwd, reconnectId }) => {
+      // If reconnectId is provided and a PTY with that ID exists, reuse it
+      if (reconnectId && sessions.has(reconnectId)) {
+        const existing = sessions.get(reconnectId)!;
+        try {
+          existing.resize(cols || 80, rows || 30);
+        } catch {}
+        return reconnectId;
+      }
 
-    const isWin = os.platform() === "win32";
-    const shell = isWin ? "powershell.exe" : "/bin/zsh";
-    const shellArgs = isWin ? [] : ["+o", "PROMPT_SP"];
-    const sessionId = randomUUID();
+      const isWin = os.platform() === "win32";
+      const shell = isWin ? "powershell.exe" : "/bin/zsh";
+      const shellArgs = isWin ? [] : ["+o", "PROMPT_SP"];
+      const sessionId = randomUUID();
 
-    try {
-      const ptyProcess = pty.spawn(shell, shellArgs, {
-        name: "xterm-256color",
-        cols: cols || 80,
-        rows: rows || 30,
-        cwd: cwd || process.env.HOME,
-        env: { ...process.env, PROMPT_EOL_MARK: "" },
-      });
+      try {
+        const ptyProcess = pty.spawn(shell, shellArgs, {
+          name: "xterm-256color",
+          cols: cols || 80,
+          rows: rows || 30,
+          cwd: cwd || process.env.HOME,
+          env: { ...process.env, PROMPT_EOL_MARK: "" },
+        });
 
-      sessionHistory.set(sessionId, "");
+        sessionHistory.set(sessionId, "");
 
-      ptyProcess.onData((data) => {
-        const currentHistory = sessionHistory.get(sessionId) || "";
-        if (currentHistory.length < 100000) {
-          sessionHistory.set(sessionId, currentHistory + data);
-        } else {
-          sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
-        }
+        ptyProcess.onData((data) => {
+          const currentHistory = sessionHistory.get(sessionId) || "";
+          if (currentHistory.length < 100000) {
+            sessionHistory.set(sessionId, currentHistory + data);
+          } else {
+            sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
+          }
 
-        const mainWindow = getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("terminal.incomingData", {
-            id: sessionId,
-            data,
-          });
-        }
-      });
+          const mainWindow = getMainWindow();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("terminal.incomingData", {
+              id: sessionId,
+              data,
+            });
+          }
+        });
 
-      ptyProcess.onExit(({ exitCode }) => {
-        const mainWindow = getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("terminal.exit", {
-            id: sessionId,
-            exitCode,
-          });
-        }
-        sessions.delete(sessionId);
-        sessionHistory.delete(sessionId);
-      });
+        ptyProcess.onExit(({ exitCode }) => {
+          const mainWindow = getMainWindow();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("terminal.exit", {
+              id: sessionId,
+              exitCode,
+            });
+          }
+          sessions.delete(sessionId);
+          sessionHistory.delete(sessionId);
+        });
 
-      sessions.set(sessionId, ptyProcess);
-      return sessionId;
-    } catch (e) {
-      console.error("Failed to create PTY session:", e);
-      throw e;
-    }
-  });
+        sessions.set(sessionId, ptyProcess);
+        return sessionId;
+      } catch (e) {
+        console.error("Failed to create PTY session:", e);
+        throw e;
+      }
+    },
+  );
 
   // Terminal Input/Output/Resize
   ipcMain.on("terminal.write", (_event, { id, data }) => {
@@ -207,7 +214,9 @@ export function registerTerminalHandlers(getMainWindow: () => BrowserWindow | nu
               );
               if (stdout.trim()) workDir = stdout.trim();
             }
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
       }
 
@@ -244,4 +253,93 @@ export function registerTerminalHandlers(getMainWindow: () => BrowserWindow | nu
   ipcMain.handle("terminal.getHistory", (_event, sessionId: string) => {
     return sessionHistory.get(sessionId) || "";
   });
+
+  // Execute a command visibly in the PTY and capture output via sentinel marker.
+  // The command runs in the user's terminal so they see it, but we also capture
+  // the output to feed back to the agent.
+  ipcMain.handle(
+    "terminal.execInTerminal",
+    async (
+      _event,
+      { sessionId, command }: { sessionId: string; command: string },
+    ) => {
+      const session = sessions.get(sessionId);
+      if (!session) {
+        return { stdout: "", exitCode: 1, error: "No PTY session found" };
+      }
+
+      // Use a unique sentinel so concurrent calls don't collide
+      const nonce = Math.random().toString(36).slice(2, 8);
+      const sentinel = `__TRON_DONE_${nonce}__`;
+      // Wrap: run command, then emit sentinel with exit code.
+      // Use printf (not echo) for portability; the \n ensures it starts on a new line.
+      const wrappedCommand = `${command}; printf '\\n${sentinel}%d\\n' $?`;
+
+      return new Promise<{ stdout: string; exitCode: number }>((resolve) => {
+        let output = "";
+        let resolved = false;
+
+        const disposable = session.onData((data: string) => {
+          output += data;
+
+          // Look for the sentinel in accumulated output
+          const sentinelEscaped = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const match = output.match(new RegExp(`${sentinelEscaped}(\\d+)`));
+          if (match) {
+            resolved = true;
+            disposable.dispose();
+            clearTimeout(timer);
+
+            const exitCode = parseInt(match[1], 10);
+
+            // --- Clean up captured output ---
+            let captured = output;
+            // 1. Strip ANSI escape codes
+            // eslint-disable-next-line no-control-regex
+            captured = captured.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+            // 2. Remove the sentinel line (and everything after it — prompt noise)
+            const sentinelIdx = captured.indexOf(sentinel);
+            if (sentinelIdx >= 0) {
+              captured = captured.slice(0, sentinelIdx);
+            }
+            // 3. Remove the echoed command line (first line contains the wrapped command)
+            //    The shell echoes back what we wrote; strip it.
+            const firstNewline = captured.indexOf("\n");
+            if (firstNewline >= 0) {
+              captured = captured.slice(firstNewline + 1);
+            }
+            // 4. Also strip any trailing printf wrapper echo that some shells show
+            captured = captured.replace(/; printf [^\n]*$/m, "");
+
+            captured = captured.trim();
+
+            // 5. Truncate very large output
+            if (captured.length > 8000) {
+              captured =
+                captured.slice(0, 4000) +
+                "\n...(truncated)...\n" +
+                captured.slice(-4000);
+            }
+
+            resolve({ stdout: captured, exitCode });
+          }
+        });
+
+        // Write the wrapped command to the PTY
+        session.write(wrappedCommand + "\r");
+
+        // Timeout after 30s
+        const timer = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            disposable.dispose();
+            resolve({
+              stdout: output.trim() || "(Command timed out after 30s)",
+              exitCode: 124,
+            });
+          }
+        }, 30000);
+      });
+    },
+  );
 }

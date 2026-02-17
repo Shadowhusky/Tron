@@ -1,8 +1,9 @@
-import { useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { TerminalSession } from "../types";
 import { aiService } from "../services/ai";
 import { useHistory } from "../contexts/HistoryContext";
 import { useAgent } from "../contexts/AgentContext";
+import { useLayout } from "../contexts/LayoutContext";
 import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 
@@ -10,7 +11,15 @@ import { cleanContextForAI } from "../utils/contextCleaner";
  * Extracts agent orchestration logic from the terminal pane component.
  * Manages running agent tasks, command execution, and permission handling.
  */
-export function useAgentRunner(sessionId: string, session: TerminalSession | undefined) {
+export function useAgentRunner(
+  sessionId: string,
+  session: TerminalSession | undefined,
+) {
+  const {
+    updateSession,
+    // @ts-ignore
+    addInteraction,
+  } = useLayout();
   const { addToHistory } = useHistory();
   const {
     agentThread,
@@ -32,6 +41,21 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
     registerAbortController,
   } = useAgent(sessionId);
 
+  // Model capabilities state
+  const [modelCapabilities, setModelCapabilities] = useState<string[]>([]);
+
+  // Fetch capabilities when session config model changes
+  useEffect(() => {
+    const model = session?.aiConfig?.model || aiService.getConfig().model;
+    const provider = session?.aiConfig?.provider || aiService.getConfig().provider;
+    if (model && provider === "ollama") {
+      const baseUrl = session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
+      aiService.getModelCapabilities(model, baseUrl).then(setModelCapabilities);
+    } else {
+      setModelCapabilities([]);
+    }
+  }, [session?.aiConfig?.model, session?.aiConfig?.provider]);
+
   // Ref to track latest alwaysAllowSession inside async closures
   const alwaysAllowRef = useRef(alwaysAllowSession);
   useEffect(() => {
@@ -39,39 +63,66 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
   }, [alwaysAllowSession]);
 
   /**
-   * Write a command to the terminal, aborting any pending input state first
-   * (heredoc, multiline, etc.) by sending Ctrl+C, then the command after a delay.
+   * Write a command to the terminal.
+   * @param cmd The command string
+   * @param skipInterrupt If true, skips sending Ctrl+C (useful for injecting comments/context without resetting prompt)
    */
-  const writeCommandToTerminal = (cmd: string): Promise<void> => {
+  const writeCommandToTerminal = (
+    cmd: string,
+    skipInterrupt = false,
+  ): Promise<void> => {
     return new Promise((resolve) => {
-      if (!window.electron) { resolve(); return; }
-      // Ctrl+C aborts heredocs, multiline input, or hung foreground processes
-      window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-        id: sessionId,
-        data: "\x03",
-      });
-      // Brief delay for shell to process interrupt and show a new prompt
-      setTimeout(() => {
+      if (!window.electron) {
+        resolve();
+        return;
+      }
+
+      const sendCommand = () => {
         window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
           id: sessionId,
-          data: "\x15" + cmd + "\r",
+          data: cmd + "\r",
         });
         resolve();
-      }, 80);
+      };
+
+      if (skipInterrupt) {
+        sendCommand();
+      } else {
+        // Ctrl+C aborts heredocs, multiline input, or hung foreground processes
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+          id: sessionId,
+          data: "\x03",
+        });
+        // Brief delay for shell to process interrupt and show a new prompt
+        setTimeout(() => {
+          // Send Ctrl+U (clear line) before command to ensure clean input
+          window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+            id: sessionId,
+            data: "\x15",
+          });
+          sendCommand();
+        }, 80);
+      }
     });
   };
 
-  const handleCommand = async (cmd: string, queueCallback?: (item: { type: "command"; content: string }) => void) => {
+  const handleCommand = async (
+    cmd: string,
+    queueCallback?: (item: { type: "command"; content: string }) => void,
+  ) => {
     if (isAgentRunning && queueCallback) {
       queueCallback({ type: "command", content: cmd });
       return;
     }
 
-    await writeCommandToTerminal(cmd);
+    await writeCommandToTerminal(cmd, true);
     addToHistory(cmd);
   };
 
-  const handleAgentRun = async (prompt: string, queueCallback?: (item: { type: "agent"; content: string }) => void) => {
+  const handleAgentRun = async (
+    prompt: string,
+    queueCallback?: (item: { type: "agent"; content: string }) => void,
+  ) => {
     if (isAgentRunning && queueCallback) {
       queueCallback({ type: "agent", content: prompt });
       return;
@@ -82,16 +133,26 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
     registerAbortController(controller);
 
     setIsAgentRunning(true);
-    setIsThinking(true);
+    if (thinkingEnabled) {
+      setIsThinking(true);
+    }
     setIsOverlayVisible(true);
 
     // Add a run separator (always, including first run)
-    setAgentThread((prev) => [
-      ...prev,
-      { step: "separator", output: prompt },
-    ]);
+    setAgentThread((prev) => [...prev, { step: "separator", output: prompt }]);
 
     try {
+      // 0. Persist User Prompt to Session State (Invisible Context)
+      if (sessionId) {
+        const currentInteractions = session?.interactions || [];
+        updateSession(sessionId, {
+          interactions: [
+            ...currentInteractions,
+            { role: "user", content: prompt, timestamp: Date.now() },
+          ],
+        });
+      }
+
       // 1. Fetch & Clean Session History
       let sessionHistory = "";
       if (window.electron) {
@@ -102,21 +163,47 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
         sessionHistory = cleanContextForAI(rawHistory);
       }
 
-      // 2. Context Compression — summarize if over limit
+      // 2. Context Compression
       const contextLimit =
         session?.aiConfig?.contextWindow ||
         aiService.getConfig().contextWindow ||
         4000;
-      if (sessionHistory.length > contextLimit) {
-        sessionHistory = await aiService.summarizeContext(
+
+      if (session?.contextSummary && session.contextSummarySourceLength) {
+        const newContent = sessionHistory.slice(
+          session.contextSummarySourceLength,
+        );
+        sessionHistory = `[PREVIOUS CONTEXT SUMMARIZED]\n${session.contextSummary}\n\n[RECENT TERMINAL OUTPUT]\n${newContent}`;
+      } else if (sessionHistory.length > contextLimit) {
+        const summary = await aiService.summarizeContext(
           sessionHistory.slice(-contextLimit),
         );
+        sessionHistory = `[CONTEXT SUMMARIZED]\n${summary}`;
       }
 
-      // 3. Augment Prompt with Context (use last 2000 chars of cleaned history)
+      // 3. Construct Augmented Prompt with Invisible Interactions
+      // Filter for recent interactions to avoid token overflow?
+      // For now, take last 10 interactions or so.
+      const recentInteractions = (session?.interactions || [])
+        .slice(-10)
+        .map((i) => `${i.role === "user" ? "User" : "Agent"}: ${i.content}`)
+        .join("\n\n");
+
+      // Add CURRENT prompt to the list (it was just added to state, but might not be in session var yet due to closure)
+      // Actually, we added it to state but `session` variable is from render scope.
+      // Safe to append it manually here if needed, but let's assume we want to be explicit.
+      const interactionContext = recentInteractions
+        ? `\n[RECENT INTERACTION HISTORY]\n${recentInteractions}\nUser: ${prompt}` // Prompt is already in valid history? No, `interactions` update might be async.
+        : // Actually, let's just use the `prompt` argument as the latest user message.
+          // And `recentInteractions` should exclude the one we just added?
+          // Let's just build it fresh.
+          "";
+
       const augmentedPrompt = `
-Context (Recent Terminal Output):
-${sessionHistory.slice(-2000)}
+Context (Terminal Output):
+${sessionHistory}
+
+${interactionContext ? interactionContext : `User: ${prompt}`}
 
 Task: ${prompt}
 `;
@@ -142,23 +229,17 @@ Task: ${prompt}
             throw new Error("No terminal session found.");
           }
 
-          // Abort any pending input state, then write command
-          await writeCommandToTerminal(cmd);
-
           addToHistory(cmd.trim());
 
-          // Execute with timeout (30s)
-          const execPromise = window.electron.ipcRenderer.exec(
-            sessionId,
-            cmd,
-          );
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error("Command timed out after 30s")),
-              30000,
-            ),
-          );
-          const result = await Promise.race([execPromise, timeoutPromise]);
+          // Write command to terminal for visibility, then exec in
+          // background for clean output capture (no sentinel pollution).
+          writeCommandToTerminal(cmd);
+
+          // Small delay to let the PTY echo start before background exec
+          await new Promise((r) => setTimeout(r, 100));
+
+          // Execute via background child_process (clean stdout)
+          const result = await window.electron.ipcRenderer.exec(sessionId, cmd);
 
           if (result.exitCode !== 0 && result.stderr) {
             throw new Error(`Exit Code ${result.exitCode}: ${result.stderr}`);
@@ -212,10 +293,33 @@ Task: ${prompt}
             });
             setIsThinking(false);
           } else if (step !== "thinking") {
-            // Real step arrived — remove any leftover streaming entry
+            // Real step arrived — update in-place where possible to avoid layout shift
             setAgentThread((prev) => {
-              const filtered = prev.filter((s) => s.step !== "streaming");
-              return [...filtered, { step, output }];
+              const updated = [...prev];
+
+              // "executed"/"failed" → transform the preceding "executing" entry in-place
+              if (step === "executed" || step === "failed") {
+                let lastExecIdx = -1;
+                for (let j = updated.length - 1; j >= 0; j--) {
+                  if (updated[j].step === "executing") { lastExecIdx = j; break; }
+                }
+                if (lastExecIdx >= 0) {
+                  updated[lastExecIdx] = { step, output };
+                  // Remove any leftover streaming entries
+                  return updated.filter((s) => s.step !== "streaming");
+                }
+              }
+
+              // Transform streaming entry in-place if present, otherwise append
+              let lastStreamIdx = -1;
+              for (let j = updated.length - 1; j >= 0; j--) {
+                if (updated[j].step === "streaming") { lastStreamIdx = j; break; }
+              }
+              if (lastStreamIdx >= 0) {
+                updated[lastStreamIdx] = { step, output };
+                return updated;
+              }
+              return [...updated, { step, output }];
             });
             setIsThinking(false);
           } else {
@@ -228,29 +332,52 @@ Task: ${prompt}
       );
       // Ensure successful completion clears active state
       setIsAgentRunning(false);
-      setAgentThread((prev) => {
-        const filtered = prev.filter((s) => s.step !== "streaming");
-        return [
-          ...filtered,
-          {
-            step: finalAnswer.success ? "done" : "failed",
-            output: finalAnswer.message,
-          },
-        ];
-      });
-    } catch (e: any) {
-      // stopAgent already adds abort entry + resets state, so skip duplicates
-      if (e.message !== "Agent aborted by user.") {
-        setAgentThread((prev) => {
-          const filtered = prev.filter((s) => s.step !== "streaming");
-          return [...filtered, { step: "error", output: e.message }];
+      // Explicitly clear any lingering streaming steps (e.g. from final_answer)
+      setAgentThread((prev) => prev.filter((s) => s.step !== "streaming"));
+
+      // Update Agent Thread with Final Status
+      if (finalAnswer.type === "question") {
+        setAgentThread((prev) => [
+          ...prev,
+          { step: "question", output: finalAnswer.message || "" },
+        ]);
+      } else if (finalAnswer.success) {
+        setAgentThread((prev) => [
+          ...prev,
+          { step: "done", output: finalAnswer.message || "Task Completed" },
+        ]);
+      } else {
+        setAgentThread((prev) => [
+          ...prev,
+          { step: "failed", output: finalAnswer.message || "Task Failed" },
+        ]);
+      }
+
+      // Persist Agent Conclusion to Session State (Invisible Context)
+      if (sessionId && finalAnswer.message) {
+        addInteraction(sessionId, {
+          role: "agent",
+          content: finalAnswer.message,
+          timestamp: Date.now(),
         });
       }
-    } finally {
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        setAgentThread((prev) => [
+          ...prev,
+          { step: "error", output: "Agent stopped by user." },
+        ]);
+      } else {
+        console.error(error);
+        setAgentThread((prev) => [
+          ...prev,
+          { step: "error", output: `Error: ${error.message}` },
+        ]);
+      }
       setIsAgentRunning(false);
+    } finally {
       setIsThinking(false);
-      // Keep panel visible so user can review the execution history
-      setIsOverlayVisible(true);
+      // unregisterAbortController(controller); // Not available in context
     }
   };
 
@@ -278,6 +405,8 @@ Task: ${prompt}
     setAlwaysAllowSession,
     thinkingEnabled,
     setThinkingEnabled,
+    // Model info
+    modelCapabilities,
     // Actions
     handleCommand,
     handleAgentRun,
