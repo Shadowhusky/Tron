@@ -181,7 +181,7 @@ class AIService {
     const body: any = { model, messages, stream: true, think };
     if (format) body.format = format;
 
-    const response = await fetch(
+    let response = await fetch(
       `${baseUrl}/api/chat`,
       {
         method: "POST",
@@ -190,6 +190,21 @@ class AIService {
         signal,
       },
     );
+
+    // Retry without format/think if model doesn't support them (400 error)
+    if (response.status === 400 && (format || think)) {
+      const retryBody: any = { model, messages, stream: true };
+      response = await fetch(
+        `${baseUrl}/api/chat`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(retryBody),
+          signal,
+        },
+      );
+    }
+
     if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
     if (!response.body) throw new Error("No response body for streaming");
 
@@ -406,38 +421,14 @@ class AIService {
     const history: any[] = [
       {
         role: "system",
-        content: `You are an autonomous terminal agent.
-You can execute commands on the user's machine to achieve the goal.
-User OS: ${navigator.platform}.
+        content: `Terminal agent. OS: ${navigator.platform}. Respond ONLY with valid JSON.
 
 TOOLS:
-1. execute_command: Run a shell command in the background and get output (e.g. ls, cat, grep, writing files).
-   Format: {"tool": "execute_command", "command": "ls -la"}
-   Use this when you need to SEE the output or CREATE/EDIT files.
-   This runs in a non-interactive shell — heredocs, pipes, and multiline commands all work.
+1. {"tool":"execute_command","command":"..."} — Run command, get output. Use for ALL file read/write/create operations.
+2. {"tool":"run_in_terminal","command":"..."} — Fire-and-forget in user's terminal. ONLY for: cd, servers, interactive apps, open. NO file writing.
+3. {"tool":"final_answer","content":"..."} — Done or can't do it.
 
-2. run_in_terminal: Run a command in the user's visible terminal (e.g. npm start, cd, vi).
-   Format: {"tool": "run_in_terminal", "command": "npm run dev"}
-   Use this ONLY for:
-   - Interactive commands (editors, REPLs)
-   - Long-running processes (servers, watchers)
-   - Changing directory (cd)
-   - Opening files (open, xdg-open)
-   NOTE: You will NOT see the output. It is "fire and forget".
-   NEVER use this for writing files — no cat heredoc, no echo redirection, no tee.
-
-RESPONSE FORMAT:
-You must respond with valid JSON only.
-Example:
-{"tool": "execute_command", "command": "cat file.txt"}
-
-If you have completed the task or need to answer the user:
-{"tool": "final_answer", "content": "I have started the server."}
-
-If you CANNOT complete the task:
-{"tool": "final_answer", "content": "I cannot do this because..."}
-
-Be concise and direct.
+RULES: Act immediately. One command per step. Don't repeat commands. Don't over-analyze — execute and observe.
 `,
       },
     ];
@@ -448,14 +439,7 @@ Be concise and direct.
     const executedCommands = new Set<string>();
 
     history[0].content += `
-CRITICAL RULES:
-1. DO NOT run the same command twice.
-2. If a command runs successfully but has no output (like 'mkdir' or 'cp'), assume it worked and proceed.
-3. If you are stuck, ask the user for help.
-4. Always use 'run_in_terminal' for 'cd' or starting servers.
-5. For creating/editing files, ALWAYS use 'execute_command' with cat heredoc or printf. NEVER use 'run_in_terminal' for file operations.
-6. Break complex tasks into small, sequential steps. Execute ONE command at a time.
-7. NEVER chain many commands with && for complex operations. Use separate tool calls instead.
+For file operations always use execute_command with cat heredoc or printf. Use run_in_terminal only for cd/servers/interactive.
 `;
 
     let parseFailures = 0;
@@ -472,16 +456,21 @@ CRITICAL RULES:
       try {
         if (provider === "ollama") {
           let thinkingAccumulated = "";
+          let contentAccumulated = "";
           const result = await this.streamOllamaChat(
             baseUrl || "http://localhost:11434",
             model,
             history,
-            thinkingEnabled ? (_token, thinking) => {
-              if (thinking) {
+            (token, thinking) => {
+              if (thinking && thinkingEnabled) {
                 thinkingAccumulated += thinking;
                 onUpdate("streaming_thinking", thinkingAccumulated);
               }
-            } : undefined,
+              if (token) {
+                contentAccumulated += token;
+                onUpdate("streaming_response", contentAccumulated);
+              }
+            },
             signal,
             "json",
             thinkingEnabled,

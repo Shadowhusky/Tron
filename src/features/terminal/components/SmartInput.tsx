@@ -425,7 +425,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
               : theme === "light"
                 ? "bg-white border-gray-200 shadow-sm text-black"
                 : theme === "modern"
-                  ? "bg-white/[0.04] border-white/[0.1] text-gray-100 backdrop-blur-2xl shadow-[0_0_30px_rgba(168,85,247,0.05)]"
+                  ? "bg-white/[0.03] border-white/[0.08] text-gray-100 backdrop-blur-2xl"
                   : "bg-[#0e0e0e] border-white/10 text-gray-200 shadow-xl"
         }`}
       >
@@ -608,12 +608,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
       {/* Hints bar */}
       <div
-        className={`flex items-center justify-between px-2 h-5 text-[10px] select-none ${
+        className={`flex items-center justify-between px-2 h-5 text-[10px] select-none overflow-hidden whitespace-nowrap ${
           theme === "light" ? "text-gray-500" : "text-gray-400"
         }`}
       >
         {/* Left: mode indicator + feedback */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {isAuto ? (
             <span
               className={`font-medium ${mode === "agent" ? "text-purple-400" : "text-teal-400"}`}
@@ -642,7 +642,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         </div>
 
         {/* Right: shortcuts */}
-        <div className={`flex items-center gap-0.5 ${
+        <div className={`flex items-center gap-0.5 shrink-0 ${
           theme === "light" ? "opacity-70" : "opacity-80"
         }`}>
           <span>⇥ cycle mode</span>

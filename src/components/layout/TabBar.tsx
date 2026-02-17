@@ -12,6 +12,7 @@ interface TabBarProps {
   onCreate: () => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onOpenSettings: () => void;
+  isTabDirty?: (tabId: string) => boolean;
 }
 
 const TabBar: React.FC<TabBarProps> = ({
@@ -23,6 +24,7 @@ const TabBar: React.FC<TabBarProps> = ({
   onCreate,
   onReorder,
   onOpenSettings,
+  isTabDirty,
 }) => {
   const dragTabRef = useRef<number | null>(null);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
@@ -35,7 +37,7 @@ const TabBar: React.FC<TabBarProps> = ({
         {
           dark: "bg-gray-900/50 border-white/5",
           modern:
-            "bg-white/[0.03] border-white/[0.08] backdrop-blur-2xl shadow-[0_1px_0_rgba(168,85,247,0.08),inset_0_1px_0_rgba(255,255,255,0.05)]",
+            "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
           light: "bg-white border-gray-200",
         },
       )}`}
@@ -125,7 +127,7 @@ const TabBar: React.FC<TabBarProps> = ({
                     ? themeClass(resolvedTheme, {
                         dark: "bg-gray-800 text-white border-white/10 shadow-sm",
                         modern:
-                          "bg-white/[0.08] text-white border-white/[0.12] shadow-[0_0_15px_rgba(168,85,247,0.12)] backdrop-blur-xl",
+                          "bg-white/[0.06] text-white border-white/[0.1] shadow-[0_0_12px_rgba(168,85,247,0.08)] backdrop-blur-xl",
                         light:
                           "bg-white text-gray-900 border-gray-300 shadow-sm",
                       })
@@ -138,11 +140,11 @@ const TabBar: React.FC<TabBarProps> = ({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
+                    const dirty = isTabDirty?.(tab.id) ?? false;
                     if (
                       tab.title === "Settings" ||
-                      window.confirm(
-                        "Are you sure you want to close this session?",
-                      )
+                      !dirty ||
+                      window.confirm("Close this terminal session?")
                     ) {
                       onClose(tab.id);
                     }
@@ -197,7 +199,7 @@ const TabBar: React.FC<TabBarProps> = ({
         onClick={onOpenSettings}
         className={`p-2 rounded-md transition-colors ${themeClass(resolvedTheme, {
           dark: "hover:bg-white/10 text-gray-500",
-          modern: "hover:bg-white/20 text-purple-300",
+          modern: "hover:bg-white/[0.08] text-purple-300/70 hover:text-purple-200",
           light: "hover:bg-gray-100 text-gray-500",
         })}`}
         title="Settings (Cmd+,)"

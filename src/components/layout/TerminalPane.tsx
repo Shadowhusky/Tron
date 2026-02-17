@@ -13,7 +13,7 @@ interface TerminalPaneProps {
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions, markSessionDirty } = useLayout();
+  const { activeSessionId, sessions, markSessionDirty, focusSession } = useLayout();
   const { resolvedTheme } = useTheme();
   const isActive = sessionId === activeSessionId;
   const session = sessions.get(sessionId);
@@ -43,7 +43,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   useEffect(() => {
     if (!isActive) return;
     const handleKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === ".") {
         e.preventDefault();
         if (agentThread.length > 0) {
           setIsOverlayVisible(!isOverlayVisible);
@@ -82,14 +82,19 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     await handleAgentRun(prompt, queueCallback);
   };
 
+  const handlePaneFocus = () => {
+    if (!isActive) focusSession(sessionId);
+  };
+
   return (
     <div
+      onMouseDown={handlePaneFocus}
       className={`w-full h-full relative flex flex-col border border-transparent ${isActive ? "ring-1 ring-purple-500/50 z-10" : "opacity-80 hover:opacity-100"}`}
     >
       {/* Top: Terminal Area */}
       <div className="flex-1 min-h-0 relative flex flex-col">
         <div className="flex-1 min-h-0 relative">
-          <Terminal className="h-full w-full" sessionId={sessionId} />
+          <Terminal className="h-full w-full" sessionId={sessionId} onActivity={() => markSessionDirty(sessionId)} isActive={isActive} />
         </div>
 
         {/* Agent Overlay */}
@@ -111,7 +116,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       <div
         className={`p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
           dark: "bg-[#0a0a0a] border-white/5",
-          modern: "bg-[#080818]/80 border-white/10 backdrop-blur-xl",
+          modern: "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl",
           light: "bg-gray-50 border-gray-200",
         })}`}
       >
