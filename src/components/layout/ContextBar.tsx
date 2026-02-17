@@ -7,6 +7,7 @@ import { Folder, X, Loader2 } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { themeClass } from "../../utils/theme";
+import { stripAnsi } from "../../utils/contextCleaner";
 
 // SVG Ring component for context usage visualization
 const ContextRing: React.FC<{ percent: number; size?: number }> = ({
@@ -53,24 +54,6 @@ const ContextRing: React.FC<{ percent: number; size?: number }> = ({
   );
 };
 
-// Strip ANSI escape sequences, terminal control codes, and clean up output
-function stripAnsi(text: string): string {
-  return text
-    // Standard ANSI escape codes (colors, cursor, etc.)
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
-    // OSC sequences (title, etc.)
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    // Character set switching
-    .replace(/\x1b[()][AB012]/g, "")
-    // DEC private modes like [?2004h, [?2004l
-    .replace(/\[?\?[0-9;]*[a-zA-Z]/g, "")
-    // Remaining non-printable control chars (keep \n and \r)
-    .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f]/g, "")
-    // Collapse 3+ blank lines into 2
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 interface ContextBarProps {
   sessionId: string;
 }
@@ -99,6 +82,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
   const [isSummarized, setIsSummarized] = useState(false);
   const isSummarizedRef = useRef(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const modelBtnRef = useRef<HTMLDivElement>(null);
   const [availableModels, setAvailableModels] = useState<
     { name: string; provider: string }[]
   >([]);
@@ -165,17 +149,17 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
 
   return (
     <div
-      className={`w-full h-8 border-t flex items-center justify-between px-3 transition-all duration-200 select-none shrink-0 ${themeClass(
+      className={`w-full h-8 border-t flex items-center justify-between px-3 transition-all duration-200 select-none shrink-0 overflow-hidden whitespace-nowrap ${themeClass(
         theme,
         {
           dark: "bg-[#0a0a0a] border-white/5 text-gray-500",
-          modern: "bg-white/[0.03] border-white/[0.08] text-gray-400 backdrop-blur-2xl",
+          modern: "bg-white/[0.02] border-white/[0.06] text-gray-400 backdrop-blur-2xl",
           light: "bg-gray-50 border-gray-200 text-gray-500",
         },
       )}`}
     >
       {/* Left: Identity + Path */}
-      <div className="flex items-center gap-4 max-w-[50%] overflow-hidden">
+      <div className="flex items-center gap-4 min-w-0 overflow-hidden">
         <span className="text-[10px] uppercase tracking-wider font-bold opacity-40">
           Context & Status
         </span>
@@ -206,7 +190,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
       </div>
 
       {/* Right: Context Ring + Model */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 shrink-0">
         {/* Context Ring with Popover — click opens modal */}
         <div
           className="relative flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
@@ -244,7 +228,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
         <div className="h-3 w-px bg-current opacity-20" />
 
         {/* Model Switcher */}
-        <div className="relative">
+        <div ref={modelBtnRef}>
           <div
             className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-purple-400 text-[10px]"
             onClick={() => setShowModelMenu(!showModelMenu)}
@@ -252,14 +236,26 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
             <span className="font-semibold">{activeModel}</span>
           </div>
 
-          {/* Model Menu */}
-          {showModelMenu && (
+          {/* Model Menu — portal to escape overflow-hidden */}
+          {showModelMenu && createPortal(
             <>
               <div
-                className="fixed inset-0 z-40"
+                className="fixed inset-0 z-[998]"
                 onClick={() => setShowModelMenu(false)}
               />
-              <div className="absolute bottom-full right-0 mb-3 w-48 py-1 rounded-lg bg-[#1a1a1a] border border-white/10 shadow-xl z-50 max-h-60 overflow-y-auto">
+              <div
+                className={`fixed w-48 py-1 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(theme, {
+                  dark: "bg-[#1a1a1a] border border-white/10",
+                  modern: "bg-[#12122e]/80 border border-white/[0.08] backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                  light: "bg-white border border-gray-200",
+                })}`}
+                style={{
+                  ...(modelBtnRef.current ? (() => {
+                    const rect = modelBtnRef.current!.getBoundingClientRect();
+                    return { bottom: window.innerHeight - rect.top + 6, right: window.innerWidth - rect.right };
+                  })() : {}),
+                }}
+              >
                 <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-gray-500 font-semibold border-b border-white/5 mb-1">
                   Select Model
                 </div>
@@ -287,7 +283,8 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
                   </div>
                 )}
               </div>
-            </>
+            </>,
+            document.body,
           )}
         </div>
       </div>
@@ -304,7 +301,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
               theme,
               {
                 dark: "bg-[#0e0e0e] border-white/10 text-gray-200",
-                modern: "bg-[#0a0a20] border-purple-500/20 text-gray-200",
+                modern: "bg-[#0a0a1e]/80 border-white/[0.08] text-gray-200 backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
                 light: "bg-white border-gray-200 text-gray-900",
               },
             )}`}

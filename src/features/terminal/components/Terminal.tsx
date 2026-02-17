@@ -7,15 +7,14 @@ import { useAgent } from "../../../contexts/AgentContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import "@xterm/xterm/css/xterm.css";
 
-// Track sessions that have already restored history to prevent duplication on remount (e.g. split)
-const initializedSessions = new Set<string>();
-
 interface TerminalProps {
   className?: string;
   sessionId: string;
+  onActivity?: () => void;
+  isActive?: boolean;
 }
 
-const THEMES = {
+const THEMES: Record<string, Xterm["options"]["theme"]> = {
   dark: {
     background: "#0a0a0a",
     foreground: "#e5e7eb",
@@ -23,10 +22,10 @@ const THEMES = {
     selectionBackground: "#ffffff30",
   },
   modern: {
-    background: "#050510",
+    background: "#040414",
     foreground: "#d4d4e0",
-    cursor: "#a855f7",
-    selectionBackground: "#a855f720",
+    cursor: "#c084fc",
+    selectionBackground: "#a855f718",
   },
   light: {
     background: "#f9fafb",
@@ -36,19 +35,25 @@ const THEMES = {
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
   const { isAgentRunning, stopAgent } = useAgent(sessionId);
 
+  // Refs for values accessed inside stable closures
+  const isAgentRunningRef = useRef(isAgentRunning);
+  useEffect(() => { isAgentRunningRef.current = isAgentRunning; }, [isAgentRunning]);
+  const stopAgentRef = useRef(stopAgent);
+  useEffect(() => { stopAgentRef.current = stopAgent; }, [stopAgent]);
+
+  // ---- Main effect: create terminal (once per sessionId) ----
   useEffect(() => {
     if (!terminalRef.current) return;
 
     const termTheme = THEMES[resolvedTheme] || THEMES.dark;
 
-    // Initialize xterm.js
     const term = new Xterm({
       cursorBlink: true,
       fontFamily: '"JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
@@ -62,43 +67,37 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
-
     term.open(terminalRef.current);
 
-    // Store refs immediately
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Initial fit
-    try {
-      fitAddon.fit();
-    } catch (e) {
-      console.warn("Initial fit failed", e);
-    }
+    // Local-only fit (adjusts xterm cols/rows to container — no IPC to backend).
+    // We must NOT send resize IPC before history is restored, because resizing
+    // the PTY causes the shell to re-render its prompt, which appends a duplicate
+    // prompt to the backend history buffer.
+    try { fitAddon.fit(); } catch (e) { console.warn("Initial fit failed", e); }
 
     term.focus();
 
-    // Custom key handling — intercept before xterm consumes them
+    // Custom key handling
     term.attachCustomKeyEventHandler((e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      const key = e.key.toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && key === "k") {
         term.clear();
         return false;
       }
-      // Let Cmd+. pass through to window handler (toggle agent panel)
-      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+      if ((e.metaKey || e.ctrlKey) && key === ".") {
         return false;
       }
       return true;
     });
 
-    // Resize Logic
+    // Resize Logic — syncs xterm dimensions to backend PTY
     const performResize = () => {
       if (!fitAddonRef.current || !xtermRef.current) return;
       try {
-        // 1. Fit frontend
         fitAddonRef.current.fit();
-
-        // 2. Sync backend
         const { cols, rows } = xtermRef.current;
         if (
           window.electron &&
@@ -116,53 +115,80 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
       }
     };
 
-    // Debounce resize to prevent thrashing PTY during animations
     let resizeTimeout: ReturnType<typeof setTimeout>;
     const debouncedResize = () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        performResize();
-      }, 100); // 100ms debounce
+      resizeTimeout = setTimeout(performResize, 100);
     };
 
-    // Initial Resizes (Multiple attempts to catch layout settlement)
-    performResize();
-    setTimeout(performResize, 50);
-    setTimeout(performResize, 250);
+    // NOTE: No performResize() calls here! We defer until after history +
+    // listener are set up (see getHistory .then() below).
 
-    // Restore History from main process (contains full scrollback for reconnected sessions)
-    if (window.electron && !initializedSessions.has(sessionId)) {
-      initializedSessions.add(sessionId);
+    // ---- IPC Listeners ----
+    let mounted = true;
+    let removeIncomingListener: (() => void) | undefined;
+    let removeEchoListener: (() => void) | undefined;
+
+    if (window.electron) {
+      // Echo listener (for agent writes) — safe to register immediately
+      const handleEcho = (_: any, data: string) => {
+        term.write(data);
+      };
+      removeEchoListener = window.electron.ipcRenderer.on(
+        terminalEchoChannel(sessionId),
+        handleEcho,
+      );
+
+      // Restore history FIRST, then register incoming data listener,
+      // then resize. This order prevents:
+      // 1. Duplication from listener + history race condition
+      // 2. Duplicate prompts from resize-triggered shell re-renders
       window.electron.ipcRenderer
         .getHistory(sessionId)
         .then((history: string) => {
+          if (!mounted) return; // Component unmounted before history arrived
+
           if (history && xtermRef.current) {
             term.write(history);
-            setTimeout(performResize, 10);
           }
+
+          // Register the incoming data listener AFTER history is written
+          removeIncomingListener = window.electron.ipcRenderer.on(
+            IPC.TERMINAL_INCOMING_DATA,
+            ({ id, data }: { id: string; data: string }) => {
+              if (id === sessionId) {
+                term.write(data);
+              }
+            },
+          );
+
+          // NOW sync dimensions to backend — any prompt re-renders from
+          // resize go through the listener (not duplicated in history)
+          performResize();
+          setTimeout(performResize, 50);
+          setTimeout(performResize, 250);
         });
+    } else {
+      term.write("\r\n\x1b[33m[Mock Mode] Electron not detected.\x1b[0m\r\n");
     }
 
-    // Observer
-    const resizeObserver = new ResizeObserver(() => {
-      debouncedResize();
-    });
-
+    // ResizeObserver
+    const resizeObserver = new ResizeObserver(debouncedResize);
     if (terminalRef.current) {
       resizeObserver.observe(terminalRef.current);
     }
     window.addEventListener("resize", debouncedResize);
 
-    // Expose write via IPC for agent echo
-    const handleEcho = (_: any, data: string) => {
-      term.write(data);
-    };
-
     // Send Input
+    let activityFired = false;
     const disposableOnData = term.onData((data) => {
-      // Check for Ctrl+C to abort agent
-      if (data === "\u0003" && isAgentRunning) {
-        stopAgent();
+      if (data === "\u0003" && isAgentRunningRef.current) {
+        stopAgentRef.current();
+      }
+
+      if (!activityFired && data === "\r" && onActivity) {
+        activityFired = true;
+        onActivity();
       }
 
       if (window.electron) {
@@ -173,38 +199,33 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId }) => {
       }
     });
 
-    // Receive Output
-    let removeIncomingListener: (() => void) | undefined;
-    let removeEchoListener: (() => void) | undefined;
-
-    if (window.electron) {
-      removeIncomingListener = window.electron.ipcRenderer.on(
-        IPC.TERMINAL_INCOMING_DATA,
-        ({ id, data }: { id: string; data: string }) => {
-          if (id === sessionId) {
-            term.write(data);
-          }
-        },
-      );
-
-      removeEchoListener = window.electron.ipcRenderer.on(
-        terminalEchoChannel(sessionId),
-        handleEcho,
-      );
-    } else {
-      term.write("\r\n\x1b[33m[Mock Mode] Electron not detected.\x1b[0m\r\n");
-    }
-
     return () => {
+      mounted = false;
       clearTimeout(resizeTimeout);
       term.dispose();
+      xtermRef.current = null;
+      fitAddonRef.current = null;
       resizeObserver.disconnect();
       window.removeEventListener("resize", debouncedResize);
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
     };
-  }, [sessionId, resolvedTheme]);
+  }, [sessionId]); // Only recreate on session change — NOT on theme change
+
+  // ---- Theme update — lightweight, no terminal recreation ----
+  useEffect(() => {
+    if (xtermRef.current) {
+      xtermRef.current.options.theme = THEMES[resolvedTheme] || THEMES.dark;
+    }
+  }, [resolvedTheme]);
+
+  // ---- Focus when tab becomes active ----
+  useEffect(() => {
+    if (isActive && xtermRef.current) {
+      xtermRef.current.focus();
+    }
+  }, [isActive]);
 
   return <div className={className} ref={terminalRef} />;
 };

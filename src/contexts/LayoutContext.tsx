@@ -32,6 +32,7 @@ interface LayoutContextType {
   updateSplitSizes: (path: number[], sizes: number[]) => void;
   openSettingsTab: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
+  focusSession: (sessionId: string) => void;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -455,6 +456,14 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
+  const focusSession = (sessionId: string) => {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId ? { ...t, activeSessionId: sessionId } : t,
+      ),
+    );
+  };
+
   const activeSessionId = getActiveTab()?.activeSessionId || null;
 
   // Poll CWD for the active session every 1 second
@@ -480,6 +489,20 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => clearInterval(interval);
   }, [activeSessionId]);
 
+  // Close pane with confirmation — skips confirm for settings or new (non-dirty) sessions
+  const closeActivePaneWithConfirm = () => {
+    const tab = tabs.find((t) => t.id === activeTabId);
+    if (!tab) return;
+    if (tab.root.type === "leaf" && tab.root.contentType === "settings") {
+      closeActivePane();
+      return;
+    }
+    const session = sessions.get(tab.activeSessionId || "");
+    if (!session?.dirty || window.confirm("Close this terminal session?")) {
+      closeActivePane();
+    }
+  };
+
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -492,18 +515,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       // Cmd/Ctrl + W: Close Pane (with confirmation for dirty sessions)
       if ((e.metaKey || e.ctrlKey) && key === "w") {
         e.preventDefault();
-        const tab = tabs.find((t) => t.id === activeTabId);
-        if (
-          tab?.root.type === "leaf" &&
-          tab.root.contentType === "settings"
-        ) {
-          closeActivePane();
-        } else {
-          const session = sessions.get(tab?.activeSessionId || "");
-          if (!session?.dirty || window.confirm("Close this terminal session?")) {
-            closeActivePane();
-          }
-        }
+        closeActivePaneWithConfirm();
       }
       // Cmd/Ctrl + D: Split Horizontal (Side-by-side)
       if ((e.metaKey || e.ctrlKey) && key === "d" && !e.shiftKey) {
@@ -524,7 +536,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       const removeCloseListener = window.electron.ipcRenderer.on(
         IPC.MENU_CLOSE_TAB,
         () => {
-          closeActivePane();
+          closeActivePaneWithConfirm();
         },
       );
       const removeCreateListener = window.electron.ipcRenderer.on(
@@ -542,7 +554,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tabs, activeTabId, activeSessionId, closeActivePane, createTab]);
+  }, [tabs, activeTabId, sessions, closeActivePane, createTab]);
 
   return (
     <LayoutContext.Provider
@@ -561,6 +573,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         updateSplitSizes,
         openSettingsTab,
         reorderTabs,
+        focusSession,
       }}
     >
       {children}

@@ -4,6 +4,7 @@ import { aiService } from "../services/ai";
 import { useHistory } from "../contexts/HistoryContext";
 import { useAgent } from "../contexts/AgentContext";
 import { IPC } from "../constants/ipc";
+import { cleanContextForAI } from "../utils/contextCleaner";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -84,21 +85,21 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
     setIsThinking(true);
     setIsOverlayVisible(true);
 
-    // Add a run separator instead of clearing history
-    setAgentThread((prev) =>
-      prev.length > 0
-        ? [...prev, { step: "separator", output: prompt }]
-        : [],
-    );
+    // Add a run separator (always, including first run)
+    setAgentThread((prev) => [
+      ...prev,
+      { step: "separator", output: prompt },
+    ]);
 
     try {
-      // 1. Fetch Session History
+      // 1. Fetch & Clean Session History
       let sessionHistory = "";
       if (window.electron) {
-        sessionHistory = await window.electron.ipcRenderer.invoke(
+        const rawHistory = await window.electron.ipcRenderer.invoke(
           IPC.TERMINAL_GET_HISTORY,
           sessionId,
         );
+        sessionHistory = cleanContextForAI(rawHistory);
       }
 
       // 2. Context Compression — summarize if over limit
@@ -108,11 +109,11 @@ export function useAgentRunner(sessionId: string, session: TerminalSession | und
         4000;
       if (sessionHistory.length > contextLimit) {
         sessionHistory = await aiService.summarizeContext(
-          sessionHistory.slice(0, contextLimit),
+          sessionHistory.slice(-contextLimit),
         );
       }
 
-      // 3. Augment Prompt with Context
+      // 3. Augment Prompt with Context (use last 2000 chars of cleaned history)
       const augmentedPrompt = `
 Context (Recent Terminal Output):
 ${sessionHistory.slice(-2000)}
@@ -198,8 +199,24 @@ Task: ${prompt}
               return [...prev, { step: "thought", output }];
             });
             setIsThinking(false);
+          } else if (step === "streaming_response") {
+            // Update or append an in-progress response entry
+            setAgentThread((prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].step === "streaming") {
+                const updated = [...prev];
+                updated[lastIdx] = { step: "streaming", output };
+                return updated;
+              }
+              return [...prev, { step: "streaming", output }];
+            });
+            setIsThinking(false);
           } else if (step !== "thinking") {
-            setAgentThread((prev) => [...prev, { step, output }]);
+            // Real step arrived — remove any leftover streaming entry
+            setAgentThread((prev) => {
+              const filtered = prev.filter((s) => s.step !== "streaming");
+              return [...filtered, { step, output }];
+            });
             setIsThinking(false);
           } else {
             setIsThinking(true);
@@ -211,20 +228,23 @@ Task: ${prompt}
       );
       // Ensure successful completion clears active state
       setIsAgentRunning(false);
-      setAgentThread((prev) => [
-        ...prev,
-        {
-          step: finalAnswer.success ? "done" : "failed",
-          output: finalAnswer.message,
-        },
-      ]);
+      setAgentThread((prev) => {
+        const filtered = prev.filter((s) => s.step !== "streaming");
+        return [
+          ...filtered,
+          {
+            step: finalAnswer.success ? "done" : "failed",
+            output: finalAnswer.message,
+          },
+        ];
+      });
     } catch (e: any) {
       // stopAgent already adds abort entry + resets state, so skip duplicates
       if (e.message !== "Agent aborted by user.") {
-        setAgentThread((prev) => [
-          ...prev,
-          { step: "error", output: e.message },
-        ]);
+        setAgentThread((prev) => {
+          const filtered = prev.filter((s) => s.step !== "streaming");
+          return [...filtered, { step: "error", output: e.message }];
+        });
       }
     } finally {
       setIsAgentRunning(false);

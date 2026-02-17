@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { LayoutProvider, useLayout } from "./contexts/LayoutContext";
+import type { LayoutNode } from "./types";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { HistoryProvider } from "./contexts/HistoryContext";
 import { AgentProvider } from "./contexts/AgentContext";
@@ -7,7 +8,7 @@ import OnboardingWizard from "./features/onboarding/components/OnboardingWizard"
 import SplitPane from "./components/layout/SplitPane";
 import TabBar from "./components/layout/TabBar";
 import { STORAGE_KEYS } from "./constants/storage";
-import { themeClass } from "./utils/theme";
+import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
 
 // Inner component to use contexts
@@ -57,18 +58,23 @@ const AppContent = () => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [openSettingsTab]);
 
-  const activeTab = tabs.find((t) => t.id === activeTabId);
+  // Check if any session in a tab's tree is dirty
+  const isTabDirty = useCallback((tabId: string) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab) return false;
+    const check = (node: LayoutNode): boolean => {
+      if (node.type === "leaf") {
+        if (node.contentType === "settings") return false;
+        return sessions.get(node.sessionId)?.dirty ?? false;
+      }
+      return node.children.some(check);
+    };
+    return check(tab.root);
+  }, [tabs, sessions]);
 
   return (
     <div
-      className={`flex flex-col h-screen w-full overflow-hidden transition-colors duration-300 ${themeClass(
-        resolvedTheme,
-        {
-          dark: "bg-[#0a0a0a] text-white",
-          modern: "bg-gradient-to-br from-[#030014] via-[#050520] to-[#0a0a2e] text-white",
-          light: "bg-gray-50 text-gray-900",
-        },
-      )}`}
+      className={`flex flex-col h-screen w-full overflow-hidden transition-colors duration-300 ${getTheme(resolvedTheme).appBg}`}
     >
       <TabBar
         tabs={tabs}
@@ -79,12 +85,24 @@ const AppContent = () => {
         onCreate={createTab}
         onReorder={reorderTabs}
         onOpenSettings={openSettingsTab}
+        isTabDirty={isTabDirty}
       />
 
-      {/* Main Workspace */}
+      {/* Main Workspace — all tabs stay mounted to preserve terminal state */}
       <div className="flex-1 relative overflow-hidden">
-        {activeTab ? (
-          <SplitPane node={activeTab.root} />
+        {tabs.length > 0 ? (
+          tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className="absolute inset-0"
+              style={{
+                visibility: tab.id === activeTabId ? "visible" : "hidden",
+                zIndex: tab.id === activeTabId ? 1 : 0,
+              }}
+            >
+              <SplitPane node={tab.root} />
+            </div>
+          ))
         ) : (
           <div className="flex items-center justify-center h-full text-gray-500 flex-col gap-4">
             <div className="text-xl font-medium">No Open Tabs</div>
