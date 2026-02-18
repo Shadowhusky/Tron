@@ -3,12 +3,15 @@ import { STORAGE_KEYS } from "../constants/storage";
 
 type Theme = "dark" | "light" | "system" | "modern";
 export type ResolvedTheme = "dark" | "light" | "modern";
+export type ViewMode = "terminal" | "agent";
 
 interface ThemeContextType {
   theme: Theme;
   resolvedTheme: ResolvedTheme; // The actual visual theme after resolving "system"
   toggleTheme: () => void;
   setTheme: (theme: Theme) => void;
+  viewMode: ViewMode;
+  setViewMode: (mode: ViewMode) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | null>(null);
@@ -26,6 +29,16 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
     const stored = localStorage.getItem(STORAGE_KEYS.THEME);
     return (stored as Theme) || "system";
   });
+
+  const [viewMode, setViewModeState] = useState<ViewMode>(() => {
+    const stored = localStorage.getItem(STORAGE_KEYS.VIEW_MODE);
+    return (stored as ViewMode) || "terminal";
+  });
+
+  const setViewMode = (mode: ViewMode) => {
+    setViewModeState(mode);
+    localStorage.setItem(STORAGE_KEYS.VIEW_MODE, mode);
+  };
 
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => {
     // Synchronously resolve initial theme to prevent flash
@@ -97,7 +110,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
 
   return (
     <ThemeContext.Provider
-      value={{ theme, resolvedTheme, toggleTheme, setTheme: setThemeValue }}
+      value={{ theme, resolvedTheme, toggleTheme, setTheme: setThemeValue, viewMode, setViewMode }}
     >
       {children}
     </ThemeContext.Provider>

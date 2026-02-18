@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Bot, ChevronRight } from "lucide-react";
+import { X, Bot, ChevronRight, Folder } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -17,7 +17,8 @@ interface TerminalPaneProps {
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const { activeSessionId, sessions, markSessionDirty, focusSession } =
     useLayout();
-  const { resolvedTheme } = useTheme();
+  const { resolvedTheme, viewMode } = useTheme();
+  const isAgentMode = viewMode === "agent";
   const isActive = sessionId === activeSessionId;
   const session = sessions.get(sessionId);
 
@@ -43,9 +44,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     Array<{ type: "command" | "agent"; content: string }>
   >([]);
 
-  // Cmd+. to toggle agent panel
+  // Cmd+. to toggle agent panel (no-op in agent view mode — overlay is always visible)
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || isAgentMode) return;
     const handleKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === ".") {
         e.preventDefault();
@@ -56,7 +57,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [isActive, isOverlayVisible, agentThread.length, setIsOverlayVisible]);
+  }, [isActive, isAgentMode, isOverlayVisible, agentThread.length, setIsOverlayVisible]);
 
   // Process Queue Effect
   useEffect(() => {
@@ -95,41 +96,85 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       onMouseDown={handlePaneFocus}
       className={`w-full h-full relative flex flex-col border border-transparent ${isActive ? "ring-1 ring-purple-500/50 z-10" : "opacity-80 hover:opacity-100"}`}
     >
-      {/* Top: Terminal Area */}
-      <div className="flex-1 min-h-0">
-        <Terminal
-          className="h-full w-full"
-          sessionId={sessionId}
-          onActivity={() => markSessionDirty(sessionId)}
-          isActive={isActive}
-        />
-      </div>
+      {isAgentMode ? (
+        <>
+          {/* Agent View Mode: info header + full-height overlay */}
+          <div
+            className={`flex items-center gap-2 px-3 py-1.5 border-b shrink-0 ${themeClass(resolvedTheme, {
+              dark: "bg-[#0a0a0a] border-white/5",
+              modern: "bg-white/[0.02] border-white/6 backdrop-blur-2xl",
+              light: "bg-gray-50 border-gray-200",
+            })}`}
+          >
+            <Folder className={`w-3 h-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`} />
+            <span className={`text-[11px] font-mono truncate ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+              {session?.cwd || "~"}
+            </span>
+          </div>
 
-      {/* Agent Overlay — in flex flow so terminal shrinks to fit */}
-      <AnimatePresence>
-      {(isOverlayVisible || isAgentRunning) && (
-        <AgentOverlay
-          isThinking={isThinking}
-          isAgentRunning={isAgentRunning}
-          agentThread={agentThread}
-          pendingCommand={pendingCommand}
-          autoExecuteEnabled={alwaysAllowSession}
-          onToggleAutoExecute={() =>
-            setAlwaysAllowSession(!alwaysAllowSession)
-          }
-          thinkingEnabled={thinkingEnabled}
-          onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
-          onClose={() => setIsOverlayVisible(false)}
-          onPermission={handlePermission}
-          isExpanded={isOverlayVisible}
-          onExpand={() => setIsOverlayVisible(true)}
-          onRunAgent={(prompt) =>
-            wrappedHandleAgentRun(prompt, queueItem as any)
-          }
-          modelCapabilities={modelCapabilities}
-        />
+          {/* AgentOverlay — full height, always expanded */}
+          <AgentOverlay
+            isThinking={isThinking}
+            isAgentRunning={isAgentRunning}
+            agentThread={agentThread}
+            pendingCommand={pendingCommand}
+            autoExecuteEnabled={alwaysAllowSession}
+            onToggleAutoExecute={() =>
+              setAlwaysAllowSession(!alwaysAllowSession)
+            }
+            thinkingEnabled={thinkingEnabled}
+            onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
+            onClose={() => {}}
+            onPermission={handlePermission}
+            isExpanded={true}
+            onExpand={() => {}}
+            onRunAgent={(prompt) =>
+              wrappedHandleAgentRun(prompt, queueItem as any)
+            }
+            modelCapabilities={modelCapabilities}
+            fullHeight
+          />
+        </>
+      ) : (
+        <>
+          {/* Terminal View Mode: xterm + overlay */}
+          <div className="flex-1 min-h-0">
+            <Terminal
+              className="h-full w-full"
+              sessionId={sessionId}
+              onActivity={() => markSessionDirty(sessionId)}
+              isActive={isActive}
+            />
+          </div>
+
+          {/* Agent Overlay — in flex flow so terminal shrinks to fit */}
+          <AnimatePresence>
+          {(isOverlayVisible || isAgentRunning) && (
+            <AgentOverlay
+              isThinking={isThinking}
+              isAgentRunning={isAgentRunning}
+              agentThread={agentThread}
+              pendingCommand={pendingCommand}
+              autoExecuteEnabled={alwaysAllowSession}
+              onToggleAutoExecute={() =>
+                setAlwaysAllowSession(!alwaysAllowSession)
+              }
+              thinkingEnabled={thinkingEnabled}
+              onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
+              onClose={() => setIsOverlayVisible(false)}
+              onPermission={handlePermission}
+              isExpanded={isOverlayVisible}
+              onExpand={() => setIsOverlayVisible(true)}
+              onRunAgent={(prompt) =>
+                wrappedHandleAgentRun(prompt, queueItem as any)
+              }
+              modelCapabilities={modelCapabilities}
+            />
+          )}
+          </AnimatePresence>
+        </>
       )}
-      </AnimatePresence>
+
       {/* Queue display */}
       <AnimatePresence>
         {inputQueue.length > 0 && (
@@ -198,6 +243,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           pendingCommand={pendingCommand}
           sessionId={sessionId}
           modelCapabilities={modelCapabilities}
+          defaultAgentMode={isAgentMode}
         />
       </div>
       <div className="relative z-30">

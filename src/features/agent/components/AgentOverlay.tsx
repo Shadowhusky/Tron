@@ -113,6 +113,7 @@ interface AgentOverlayProps {
   onExpand: () => void;
   onRunAgent: (prompt: string) => Promise<void>;
   modelCapabilities?: string[];
+  fullHeight?: boolean;
 }
 
 /* Toast for transient execution-state notifications only */
@@ -482,6 +483,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   isExpanded,
   onExpand,
   modelCapabilities,
+  fullHeight,
 }) => {
   const { resolvedTheme } = useTheme();
   const isLight = resolvedTheme === "light";
@@ -638,7 +640,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   const panelSteps = agentThread;
 
   const showPanel =
-    isAgentRunning || isThinking || pendingCommand || panelSteps.length > 0;
+    fullHeight || isAgentRunning || isThinking || pendingCommand || panelSteps.length > 0;
 
   if (!showPanel && toasts.length === 0) return null;
 
@@ -675,8 +677,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.25, ease: "easeOut" }}
-          className={`w-full shrink-0 ${isExpanded
-            ? "max-h-[50vh] flex-col"
+          className={`w-full ${fullHeight ? "flex-1 min-h-0" : "shrink-0"} ${isExpanded
+            ? fullHeight ? "flex-col" : "max-h-[50vh] flex-col"
             : "h-auto cursor-pointer hover:opacity-100 opacity-90"
             } overflow-hidden border-t flex shadow-lg z-20 ${isLight
               ? "bg-white/95 border-gray-200 text-gray-900"
@@ -751,20 +753,22 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 >
                   {panelNarrow ? "Exec" : "Auto Exec " + (autoExecuteEnabled ? "ON" : "OFF")}
                 </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onClose();
-                  }}
-                  className={`text-[10px] px-1.5 py-0.5 rounded transition-colors shrink-0 flex items-center gap-1 ${isLight
-                    ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
-                    : "text-gray-400 hover:text-white hover:bg-white/10"
-                    }`}
-                  title="Minimize panel (Cmd+.)"
-                >
-                  <Minimize2 className="w-3 h-3" />
-                  {!panelNarrow && <span className="uppercase tracking-wider">Min</span>}
-                </button>
+                {!fullHeight && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onClose();
+                    }}
+                    className={`text-[10px] px-1.5 py-0.5 rounded transition-colors shrink-0 flex items-center gap-1 ${isLight
+                      ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
+                      : "text-gray-400 hover:text-white hover:bg-white/10"
+                      }`}
+                    title="Minimize panel (Cmd+.)"
+                  >
+                    <Minimize2 className="w-3 h-3" />
+                    {!panelNarrow && <span className="uppercase tracking-wider">Min</span>}
+                  </button>
+                )}
               </div>
             )}
 

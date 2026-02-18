@@ -24,6 +24,7 @@ interface SmartInputProps {
   pendingCommand: string | null;
   sessionId?: string;
   modelCapabilities?: string[];
+  defaultAgentMode?: boolean;
 }
 
 const SmartInput: React.FC<SmartInputProps> = ({
@@ -33,6 +34,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   pendingCommand,
   sessionId,
   modelCapabilities = [],
+  defaultAgentMode = false,
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId } = useLayout();
@@ -41,8 +43,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const { history, addToHistory } = useHistory();
   const [value, setValue] = useState("");
   // Mode State
-  const [isAuto, setIsAuto] = useState(true);
-  const [mode, setMode] = useState<"command" | "advice" | "agent">("command");
+  const [isAuto, setIsAuto] = useState(!defaultAgentMode);
+  const [mode, setMode] = useState<"command" | "advice" | "agent">(defaultAgentMode ? "agent" : "command");
 
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedCommand, setSuggestedCommand] = useState<string | null>(null);
