@@ -12,6 +12,7 @@ interface Window {
       getCwd: (sessionId: string) => Promise<string | null>;
       getCompletions: (prefix: string, cwd?: string, sessionId?: string) => Promise<string[]>;
       getHistory: (sessionId: string) => Promise<string>;
+      scanCommands: () => Promise<string[]>;
       exec: (
         sessionId: string,
         command: string,
@@ -28,6 +29,7 @@ interface Window {
         model: string;
         apiKey?: string;
       }) => Promise<boolean>;
+      selectFolder: (defaultPath?: string) => Promise<string | null>;
     };
   };
 }

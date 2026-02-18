@@ -12,10 +12,12 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.getCwd",
   "terminal.getCompletions",
   "terminal.getHistory",
+  "terminal.scanCommands",
   "system.fixPermissions",
   "system.checkPermissions",
   "system.openPrivacySettings",
   "ai.testConnection",
+  "system.selectFolder",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -79,6 +81,8 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("terminal.getCompletions", { prefix, cwd, sessionId }),
     getHistory: (sessionId: string) =>
       ipcRenderer.invoke("terminal.getHistory", sessionId),
+    scanCommands: () =>
+      ipcRenderer.invoke("terminal.scanCommands") as Promise<string[]>,
     exec: (sessionId: string, command: string) =>
       ipcRenderer.invoke("terminal.exec", { sessionId, command }),
     execInTerminal: (sessionId: string, command: string) =>
@@ -93,5 +97,7 @@ contextBridge.exposeInMainWorld("electron", {
       apiKey?: string;
       baseUrl?: string;
     }) => ipcRenderer.invoke("ai.testConnection", config),
+    selectFolder: (defaultPath?: string) =>
+      ipcRenderer.invoke("system.selectFolder", defaultPath) as Promise<string | null>,
   },
 });

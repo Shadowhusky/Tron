@@ -10,6 +10,7 @@ export const IPC = {
   TERMINAL_GET_CWD: "terminal.getCwd",
   TERMINAL_GET_COMPLETIONS: "terminal.getCompletions",
   TERMINAL_GET_HISTORY: "terminal.getHistory",
+  TERMINAL_SCAN_COMMANDS: "terminal.scanCommands",
 
   // Terminal — send (fire-and-forget)
   TERMINAL_WRITE: "terminal.write",
@@ -24,6 +25,7 @@ export const IPC = {
   SYSTEM_FIX_PERMISSIONS: "system.fixPermissions",
   SYSTEM_CHECK_PERMISSIONS: "system.checkPermissions",
   SYSTEM_OPEN_PRIVACY_SETTINGS: "system.openPrivacySettings",
+  SYSTEM_SELECT_FOLDER: "system.selectFolder",
 
   // AI — invoke
   AI_TEST_CONNECTION: "ai.testConnection",

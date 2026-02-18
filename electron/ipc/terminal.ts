@@ -2,9 +2,49 @@ import { ipcMain, BrowserWindow } from "electron";
 import * as pty from "node-pty";
 import os from "os";
 import { randomUUID } from "crypto";
+import { exec, ChildProcess } from "child_process";
 
 const sessions = new Map<string, pty.IPty>();
 const sessionHistory = new Map<string, string>();
+const activeChildProcesses = new Set<ChildProcess>();
+
+/** Spawn a child process and track it for cleanup. */
+function trackedExec(
+  command: string,
+  options?: { cwd?: string; timeout?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = exec(command, options, (error, stdout, stderr) => {
+      activeChildProcesses.delete(child);
+      if (error) reject(error);
+      else resolve({ stdout: stdout as string, stderr: stderr as string });
+    });
+    activeChildProcesses.add(child);
+  });
+}
+
+/** Get CWD for a PID. Uses trackedExec for proper cleanup. */
+async function getCwdForPid(pid: number): Promise<string | null> {
+  try {
+    if (os.platform() === "darwin") {
+      const { stdout } = await trackedExec(
+        `lsof -p ${pid} 2>/dev/null | grep ' cwd ' | awk '{print $NF}'`,
+      );
+      return stdout.trim() || null;
+    } else if (os.platform() === "linux") {
+      const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
+      return stdout.trim() || null;
+    } else if (os.platform() === "win32") {
+      const { stdout } = await trackedExec(
+        `powershell -NoProfile -Command "(Get-Process -Id ${pid}).Path"`,
+      );
+      return stdout.trim() || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export function getSessions() {
   return sessions;
@@ -12,6 +52,24 @@ export function getSessions() {
 
 export function getSessionHistory() {
   return sessionHistory;
+}
+
+/** Kill all tracked child processes and PTY sessions. */
+export function cleanupAllSessions() {
+  for (const child of activeChildProcesses) {
+    try {
+      child.kill();
+    } catch {}
+  }
+  activeChildProcesses.clear();
+
+  for (const [, session] of sessions) {
+    try {
+      session.kill();
+    } catch {}
+  }
+  sessions.clear();
+  sessionHistory.clear();
 }
 
 export function registerTerminalHandlers(
@@ -45,7 +103,7 @@ export function registerTerminalHandlers(
           name: "xterm-256color",
           cols: cols || 80,
           rows: rows || 30,
-          cwd: cwd || process.env.HOME,
+          cwd: cwd || os.homedir(),
           env: { ...process.env, PROMPT_EOL_MARK: "" },
         });
 
@@ -110,13 +168,10 @@ export function registerTerminalHandlers(
   });
 
   ipcMain.handle("terminal.checkCommand", async (_event, command) => {
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execAsync = promisify(exec);
     try {
       const checkCmd =
         os.platform() === "win32" ? `where ${command}` : `which ${command}`;
-      await execAsync(checkCmd);
+      await trackedExec(checkCmd);
       return true;
     } catch {
       return false;
@@ -131,30 +186,15 @@ export function registerTerminalHandlers(
       { sessionId, command }: { sessionId: string; command: string },
     ) => {
       const session = sessions.get(sessionId);
-      const { exec } = await import("child_process");
-      const { promisify } = await import("util");
-      const execAsync = promisify(exec);
 
-      let cwd = process.env.HOME || "/";
+      let cwd = os.homedir() || "/";
       if (session) {
-        try {
-          const pid = session.pid;
-          if (os.platform() === "darwin") {
-            const { stdout } = await execAsync(
-              `lsof -p ${pid} | grep cwd | awk '{print $9}'`,
-            );
-            if (stdout.trim()) cwd = stdout.trim();
-          } else if (os.platform() === "linux") {
-            const { stdout } = await execAsync(`readlink /proc/${pid}/cwd`);
-            if (stdout.trim()) cwd = stdout.trim();
-          }
-        } catch (e) {
-          console.error("Error fetching CWD:", e);
-        }
+        const resolved = await getCwdForPid(session.pid);
+        if (resolved) cwd = resolved;
       }
 
       try {
-        const { stdout, stderr } = await execAsync(command, { cwd });
+        const { stdout, stderr } = await trackedExec(command, { cwd });
         return { stdout, stderr, exitCode: 0 };
       } catch (e: any) {
         return { stdout: "", stderr: e.message, exitCode: e.code || 1 };
@@ -166,25 +206,7 @@ export function registerTerminalHandlers(
   ipcMain.handle("terminal.getCwd", async (_event, sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return null;
-    const pid = session.pid;
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execAsync = promisify(exec);
-
-    try {
-      if (os.platform() === "darwin") {
-        const { stdout: lsofOut } = await execAsync(
-          `lsof -p ${pid} | grep cwd | awk '{print $NF}' `,
-        );
-        return lsofOut.trim() || null;
-      } else if (os.platform() === "linux") {
-        const { stdout } = await execAsync(`readlink /proc/${pid}/cwd`);
-        return stdout.trim() || null;
-      }
-      return null;
-    } catch {
-      return null;
-    }
+    return getCwdForPid(session.pid);
   });
 
   ipcMain.handle(
@@ -197,38 +219,26 @@ export function registerTerminalHandlers(
         sessionId,
       }: { prefix: string; cwd?: string; sessionId?: string },
     ) => {
-      const { exec } = await import("child_process");
-      const { promisify } = await import("util");
-      const execAsync = promisify(exec);
-
       // Resolve CWD from session if available
-      let workDir = cwd || process.env.HOME || "/";
+      let workDir = cwd || os.homedir() || "/";
       if (!cwd && sessionId) {
         const session = sessions.get(sessionId);
         if (session) {
-          try {
-            const pid = session.pid;
-            if (os.platform() === "darwin") {
-              const { stdout } = await execAsync(
-                `lsof -p ${pid} | grep cwd | awk '{print $NF}'`,
-              );
-              if (stdout.trim()) workDir = stdout.trim();
-            }
-          } catch {
-            /* ignore */
-          }
+          const resolved = await getCwdForPid(session.pid);
+          if (resolved) workDir = resolved;
         }
       }
 
       try {
+        const isWin = os.platform() === "win32";
         const parts = prefix.trim().split(/\s+/);
 
         if (parts.length <= 1) {
           const word = parts[0] || "";
-          const { stdout } = await execAsync(
-            `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`,
-            { cwd: workDir },
-          );
+          const cmd = isWin
+            ? `powershell -NoProfile -Command "Get-Command '${word}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+            : `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`;
+          const { stdout } = await trackedExec(cmd, { cwd: workDir });
           const results = stdout.trim().split("\n").filter(Boolean);
           return [...new Set(results)]
             .sort((a, b) => a.length - b.length)
@@ -236,10 +246,10 @@ export function registerTerminalHandlers(
         }
 
         const lastWord = parts[parts.length - 1];
-        const { stdout } = await execAsync(
-          `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`,
-          { cwd: workDir },
-        );
+        const cmd = isWin
+          ? `powershell -NoProfile -Command "Get-ChildItem '${lastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+          : `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`;
+        const { stdout } = await trackedExec(cmd, { cwd: workDir });
         const results = stdout.trim().split("\n").filter(Boolean);
         return [...new Set(results)]
           .sort((a, b) => a.length - b.length)
@@ -252,6 +262,21 @@ export function registerTerminalHandlers(
 
   ipcMain.handle("terminal.getHistory", (_event, sessionId: string) => {
     return sessionHistory.get(sessionId) || "";
+  });
+
+  // Scan all available commands on the system (for auto-mode classification)
+  ipcMain.handle("terminal.scanCommands", async () => {
+    const isWin = os.platform() === "win32";
+
+    try {
+      const cmd = isWin
+        ? `powershell -NoProfile -Command "Get-Command -CommandType Application,Cmdlet | Select-Object -ExpandProperty Name -First 500"`
+        : `bash -c 'compgen -abck 2>/dev/null | sort -u | head -500'`;
+      const { stdout } = await trackedExec(cmd, { timeout: 10000 });
+      return stdout.trim().split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
   });
 
   // Execute a command visibly in the PTY and capture output via sentinel marker.
@@ -272,8 +297,10 @@ export function registerTerminalHandlers(
       const nonce = Math.random().toString(36).slice(2, 8);
       const sentinel = `__TRON_DONE_${nonce}__`;
       // Wrap: run command, then emit sentinel with exit code.
-      // Use printf (not echo) for portability; the \n ensures it starts on a new line.
-      const wrappedCommand = `${command}; printf '\\n${sentinel}%d\\n' $?`;
+      const isWin = os.platform() === "win32";
+      const wrappedCommand = isWin
+        ? `${command}; Write-Host "${sentinel}$LASTEXITCODE"`
+        : `${command}; printf '\\n${sentinel}%d\\n' $?`;
 
       return new Promise<{ stdout: string; exitCode: number }>((resolve) => {
         let output = "";

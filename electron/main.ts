@@ -5,7 +5,10 @@ import {
   MenuItemConstructorOptions,
 } from "electron";
 import path from "path";
-import { registerTerminalHandlers } from "./ipc/terminal";
+import {
+  registerTerminalHandlers,
+  cleanupAllSessions,
+} from "./ipc/terminal";
 import { registerSystemHandlers } from "./ipc/system";
 import { registerAIHandlers } from "./ipc/ai";
 
@@ -103,6 +106,11 @@ const createWindow = () => {
 
   createMenu(mainWindow);
 
+  mainWindow.on("closed", () => {
+    cleanupAllSessions();
+    mainWindow = null;
+  });
+
   const isDev = !app.isPackaged;
   const devPort = process.env.PORT || 5173;
   if (isDev) {
@@ -127,5 +135,10 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  cleanupAllSessions();
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  cleanupAllSessions();
 });

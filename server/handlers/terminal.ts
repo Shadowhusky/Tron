@@ -1,15 +1,46 @@
 import * as pty from "node-pty";
 import os from "os";
 import { randomUUID } from "crypto";
-import { exec } from "child_process";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
+import { exec, ChildProcess } from "child_process";
 
 const sessions = new Map<string, pty.IPty>();
 const sessionHistory = new Map<string, string>();
 // Track which WS client owns each session
 const sessionOwners = new Map<string, string>();
+const activeChildProcesses = new Set<ChildProcess>();
+
+/** Spawn a child process and track it for cleanup. */
+function trackedExec(
+  command: string,
+  options?: { cwd?: string; timeout?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = exec(command, options, (error, stdout, stderr) => {
+      activeChildProcesses.delete(child);
+      if (error) reject(error);
+      else resolve({ stdout: stdout as string, stderr: stderr as string });
+    });
+    activeChildProcesses.add(child);
+  });
+}
+
+/** Get CWD for a PID. Uses trackedExec for proper cleanup. */
+async function getCwdForPid(pid: number): Promise<string | null> {
+  try {
+    if (os.platform() === "darwin") {
+      const { stdout } = await trackedExec(
+        `lsof -p ${pid} 2>/dev/null | grep ' cwd ' | awk '{print $NF}'`,
+      );
+      return stdout.trim() || null;
+    } else if (os.platform() === "linux") {
+      const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
+      return stdout.trim() || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export type EventPusher = (channel: string, data: any) => void;
 
@@ -33,6 +64,21 @@ export function cleanupClientSessions(clientId: string) {
       sessionOwners.delete(sessionId);
     }
   }
+}
+
+/** Kill all tracked child processes and PTY sessions. */
+export function cleanupAllServerSessions() {
+  for (const child of activeChildProcesses) {
+    try { child.kill(); } catch {}
+  }
+  activeChildProcesses.clear();
+
+  for (const [, session] of sessions) {
+    try { session.kill(); } catch {}
+  }
+  sessions.clear();
+  sessionHistory.clear();
+  sessionOwners.clear();
 }
 
 export function sessionExists(sessionId: string): boolean {
@@ -111,7 +157,7 @@ export function closeSession(id: string) {
 export async function checkCommand(command: string): Promise<boolean> {
   try {
     const checkCmd = os.platform() === "win32" ? `where ${command}` : `which ${command}`;
-    await execAsync(checkCmd);
+    await trackedExec(checkCmd);
     return true;
   } catch {
     return false;
@@ -122,18 +168,8 @@ async function getSessionCwd(sessionId: string): Promise<string> {
   const session = sessions.get(sessionId);
   let cwd = process.env.HOME || "/";
   if (session) {
-    try {
-      const pid = session.pid;
-      if (os.platform() === "darwin") {
-        const { stdout } = await execAsync(`lsof -p ${pid} | grep cwd | awk '{print $9}'`);
-        if (stdout.trim()) cwd = stdout.trim();
-      } else if (os.platform() === "linux") {
-        const { stdout } = await execAsync(`readlink /proc/${pid}/cwd`);
-        if (stdout.trim()) cwd = stdout.trim();
-      }
-    } catch (e) {
-      console.error("Error fetching CWD:", e);
-    }
+    const resolved = await getCwdForPid(session.pid);
+    if (resolved) cwd = resolved;
   }
   return cwd;
 }
@@ -141,7 +177,7 @@ async function getSessionCwd(sessionId: string): Promise<string> {
 export async function execCommand(sessionId: string, command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const cwd = await getSessionCwd(sessionId);
   try {
-    const { stdout, stderr } = await execAsync(command, { cwd });
+    const { stdout, stderr } = await trackedExec(command, { cwd });
     return { stdout, stderr, exitCode: 0 };
   } catch (e: any) {
     return { stdout: "", stderr: e.message, exitCode: e.code || 1 };
@@ -151,20 +187,7 @@ export async function execCommand(sessionId: string, command: string): Promise<{
 export async function getCwd(sessionId: string): Promise<string | null> {
   const session = sessions.get(sessionId);
   if (!session) return null;
-  const pid = session.pid;
-
-  try {
-    if (os.platform() === "darwin") {
-      const { stdout } = await execAsync(`lsof -p ${pid} | grep cwd | awk '{print $NF}'`);
-      return stdout.trim() || null;
-    } else if (os.platform() === "linux") {
-      const { stdout } = await execAsync(`readlink /proc/${pid}/cwd`);
-      return stdout.trim() || null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return getCwdForPid(session.pid);
 }
 
 export async function getCompletions({ prefix, cwd, sessionId }: { prefix: string; cwd?: string; sessionId?: string }): Promise<string[]> {
@@ -172,13 +195,8 @@ export async function getCompletions({ prefix, cwd, sessionId }: { prefix: strin
   if (!cwd && sessionId) {
     const session = sessions.get(sessionId);
     if (session) {
-      try {
-        const pid = session.pid;
-        if (os.platform() === "darwin") {
-          const { stdout } = await execAsync(`lsof -p ${pid} | grep cwd | awk '{print $NF}'`);
-          if (stdout.trim()) workDir = stdout.trim();
-        }
-      } catch { /* ignore */ }
+      const resolved = await getCwdForPid(session.pid);
+      if (resolved) workDir = resolved;
     }
   }
 
@@ -187,7 +205,7 @@ export async function getCompletions({ prefix, cwd, sessionId }: { prefix: strin
 
     if (parts.length <= 1) {
       const word = parts[0] || "";
-      const { stdout } = await execAsync(
+      const { stdout } = await trackedExec(
         `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`,
         { cwd: workDir }
       );
@@ -196,7 +214,7 @@ export async function getCompletions({ prefix, cwd, sessionId }: { prefix: strin
     }
 
     const lastWord = parts[parts.length - 1];
-    const { stdout } = await execAsync(
+    const { stdout } = await trackedExec(
       `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`,
       { cwd: workDir }
     );

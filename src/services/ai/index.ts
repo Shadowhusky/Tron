@@ -52,14 +52,18 @@ class AIService {
       });
       if (!response.ok) return [];
       const data = await response.json();
-      const capabilities: string[] = [];
 
-      // Check model capabilities from model_info and template
+      // Prefer authoritative capabilities array from newer Ollama versions
+      if (data.capabilities && Array.isArray(data.capabilities)) {
+        return data.capabilities.filter((c: string) => c !== "completion");
+      }
+
+      // Fallback: infer from model_info and template (older Ollama)
+      const capabilities: string[] = [];
       const modelInfo = data.model_info || {};
       const template = data.template || "";
       const parameters = data.parameters || "";
 
-      // Check for thinking/reasoning capability
       if (
         template.includes("<think>") ||
         template.includes("thinking") ||
@@ -68,7 +72,6 @@ class AIService {
         capabilities.push("thinking");
       }
 
-      // Check for vision capability
       const projectorKeys = Object.keys(modelInfo).filter(
         (k) =>
           k.includes("vision") ||
@@ -79,7 +82,6 @@ class AIService {
         capabilities.push("vision");
       }
 
-      // Check for tool use capability
       if (
         template.includes("<tool_call>") ||
         template.includes("tools") ||
@@ -201,7 +203,7 @@ class AIService {
     const response = await fetch(`${baseUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt, stream: true, think: true }),
+      body: JSON.stringify({ model, prompt, stream: true }),
       signal,
     });
     if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
@@ -245,8 +247,14 @@ class AIService {
     format?: string,
     think: boolean = true,
   ): Promise<{ content: string; thinking: string }> {
-    const body: any = { model, messages, stream: true, think };
-    if (format) body.format = format;
+    // Many models reject think + format:"json" together — never send both
+    const body: any = { model, messages, stream: true };
+    if (format) {
+      body.format = format;
+      // Don't enable think when requesting structured output
+    } else if (think) {
+      body.think = true;
+    }
 
     let response = await fetch(`${baseUrl}/api/chat`, {
       method: "POST",
@@ -255,8 +263,8 @@ class AIService {
       signal,
     });
 
-    // Retry without format/think if model doesn't support them (400 error)
-    if (response.status === 400 && (format || think)) {
+    // Retry without format/think if model still returns 400
+    if (response.status === 400 && (body.format || body.think)) {
       const retryBody: any = { model, messages, stream: true };
       response = await fetch(`${baseUrl}/api/chat`, {
         method: "POST",
@@ -483,6 +491,92 @@ class AIService {
     return "";
   }
 
+  /** Generate a very short tab title (2-5 words) from the user's prompt. Fire-and-forget safe. */
+  async generateTabTitle(
+    prompt: string,
+    sessionConfig?: AIConfig,
+  ): Promise<string> {
+    const { provider, model, baseUrl, apiKey } = sessionConfig || this.config;
+    const systemPrompt = `Generate a very short title (2-5 words, max 25 chars) for a terminal session based on the user's task. Output ONLY the title, no quotes, no punctuation, no explanation. Examples: "Fix Login Bug", "Setup Docker", "Git Rebase Main", "Deploy API".`;
+
+    try {
+      if (provider === "ollama") {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        try {
+          const response = await fetch(
+            `${baseUrl || "http://localhost:11434"}/api/generate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model,
+                prompt: `${systemPrompt}\n\nUser task: ${prompt.slice(0, 200)}\n\nTitle:`,
+                stream: false,
+              }),
+              signal: controller.signal,
+            },
+          );
+          clearTimeout(timeout);
+          if (!response.ok) return "";
+          const data = await response.json();
+          const result = (data.response || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+          return result.length > 0 && result.length <= 30 ? result : "";
+        } catch {
+          clearTimeout(timeout);
+          return "";
+        }
+      }
+
+      if (provider === "openai" && apiKey) {
+        const response = await fetch(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: prompt.slice(0, 200) },
+              ],
+              max_tokens: 15,
+            }),
+          },
+        );
+        const data = await response.json();
+        const result = (data.choices?.[0]?.message?.content || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+        return result.length > 0 && result.length <= 30 ? result : "";
+      }
+
+      if (provider === "anthropic" && apiKey) {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 15,
+            system: systemPrompt,
+            messages: [{ role: "user", content: prompt.slice(0, 200) }],
+          }),
+        });
+        const data = await response.json();
+        const result = (data.content?.[0]?.text || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+        return result.length > 0 && result.length <= 30 ? result : "";
+      }
+    } catch {
+      // Non-critical
+    }
+    return "";
+  }
+
   async runAgent(
     prompt: string,
     executeCommand: (cmd: string) => Promise<string>,
@@ -506,9 +600,9 @@ TOOLS:
 4. {"tool":"final_answer","content":"..."} — Done or can't do it.
 
 RULES:
-1. VERIFY: After running a command, analyze the output. Did it succeed? If not, FIX IT.
-2. RECOVER: If a command fails (e.g. missing dependency), try to install it or use an alternative.
-3. AMBIGUITY: If the user request is unclear (e.g. "run server" but multiple exist), use ask_question.
+1. SELF-SOLVE FIRST: Before asking the user anything, try to find the answer yourself using execute_command. Need system specs? Run "uname -a", "sysctl hw.memsize", "system_profiler SPHardwareDataType", etc. Need project info? Run "ls", "cat package.json", etc. Only use ask_question as a LAST RESORT when you truly cannot determine the answer by running commands.
+2. VERIFY: After running a command, analyze the output. Did it succeed? If not, FIX IT.
+3. RECOVER: If a command fails (e.g. missing dependency), try to install it or use an alternative.
 4. COMPLETION: Do not say "Done" until you have VERIFIED the task is actually complete based on command output.
 5. CONCISENESS: Keep final_answer short (under 3 lines) if possible. If long, summarize.
 6. JSON: Output ONLY valid JSON.
@@ -530,7 +624,9 @@ For file operations always use execute_command with cat heredoc or printf. Use r
       if (signal?.aborted) {
         throw new Error("Agent aborted by user.");
       }
-      onUpdate("thinking", "Agent is thinking...");
+      if (thinkingEnabled) {
+        onUpdate("thinking", "Agent is thinking...");
+      }
 
       let responseText = "";
 
@@ -562,6 +658,9 @@ For file operations always use execute_command with cat heredoc or printf. Use r
           thinkingText = result.thinking;
           if (thinkingAccumulated) {
             onUpdate("thinking_complete", thinkingAccumulated);
+          } else {
+            // For non-thinking models: ensure thinking state is cleared
+            onUpdate("thinking_done", "");
           }
         } else {
           // ... (fallback same as before)

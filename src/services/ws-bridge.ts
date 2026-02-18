@@ -152,6 +152,7 @@ export function initWebSocketBridge() {
       getCompletions: (prefix: string, cwd?: string, sessionId?: string) =>
         invoke("terminal.getCompletions", { prefix, cwd, sessionId }),
       getHistory: (sessionId: string) => invoke("terminal.getHistory", sessionId),
+      scanCommands: () => invoke("terminal.scanCommands") as Promise<string[]>,
       exec: (sessionId: string, command: string) =>
         invoke("terminal.exec", { sessionId, command }),
       fixPermissions: () => invoke("system.fixPermissions"),

@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "../../../contexts/ThemeContext";
-import type { AIConfig, AIModel } from "../../../types";
+import type { AIConfig } from "../../../types";
 import { aiService } from "../../../services/ai";
 import { Shield, Monitor, Brain, Check, Gem } from "lucide-react";
+import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
 import FeatureIcon from "../../../components/ui/FeatureIcon";
 import {
   fadeScale,
@@ -60,22 +61,13 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
     "idle" | "fixing" | "waitingForUser" | "success" | "error"
   >("idle");
   const [aiConfig, setAiConfig] = useState<AIConfig>(aiService.getConfig());
-  const [ollamaModels, setOllamaModels] = useState<AIModel[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<
     "idle" | "testing" | "success" | "error"
   >("idle");
 
-  // Fetch Ollama models on mount, then lazy-load capabilities
-  useEffect(() => {
-    aiService.getModels().then(async (list) => {
-      const ollama = list.filter((m) => m.provider === "ollama");
-      setOllamaModels(ollama);
-      for (const m of ollama) {
-        m.capabilities = await aiService.getModelCapabilities(m.name);
-      }
-      setOllamaModels([...ollama]);
-    });
-  }, []);
+  const { data: allModels = [] } = useModelsWithCaps(aiConfig.baseUrl);
+  const invalidateModels = useInvalidateModels();
+  const ollamaModels = allModels.filter((m) => m.provider === "ollama");
 
   const handleFixPermissions = async () => {
     setPermissionStatus("fixing");
@@ -388,9 +380,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                             setAiConfig((c) => ({ ...c, baseUrl: newUrl }));
                           }}
                           onBlur={() => {
-                            aiService.getModels(aiConfig.baseUrl).then((list) => {
-                              setOllamaModels(list.filter((m) => m.provider === "ollama"));
-                            });
+                            invalidateModels(aiConfig.baseUrl);
                           }}
                           className={`flex-1 p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
                             ${
@@ -405,10 +395,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => {
-                            setOllamaModels([]);
-                            aiService.getModels(aiConfig.baseUrl).then((list) => {
-                              setOllamaModels(list.filter((m) => m.provider === "ollama"));
-                            });
+                            invalidateModels(aiConfig.baseUrl);
                           }}
                           className={`px-3 py-2 rounded-lg border transition-colors ${
                             resolvedTheme === "light"
