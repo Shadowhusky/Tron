@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { X, Bot, ChevronRight } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -129,6 +130,58 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         />
       )}
       </AnimatePresence>
+      {/* Queue display */}
+      <AnimatePresence>
+        {inputQueue.length > 0 && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className={`overflow-hidden border-t ${themeClass(resolvedTheme, {
+              dark: "bg-[#0e0e0e] border-white/5",
+              modern: "bg-white/[0.03] border-white/6",
+              light: "bg-amber-50/50 border-gray-200",
+            })}`}
+          >
+            <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap">
+              <span className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${
+                resolvedTheme === "light" ? "text-amber-600" : "text-amber-400/70"
+              }`}>
+                Queue ({inputQueue.length})
+              </span>
+              {inputQueue.map((item, i) => (
+                <div
+                  key={i}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono max-w-[200px] ${
+                    resolvedTheme === "light"
+                      ? item.type === "agent"
+                        ? "bg-purple-100 text-purple-700 border border-purple-200"
+                        : "bg-gray-100 text-gray-700 border border-gray-200"
+                      : item.type === "agent"
+                        ? "bg-purple-500/10 text-purple-300 border border-purple-500/20"
+                        : "bg-white/5 text-gray-400 border border-white/10"
+                  }`}
+                >
+                  {item.type === "agent" ? (
+                    <Bot className="w-3 h-3 shrink-0 opacity-60" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3 shrink-0 opacity-60" />
+                  )}
+                  <span className="truncate">{item.content}</span>
+                  <button
+                    onClick={() => setInputQueue(prev => prev.filter((_, idx) => idx !== i))}
+                    className="shrink-0 opacity-40 hover:opacity-100 transition-opacity"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div
         className={`p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
           dark: "bg-[#0a0a0a] border-white/5",
