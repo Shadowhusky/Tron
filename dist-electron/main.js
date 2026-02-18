@@ -45,6 +45,8 @@ const ai_1 = require("./ipc/ai");
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
 }
+// Suppress Chromium GPU SharedImageManager / mailbox errors on macOS.
+electron_1.app.commandLine.appendSwitch("disable-gpu-compositing");
 // --- Global State ---
 let mainWindow = null;
 let forceQuit = false;

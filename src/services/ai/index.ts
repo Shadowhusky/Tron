@@ -101,6 +101,12 @@ class AIService {
     if (stored) {
       this.config = { ...this.config, ...JSON.parse(stored) };
     }
+    // Cloud providers must never use a baseUrl (Ollama's localhost leaks via
+    // JSON.stringify stripping undefined values — on reload the default
+    // "http://localhost:11434" survives the merge).
+    if (this.config.provider !== "ollama") {
+      this.config.baseUrl = undefined;
+    }
   }
 
   saveConfig(config: Partial<AIConfig>) {
@@ -674,7 +680,11 @@ class AIService {
     prompt: string,
     sessionConfig?: AIConfig,
   ): Promise<string> {
-    const { provider, model, baseUrl, apiKey } = sessionConfig || this.config;
+    const cfg = sessionConfig || this.config;
+    const provider = cfg.provider;
+    const model = cfg.model;
+    const apiKey = cfg.apiKey || this.config.apiKey;
+    const baseUrl = provider === "ollama" ? cfg.baseUrl : undefined;
     const systemPrompt = `Generate a very short title (2-5 words, max 25 chars) for a terminal session based on the user's task. Output ONLY the title, no quotes, no punctuation, no explanation. Examples: "Fix Login Bug", "Setup Docker", "Git Rebase Main", "Deploy API".`;
 
     try {
@@ -754,7 +764,14 @@ class AIService {
     signal?: AbortSignal,
     thinkingEnabled: boolean = true,
   ): Promise<AgentResult> {
-    const { provider, model, baseUrl, apiKey } = sessionConfig || this.config;
+    const cfg = sessionConfig || this.config;
+    const provider = cfg.provider;
+    const model = cfg.model;
+    // Fall back to global apiKey if session config doesn't have one (e.g.
+    // model selected via ContextBar before settings propagated).
+    const apiKey = cfg.apiKey || this.config.apiKey;
+    // Never send a baseUrl to cloud providers — prevents Ollama localhost leak.
+    const baseUrl = provider === "ollama" ? cfg.baseUrl : undefined;
 
     const history: any[] = [
       {
