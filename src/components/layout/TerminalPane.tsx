@@ -144,6 +144,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           isAgentRunning={isAgentRunning}
           pendingCommand={pendingCommand}
           sessionId={sessionId}
+          modelCapabilities={modelCapabilities}
         />
       </div>
       <div className="relative z-30">

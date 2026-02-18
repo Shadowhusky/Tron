@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { AIConfig, AIModel } from "../../../types";
+import type { AIConfig } from "../../../types";
 import { aiService } from "../../../services/ai";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { getTheme } from "../../../utils/theme";
+import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
 import {
   Gem,
   Laptop,
@@ -12,6 +13,7 @@ import {
   SlidersHorizontal,
   Save,
   ChevronDown,
+  Check,
 } from "lucide-react";
 import { staggerContainer, staggerItem } from "../../../utils/motion";
 
@@ -22,28 +24,20 @@ const SettingsPane = () => {
   const [initialConfig, setInitialConfig] = useState<string>(
     JSON.stringify(aiService.getConfig()),
   );
-  const [ollamaModels, setOllamaModels] = useState<AIModel[]>([]);
   const [testStatus, setTestStatus] = useState<
     "idle" | "testing" | "success" | "error"
   >("idle");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
+
+  const { data: allModels = [] } = useModelsWithCaps(config.baseUrl);
+  const invalidateModels = useInvalidateModels();
+  const ollamaModels = allModels.filter((m) => m.provider === "ollama");
 
   // Load initial config
   useEffect(() => {
     const current = aiService.getConfig();
     setConfig(current);
     setInitialConfig(JSON.stringify(current));
-
-    // Fetch Ollama models, then lazy-load capabilities
-    aiService.getModels().then(async (list) => {
-      const ollama = list.filter((m) => m.provider === "ollama");
-      setOllamaModels(ollama);
-      // Fetch capabilities in background (one at a time to avoid 400 spam)
-      for (const m of ollama) {
-        m.capabilities = await aiService.getModelCapabilities(m.name);
-      }
-      setOllamaModels([...ollama]);
-    });
   }, []);
 
   const hasChanges = JSON.stringify(config) !== initialConfig;
@@ -161,11 +155,7 @@ const SettingsPane = () => {
                   <div className="flex items-center justify-between">
                     <label className={labelClass}>Model</label>
                     <button
-                      onClick={() => {
-                        aiService.getModels().then((list) => {
-                          setOllamaModels(list.filter((m) => m.provider === "ollama"));
-                        });
-                      }}
+                      onClick={() => invalidateModels(config.baseUrl)}
                       title="Refresh Models"
                       className={`p-1 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                     >
@@ -240,38 +230,16 @@ const SettingsPane = () => {
                       onChange={(e) =>
                         setConfig({ ...config, baseUrl: e.target.value })
                       }
-                      onBlur={() => {
-                        // Refresh models on blur
-                        aiService.getModels(config.baseUrl).then((list) => {
-                          setOllamaModels(list.filter((m) => m.provider === "ollama"));
-                        });
-                      }}
+                      onBlur={() => invalidateModels(config.baseUrl)}
                       placeholder="http://localhost:11434"
                       className={inputClass}
                     />
                     <button
-                      onClick={() => {
-                        setOllamaModels([]);
-                        aiService.getModels(config.baseUrl).then((list) => {
-                          setOllamaModels(list.filter((m) => m.provider === "ollama"));
-                        });
-                      }}
-                      title="Refresh Models"
+                      onClick={() => invalidateModels(config.baseUrl)}
+                      title="Confirm URL"
                       className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                     >
-                      <svg
-                        className="w-4 h-4 opacity-70"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
+                      <Check className="w-4 h-4 opacity-70" />
                     </button>
                   </div>
                 </div>

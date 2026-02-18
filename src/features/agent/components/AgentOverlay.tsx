@@ -9,6 +9,7 @@ import {
   ShieldAlert,
   Terminal as TerminalIcon,
   Brain,
+  Minimize2,
 } from "lucide-react";
 import { marked } from "marked";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -131,19 +132,18 @@ const AgentToast: React.FC<{
 
   return (
     <div
-      className={`flex items-center gap-2 px-3 py-2 rounded-lg shadow-lg text-xs font-mono max-w-sm animate-in fade-in slide-in-from-right-3 border ${
-        type === "error"
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg shadow-lg text-xs font-mono max-w-sm animate-in fade-in slide-in-from-right-3 border ${type === "error"
+        ? isLight
+          ? "bg-red-50 border-red-200 text-red-700"
+          : "bg-red-950/80 border-red-500/20 text-red-300"
+        : type === "success"
           ? isLight
-            ? "bg-red-50 border-red-200 text-red-700"
-            : "bg-red-950/80 border-red-500/20 text-red-300"
-          : type === "success"
-            ? isLight
-              ? "bg-green-50 border-green-200 text-green-700"
-              : "bg-green-950/80 border-green-500/20 text-green-300"
-            : isLight
-              ? "bg-white border-gray-200 text-gray-700"
-              : "bg-[#1a1a2e]/90 border-white/10 text-gray-300"
-      }`}
+            ? "bg-green-50 border-green-200 text-green-700"
+            : "bg-green-950/80 border-green-500/20 text-green-300"
+          : isLight
+            ? "bg-white border-gray-200 text-gray-700"
+            : "bg-[#1a1a2e]/90 border-white/10 text-gray-300"
+        }`}
     >
       {type === "error" ? (
         <AlertTriangle className="w-3 h-3 shrink-0 text-red-400" />
@@ -157,30 +157,31 @@ const AgentToast: React.FC<{
   );
 };
 
-/** Truncated thinking display — shows last N lines with expand toggle */
-const THINKING_VISIBLE_LINES = 6;
+/** Thinking display — shows latest 2 lines by default with scroll, expandable */
 const ThinkingBlock: React.FC<{
   content: string;
   isLight: boolean;
   isStreaming: boolean;
 }> = ({ content, isLight, isStreaming }) => {
   const [expanded, setExpanded] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const lines = content.split("\n");
-  const isTruncated = lines.length > THINKING_VISIBLE_LINES;
-  const displayContent =
-    expanded || !isTruncated
-      ? content
-      : lines.slice(-THINKING_VISIBLE_LINES).join("\n");
-
+  const isTruncated = lines.length > 2;
   const tokenCount = Math.round(content.length / 4);
+
+  // Always show latest content (bottom) when collapsed
+  useEffect(() => {
+    if (!expanded && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [content, expanded]);
 
   return (
     <div
-      className={`mt-1 rounded border p-2 transition-all ${
-        isLight
-          ? "bg-purple-50/50 border-purple-200/50"
-          : "bg-purple-950/20 border-purple-500/10"
-      }`}
+      className={`mt-1 rounded border p-2 transition-all ${isLight
+        ? "bg-purple-50/50 border-purple-200/50"
+        : "bg-purple-950/20 border-purple-500/10"
+        }`}
     >
       <div className="flex items-center justify-between mb-1">
         <span
@@ -188,38 +189,105 @@ const ThinkingBlock: React.FC<{
         >
           {isStreaming ? "Thinking Process" : "Reasoning"}
         </span>
-        <span
-          className={`text-[9px] font-mono ${isLight ? "text-purple-400" : "text-purple-500/60"}`}
-        >
-          {tokenCount} tokens
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-[9px] font-mono ${isLight ? "text-purple-400" : "text-purple-500/60"}`}
+          >
+            {tokenCount} tokens
+          </span>
+          {isTruncated && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className={`text-[9px] uppercase tracking-wider opacity-60 hover:opacity-100 transition-opacity ${isLight ? "text-purple-600" : "text-purple-400"
+                }`}
+            >
+              {expanded ? "Collapse" : "Expand"}
+            </button>
+          )}
+        </div>
       </div>
 
-      {isTruncated && !expanded && (
-        <button
-          onClick={() => setExpanded(true)}
-          className={`text-[9px] uppercase tracking-wider mb-1 opacity-60 hover:opacity-100 transition-opacity w-full text-left ${
-            isLight ? "text-purple-600" : "text-purple-400"
-          }`}
+      <div
+        ref={scrollRef}
+        className={`transition-all ${expanded ? "max-h-60 overflow-y-auto" : "max-h-[2.75rem] overflow-hidden"}`}
+        style={!expanded && isTruncated ? {
+          WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 60%)",
+          maskImage: "linear-gradient(to bottom, transparent 0%, black 60%)",
+        } : undefined}
+      >
+        <MarkdownContent
+          content={content}
+          className={`text-[11px] leading-relaxed ${isLight ? "text-gray-700" : "text-gray-300"}`}
+        />
+      </div>
+    </div>
+  );
+};
+
+/** Streaming planning display — similar to ThinkingBlock but for in-progress tool calls */
+const PlanningBlock: React.FC<{
+  content: string;
+  label: string;
+  isLight: boolean;
+}> = ({ content, label, isLight }) => {
+  const [expanded, setExpanded] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const lines = content.split("\n");
+  const isTruncated = lines.length > 2 || content.length > 120;
+  const tokenCount = Math.round(content.length / 4);
+
+  // Always show latest content (bottom) when collapsed
+  useEffect(() => {
+    if (!expanded && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [content, expanded]);
+
+  return (
+    <div
+      className={`mt-1 rounded border p-2 transition-all ${isLight
+        ? "bg-cyan-50/50 border-cyan-200/50"
+        : "bg-cyan-950/20 border-cyan-500/10"
+        }`}
+    >
+      <div className="flex items-center justify-between mb-1">
+        <span
+          className={`text-[9px] uppercase tracking-wider font-semibold ${isLight ? "text-cyan-400" : "text-cyan-500/80"}`}
         >
-          ... {lines.length - THINKING_VISIBLE_LINES} more lines — click to
-          expand
-        </button>
-      )}
-      <MarkdownContent
-        content={displayContent}
-        className={`text-[11px] leading-relaxed ${isLight ? "text-gray-700" : "text-gray-300"} ${isStreaming ? "opacity-100" : ""}`}
-      />
-      {isTruncated && expanded && (
-        <button
-          onClick={() => setExpanded(false)}
-          className={`text-[9px] uppercase tracking-wider mt-1 opacity-60 hover:opacity-100 transition-opacity ${
-            isLight ? "text-purple-600" : "text-purple-400"
-          }`}
+          {label}
+        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-[9px] font-mono ${isLight ? "text-cyan-400" : "text-cyan-500/60"}`}
+          >
+            {tokenCount} tokens
+          </span>
+          {isTruncated && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className={`text-[9px] uppercase tracking-wider opacity-60 hover:opacity-100 transition-opacity ${isLight ? "text-cyan-600" : "text-cyan-400"
+                }`}
+            >
+              {expanded ? "Collapse" : "Expand"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div
+        ref={scrollRef}
+        className={`transition-all ${expanded ? "max-h-60 overflow-y-auto" : "max-h-[2.75rem] overflow-hidden"}`}
+        style={!expanded && isTruncated ? {
+          WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 60%)",
+          maskImage: "linear-gradient(to bottom, transparent 0%, black 60%)",
+        } : undefined}
+      >
+        <code
+          className={`block text-[11px] leading-relaxed whitespace-pre-wrap ${isLight ? "text-gray-700" : "text-gray-300"}`}
         >
-          Collapse
-        </button>
-      )}
+          {content}
+        </code>
+      </div>
     </div>
   );
 };
@@ -232,10 +300,13 @@ const PermissionRequest: React.FC<{
 }> = ({ command, isLight, onPermission }) => {
   const dangerous = isDangerousCommand(command);
   const [confirmStep, setConfirmStep] = useState<0 | 1>(0);
+  const [cmdExpanded, setCmdExpanded] = useState(false);
+  const isLongCommand = command.length > 300 || command.split("\n").length > 8;
 
-  // Reset confirm step when command changes
+  // Reset confirm step and collapse when command changes
   useEffect(() => {
     setConfirmStep(0);
+    setCmdExpanded(false);
   }, [command]);
 
   const handleAllow = () => {
@@ -248,27 +319,25 @@ const PermissionRequest: React.FC<{
 
   return (
     <div
-      className={`flex flex-col max-h-full overflow-hidden p-4 border-t animate-in fade-in slide-in-from-bottom-2 ${
-        dangerous
-          ? isLight
-            ? "bg-red-50/90 border-red-300"
-            : "bg-red-950/40 border-red-500/30"
-          : isLight
-            ? "bg-blue-50/80 border-blue-200"
-            : "bg-blue-900/20 border-blue-500/20"
-      }`}
+      className={`flex flex-col p-4 border-t animate-in fade-in slide-in-from-bottom-2 ${dangerous
+        ? isLight
+          ? "bg-red-50/90 border-red-300"
+          : "bg-red-950/40 border-red-500/30"
+        : isLight
+          ? "bg-blue-50/80 border-blue-200"
+          : "bg-blue-900/20 border-blue-500/20"
+        }`}
     >
       {/* Header */}
       <div
-        className={`text-sm mb-2 font-medium flex items-center gap-2 shrink-0 ${
-          dangerous
-            ? isLight
-              ? "text-red-700"
-              : "text-red-300"
-            : isLight
-              ? "text-blue-700"
-              : "text-blue-200"
-        }`}
+        className={`text-sm mb-2 font-medium flex items-center gap-2 shrink-0 ${dangerous
+          ? isLight
+            ? "text-red-700"
+            : "text-red-300"
+          : isLight
+            ? "text-blue-700"
+            : "text-blue-200"
+          }`}
       >
         {dangerous ? (
           <ShieldAlert className="w-4 h-4" />
@@ -280,33 +349,49 @@ const PermissionRequest: React.FC<{
           : "Allow command execution?"}
       </div>
 
-      {/* Command display */}
-      <div className="flex-1 min-h-0 overflow-hidden mb-3 flex flex-col">
-        <div className="overflow-y-auto rounded border custom-scrollbar">
+      {/* Command display — collapsed by default for long commands */}
+      <div className="shrink-0 mb-3">
+        <div className="rounded border overflow-hidden">
           <code
-            className={`block p-3 text-xs font-mono break-all whitespace-pre-wrap ${
-              dangerous
-                ? isLight
-                  ? "bg-red-100 border-red-300 text-red-900"
-                  : "bg-red-950/50 border-red-500/20 text-red-200"
-                : isLight
-                  ? "bg-white border-blue-200 text-blue-800"
-                  : "bg-black/50 border-blue-500/10 text-blue-100"
-            }`}
+            className={`block p-3 text-xs font-mono break-all whitespace-pre-wrap transition-all ${
+              isLongCommand && !cmdExpanded ? "max-h-[6rem] overflow-hidden" : "max-h-[25vh] overflow-y-auto"
+            } ${dangerous
+              ? isLight
+                ? "bg-red-100 border-red-300 text-red-900"
+                : "bg-red-950/50 border-red-500/20 text-red-200"
+              : isLight
+                ? "bg-white border-blue-200 text-blue-800"
+                : "bg-black/50 border-blue-500/10 text-blue-100"
+              }`}
+            style={isLongCommand && !cmdExpanded ? {
+              WebkitMaskImage: "linear-gradient(to bottom, black 50%, transparent 100%)",
+              maskImage: "linear-gradient(to bottom, black 50%, transparent 100%)",
+            } : undefined}
           >
             {command}
           </code>
+          {isLongCommand && (
+            <button
+              onClick={() => setCmdExpanded(!cmdExpanded)}
+              className={`w-full text-[10px] py-1 text-center uppercase tracking-wider transition-colors ${
+                isLight
+                  ? "bg-gray-50 text-gray-500 hover:text-gray-800 hover:bg-gray-100"
+                  : "bg-white/5 text-gray-500 hover:text-white hover:bg-white/10"
+              }`}
+            >
+              {cmdExpanded ? "Collapse" : `Show full command (${command.split("\n").length} lines)`}
+            </button>
+          )}
         </div>
       </div>
 
       {/* Danger warning */}
       {dangerous && (
         <div
-          className={`shrink-0 flex items-start gap-2 mb-3 p-2 rounded text-xs ${
-            isLight
-              ? "bg-red-100/50 text-red-700"
-              : "bg-red-950/30 text-red-300/80"
-          }`}
+          className={`shrink-0 flex items-start gap-2 mb-3 p-2 rounded text-xs ${isLight
+            ? "bg-red-100/50 text-red-700"
+            : "bg-red-950/30 text-red-300/80"
+            }`}
         >
           <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>
@@ -319,11 +404,10 @@ const PermissionRequest: React.FC<{
       {/* Double-confirm step for dangerous commands */}
       {dangerous && confirmStep === 1 && (
         <div
-          className={`shrink-0 flex items-center gap-2 mb-3 p-2 rounded border text-xs font-semibold animate-in fade-in ${
-            isLight
-              ? "bg-red-200/60 border-red-400 text-red-800"
-              : "bg-red-900/40 border-red-500/40 text-red-200"
-          }`}
+          className={`shrink-0 flex items-center gap-2 mb-3 p-2 rounded border text-xs font-semibold animate-in fade-in ${isLight
+            ? "bg-red-200/60 border-red-400 text-red-800"
+            : "bg-red-900/40 border-red-500/40 text-red-200"
+            }`}
         >
           <ShieldAlert className="w-3.5 h-3.5 shrink-0 animate-pulse" />
           Are you absolutely sure? Click "Confirm Execute" to proceed.
@@ -334,37 +418,34 @@ const PermissionRequest: React.FC<{
       <div className="flex gap-2 justify-end shrink-0">
         <button
           onClick={() => onPermission("deny")}
-          className={`px-4 py-2 text-xs rounded-md border transition-colors flex items-center gap-1.5 ${
-            isLight
-              ? "bg-white hover:bg-gray-50 text-gray-600 border-gray-300"
-              : "bg-transparent hover:bg-white/5 text-white/60 border-white/10"
-          }`}
+          className={`px-4 py-2 text-xs rounded-md border transition-colors flex items-center gap-1.5 ${isLight
+            ? "bg-white hover:bg-gray-50 text-gray-600 border-gray-300"
+            : "bg-transparent hover:bg-white/5 text-white/60 border-white/10"
+            }`}
         >
           <X className="w-3 h-3" /> Deny
         </button>
         {!dangerous && (
           <button
             onClick={() => onPermission("always")}
-            className={`px-4 py-2 text-xs rounded-md border transition-colors ${
-              isLight
-                ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300"
-                : "bg-blue-900/30 hover:bg-blue-900/50 text-blue-200 border-blue-500/20"
-            }`}
+            className={`px-4 py-2 text-xs rounded-md border transition-colors ${isLight
+              ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300"
+              : "bg-blue-900/30 hover:bg-blue-900/50 text-blue-200 border-blue-500/20"
+              }`}
           >
             Always Allow
           </button>
         )}
         <button
           onClick={handleAllow}
-          className={`px-4 py-2 text-xs rounded-md transition-colors flex items-center gap-1.5 ${
-            dangerous
-              ? confirmStep === 1
-                ? "bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/30"
-                : isLight
-                  ? "bg-red-100 hover:bg-red-200 text-red-700 border border-red-300"
-                  : "bg-red-900/40 hover:bg-red-900/60 text-red-200 border border-red-500/30"
-              : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20"
-          }`}
+          className={`px-4 py-2 text-xs rounded-md transition-colors flex items-center gap-1.5 ${dangerous
+            ? confirmStep === 1
+              ? "bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/30"
+              : isLight
+                ? "bg-red-100 hover:bg-red-200 text-red-700 border border-red-300"
+                : "bg-red-900/40 hover:bg-red-900/60 text-red-200 border border-red-500/30"
+            : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20"
+            }`}
         >
           {dangerous ? (
             confirmStep === 1 ? (
@@ -405,6 +486,55 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   const { resolvedTheme } = useTheme();
   const isLight = resolvedTheme === "light";
   const scrollRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [panelNarrow, setPanelNarrow] = useState(false);
+
+  // Track panel width for responsive controls
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setPanelNarrow(entry.contentRect.width < 400);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Collapsible executed steps: track which step indices are collapsed
+  const [collapsedSteps, setCollapsedSteps] = useState<Set<number>>(new Set());
+
+  // Auto-collapse previous executed steps when new executing/separator step arrives
+  const prevAutoCollapseLen = useRef(agentThread.length);
+  useEffect(() => {
+    if (agentThread.length <= prevAutoCollapseLen.current) {
+      if (agentThread.length === 0) setCollapsedSteps(new Set());
+      prevAutoCollapseLen.current = agentThread.length;
+      return;
+    }
+    const newSteps = agentThread.slice(prevAutoCollapseLen.current);
+    prevAutoCollapseLen.current = agentThread.length;
+
+    // If any new step is executing/separator/streaming, collapse all previous executed steps
+    const shouldCollapse = newSteps.some(
+      (s) => s.step === "executing" || s.step === "separator" || s.step === "streaming",
+    );
+    if (shouldCollapse) {
+      const toCollapse = new Set(collapsedSteps);
+      for (let i = 0; i < agentThread.length - newSteps.length; i++) {
+        if (agentThread[i].step === "executed") toCollapse.add(i);
+      }
+      setCollapsedSteps(toCollapse);
+    }
+  }, [agentThread.length]);
+
+  const toggleStepCollapse = useCallback((idx: number) => {
+    setCollapsedSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }, []);
 
   // Toast state: only for transient "executing"/"executed" notifications
   const [toasts, setToasts] = useState<
@@ -443,33 +573,40 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     }
   }, [agentThread.length]);
 
-  // Auto-scroll: only if user is near the bottom (not manually scrolled up)
+  // Auto-scroll: only if user hasn't manually scrolled up
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
   const userScrolledUpRef = useRef(false);
+  const isAutoScrolling = useRef(false);
+
   const handleScroll = useCallback(() => {
+    // Skip scroll events caused by our own programmatic scrolling
+    if (isAutoScrolling.current) return;
     const el = scrollRef.current;
     if (!el) return;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    userScrolledUpRef.current = distFromBottom > 60;
+    const scrolledUp = distFromBottom > 60;
+    userScrolledUpRef.current = scrolledUp;
+    setUserScrolledUp(scrolledUp);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    isAutoScrolling.current = true;
+    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+    userScrolledUpRef.current = false;
+    setUserScrolledUp(false);
+    // Reset flag after scroll event fires
+    requestAnimationFrame(() => { isAutoScrolling.current = false; });
   }, []);
 
   const lastEntry = agentThread[agentThread.length - 1];
   const scrollTrigger = `${agentThread.length}:${lastEntry?.output?.length || 0}`;
   useEffect(() => {
     if (!userScrolledUpRef.current) {
+      isAutoScrolling.current = true;
       scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+      requestAnimationFrame(() => { isAutoScrolling.current = false; });
     }
   }, [scrollTrigger]);
-
-  // Reset scroll lock when a new step type is added (not just content update)
-  const prevStepCountRef = useRef(agentThread.length);
-  useEffect(() => {
-    if (agentThread.length > prevStepCountRef.current) {
-      // New step added — auto-scroll to show it
-      userScrolledUpRef.current = false;
-      scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-    }
-    prevStepCountRef.current = agentThread.length;
-  }, [agentThread.length]);
 
   // Reset toasts on new run
   useEffect(() => {
@@ -486,16 +623,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     : isAgentRunning
       ? "Agent working..."
       : (() => {
-          const last = agentThread[agentThread.length - 1];
-          if (!last) return "Idle";
-          if (last.step === "error" || last.step === "failed")
-            return last.output.toLowerCase().includes("abort")
-              ? "Task Aborted"
-              : "Task Failed";
-          if (last.step === "question") return "Awaiting Input";
-          if (last.step === "done") return "Task Completed";
-          return "Task Completed";
-        })();
+        const last = agentThread[agentThread.length - 1];
+        if (!last) return "Idle";
+        if (last.step === "error" || last.step === "failed")
+          return last.output.toLowerCase().includes("abort")
+            ? "Task Aborted"
+            : "Task Failed";
+        if (last.step === "question") return "Awaiting Input";
+        if (last.step === "done") return "Task Completed";
+        return "Task Completed";
+      })();
 
   // Steps to show in panel: include executing steps (with spinner)
   const panelSteps = agentThread;
@@ -534,44 +671,39 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       {/* Agent Panel */}
       {showPanel && (
         <motion.div
+          ref={panelRef}
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.25, ease: "easeOut" }}
-          className={`w-full shrink-0 ${
-            isExpanded
-              ? "max-h-[50vh] flex-col"
-              : "h-auto cursor-pointer hover:opacity-100 opacity-90"
-          } overflow-hidden border-t flex shadow-lg z-20 ${
-            isLight
+          className={`w-full shrink-0 ${isExpanded
+            ? "max-h-[50vh] flex-col"
+            : "h-auto cursor-pointer hover:opacity-100 opacity-90"
+            } overflow-hidden border-t flex shadow-lg z-20 ${isLight
               ? "bg-white/95 border-gray-200 text-gray-900"
               : resolvedTheme === "modern"
                 ? "bg-[#0a0a1a]/60 border-white/[0.06] text-white backdrop-blur-2xl shadow-[0_-4px_24px_rgba(0,0,0,0.3)]"
                 : "bg-[#0a0a0a]/95 border-white/10 text-white"
-          }`}
+            }`}
           onClick={!isExpanded ? onExpand : undefined}
         >
           {/* Status Header */}
           <div
-            className={`flex items-center justify-between px-4 py-1.5 shrink-0 ${
-              isExpanded ? "border-b" : ""
-            } ${
-              isLight
+            className={`flex items-center justify-between gap-2 px-3 py-1.5 shrink-0 ${isExpanded ? "border-b" : ""
+              } ${isLight
                 ? "border-gray-200/80 bg-gray-50/60"
                 : "border-white/5 bg-white/5"
-            }`}
+              }`}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <div
-                className={`w-2 h-2 rounded-full ${
-                  isAgentRunning || isThinking
-                    ? "bg-purple-400 animate-pulse"
-                    : "bg-gray-500"
-                }`}
+                className={`w-2 h-2 rounded-full ${isAgentRunning || isThinking
+                  ? "bg-purple-400 animate-pulse"
+                  : "bg-gray-500"
+                  }`}
               />
               <span
-                className={`text-xs font-medium ${
-                  isLight ? "text-purple-700" : "text-purple-200"
-                }`}
+                className={`text-xs font-medium ${isLight ? "text-purple-700" : "text-purple-200"
+                  }`}
               >
                 {statusText}
               </span>
@@ -579,61 +711,59 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
             {/* Controls - Only show when expanded, logic for minimize/expand handled by container click when collapsed */}
             {isExpanded && (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 flex-wrap justify-end">
                 {(!modelCapabilities || modelCapabilities.length === 0 || modelCapabilities.includes("thinking")) && (
-                <button
-                  onClick={onToggleThinking}
-                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center gap-1 ${
-                    thinkingEnabled
+                  <button
+                    onClick={onToggleThinking}
+                    className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1 shrink-0 ${thinkingEnabled
                       ? isLight
                         ? "border-purple-300 text-purple-600 bg-purple-50 hover:bg-purple-100"
                         : "border-purple-500/30 text-purple-400 bg-purple-500/10 hover:bg-purple-500/20"
                       : isLight
                         ? "border-gray-300 text-gray-500 bg-gray-50 hover:bg-gray-100"
                         : "border-white/10 text-gray-500 bg-white/5 hover:bg-white/10"
-                  }`}
-                  title={
-                    thinkingEnabled
-                      ? "Disable thinking (faster responses)"
-                      : "Enable thinking (more thorough reasoning)"
-                  }
-                >
-                  <Brain className="w-3 h-3" />
-                  Think {thinkingEnabled ? "ON" : "OFF"}
-                </button>
+                      }`}
+                    title={
+                      thinkingEnabled
+                        ? "Disable thinking (faster responses)"
+                        : "Enable thinking (more thorough reasoning)"
+                    }
+                  >
+                    <Brain className="w-3 h-3" />
+                    {"Thinking " + (thinkingEnabled ? "ON" : "OFF")}
+                  </button>
                 )}
                 <button
                   onClick={onToggleAutoExecute}
-                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center gap-1 ${
-                    autoExecuteEnabled
-                      ? isLight
-                        ? "border-orange-300 text-orange-600 bg-orange-50 hover:bg-orange-100"
-                        : "border-orange-500/30 text-orange-400 bg-orange-500/10 hover:bg-orange-500/20"
-                      : isLight
-                        ? "border-gray-300 text-gray-500 bg-gray-50 hover:bg-gray-100"
-                        : "border-white/10 text-gray-500 bg-white/5 hover:bg-white/10"
-                  }`}
+                  className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1 shrink-0 ${autoExecuteEnabled
+                    ? isLight
+                      ? "border-orange-300 text-orange-600 bg-orange-50 hover:bg-orange-100"
+                      : "border-orange-500/30 text-orange-400 bg-orange-500/10 hover:bg-orange-500/20"
+                    : isLight
+                      ? "border-gray-300 text-gray-500 bg-gray-50 hover:bg-gray-100"
+                      : "border-white/10 text-gray-500 bg-white/5 hover:bg-white/10"
+                    }`}
                   title={
                     autoExecuteEnabled
                       ? "Disable auto-execute"
                       : "Enable auto-execute (skip permission prompts)"
                   }
                 >
-                  Auto-Exec {autoExecuteEnabled ? "ON" : "OFF"}
+                  {panelNarrow ? "Exec" : "Auto Exec " + (autoExecuteEnabled ? "ON" : "OFF")}
                 </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onClose();
                   }}
-                  className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded transition-colors ${
-                    isLight
-                      ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
-                      : "text-gray-400 hover:text-white hover:bg-white/10"
-                  }`}
+                  className={`text-[10px] px-1.5 py-0.5 rounded transition-colors shrink-0 flex items-center gap-1 ${isLight
+                    ? "text-gray-500 hover:text-gray-900 hover:bg-gray-200/60"
+                    : "text-gray-400 hover:text-white hover:bg-white/10"
+                    }`}
                   title="Minimize panel (Cmd+.)"
                 >
-                  Minimize <span className="opacity-50 ml-0.5">&#8984;.</span>
+                  <Minimize2 className="w-3 h-3" />
+                  {!panelNarrow && <span className="uppercase tracking-wider">Min</span>}
                 </button>
               </div>
             )}
@@ -648,43 +778,45 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
           {/* Thread History - Only show when expanded */}
           {isExpanded && (panelSteps.length > 0 || isAgentRunning) && (
-            <div
-              ref={scrollRef}
-              onScroll={handleScroll}
-              className="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-xs scrollbar-thin scrollbar-thumb-gray-700"
-            >
-              {(() => {
-                // Group steps into runs by separator
-                const runs: { title: string; steps: AgentStep[] }[] = [];
-                for (const step of panelSteps) {
-                  if (step.step === "separator") {
-                    runs.push({ title: step.output, steps: [] });
-                  } else {
-                    if (runs.length === 0)
-                      runs.push({ title: "Agent Session", steps: [] });
-                    runs[runs.length - 1].steps.push(step);
+            <div className="flex-1 relative min-h-0">
+              <div
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="h-full overflow-y-auto p-4 space-y-4 font-mono text-xs scrollbar-thin scrollbar-thumb-gray-700"
+              >
+                {(() => {
+                  // Group steps into runs by separator, tracking global indices
+                  const runs: { title: string; steps: { step: AgentStep; globalIdx: number }[] }[] = [];
+                  for (let gi = 0; gi < panelSteps.length; gi++) {
+                    const step = panelSteps[gi];
+                    if (step.step === "separator") {
+                      runs.push({ title: step.output, steps: [] });
+                    } else {
+                      if (runs.length === 0)
+                        runs.push({ title: "Agent Session", steps: [] });
+                      runs[runs.length - 1].steps.push({ step, globalIdx: gi });
+                    }
                   }
-                }
 
-                const renderStep = (step: AgentStep, key: string) => {
-                  const isError =
-                    step.step === "error" || step.step === "failed";
-                  const isDone = step.step === "done";
-                  const isQuestion = step.step === "question";
-                  const isExecuted = step.step === "executed";
-                  const isExecuting = step.step === "executing";
-                  const isThinkingStep = step.step === "thinking";
-                  const isThought = step.step === "thought";
-                  const isStreamingStep = step.step === "streaming";
-                  const streamInfo = isStreamingStep
-                    ? describeStreamingContent(step.output)
-                    : null;
+                  const renderStep = (step: AgentStep, key: string, globalIdx: number) => {
+                    const isError =
+                      step.step === "error" || step.step === "failed";
+                    const isDone = step.step === "done";
+                    const isQuestion = step.step === "question";
+                    const isExecuted = step.step === "executed";
+                    const isExecuting = step.step === "executing";
+                    const isThinkingStep = step.step === "thinking";
+                    const isThought = step.step === "thought";
+                    const isStreamingStep = step.step === "streaming";
+                    const streamInfo = isStreamingStep
+                      ? describeStreamingContent(step.output)
+                      : null;
+                    const isCollapsed = isExecuted && collapsedSteps.has(globalIdx);
 
-                  return (
-                    <div
-                      key={key}
-                      className={`border-l-2 pl-4 py-2 ${
-                        isError
+                    return (
+                      <div
+                        key={key}
+                        className={`border-l-2 pl-4 py-2 ${isError
                           ? isLight
                             ? "border-red-300"
                             : "border-red-500/30"
@@ -715,31 +847,36 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                       : isLight
                                         ? "border-gray-200"
                                         : "border-white/10"
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        {isError ? (
-                          <AlertTriangle className="w-3 h-3 text-red-400" />
-                        ) : isDone ? (
-                          <Check className="w-3 h-3 text-green-400" />
-                        ) : isQuestion ? (
-                          <Brain className="w-3 h-3 text-amber-400" />
-                        ) : isExecuting ? (
-                          <TerminalIcon className="w-3 h-3 text-amber-400 animate-pulse" />
-                        ) : isExecuted ? (
-                          <Check className="w-3 h-3 text-blue-400" />
-                        ) : isThinkingStep || isThought ? (
-                          <Brain
-                            className={`w-3 h-3 text-purple-400 ${isThinkingStep ? "animate-pulse" : ""}`}
-                          />
-                        ) : isStreamingStep ? (
-                          <TerminalIcon className="w-3 h-3 text-cyan-400 animate-pulse" />
-                        ) : (
-                          <TerminalIcon className="w-3 h-3 text-gray-400 opacity-60" />
-                        )}
-                        <span
-                          className={`uppercase font-bold text-[10px] tracking-wider ${
-                            isExecuting
+                          }`}
+                      >
+                        <div
+                          className={`flex items-center gap-1.5 mb-0.5 ${isExecuted ? "cursor-pointer select-none" : ""}`}
+                          onClick={isExecuted ? () => toggleStepCollapse(globalIdx) : undefined}
+                        >
+                          {isExecuted && (
+                            <span className={`text-[9px] opacity-50 transition-transform ${isCollapsed ? "" : "rotate-90"}`}>▶</span>
+                          )}
+                          {isError ? (
+                            <AlertTriangle className="w-3 h-3 text-red-400" />
+                          ) : isDone ? (
+                            <Check className="w-3 h-3 text-green-400" />
+                          ) : isQuestion ? (
+                            <Brain className="w-3 h-3 text-amber-400" />
+                          ) : isExecuting ? (
+                            <TerminalIcon className="w-3 h-3 text-amber-400 animate-pulse" />
+                          ) : isExecuted ? (
+                            <Check className="w-3 h-3 text-blue-400" />
+                          ) : isThinkingStep || isThought ? (
+                            <Brain
+                              className={`w-3 h-3 text-purple-400 ${isThinkingStep ? "animate-pulse" : ""}`}
+                            />
+                          ) : isStreamingStep ? (
+                            <TerminalIcon className="w-3 h-3 text-cyan-400 animate-pulse" />
+                          ) : (
+                            <TerminalIcon className="w-3 h-3 text-gray-400 opacity-60" />
+                          )}
+                          <span
+                            className={`uppercase font-bold text-[10px] tracking-wider ${isExecuting
                               ? "text-amber-400"
                               : isExecuted
                                 ? "text-blue-400"
@@ -754,242 +891,278 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                         : isStreamingStep
                                           ? "text-cyan-400"
                                           : "text-gray-500"
-                          }`}
-                        >
-                          {isExecuting
-                            ? "running..."
-                            : isThinkingStep
-                              ? "thinking..."
-                              : isStreamingStep
-                                ? `${streamInfo!.label}...`
-                                : step.step}
-                        </span>
-                        {(isThinkingStep || isStreamingStep || isExecuting) && (
-                          <div className="flex gap-0.5 ml-1">
-                            <div
-                              className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
-                              style={{ animationDelay: "0ms" }}
-                            />
-                            <div
-                              className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
-                              style={{ animationDelay: "150ms" }}
-                            />
-                            <div
-                              className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
-                              style={{ animationDelay: "300ms" }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                      {/* Output */}
-                      {isThinkingStep || isThought ? (
-                        <ThinkingBlock
-                          content={step.output}
-                          isLight={isLight}
-                          isStreaming={isThinkingStep}
-                        />
-                      ) : isStreamingStep ? (
-                        (() => {
-                          // Show detail if available (only when JSON fully parsed)
-                          if (streamInfo?.detail) {
-                            return (
-                              <code
-                                className={`block text-[11px] whitespace-pre-wrap truncate ${isLight ? "text-gray-500" : "text-gray-400"} opacity-70`}
-                              >
-                                {streamInfo.detail}
-                              </code>
-                            );
-                          }
-                          // For text responses, show a scrolling preview of the last portion
-                          if (
-                            streamInfo?.label === "Responding" &&
-                            step.output.length > 0
-                          ) {
-                            const preview =
-                              step.output.length > 200
-                                ? step.output.slice(-200)
-                                : step.output;
-                            const tokenCount = Math.round(
-                              step.output.length / 4,
-                            );
-
-                            return (
+                              }`}
+                          >
+                            {isExecuting
+                              ? "running..."
+                              : isThinkingStep
+                                ? "thinking..."
+                                : isStreamingStep
+                                  ? `${streamInfo!.label}...`
+                                  : step.step}
+                          </span>
+                          {isCollapsed && (
+                            <span className={`text-[10px] truncate flex-1 min-w-0 ${isLight ? "text-gray-400" : "text-gray-500"}`}>
+                              {step.output.split("\n")[0].slice(0, 120)}
+                            </span>
+                          )}
+                          {(isThinkingStep || isStreamingStep || isExecuting) && (
+                            <div className="flex gap-0.5 ml-1">
                               <div
-                                className={`mt-1 max-h-24 overflow-hidden rounded border p-2 ${
-                                  isLight
+                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
+                                style={{ animationDelay: "0ms" }}
+                              />
+                              <div
+                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
+                                style={{ animationDelay: "150ms" }}
+                              />
+                              <div
+                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
+                                style={{ animationDelay: "300ms" }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                        {/* Output — hidden when collapsed */}
+                        {isCollapsed ? null : isThinkingStep || isThought ? (
+                          <ThinkingBlock
+                            content={step.output}
+                            isLight={isLight}
+                            isStreaming={isThinkingStep}
+                          />
+                        ) : isStreamingStep ? (
+                          (() => {
+                            // Show detail if available (only when JSON fully parsed)
+                            if (streamInfo?.detail) {
+                              return (
+                                <code
+                                  className={`block text-[11px] whitespace-pre-wrap truncate ${isLight ? "text-gray-500" : "text-gray-400"} opacity-70`}
+                                >
+                                  {streamInfo.detail}
+                                </code>
+                              );
+                            }
+                            // For planning/composing states, show streaming content in a collapsible block
+                            if (
+                              (streamInfo?.label?.startsWith("Planning") || streamInfo?.label === "Composing answer") &&
+                              step.output.length > 0
+                            ) {
+                              return (
+                                <PlanningBlock
+                                  content={step.output}
+                                  label={streamInfo.label}
+                                  isLight={isLight}
+                                />
+                              );
+                            }
+                            // For text responses, show a scrolling preview of the last portion
+                            if (
+                              streamInfo?.label === "Responding" &&
+                              step.output.length > 0
+                            ) {
+                              const preview =
+                                step.output.length > 200
+                                  ? step.output.slice(-200)
+                                  : step.output;
+                              const tokenCount = Math.round(
+                                step.output.length / 4,
+                              );
+
+                              return (
+                                <div
+                                  className={`mt-1 max-h-24 overflow-hidden rounded border p-2 ${isLight
                                     ? "bg-gray-50/50 border-gray-200/50"
                                     : "bg-white/[0.02] border-white/5"
-                                }`}
-                              >
-                                <div className="flex justify-between items-center mb-1">
-                                  <span
-                                    className={`text-[9px] font-semibold uppercase ${isLight ? "text-gray-400" : "text-gray-500"}`}
-                                  >
-                                    Live Output
-                                  </span>
-                                  <span
-                                    className={`text-[9px] font-mono ${isLight ? "text-gray-400" : "text-gray-600"}`}
-                                  >
-                                    {tokenCount} tokens
-                                  </span>
+                                    }`}
+                                >
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span
+                                      className={`text-[9px] font-semibold uppercase ${isLight ? "text-gray-400" : "text-gray-500"}`}
+                                    >
+                                      Live Output
+                                    </span>
+                                    <span
+                                      className={`text-[9px] font-mono ${isLight ? "text-gray-400" : "text-gray-600"}`}
+                                    >
+                                      {tokenCount} tokens
+                                    </span>
+                                  </div>
+                                  <MarkdownContent
+                                    content={preview}
+                                    className={`text-[11px] leading-relaxed ${isLight ? "text-gray-600" : "text-gray-400"}`}
+                                  />
                                 </div>
-                                <MarkdownContent
-                                  content={preview}
-                                  className={`text-[11px] leading-relaxed ${isLight ? "text-gray-600" : "text-gray-400"}`}
-                                />
-                              </div>
-                            );
-                          }
-                          return null;
-                        })()
-                      ) : step.output.length > 120 ? (
-                        <details className="group" open>
-                          <summary
-                            className={`cursor-pointer text-[11px] truncate select-none list-none flex items-center gap-1.5 ${
-                              isLight
+                              );
+                            }
+                            return null;
+                          })()
+                        ) : step.output.length > 120 ? (
+                          <details className="group" open>
+                            <summary
+                              className={`cursor-pointer text-[11px] truncate select-none list-none flex items-center gap-1.5 ${isLight
                                 ? "text-gray-500 hover:text-gray-900"
                                 : "text-gray-400 hover:text-white"
-                            }`}
-                          >
-                            <span className="text-[9px] opacity-50 group-open:rotate-90 transition-transform">
-                              ▶
-                            </span>
-                            {step.output.slice(0, 80)}...
-                          </summary>
-                          <pre
-                            className={`mt-1 p-2 rounded border text-[11px] leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-40 ${
-                              isLight
+                                }`}
+                            >
+                              <span className="text-[9px] opacity-50 group-open:rotate-90 transition-transform">
+                                ▶
+                              </span>
+                              {step.output.slice(0, 80)}...
+                            </summary>
+                            <pre
+                              className={`mt-1 p-2 rounded border text-[11px] leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-40 ${isLight
                                 ? "bg-gray-50 border-gray-200 text-gray-800"
                                 : "bg-black/40 border-white/5 text-gray-300"
-                            }`}
+                                }`}
+                            >
+                              {step.output}
+                            </pre>
+                          </details>
+                        ) : (
+                          <code
+                            className={`block text-[11px] whitespace-pre-wrap ${isLight ? "text-gray-600" : "text-gray-400"}`}
                           >
                             {step.output}
-                          </pre>
-                        </details>
-                      ) : (
-                        <code
-                          className={`block text-[11px] whitespace-pre-wrap ${isLight ? "text-gray-600" : "text-gray-400"}`}
-                        >
-                          {step.output}
-                        </code>
-                      )}
-                    </div>
-                  );
-                };
+                          </code>
+                        )}
+                      </div>
+                    );
+                  };
 
-                return runs.map((run, runIdx) => {
-                  const isLastRun = runIdx === runs.length - 1;
-                  // Compact title: take first line, truncate to 40 chars
-                  const firstLine = run.title.split("\n")[0].trim();
-                  const displayTitle =
-                    firstLine.slice(0, 40) +
-                    (firstLine.length > 40 ? "..." : "");
+                  return runs.map((run, runIdx) => {
+                    const isLastRun = runIdx === runs.length - 1;
+                    // Compact title: take first line, truncate to 80 chars
+                    const firstLine = run.title.split("\n")[0].trim();
+                    const displayTitle =
+                      firstLine.slice(0, 80) +
+                      (firstLine.length > 80 ? "..." : "");
 
-                  // Previous runs: collapsed by default
-                  if (!isLastRun) {
-                    // Find result status for summary
-                    const lastStep = run.steps[run.steps.length - 1];
-                    const statusIcon =
-                      lastStep?.step === "done"
-                        ? "✓"
-                        : lastStep?.step === "error" ||
-                            lastStep?.step === "failed"
-                          ? "✗"
-                          : "—";
-                    const statusColor =
-                      lastStep?.step === "done"
-                        ? isLight
-                          ? "text-green-600"
-                          : "text-green-400"
-                        : lastStep?.step === "error" ||
-                            lastStep?.step === "failed"
+                    // Previous runs: collapsed by default
+                    if (!isLastRun) {
+                      // Find result status for summary
+                      const lastStepEntry = run.steps[run.steps.length - 1];
+                      const lastStepType = lastStepEntry?.step.step;
+                      const statusIcon =
+                        lastStepType === "done"
+                          ? "✓"
+                          : lastStepType === "error" ||
+                            lastStepType === "failed"
+                            ? "✗"
+                            : "—";
+                      const statusColor =
+                        lastStepType === "done"
                           ? isLight
-                            ? "text-red-600"
-                            : "text-red-400"
-                          : isLight
-                            ? "text-gray-400"
-                            : "text-gray-500";
+                            ? "text-green-600"
+                            : "text-green-400"
+                          : lastStepType === "error" ||
+                            lastStepType === "failed"
+                            ? isLight
+                              ? "text-red-600"
+                              : "text-red-400"
+                            : isLight
+                              ? "text-gray-400"
+                              : "text-gray-500";
 
-                    return (
-                      <details key={`run-${runIdx}`} className="group/run">
-                        <summary
-                          className={`flex items-center gap-1.5 py-1 cursor-pointer select-none list-none`}
-                        >
-                          <span className="text-[9px] opacity-50 group-open/run:rotate-90 transition-transform">
-                            ▶
-                          </span>
-                          <span
-                            className={`text-[10px] font-semibold ${statusColor}`}
+                      return (
+                        <details key={`run-${runIdx}`} className="group/run">
+                          <summary
+                            className={`flex items-center gap-1.5 py-1 cursor-pointer select-none list-none`}
                           >
-                            {statusIcon}
-                          </span>
+                            <span className="text-[9px] opacity-50 group-open/run:rotate-90 transition-transform">
+                              ▶
+                            </span>
+                            <span
+                              className={`text-[10px] font-semibold ${statusColor}`}
+                            >
+                              {statusIcon}
+                            </span>
+                            <span
+                              className={`text-[10px] truncate flex-1 min-w-0 ${isLight ? "text-gray-400" : "text-gray-500"}`}
+                            >
+                              {displayTitle}
+                            </span>
+                          </summary>
+                          <div className="space-y-1.5 pb-1">
+                            {run.steps.map((s, si) =>
+                              renderStep(s.step, `${runIdx}-${si}`, s.globalIdx),
+                            )}
+                          </div>
+                        </details>
+                      );
+                    }
+
+                    // Current (last) run: fully expanded
+                    return (
+                      <div key={`run-${runIdx}`}>
+                        {/* Run title — minimal left-aligned label */}
+                        <div className="flex items-center gap-1.5 py-1">
+                          <Bot className="w-3 h-3 text-purple-400 opacity-60 shrink-0" />
                           <span
-                            className={`text-[10px] truncate max-w-[200px] ${isLight ? "text-gray-400" : "text-gray-500"}`}
+                            className={`text-[10px] truncate flex-1 min-w-0 ${isLight ? "text-gray-400" : "text-gray-500"}`}
                           >
                             {displayTitle}
                           </span>
-                        </summary>
-                        <div className="space-y-1.5 pb-1">
-                          {run.steps.map((step, si) =>
-                            renderStep(step, `${runIdx}-${si}`),
-                          )}
                         </div>
-                      </details>
+                        {run.steps.map((s, si) =>
+                          renderStep(s.step, `${runIdx}-${si}`, s.globalIdx),
+                        )}
+                      </div>
                     );
-                  }
+                  });
+                })()}
 
-                  // Current (last) run: fully expanded
-                  return (
-                    <div key={`run-${runIdx}`}>
-                      {/* Run title — minimal left-aligned label */}
-                      <div className="flex items-center gap-1.5 py-1">
-                        <Bot className="w-3 h-3 text-purple-400 opacity-60 shrink-0" />
-                        <span
-                          className={`text-[10px] truncate max-w-[200px] ${isLight ? "text-gray-400" : "text-gray-500"}`}
-                        >
-                          {displayTitle}
-                        </span>
-                      </div>
-                      {run.steps.map((step, si) =>
-                        renderStep(step, `${runIdx}-${si}`),
-                      )}
-                    </div>
-                  );
-                });
-              })()}
-
-              {/* Inline thinking indicator — shown when waiting and no streaming step visible yet */}
-              {isAgentRunning &&
-                isThinking &&
-                (!panelSteps.length ||
-                  (panelSteps[panelSteps.length - 1]?.step !== "thinking" &&
-                    panelSteps[panelSteps.length - 1]?.step !==
+                {/* Inline thinking indicator — shown when waiting and no streaming step visible yet */}
+                {isAgentRunning &&
+                  isThinking &&
+                  (!panelSteps.length ||
+                    (panelSteps[panelSteps.length - 1]?.step !== "thinking" &&
+                      panelSteps[panelSteps.length - 1]?.step !==
                       "streaming")) && (
-                  <div
-                    className={`border-l-2 pl-3 py-1 ${isLight ? "border-purple-300" : "border-purple-500/30"}`}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <Brain className="w-3 h-3 text-purple-400 animate-pulse" />
-                      <span className="uppercase font-bold text-[10px] tracking-wider text-purple-400">
-                        thinking...
-                      </span>
-                      <div className="flex gap-0.5 ml-1">
-                        <div
-                          className="w-1 h-1 bg-purple-400 rounded-full animate-bounce"
-                          style={{ animationDelay: "0ms" }}
-                        />
-                        <div
-                          className="w-1 h-1 bg-purple-400 rounded-full animate-bounce"
-                          style={{ animationDelay: "150ms" }}
-                        />
-                        <div
-                          className="w-1 h-1 bg-purple-400 rounded-full animate-bounce"
-                          style={{ animationDelay: "300ms" }}
-                        />
+                    <div
+                      className={`border-l-2 pl-3 py-1 ${isLight ? "border-purple-300" : "border-purple-500/30"}`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Brain className="w-3 h-3 text-purple-400 animate-pulse" />
+                        <span className="uppercase font-bold text-[10px] tracking-wider text-purple-400">
+                          thinking...
+                        </span>
+                        <div className="flex gap-0.5 ml-1">
+                          <div
+                            className="w-1 h-1 bg-purple-400 rounded-full animate-bounce"
+                            style={{ animationDelay: "0ms" }}
+                          />
+                          <div
+                            className="w-1 h-1 bg-purple-400 rounded-full animate-bounce"
+                            style={{ animationDelay: "150ms" }}
+                          />
+                          <div
+                            className="w-1 h-1 bg-purple-400 rounded-full animate-bounce"
+                            style={{ animationDelay: "300ms" }}
+                          />
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
+              </div>
+
+              {/* Scroll to bottom button — shown when user has scrolled up */}
+              <AnimatePresence>
+                {userScrolledUp && isAgentRunning && (
+                  <motion.button
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={{ duration: 0.15 }}
+                    onClick={scrollToBottom}
+                    className={`absolute bottom-2 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-[10px] font-medium shadow-lg z-10 transition-colors ${isLight
+                      ? "bg-gray-100 hover:bg-gray-200 text-gray-600 border border-gray-300"
+                      : "bg-white/10 hover:bg-white/15 text-gray-300 border border-white/10 backdrop-blur-sm"
+                      }`}
+                  >
+                    ↓ Scroll to bottom
+                  </motion.button>
                 )}
+              </AnimatePresence>
             </div>
           )}
 
@@ -1002,6 +1175,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
+                className="shrink-0"
               >
                 <PermissionRequest
                   command={pendingCommand}

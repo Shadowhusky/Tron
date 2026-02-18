@@ -106,12 +106,47 @@ const NL_INDICATORS = new Set([
   "nothing",
 ]);
 
+// Words that almost always start a natural language question/request,
+// even though some (e.g. "what") are real executables on macOS/BSD.
+const QUESTION_STARTERS = new Set([
+  "what",
+  "why",
+  "how",
+  "where",
+  "when",
+  "who",
+  "can",
+  "could",
+  "should",
+  "would",
+  "will",
+  "does",
+  "do",
+  "is",
+  "are",
+  "was",
+  "were",
+  "has",
+  "have",
+  "please",
+  "tell",
+  "explain",
+  "describe",
+  "show",
+  "help",
+  "list",
+]);
+
 /**
  * Returns true if the input contains natural language patterns anywhere.
  * Checks for English glue words in any position beyond the first word.
  */
 function hasNaturalLanguagePattern(words: string[]): boolean {
   if (words.length < 2) return false;
+
+  // If the first word is a question/request starter, it's natural language
+  if (QUESTION_STARTERS.has(words[0].toLowerCase())) return true;
+
   // Check if any word (after the first) is a natural language indicator
   let nlCount = 0;
   for (let i = 1; i < words.length; i++) {
@@ -244,6 +279,19 @@ const UNAMBIGUOUS_COMMANDS = new Set([
   "scala",
   "kotlin",
 ]);
+
+// Dynamic command set populated by system scan
+let scannedCommands: Set<string> | null = null;
+
+/** Load scanned commands from a system scan result. */
+export function loadScannedCommands(commands: string[]) {
+  scannedCommands = new Set(commands.map((c) => c.toLowerCase()));
+}
+
+/** Check if a word is in the scanned commands list. */
+export function isScannedCommand(word: string): boolean {
+  return scannedCommands?.has(word.toLowerCase()) ?? false;
+}
 
 export function isKnownExecutable(word: string): boolean {
   return UNAMBIGUOUS_COMMANDS.has(word);

@@ -62,7 +62,7 @@ function loadPersistedAgentState(): Map<string, AgentState> {
       const map = new Map<string, AgentState>();
       for (const [id, data] of Object.entries(parsed)) {
         if (data.agentThread?.length > 0) {
-          map.set(id, { ...defaultState, agentThread: data.agentThread });
+          map.set(id, { ...defaultState, agentThread: data.agentThread, isOverlayVisible: true });
         }
       }
       return map;

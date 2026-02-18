@@ -19,6 +19,7 @@ export function useAgentRunner(
     updateSession,
     // @ts-ignore
     addInteraction,
+    renameTab,
   } = useLayout();
   const { addToHistory } = useHistory();
   const {
@@ -133,7 +134,8 @@ export function useAgentRunner(
     registerAbortController(controller);
 
     setIsAgentRunning(true);
-    if (thinkingEnabled) {
+    const modelSupportsThinking = modelCapabilities.length === 0 || modelCapabilities.includes("thinking");
+    if (thinkingEnabled && modelSupportsThinking) {
       setIsThinking(true);
     }
     setIsOverlayVisible(true);
@@ -269,16 +271,20 @@ Task: ${prompt}
             });
             setIsThinking(true);
           } else if (step === "thinking_complete") {
-            // Replace streaming entry with finalized thought
+            // Replace the last thinking entry with finalized thought (search backwards)
             setAgentThread((prev) => {
-              const lastIdx = prev.length - 1;
-              if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
-                const updated = [...prev];
-                updated[lastIdx] = { step: "thought", output };
-                return updated;
+              const updated = [...prev];
+              for (let i = updated.length - 1; i >= 0; i--) {
+                if (updated[i].step === "thinking") {
+                  updated[i] = { step: "thought", output };
+                  return updated;
+                }
               }
               return [...prev, { step: "thought", output }];
             });
+            setIsThinking(false);
+          } else if (step === "thinking_done") {
+            // No thinking content produced — just clear thinking state
             setIsThinking(false);
           } else if (step === "streaming_response") {
             // Update or append an in-progress response entry
@@ -322,13 +328,13 @@ Task: ${prompt}
               return [...updated, { step, output }];
             });
             setIsThinking(false);
-          } else {
+          } else if (thinkingEnabled && modelSupportsThinking) {
             setIsThinking(true);
           }
         },
         session?.aiConfig,
         controller.signal,
-        thinkingEnabled,
+        thinkingEnabled && modelSupportsThinking,
       );
       // Ensure successful completion clears active state
       setIsAgentRunning(false);
@@ -360,6 +366,16 @@ Task: ${prompt}
           content: finalAnswer.message,
           timestamp: Date.now(),
         });
+      }
+
+      // Generate AI tab title (fire-and-forget, non-blocking)
+      if (sessionId) {
+        aiService
+          .generateTabTitle(prompt, session?.aiConfig)
+          .then((title) => {
+            if (title) renameTab(sessionId, title);
+          })
+          .catch(() => {});
       }
     } catch (error: any) {
       if (error.name === "AbortError") {

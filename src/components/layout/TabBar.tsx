@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useEffect, useRef } from "react";
+import { Reorder, AnimatePresence, motion } from "framer-motion";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
@@ -27,19 +27,40 @@ const TabBar: React.FC<TabBarProps> = ({
   onOpenSettings,
   isTabDirty,
 }) => {
-  const dragTabRef = useRef<number | null>(null);
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  // Local visual order — avoids propagating every drag frame to parent
+  const [localTabs, setLocalTabs] = useState(tabs);
+  const isDraggingRef = useRef(false);
+
+  // Sync from parent when not dragging
+  useEffect(() => {
+    if (!isDraggingRef.current) {
+      setLocalTabs(tabs);
+    }
+  }, [tabs]);
+
+  const commitReorder = () => {
+    isDraggingRef.current = false;
+    const oldIds = tabs.map((t) => t.id);
+    const newIds = localTabs.map((t) => t.id);
+    for (let i = 0; i < oldIds.length; i++) {
+      if (oldIds[i] !== newIds[i]) {
+        const movedId = newIds[i];
+        const fromIndex = oldIds.indexOf(movedId);
+        onReorder(fromIndex, i);
+        break;
+      }
+    }
+  };
 
   return (
     <div
       className={`flex items-center h-10 px-2 gap-2 border-b select-none shrink-0 ${themeClass(
         resolvedTheme,
         {
-          dark: "bg-gray-900/50 border-white/5",
+          dark: "bg-[#111111] border-white/5",
           modern:
-            "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-          light: "bg-white border-gray-200",
+            "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl",
+          light: "bg-gray-100 border-gray-200",
         },
       )}`}
       style={{ WebkitAppRegion: "drag" } as any}
@@ -48,148 +69,102 @@ const TabBar: React.FC<TabBarProps> = ({
       <div className="w-16" />
 
       {/* Tabs */}
-      <div
+      <Reorder.Group
+        as="div"
+        axis="x"
+        values={localTabs}
+        onReorder={(newTabs) => {
+          isDraggingRef.current = true;
+          setLocalTabs(newTabs);
+        }}
         className="flex items-center gap-1 flex-1 overflow-x-auto no-scrollbar"
         style={{ WebkitAppRegion: "drag" } as any}
       >
         <AnimatePresence initial={false}>
-        {tabs.map((tab, tabIndex) => {
-          const showLeft =
-            dragOverIndex === tabIndex &&
-            draggingIndex !== null &&
-            draggingIndex > tabIndex;
-          const showRight =
-            dragOverIndex === tabIndex &&
-            draggingIndex !== null &&
-            draggingIndex < tabIndex;
-          return (
-            <motion.div
+          {localTabs.map((tab) => (
+            <Reorder.Item
               key={tab.id}
-              layout
+              value={tab}
+              drag="x"
+              dragConstraints={{ top: 0, bottom: 0 }}
               initial={{ opacity: 0, scale: 0.9, width: 0 }}
               animate={{ opacity: 1, scale: 1, width: "auto" }}
               exit={{ opacity: 0, scale: 0.9, width: 0 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
-              className="relative flex items-center"
+              onDragEnd={commitReorder}
+              whileDrag={{
+                scale: 1.03,
+                boxShadow:
+                  resolvedTheme === "light"
+                    ? "0 4px 16px rgba(0,0,0,0.12)"
+                    : "0 4px 16px rgba(0,0,0,0.4)",
+                zIndex: 50,
+                cursor: "grabbing",
+              }}
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-grab active:cursor-grabbing transition-colors border max-w-[200px] min-w-[100px] ${
+                tab.id === activeTabId
+                  ? themeClass(resolvedTheme, {
+                      dark: "bg-[#1e1e1e] text-white border-white/10",
+                      modern:
+                        "bg-white/[0.06] text-white border-white/[0.1] backdrop-blur-xl",
+                      light:
+                        "bg-white text-gray-900 border-gray-300 shadow-sm",
+                    })
+                  : themeClass(resolvedTheme, {
+                      dark: "bg-[#161616] border-white/5 hover:bg-[#1a1a1a] text-gray-500 hover:text-gray-300",
+                      modern: "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300",
+                      light: "bg-gray-100/80 border-gray-200/60 text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                    })
+              }`}
+              onClick={() => onSelect(tab.id)}
             >
-              {/* Drop indicator — left (dragging leftward) */}
-              {showLeft && (
-                <div className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 -translate-x-0.5" />
-              )}
-              <div
-                onClick={() => onSelect(tab.id)}
-                draggable
-                onDragStart={(e) => {
-                  dragTabRef.current = tabIndex;
-                  setDraggingIndex(tabIndex);
-                  e.dataTransfer.effectAllowed = "move";
-                  const ghost = e.currentTarget.cloneNode(true) as HTMLElement;
-                  ghost.style.position = "absolute";
-                  ghost.style.top = "-1000px";
-                  ghost.style.opacity = "0.85";
-                  ghost.style.transform = "scale(0.95)";
-                  ghost.style.borderRadius = "6px";
-                  ghost.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
-                  ghost.style.background =
-                    resolvedTheme === "light" ? "#fff" : "#1a1a2e";
-                  ghost.style.border = "1px solid rgba(168,85,247,0.4)";
-                  ghost.style.pointerEvents = "none";
-                  document.body.appendChild(ghost);
-                  e.dataTransfer.setDragImage(
-                    ghost,
-                    ghost.offsetWidth / 2,
-                    ghost.offsetHeight / 2,
-                  );
-                  requestAnimationFrame(() => document.body.removeChild(ghost));
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  setDragOverIndex(tabIndex);
-                }}
-                onDragLeave={() => {
-                  setDragOverIndex((prev) =>
-                    prev === tabIndex ? null : prev,
-                  );
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
+              <span className="truncate flex-1">{tab.title}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const dirty = isTabDirty?.(tab.id) ?? false;
                   if (
-                    dragTabRef.current !== null &&
-                    dragTabRef.current !== tabIndex
+                    tab.title === "Settings" ||
+                    !dirty ||
+                    window.confirm("Close this terminal session?")
                   ) {
-                    onReorder(dragTabRef.current, tabIndex);
+                    onClose(tab.id);
                   }
-                  dragTabRef.current = null;
-                  setDraggingIndex(null);
-                  setDragOverIndex(null);
                 }}
-                onDragEnd={() => {
-                  dragTabRef.current = null;
-                  setDraggingIndex(null);
-                  setDragOverIndex(null);
-                }}
-                style={{ WebkitAppRegion: "no-drag" } as any}
-                className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-grab active:cursor-grabbing transition-all border max-w-[200px] min-w-[100px] ${
-                  draggingIndex === tabIndex ? "opacity-30 scale-95" : ""
-                } ${
-                  tab.id === activeTabId
-                    ? themeClass(resolvedTheme, {
-                        dark: "bg-gray-800 text-white border-white/10 shadow-sm",
-                        modern:
-                          "bg-white/[0.06] text-white border-white/[0.1] shadow-[0_0_12px_rgba(168,85,247,0.08)] backdrop-blur-xl",
-                        light:
-                          "bg-white text-gray-900 border-gray-300 shadow-sm",
-                      })
-                    : resolvedTheme === "light"
-                      ? "border-transparent hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-                      : "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300"
-                }`}
+                className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""} ${themeClass(resolvedTheme, {
+                  dark: "hover:bg-white/20",
+                  modern: "hover:bg-white/20",
+                  light: "hover:bg-black/10",
+                })}`}
               >
-                <span className="truncate flex-1">{tab.title}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const dirty = isTabDirty?.(tab.id) ?? false;
-                    if (
-                      tab.title === "Settings" ||
-                      !dirty ||
-                      window.confirm("Close this terminal session?")
-                    ) {
-                      onClose(tab.id);
-                    }
-                  }}
-                  className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm hover:bg-white/20 transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""}`}
+                <svg
+                  className="w-3 h-3"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
                 >
-                  <svg
-                    className="w-3 h-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-              {/* Drop indicator — right (dragging rightward) */}
-              {showRight && (
-                <div className="absolute right-0 top-1 bottom-1 w-0.5 rounded-full bg-purple-500 z-20 translate-x-0.5" />
-              )}
-            </motion.div>
-          );
-        })}
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </Reorder.Item>
+          ))}
         </AnimatePresence>
         <motion.button
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
           onClick={onCreate}
           style={{ WebkitAppRegion: "no-drag" } as any}
-          className="p-1.5 rounded-md hover:bg-white/10 text-gray-500 transition-colors"
+          className={`p-1.5 rounded-md transition-colors ${themeClass(resolvedTheme, {
+            dark: "hover:bg-white/10 text-gray-500",
+            modern: "hover:bg-white/10 text-gray-500",
+            light: "hover:bg-gray-200 text-gray-500",
+          })}`}
         >
           <svg
             className="w-4 h-4"
@@ -205,7 +180,7 @@ const TabBar: React.FC<TabBarProps> = ({
             />
           </svg>
         </motion.button>
-      </div>
+      </Reorder.Group>
 
       {/* Settings Button */}
       <button

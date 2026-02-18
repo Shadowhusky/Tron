@@ -9,7 +9,8 @@ import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
-import { slideUp } from "../../utils/motion";
+import { useModelsWithCaps } from "../../hooks/useModels";
+
 
 // SVG Ring component for context usage visualization
 const ContextRing: React.FC<{ percent: number; size?: number }> = ({
@@ -78,20 +79,15 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
   // Poll for context length (history size)
   const [contextLength, setContextLength] = useState(0);
   const [contextText, setContextText] = useState("");
-  const [showContextInfo, setShowContextInfo] = useState(false);
   const [showContextModal, setShowContextModal] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isSummarized, setIsSummarized] = useState(!!session?.contextSummary);
   const isSummarizedRef = useRef(!!session?.contextSummary);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showCtxTooltip, setShowCtxTooltip] = useState(false);
+  const ctxRingRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLDivElement>(null);
-  const [availableModels, setAvailableModels] = useState<
-    { name: string; provider: string }[]
-  >([]);
-
-  useEffect(() => {
-    aiService.getModels().then(setAvailableModels);
-  }, []);
+  const { data: availableModels = [] } = useModelsWithCaps();
 
   // Update local state when session changes
   useEffect(() => {
@@ -214,11 +210,22 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
       {/* Left: Identity + Path */}
       <div className="flex items-center gap-4 min-w-0 overflow-hidden">
         <div
-          className="flex items-center gap-1.5 overflow-hidden cursor-default"
-          title={`Current directory: ${cwd}`}
+          className="flex items-center gap-1.5 overflow-hidden cursor-pointer group/path"
+          title={`Current directory: ${cwd}\nClick to change`}
+          onClick={async () => {
+            if (!window.electron?.ipcRenderer?.selectFolder) return;
+            const selected = await window.electron.ipcRenderer.selectFolder(cwd);
+            if (selected && sessionId) {
+              // cd into the selected directory via the PTY
+              window.electron.ipcRenderer.send("terminal.write", {
+                id: sessionId,
+                data: `cd ${JSON.stringify(selected)}\r`,
+              });
+            }
+          }}
         >
-          <Folder className="w-3 h-3 opacity-60" />
-          <span className="truncate opacity-80 hover:opacity-100 transition-opacity text-[10px]">
+          <Folder className="w-3 h-3 opacity-60 group-hover/path:opacity-100 transition-opacity" />
+          <span className="truncate opacity-80 group-hover/path:opacity-100 group-hover/path:underline transition-opacity text-[10px]">
             {displayCwd}
           </span>
         </div>
@@ -246,47 +253,44 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
 
       {/* Right: Context Ring + Model */}
       <div className="flex items-center gap-4 shrink-0">
-        {/* Context Ring with Popover — click opens modal */}
+        {/* Context Ring — click opens modal, hover shows tooltip */}
         <div
-          className="relative flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
-          onMouseEnter={() => setShowContextInfo(true)}
-          onMouseLeave={() => setShowContextInfo(false)}
+          ref={ctxRingRef}
+          className="relative flex items-center gap-1 opacity-70 hover:opacity-100 hover:scale-110 transition-all duration-200 cursor-pointer"
           onClick={handleOpenContextModal}
+          onMouseEnter={() => setShowCtxTooltip(true)}
+          onMouseLeave={() => setShowCtxTooltip(false)}
         >
           <ContextRing percent={contextPercent} size={12} />
           <span className="text-[10px]">{contextPercent}%</span>
-
-          {/* Context Popover */}
-          <AnimatePresence>
-          {showContextInfo && (
-            <motion.div
-              key="ctx-popover"
-              variants={slideUp}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
-              className="absolute bottom-full right-0 mb-3 w-48 p-2 rounded-lg bg-[#1a1a1a] border border-white/10 shadow-xl z-100">
-              <div className="text-xs font-semibold text-gray-200 mb-1">
-                Context Usage
-              </div>
-              <div className="flex justify-between text-[10px] text-gray-400">
-                <span>Used:</span>
-                <span>{contextLength.toLocaleString()} chars</span>
-              </div>
-              <div className="flex justify-between text-[10px] text-gray-400">
-                <span>Limit:</span>
-                <span>{maxContext.toLocaleString()} chars</span>
-              </div>
-              <div className="mt-1 w-full bg-white/10 h-1 rounded-full overflow-hidden">
-                <div
-                  className={`h-full ${contextPercent > 90 ? "bg-red-500" : "bg-blue-500"}`}
-                  style={{ width: `${contextPercent}%` }}
-                />
-              </div>
-            </motion.div>
-          )}
-          </AnimatePresence>
         </div>
+        {/* Context tooltip — portal to escape overflow-hidden */}
+        {showCtxTooltip &&
+          createPortal(
+            <div
+              className="fixed z-[999] pointer-events-none"
+              style={{
+                ...(ctxRingRef.current
+                  ? (() => {
+                      const rect = ctxRingRef.current!.getBoundingClientRect();
+                      return {
+                        bottom: window.innerHeight - rect.top + 4,
+                        right: window.innerWidth - rect.right,
+                      };
+                    })()
+                  : {}),
+              }}
+            >
+              <div className={`px-2 py-1 rounded text-[10px] whitespace-nowrap shadow-lg ${
+                theme === "light"
+                  ? "bg-gray-800 text-white"
+                  : "bg-[#1a1a1a] text-gray-200 border border-white/10"
+              }`}>
+                {contextLength.toLocaleString()} / {maxContext.toLocaleString()} chars
+              </div>
+            </div>,
+            document.body,
+          )}
 
         <div className="h-3 w-px bg-current opacity-20" />
 
@@ -311,7 +315,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
                   initial={{ opacity: 0, scale: 0.95, y: 4 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   transition={{ duration: 0.15 }}
-                  className={`fixed w-48 py-1 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
+                  className={`fixed w-64 py-1 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
                     theme,
                     {
                       dark: "bg-[#1a1a1a] border border-white/10",
@@ -346,10 +350,28 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
                         });
                         setShowModelMenu(false);
                       }}
-                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center justify-between group ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
+                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center gap-2 group ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
                     >
-                      <span>{m.name}</span>
-                      <span className="text-[9px] opacity-30 uppercase">
+                      <span className="flex-1 truncate">{m.name}</span>
+                      <div className="flex gap-1 shrink-0">
+                        {m.capabilities?.map((cap) => (
+                          <span
+                            key={cap}
+                            className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
+                              cap === "thinking"
+                                ? "bg-purple-500/20 text-purple-400"
+                                : cap === "vision"
+                                  ? "bg-blue-500/20 text-blue-400"
+                                  : cap === "tools"
+                                    ? "bg-green-500/20 text-green-400"
+                                    : "bg-gray-500/20 text-gray-400"
+                            }`}
+                          >
+                            {cap}
+                          </span>
+                        ))}
+                      </div>
+                      <span className="text-[9px] opacity-30 uppercase shrink-0">
                         {m.provider}
                       </span>
                     </button>

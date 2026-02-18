@@ -12,10 +12,12 @@ const ALLOWED_INVOKE_CHANNELS = [
     "terminal.getCwd",
     "terminal.getCompletions",
     "terminal.getHistory",
+    "terminal.scanCommands",
     "system.fixPermissions",
     "system.checkPermissions",
     "system.openPrivacySettings",
     "ai.testConnection",
+    "system.selectFolder",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -68,6 +70,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         getCwd: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getCwd", sessionId),
         getCompletions: (prefix, cwd, sessionId) => electron_1.ipcRenderer.invoke("terminal.getCompletions", { prefix, cwd, sessionId }),
         getHistory: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getHistory", sessionId),
+        scanCommands: () => electron_1.ipcRenderer.invoke("terminal.scanCommands"),
         exec: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.exec", { sessionId, command }),
         execInTerminal: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
         // System
@@ -75,6 +78,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         checkPermissions: () => electron_1.ipcRenderer.invoke("system.checkPermissions"),
         openPrivacySettings: () => electron_1.ipcRenderer.invoke("system.openPrivacySettings"),
         testAIConnection: (config) => electron_1.ipcRenderer.invoke("ai.testConnection", config),
+        selectFolder: (defaultPath) => electron_1.ipcRenderer.invoke("system.selectFolder", defaultPath),
     },
 });
 //# sourceMappingURL=preload.js.map

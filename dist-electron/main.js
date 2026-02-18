@@ -127,6 +127,10 @@ const createWindow = () => {
         backgroundColor: "#00000000",
     });
     createMenu(mainWindow);
+    mainWindow.on("closed", () => {
+        (0, terminal_1.cleanupAllSessions)();
+        mainWindow = null;
+    });
     const isDev = !electron_1.app.isPackaged;
     const devPort = process.env.PORT || 5173;
     if (isDev) {
@@ -150,7 +154,11 @@ electron_1.app.whenReady().then(() => {
     });
 });
 electron_1.app.on("window-all-closed", () => {
+    (0, terminal_1.cleanupAllSessions)();
     if (process.platform !== "darwin")
         electron_1.app.quit();
+});
+electron_1.app.on("before-quit", () => {
+    (0, terminal_1.cleanupAllSessions)();
 });
 //# sourceMappingURL=main.js.map

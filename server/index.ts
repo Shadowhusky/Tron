@@ -134,3 +134,11 @@ server.listen(PORT, "0.0.0.0", () => {
     console.log(`[Tron Web] Proxying to Vite at http://localhost:${DEV_VITE_PORT}`);
   }
 });
+
+// Cleanup on server shutdown
+const shutdownHandler = () => {
+  terminal.cleanupAllServerSessions();
+  process.exit(0);
+};
+process.on("SIGINT", shutdownHandler);
+process.on("SIGTERM", shutdownHandler);

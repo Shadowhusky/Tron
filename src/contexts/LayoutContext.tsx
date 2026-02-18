@@ -38,6 +38,7 @@ interface LayoutContextType {
   openSettingsTab: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
+  renameTab: (sessionId: string, title: string) => void;
   isHydrated: boolean;
 }
 
@@ -537,28 +538,42 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
+  /** Update tab title for the tab containing a given session */
+  const renameTab = (sessionId: string, title: string) => {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.activeSessionId === sessionId ? { ...t, title } : t,
+      ),
+    );
+  };
+
   const activeSessionId = getActiveTab()?.activeSessionId || null;
 
-  // Poll CWD for the active session every 1 second
+  // Poll CWD for the active session every 3 seconds (with in-flight guard)
+  // Also derives the tab title from the active session's CWD
   useEffect(() => {
     if (!activeSessionId || activeSessionId === "settings" || !window.electron)
       return;
 
+    let inFlight = false;
+
     const pollCwd = async () => {
+      if (inFlight) return; // skip if previous poll still pending
+      inFlight = true;
       try {
         const cwd = await window.electron.ipcRenderer.getCwd(activeSessionId);
-        // console.log('Parsed CWD:', cwd); // Debug logging
         if (cwd) {
           updateSessionCwd(activeSessionId, cwd);
         }
       } catch (e) {
         console.warn("Error polling CWD:", e);
+      } finally {
+        inFlight = false;
       }
     };
 
-    // Poll immediately, then on interval
     pollCwd();
-    const interval = setInterval(pollCwd, 1000);
+    const interval = setInterval(pollCwd, 3000);
     return () => clearInterval(interval);
   }, [activeSessionId]);
 
@@ -648,6 +663,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         openSettingsTab,
         reorderTabs,
         focusSession,
+        renameTab,
         addInteraction,
         isHydrated,
       }}

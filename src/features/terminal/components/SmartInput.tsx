@@ -1,14 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   isCommand,
   isDefinitelyNaturalLanguage,
   isKnownExecutable,
+  isScannedCommand,
+  loadScannedCommands,
 } from "../../../utils/commandClassifier";
 import { aiService } from "../../../services/ai";
 import { useHistory } from "../../../contexts/HistoryContext";
-import { Terminal, Sparkles, Bot, ChevronRight } from "lucide-react";
+import { Terminal, Bot, ChevronRight, Lightbulb, Zap } from "lucide-react";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
 import { useLayout } from "../../../contexts/LayoutContext";
@@ -20,6 +23,7 @@ interface SmartInputProps {
   isAgentRunning: boolean;
   pendingCommand: string | null;
   sessionId?: string;
+  modelCapabilities?: string[];
 }
 
 const SmartInput: React.FC<SmartInputProps> = ({
@@ -28,10 +32,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
   isAgentRunning,
   pendingCommand,
   sessionId,
+  modelCapabilities = [],
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId } = useLayout();
-  const { stopAgent } = useAgent(activeSessionId || "");
+  const { stopAgent, thinkingEnabled, setThinkingEnabled } = useAgent(activeSessionId || "");
 
   const { history, addToHistory } = useHistory();
   const [value, setValue] = useState("");
@@ -50,6 +55,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState("");
+  // Track whether user explicitly navigated completions with arrow keys
+  const navigatedCompletionsRef = useRef(false);
 
   // AI-generated placeholder
   const [aiPlaceholder, setAiPlaceholder] = useState("");
@@ -57,8 +64,52 @@ const SmartInput: React.FC<SmartInputProps> = ({
     null,
   );
 
+  // Per-session command history (for completions — not global)
+  const sessionCommandsRef = useRef<string[]>([]);
+
+  // Scan system commands once on first mount (cached across renders)
+  const commandsScanDone = useRef(false);
+  useEffect(() => {
+    if (commandsScanDone.current) return;
+    commandsScanDone.current = true;
+
+    // Check localStorage cache first (< 1 hour old)
+    const CACHE_KEY = "tron.scannedCommands";
+    const CACHE_TS_KEY = "tron.scannedCommandsTs";
+    const cached = localStorage.getItem(CACHE_KEY);
+    const cachedTs = Number(localStorage.getItem(CACHE_TS_KEY) || 0);
+    if (cached && Date.now() - cachedTs < 3600_000) {
+      try {
+        loadScannedCommands(JSON.parse(cached));
+        return;
+      } catch { /* re-scan */ }
+    }
+
+    // Scan in background
+    window.electron?.ipcRenderer?.scanCommands?.()
+      .then((cmds: string[]) => {
+        if (cmds.length > 0) {
+          loadScannedCommands(cmds);
+          localStorage.setItem(CACHE_KEY, JSON.stringify(cmds));
+          localStorage.setItem(CACHE_TS_KEY, String(Date.now()));
+        }
+      })
+      .catch(() => { /* non-critical */ });
+  }, []);
+
   const inputRef = useRef<HTMLInputElement>(null);
+  const completionsRef = useRef<HTMLDivElement>(null);
+  const modeBtnRef = useRef<HTMLButtonElement>(null);
+  const [showModeMenu, setShowModeMenu] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestInputRef = useRef("");
+
+  // Scroll selected completion into view
+  useEffect(() => {
+    if (!showCompletions || !completionsRef.current) return;
+    const el = completionsRef.current.children[selectedIndex] as HTMLElement;
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex, showCompletions]);
 
   // Fetch AI placeholder when input is empty
   useEffect(() => {
@@ -140,8 +191,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    // 4. Unknown Word Fallback: Check PATH dynamically
-    // This covers third-party tools (ollama, aws, etc.) that aren't in the hardcoded list
+    // 4. Check scanned commands cache (instant, no IPC)
+    if (isScannedCommand(firstWord)) {
+      setMode("command");
+      return;
+    }
+
+    // 5. Unknown Word Fallback: Check PATH dynamically via IPC
+    // This covers commands not yet in the scanned cache
     if (words.length >= 1 && window.electron?.ipcRenderer?.checkCommand) {
       window.electron.ipcRenderer
         .checkCommand(words[0])
@@ -157,6 +214,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const fetchCompletions = useCallback(
     (input: string) => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      latestInputRef.current = input;
       const shouldComplete =
         input.trim().length > 0 &&
         !!window.electron?.ipcRenderer?.getCompletions &&
@@ -168,6 +226,23 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return;
       }
 
+      // Show local history matches immediately (no debounce)
+      const trimmedInput = input.trim().toLowerCase();
+      const sessionCmds = sessionCommandsRef.current;
+      const instantMatches = sessionCmds
+        .filter(
+          (cmd) =>
+            cmd.toLowerCase().startsWith(trimmedInput) &&
+            cmd.toLowerCase() !== trimmedInput,
+        )
+        .reverse()
+        .slice(0, 5);
+      if (instantMatches.length > 0) {
+        setCompletions(instantMatches);
+        setShowCompletions(true);
+        setSelectedIndex(0);
+      }
+
       debounceRef.current = setTimeout(async () => {
         try {
           const results = await window.electron.ipcRenderer.getCompletions(
@@ -175,23 +250,60 @@ const SmartInput: React.FC<SmartInputProps> = ({
             undefined,
             activeSessionId || undefined,
           );
-          setCompletions(results);
-          setShowCompletions(results.length > 0);
+
+          // Stale check: if input changed while IPC was pending, discard results
+          if (latestInputRef.current !== input) return;
+
+          // Merge per-session history matches (prefix match, most recent first)
+          const trimmedInput = input.trim().toLowerCase();
+          const sessionCmds = sessionCommandsRef.current;
+          const historyMatches = sessionCmds
+            .filter(
+              (cmd) =>
+                cmd.toLowerCase().startsWith(trimmedInput) &&
+                cmd.toLowerCase() !== trimmedInput,
+            )
+            .reverse() // most recent first
+            .slice(0, 5);
+
+          // Dedupe: history first, then shell completions
+          const seen = new Set<string>();
+          const merged: string[] = [];
+          for (const h of historyMatches) {
+            if (!seen.has(h)) { seen.add(h); merged.push(h); }
+          }
+          for (const r of results) {
+            if (!seen.has(r)) { seen.add(r); merged.push(r); }
+          }
+          const finalResults = merged.slice(0, 15);
+
+          setCompletions(finalResults);
+          setShowCompletions(finalResults.length > 0);
           setSelectedIndex(0);
 
           // Ghost text from best match
-          if (results.length > 0) {
-            const best = results[0];
-            const parts = input.trimEnd().split(/\s+/);
-            const lastWord = parts[parts.length - 1];
+          if (finalResults.length > 0) {
+            const best = finalResults[0];
+            // If best match is a full-line history match (starts with entire input)
             if (
               best &&
-              best.toLowerCase().startsWith(lastWord.toLowerCase()) &&
-              best.length > lastWord.length
+              best.toLowerCase().startsWith(trimmedInput) &&
+              best.length > input.trim().length
             ) {
-              setGhostText(best.slice(lastWord.length));
+              setGhostText(best.slice(input.trim().length));
             } else {
-              setGhostText("");
+              // Fallback: partial word completion
+              const parts = input.trimEnd().split(/\s+/);
+              const lastWord = parts[parts.length - 1];
+              if (
+                best &&
+                best.toLowerCase().startsWith(lastWord.toLowerCase()) &&
+                best.length > lastWord.length
+              ) {
+                setGhostText(best.slice(lastWord.length));
+              } else {
+                setGhostText("");
+              }
             }
           } else {
             setGhostText("");
@@ -213,12 +325,25 @@ const SmartInput: React.FC<SmartInputProps> = ({
     };
   }, [value, fetchCompletions]);
 
+  // Helper: add command to both global and per-session history
+  const trackCommand = (cmd: string) => {
+    addToHistory(cmd);
+    const sc = sessionCommandsRef.current;
+    if (sc.length === 0 || sc[sc.length - 1] !== cmd) {
+      sessionCommandsRef.current = [...sc, cmd];
+    }
+  };
+
   const acceptCompletion = (completion: string) => {
-    const parts = value.trimEnd().split(/\s+/);
-    parts.pop(); // Remove partial word
-    parts.push(completion); // Add completion
-    const newValue = parts.join(" ") + " ";
-    setValue(newValue);
+    // If the completion starts with the entire current input, it's a full-line match (history)
+    if (completion.toLowerCase().startsWith(value.trim().toLowerCase()) && completion.includes(" ")) {
+      setValue(completion + " ");
+    } else {
+      const parts = value.trimEnd().split(/\s+/);
+      parts.pop(); // Remove partial word
+      parts.push(completion); // Add completion
+      setValue(parts.join(" ") + " ");
+    }
     setCompletions([]);
     setShowCompletions(false);
     setGhostText("");
@@ -339,6 +464,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
     if (e.key === "ArrowUp") {
       e.preventDefault();
       if (showCompletions && completions.length > 0) {
+        navigatedCompletionsRef.current = true;
         const newIndex =
           selectedIndex <= 0 ? completions.length - 1 : selectedIndex - 1;
         setSelectedIndex(newIndex);
@@ -368,6 +494,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
     if (e.key === "ArrowDown") {
       e.preventDefault();
       if (showCompletions && completions.length > 0) {
+        navigatedCompletionsRef.current = true;
         const newIndex =
           selectedIndex >= completions.length - 1 ? 0 : selectedIndex + 1;
         setSelectedIndex(newIndex);
@@ -401,35 +528,35 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
       e.preventDefault();
 
-      if (showCompletions && completions[selectedIndex]) {
+      // Dismiss stale completions — only use completion if user actively navigated with arrow keys
+      if (showCompletions && !navigatedCompletionsRef.current) {
+        setCompletions([]);
+        setShowCompletions(false);
+        setGhostText("");
+      }
+
+      if (showCompletions && navigatedCompletionsRef.current && completions[selectedIndex]) {
         const selected = completions[selectedIndex];
         // Apply completion and EXECUTE immediately
-        const parts = value.trimEnd().split(/\s+/);
-        parts.pop();
-        parts.push(selected);
-        const finalVal = parts.join(" "); // No trailing space for execution
-
-        if (mode === "command") {
-          setFeedbackMsg("");
-          addToHistory(finalVal);
-          onSend(finalVal);
-          setValue("");
-          setCompletions([]);
-          setShowCompletions(false);
-          setHistoryIndex(-1);
-          return;
+        let finalVal: string;
+        // Full-line history match: use completion as-is
+        if (selected.toLowerCase().startsWith(value.trim().toLowerCase()) && selected.includes(" ")) {
+          finalVal = selected.trim();
+        } else {
+          const parts = value.trimEnd().split(/\s+/);
+          parts.pop();
+          parts.push(selected);
+          finalVal = parts.join(" ").trim();
         }
 
-        // If not command mode (unlikely for completions?), fall through or handle similar to above
-        // But completions are currently only for command/auto mode.
-        // If in auto mode and we picked a completion, treat as command.
         setFeedbackMsg("");
-        addToHistory(finalVal);
+        trackCommand(finalVal);
         onSend(finalVal);
         setValue("");
         setCompletions([]);
         setShowCompletions(false);
         setHistoryIndex(-1);
+        navigatedCompletionsRef.current = false;
         return;
       }
 
@@ -439,7 +566,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       if (suggestedCommand) {
         const cmd = suggestedCommand;
         setSuggestedCommand(null);
-        addToHistory(cmd);
+        trackCommand(cmd);
         onSend(cmd);
         setValue("");
         setGhostText("");
@@ -451,7 +578,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       // Execute based on active mode
       if (mode === "command") {
         setFeedbackMsg("");
-        addToHistory(finalVal);
+        trackCommand(finalVal);
         onSend(finalVal);
       } else if (mode === "agent") {
         setFeedbackMsg("Agent Started");
@@ -514,8 +641,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
       >
         <div className="flex items-center gap-2">
           {/* Mode Switcher */}
-          <div className="relative group/mode">
+          <div className="relative">
             <button
+              ref={modeBtnRef}
               className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors ${
                 isAuto
                   ? "bg-teal-500/10 text-teal-400"
@@ -525,110 +653,120 @@ const SmartInput: React.FC<SmartInputProps> = ({
                       ? "bg-blue-500/10 text-blue-400"
                       : "bg-white/5 text-gray-400 hover:text-white"
               }`}
-              onClick={() => {
-                if (isAuto) {
-                  setIsAuto(false);
-                  setMode("command");
-                } else if (mode === "command") {
-                  setMode("advice");
-                } else if (mode === "advice") {
-                  setMode("agent");
-                } else {
-                  setIsAuto(true);
-                }
-              }}
+              onClick={() => setShowModeMenu((v) => !v)}
             >
               {isAuto ? (
-                <Sparkles className="w-3 h-3" />
+                <Zap className="w-3 h-3" />
               ) : mode === "agent" ? (
                 <Bot className="w-4 h-4" />
               ) : mode === "advice" ? (
-                <Sparkles className="w-4 h-4" />
+                <Lightbulb className="w-4 h-4" />
               ) : (
                 <ChevronRight className="w-4 h-4" />
               )}
             </button>
 
-            {/* Mode Dropdown */}
-            <div className="absolute bottom-full left-0 hidden group-hover/mode:block z-100">
-              <div
-                className={`mb-0 w-36 rounded-lg shadow-xl overflow-hidden border ${
-                  theme === "light"
-                    ? "bg-white border-gray-200"
-                    : "bg-[#1e1e1e] border-white/10"
-                }`}
-              >
-                {[
-                  {
-                    id: "auto",
-                    label: "Auto",
-                    shortcut: "⌘0",
-                    icon: <Sparkles className="w-3 h-3" />,
-                  },
-                  {
-                    id: "command",
-                    label: "Command",
-                    shortcut: "⌘1",
-                    icon: <ChevronRight className="w-3 h-3" />,
-                  },
-                  {
-                    id: "advice",
-                    label: "Advice",
-                    shortcut: "⌘2",
-                    icon: <Sparkles className="w-3 h-3" />,
-                  },
-                  {
-                    id: "agent",
-                    label: "Agent",
-                    shortcut: "⌘3",
-                    icon: <Bot className="w-3 h-3" />,
-                  },
-                ].map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => {
-                      if (m.id === "auto") {
-                        setIsAuto(true);
-                        setMode("command");
-                      } else {
-                        setIsAuto(false);
-                        setMode(m.id as any);
-                      }
-                    }}
-                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 ${
+            {/* Mode Dropdown — portal to escape stacking context */}
+            {showModeMenu &&
+              createPortal(
+                <>
+                  <div
+                    className="fixed inset-0 z-[998]"
+                    onClick={() => setShowModeMenu(false)}
+                  />
+                  <div
+                    className={`fixed w-36 rounded-lg shadow-xl overflow-hidden border z-[999] ${
                       theme === "light"
-                        ? (isAuto && m.id === "auto") ||
-                          (!isAuto && mode === m.id)
-                          ? "text-gray-900 bg-gray-100"
-                          : "text-gray-600 hover:bg-gray-50"
-                        : (isAuto && m.id === "auto") ||
-                            (!isAuto && mode === m.id)
-                          ? "text-white bg-white/5"
-                          : "text-gray-400 hover:bg-white/5"
+                        ? "bg-white border-gray-200"
+                        : "bg-[#1e1e1e] border-white/10"
                     }`}
+                    style={{
+                      ...(modeBtnRef.current
+                        ? (() => {
+                            const rect = modeBtnRef.current!.getBoundingClientRect();
+                            return {
+                              bottom: window.innerHeight - rect.top + 4,
+                              left: rect.left,
+                            };
+                          })()
+                        : {}),
+                    }}
                   >
-                    <span className="w-4 text-center flex justify-center">
-                      {m.icon}
-                    </span>
-                    <span className="flex-1">{m.label}</span>
-                    <span className="text-[10px] opacity-40">{m.shortcut}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="h-1" />
-            </div>
+                    {[
+                      {
+                        id: "auto",
+                        label: "Auto",
+                        shortcut: "⌘0",
+                        icon: <Zap className="w-3 h-3" />,
+                      },
+                      {
+                        id: "command",
+                        label: "Command",
+                        shortcut: "⌘1",
+                        icon: <ChevronRight className="w-3 h-3" />,
+                      },
+                      {
+                        id: "advice",
+                        label: "Advice",
+                        shortcut: "⌘2",
+                        icon: <Lightbulb className="w-3 h-3" />,
+                      },
+                      {
+                        id: "agent",
+                        label: "Agent",
+                        shortcut: "⌘3",
+                        icon: <Bot className="w-3 h-3" />,
+                      },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => {
+                          if (m.id === "auto") {
+                            setIsAuto(true);
+                            setMode("command");
+                          } else {
+                            setIsAuto(false);
+                            setMode(m.id as any);
+                          }
+                          setShowModeMenu(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 ${
+                          theme === "light"
+                            ? (isAuto && m.id === "auto") ||
+                              (!isAuto && mode === m.id)
+                              ? "text-gray-900 bg-gray-100"
+                              : "text-gray-600 hover:bg-gray-50"
+                            : (isAuto && m.id === "auto") ||
+                                (!isAuto && mode === m.id)
+                              ? "text-white bg-white/5"
+                              : "text-gray-400 hover:bg-white/5"
+                        }`}
+                      >
+                        <span className="w-4 text-center flex justify-center">
+                          {m.icon}
+                        </span>
+                        <span className="flex-1">{m.label}</span>
+                        <span className="text-[10px] opacity-40">{m.shortcut}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>,
+                document.body,
+              )}
           </div>
 
           <div className="relative flex-1">
-            <div className="absolute inset-0 flex items-center pointer-events-none font-mono text-sm whitespace-pre overflow-hidden">
-              <span className="invisible">{value}</span>
-              <span className="text-gray-600 opacity-50">
-                {ghostText ||
-                  (currentCompletion && currentCompletion.startsWith(value)
-                    ? currentCompletion.slice(value.length)
-                    : "")}
-              </span>
-            </div>
+            {value.length > 0 && (
+              <div className="absolute inset-0 flex items-center pointer-events-none font-mono text-sm whitespace-pre overflow-hidden">
+                <span className="invisible">{value}</span>
+                <span className="text-gray-600 opacity-50">
+                  {ghostText ||
+                    (currentCompletion && currentCompletion.startsWith(value)
+                      ? currentCompletion.slice(value.length)
+                      : "")}
+                </span>
+              </div>
+            )}
 
             <input
               ref={inputRef}
@@ -653,6 +791,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 setValue(e.target.value);
                 setHistoryIndex(-1);
                 setSuggestedCommand(null);
+                navigatedCompletionsRef.current = false;
                 if (e.target.value.trim() !== "") setAiPlaceholder("");
               }}
               onKeyDown={handleKeyDown}
@@ -721,6 +860,23 @@ const SmartInput: React.FC<SmartInputProps> = ({
           {feedbackMsg && (
             <span className="animate-in fade-in opacity-70">{feedbackMsg}</span>
           )}
+          {mode === "agent" && (modelCapabilities.length === 0 || modelCapabilities.includes("thinking")) && (
+            <button
+              onClick={() => setThinkingEnabled(!thinkingEnabled)}
+              className={`px-1 py-px rounded border transition-colors ${
+                thinkingEnabled
+                  ? theme === "light"
+                    ? "border-purple-300 text-purple-600 bg-purple-50"
+                    : "border-purple-500/30 text-purple-400 bg-purple-500/10"
+                  : theme === "light"
+                    ? "border-gray-300 text-gray-400 bg-gray-50"
+                    : "border-white/10 text-gray-500 bg-white/5"
+              }`}
+              title={thinkingEnabled ? "Disable thinking" : "Enable thinking"}
+            >
+              think {thinkingEnabled ? "on" : "off"}
+            </button>
+          )}
         </div>
 
         {/* Right: shortcuts */}
@@ -750,14 +906,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
             initial="hidden"
             animate="visible"
             exit="exit"
+            ref={completionsRef}
             className="absolute bottom-full left-0 mb-1 w-full max-w-md bg-[#1a1a1a] border border-white/10 rounded-lg shadow-xl overflow-hidden z-20 max-h-60 overflow-y-auto"
           >
             {completions.map((comp, i) => (
               <motion.div
                 key={comp}
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.02, duration: 0.15 }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.12 }}
                 className={`px-3 py-2 text-xs font-mono cursor-pointer flex items-center gap-2 ${
                   i === selectedIndex
                     ? "bg-blue-600 text-white"
@@ -768,8 +925,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   setTimeout(() => handleSend(), 0);
                 }}
               >
-                <Terminal className="w-3 h-3 opacity-50" />
-                {comp}
+                <Terminal className="w-3 h-3 opacity-50 shrink-0" />
+                <span className="truncate">{comp}</span>
               </motion.div>
             ))}
           </motion.div>
@@ -788,7 +945,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
             className="absolute bottom-full left-0 mb-2 w-full bg-[#1a1a1a]/90 backdrop-blur border border-purple-500/20 rounded-lg p-3 shadow-xl z-10 max-h-48 overflow-y-auto"
           >
             <div className="flex items-start gap-3">
-              <Sparkles
+              <Lightbulb
                 className={`w-4 h-4 text-purple-400 mt-0.5 shrink-0 ${isLoading ? "animate-pulse" : ""}`}
               />
               <div className="flex-1">

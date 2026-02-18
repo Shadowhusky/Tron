@@ -78,7 +78,7 @@ const darkTheme: ThemeTokens = {
 
 const lightTheme: ThemeTokens = {
   isLight: true,
-  appBg: "bg-gray-50 text-gray-900",
+  appBg: "bg-gray-100 text-gray-900",
 
   surface: "bg-white border border-gray-200",
   surfaceHover: "hover:bg-gray-100",
@@ -87,14 +87,14 @@ const lightTheme: ThemeTokens = {
   surfaceOverlay: "bg-white/95 border-gray-200 text-gray-900",
 
   border: "border-gray-200",
-  borderSubtle: "border-gray-100",
+  borderSubtle: "border-gray-200/60",
   borderFocus: "border-purple-500",
 
   text: "text-gray-900",
   textMuted: "text-gray-500",
   textFaint: "text-gray-400",
 
-  bar: "bg-gray-50",
+  bar: "bg-gray-100",
   barBorder: "border-gray-200",
 
   glass: "",

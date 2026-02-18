@@ -21,6 +21,14 @@ body {
     min-height: 100vh;
 }
 
+button, [role="button"] {
+    cursor: pointer;
+}
+
+button:disabled {
+    cursor: not-allowed;
+}
+
 .drag-region {
     -webkit-app-region: drag;
 }
