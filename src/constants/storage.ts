@@ -2,6 +2,7 @@
 
 export const STORAGE_KEYS = {
   AI_CONFIG: "tron_ai_config",
+  PROVIDER_CONFIGS: "tron_provider_configs",
   CONFIGURED: "tron_configured",
   LAYOUT: "tron_layout_v1",
   THEME: "tron_theme",

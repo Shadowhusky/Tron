@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   Menu,
   MenuItemConstructorOptions,
+  ipcMain,
 } from "electron";
 import path from "path";
 import {
@@ -19,6 +20,7 @@ if (require("electron-squirrel-startup")) {
 
 // --- Global State ---
 let mainWindow: BrowserWindow | null = null;
+let forceQuit = false;
 
 // --- Menu Helper ---
 const createMenu = (win: BrowserWindow) => {
@@ -106,6 +108,14 @@ const createWindow = () => {
 
   createMenu(mainWindow);
 
+  // Intercept close to show confirmation in renderer
+  mainWindow.on("close", (e) => {
+    if (!forceQuit && mainWindow && !mainWindow.isDestroyed()) {
+      e.preventDefault();
+      mainWindow.webContents.send("window.confirmClose");
+    }
+  });
+
   mainWindow.on("closed", () => {
     cleanupAllSessions();
     mainWindow = null;
@@ -126,6 +136,18 @@ registerTerminalHandlers(() => mainWindow);
 registerSystemHandlers();
 registerAIHandlers();
 
+// --- Window close response from renderer ---
+ipcMain.on("window.closeConfirmed", () => {
+  forceQuit = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  }
+});
+
+ipcMain.on("window.closeCancelled", () => {
+  // No-op — renderer dismissed the modal
+});
+
 // --- App lifecycle ---
 app.whenReady().then(() => {
   createWindow();
@@ -140,5 +162,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  forceQuit = true;
   cleanupAllSessions();
 });

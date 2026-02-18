@@ -47,6 +47,7 @@ if (require("electron-squirrel-startup")) {
 }
 // --- Global State ---
 let mainWindow = null;
+let forceQuit = false;
 // --- Menu Helper ---
 const createMenu = (win) => {
     const isMac = process.platform === "darwin";
@@ -127,6 +128,13 @@ const createWindow = () => {
         backgroundColor: "#00000000",
     });
     createMenu(mainWindow);
+    // Intercept close to show confirmation in renderer
+    mainWindow.on("close", (e) => {
+        if (!forceQuit && mainWindow && !mainWindow.isDestroyed()) {
+            e.preventDefault();
+            mainWindow.webContents.send("window.confirmClose");
+        }
+    });
     mainWindow.on("closed", () => {
         (0, terminal_1.cleanupAllSessions)();
         mainWindow = null;
@@ -145,6 +153,16 @@ const createWindow = () => {
 (0, terminal_1.registerTerminalHandlers)(() => mainWindow);
 (0, system_1.registerSystemHandlers)();
 (0, ai_1.registerAIHandlers)();
+// --- Window close response from renderer ---
+electron_1.ipcMain.on("window.closeConfirmed", () => {
+    forceQuit = true;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.close();
+    }
+});
+electron_1.ipcMain.on("window.closeCancelled", () => {
+    // No-op — renderer dismissed the modal
+});
 // --- App lifecycle ---
 electron_1.app.whenReady().then(() => {
     createWindow();
@@ -159,6 +177,7 @@ electron_1.app.on("window-all-closed", () => {
         electron_1.app.quit();
 });
 electron_1.app.on("before-quit", () => {
+    forceQuit = true;
     (0, terminal_1.cleanupAllSessions)();
 });
 //# sourceMappingURL=main.js.map

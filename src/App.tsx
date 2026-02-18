@@ -9,9 +9,10 @@ import OnboardingWizard from "./features/onboarding/components/OnboardingWizard"
 import SplitPane from "./components/layout/SplitPane";
 import TabBar from "./components/layout/TabBar";
 import { STORAGE_KEYS } from "./constants/storage";
+import { IPC } from "./constants/ipc";
 import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
-import { fadeIn, fadeScale } from "./utils/motion";
+import { fadeIn, fadeScale, overlay } from "./utils/motion";
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -29,6 +30,7 @@ const AppContent = () => {
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   useEffect(() => {
     const hasConfigured = localStorage.getItem(STORAGE_KEYS.CONFIGURED);
@@ -47,6 +49,27 @@ const AppContent = () => {
         updateSessionConfig(sessionId, newConfig);
       }
     });
+  };
+
+  // Listen for window close confirmation from Electron main process
+  useEffect(() => {
+    if (!window.electron?.ipcRenderer?.on) return;
+    const cleanup = window.electron.ipcRenderer.on(IPC.WINDOW_CONFIRM_CLOSE, () => {
+      setShowCloseConfirm(true);
+    });
+    return cleanup;
+  }, []);
+
+  const handleCloseConfirm = (action: "save" | "discard" | "cancel") => {
+    setShowCloseConfirm(false);
+    if (action === "cancel") {
+      window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CANCELLED, {});
+      return;
+    }
+    if (action === "discard") {
+      localStorage.removeItem(STORAGE_KEYS.LAYOUT);
+    }
+    window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CONFIRMED, {});
   };
 
   // Global Shortcuts
@@ -152,6 +175,74 @@ const AppContent = () => {
             exit="exit"
           >
             <OnboardingWizard onComplete={handleOnboardingComplete} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showCloseConfirm && (
+          <motion.div
+            key="close-confirm"
+            variants={overlay}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => handleCloseConfirm("cancel")}
+          >
+            <motion.div
+              variants={fadeScale}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              onClick={(e) => e.stopPropagation()}
+              className={`w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden
+                ${resolvedTheme === "light" ? "bg-white text-gray-900 border border-gray-200" : ""}
+                ${resolvedTheme === "dark" ? "bg-gray-900 text-white border border-white/10" : ""}
+                ${resolvedTheme === "modern" ? "bg-black/80 text-white border border-white/10 backdrop-blur-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)]" : ""}
+              `}
+            >
+              <div className="p-6 space-y-2">
+                <h3 className="text-lg font-semibold">Close Tron?</h3>
+                <p className={`text-sm ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+                  You have active terminal sessions. What would you like to do?
+                </p>
+              </div>
+              <div className={`px-6 pb-6 flex flex-col gap-2`}>
+                <motion.button
+                  whileHover={{ scale: 1.01 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => handleCloseConfirm("save")}
+                  className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-medium transition-colors shadow-lg shadow-purple-900/20"
+                >
+                  Exit & Save Session
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.01 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => handleCloseConfirm("discard")}
+                  className={`w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors border ${
+                    resolvedTheme === "light"
+                      ? "border-gray-200 hover:bg-gray-50 text-gray-700"
+                      : "border-white/10 hover:bg-white/5 text-gray-300"
+                  }`}
+                >
+                  Exit Without Saving
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.01 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => handleCloseConfirm("cancel")}
+                  className={`w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                    resolvedTheme === "light"
+                      ? "hover:bg-gray-100 text-gray-500"
+                      : "hover:bg-white/5 text-gray-500"
+                  }`}
+                >
+                  Cancel
+                </motion.button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

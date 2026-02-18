@@ -43,8 +43,35 @@ exports.registerTerminalHandlers = registerTerminalHandlers;
 const electron_1 = require("electron");
 const pty = __importStar(require("node-pty"));
 const os_1 = __importDefault(require("os"));
+const fs_1 = __importDefault(require("fs"));
 const crypto_1 = require("crypto");
 const child_process_1 = require("child_process");
+/** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
+function detectShell() {
+    if (os_1.default.platform() === "win32") {
+        return { shell: "powershell.exe", args: [] };
+    }
+    // Prefer user's SHELL env, then try common paths
+    const candidates = [
+        process.env.SHELL,
+        "/bin/zsh",
+        "/usr/bin/zsh",
+        "/bin/bash",
+        "/usr/bin/bash",
+        "/bin/sh",
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+        try {
+            if (fs_1.default.existsSync(candidate)) {
+                const isZsh = candidate.endsWith("/zsh");
+                return { shell: candidate, args: isZsh ? ["+o", "PROMPT_SP"] : [] };
+            }
+        }
+        catch { }
+    }
+    // Ultimate fallback
+    return { shell: "/bin/sh", args: [] };
+}
 const sessions = new Map();
 const sessionHistory = new Map();
 const activeChildProcesses = new Set();
@@ -122,9 +149,7 @@ function registerTerminalHandlers(getMainWindow) {
             catch { }
             return reconnectId;
         }
-        const isWin = os_1.default.platform() === "win32";
-        const shell = isWin ? "powershell.exe" : "/bin/zsh";
-        const shellArgs = isWin ? [] : ["+o", "PROMPT_SP"];
+        const { shell, args: shellArgs } = detectShell();
         const sessionId = (0, crypto_1.randomUUID)();
         try {
             const ptyProcess = pty.spawn(shell, shellArgs, {

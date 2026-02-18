@@ -1,7 +1,33 @@
 import * as pty from "node-pty";
 import os from "os";
+import fs from "fs";
 import { randomUUID } from "crypto";
 import { exec, ChildProcess } from "child_process";
+
+/** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
+function detectShell(): { shell: string; args: string[] } {
+  if (os.platform() === "win32") {
+    return { shell: "powershell.exe", args: [] };
+  }
+  const candidates = [
+    process.env.SHELL,
+    "/bin/zsh",
+    "/usr/bin/zsh",
+    "/bin/bash",
+    "/usr/bin/bash",
+    "/bin/sh",
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        const isZsh = candidate.endsWith("/zsh");
+        return { shell: candidate, args: isZsh ? ["+o", "PROMPT_SP"] : [] };
+      }
+    } catch {}
+  }
+  return { shell: "/bin/sh", args: [] };
+}
 
 const sessions = new Map<string, pty.IPty>();
 const sessionHistory = new Map<string, string>();
@@ -97,9 +123,7 @@ export function createSession(
     return reconnectId;
   }
 
-  const isWin = os.platform() === "win32";
-  const shell = isWin ? "powershell.exe" : "/bin/zsh";
-  const shellArgs = isWin ? [] : ["+o", "PROMPT_SP"];
+  const { shell, args: shellArgs } = detectShell();
   const sessionId = randomUUID();
 
   const ptyProcess = pty.spawn(shell, shellArgs, {

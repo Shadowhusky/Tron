@@ -155,10 +155,7 @@ export function initWebSocketBridge() {
       scanCommands: () => invoke("terminal.scanCommands") as Promise<string[]>,
       exec: (sessionId: string, command: string) =>
         invoke("terminal.exec", { sessionId, command }),
-      fixPermissions: () => invoke("system.fixPermissions"),
-      checkPermissions: () => invoke("system.checkPermissions"),
-      openPrivacySettings: () => invoke("system.openPrivacySettings"),
-      testAIConnection: (config: { provider: string; model: string; apiKey?: string }) =>
+      testAIConnection: (config: { provider: string; model: string; apiKey?: string; baseUrl?: string }) =>
         invoke("ai.testConnection", config),
     },
   };

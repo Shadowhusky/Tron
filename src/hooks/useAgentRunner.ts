@@ -243,8 +243,8 @@ Task: ${prompt}
           // Execute via background child_process (clean stdout)
           const result = await window.electron.ipcRenderer.exec(sessionId, cmd);
 
-          if (result.exitCode !== 0 && result.stderr) {
-            throw new Error(`Exit Code ${result.exitCode}: ${result.stderr}`);
+          if (result.exitCode !== 0) {
+            throw new Error(`Exit Code ${result.exitCode}: ${result.stderr || result.stdout || "Command failed"}`);
           }
 
           return (

@@ -1,10 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { AIConfig } from "../../../types";
-import { aiService } from "../../../services/ai";
+import type { AIConfig, AIProvider } from "../../../types";
+import { aiService, getCloudProvider, getCloudProviderList } from "../../../services/ai";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { getTheme } from "../../../utils/theme";
+import { useLayout } from "../../../contexts/LayoutContext";
 import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
+import { STORAGE_KEYS } from "../../../constants/storage";
 import {
   Gem,
   Laptop,
@@ -17,8 +19,23 @@ import {
 } from "lucide-react";
 import { staggerContainer, staggerItem } from "../../../utils/motion";
 
+// Per-provider saved configs (model, apiKey, baseUrl)
+type ProviderCache = Record<string, { model?: string; apiKey?: string; baseUrl?: string }>;
+
+function loadProviderCache(): ProviderCache {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveProviderCache(cache: ProviderCache) {
+  localStorage.setItem(STORAGE_KEYS.PROVIDER_CONFIGS, JSON.stringify(cache));
+}
+
 const SettingsPane = () => {
   const { theme, resolvedTheme, setTheme } = useTheme();
+  const { sessions, updateSessionConfig } = useLayout();
   const t = getTheme(resolvedTheme);
   const [config, setConfig] = useState<AIConfig>(aiService.getConfig());
   const [initialConfig, setInitialConfig] = useState<string>(
@@ -28,8 +45,11 @@ const SettingsPane = () => {
     "idle" | "testing" | "success" | "error"
   >("idle");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
+  const providerCacheRef = useRef<ProviderCache>(loadProviderCache());
 
-  const { data: allModels = [] } = useModelsWithCaps(config.baseUrl);
+  const { data: allModels = [] } = useModelsWithCaps(
+    config.provider === "ollama" ? config.baseUrl : undefined,
+  );
   const invalidateModels = useInvalidateModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
 
@@ -42,12 +62,60 @@ const SettingsPane = () => {
 
   const hasChanges = JSON.stringify(config) !== initialConfig;
 
+  // When switching providers, save current config to cache and load the new provider's cached config
+  const handleProviderChange = (newProvider: string) => {
+    // Save current provider's config to cache
+    const cache = providerCacheRef.current;
+    cache[config.provider] = {
+      model: config.model,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+    };
+    saveProviderCache(cache);
+
+    // Load cached config for new provider (or defaults)
+    const cached = cache[newProvider];
+    const providerInfo = getCloudProvider(newProvider);
+    setConfig({
+      ...config,
+      provider: newProvider as AIProvider,
+      model: cached?.model || providerInfo?.defaultModels?.[0] || "",
+      apiKey: cached?.apiKey || "",
+      baseUrl: newProvider === "ollama"
+        ? (cached?.baseUrl || "http://localhost:11434")
+        : (cached?.baseUrl || undefined),
+    });
+    setTestStatus("idle");
+  };
+
   const handleSave = () => {
+    // Save current provider config to cache too
+    const cache = providerCacheRef.current;
+    cache[config.provider] = {
+      model: config.model,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+    };
+    saveProviderCache(cache);
+
+    // For cloud providers, don't persist the Ollama baseUrl
+    const configToSave = { ...config };
+    if (config.provider !== "ollama" && !configToSave.baseUrl) {
+      delete configToSave.baseUrl;
+    }
+
     // Save globally
-    aiService.saveConfig(config);
+    aiService.saveConfig(configToSave);
     setInitialConfig(JSON.stringify(config));
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 2000);
+
+    // Propagate to all existing sessions
+    sessions.forEach((_, sessionId) => {
+      if (sessionId !== "settings") {
+        updateSessionConfig(sessionId, configToSave);
+      }
+    });
   };
 
   const handleTestConnection = async () => {
@@ -120,19 +188,13 @@ const SettingsPane = () => {
               <div className="relative">
                 <select
                   value={config.provider}
-                  onChange={(e) => {
-                    setConfig({
-                      ...config,
-                      provider: e.target.value as any,
-                      model: "",
-                    });
-                    setTestStatus("idle");
-                  }}
+                  onChange={(e) => handleProviderChange(e.target.value)}
                   className={selectClass}
                 >
                   <option value="ollama">Ollama (Local)</option>
-                  <option value="openai">OpenAI (Cloud)</option>
-                  <option value="anthropic">Anthropic (Cloud)</option>
+                  {getCloudProviderList().map(({ id, info }) => (
+                    <option key={id} value={id}>{info.label}</option>
+                  ))}
                 </select>
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
                   <ChevronDown className="w-3.5 h-3.5" />
@@ -253,31 +315,54 @@ const SettingsPane = () => {
                 transition={{ duration: 0.2 }}
                 className="space-y-3 overflow-hidden"
               >
-                <div className="flex flex-col gap-1">
-                  <label className={labelClass}>Model Name</label>
-                  <input
-                    type="text"
-                    value={config.model}
-                    placeholder={
-                      config.provider === "openai" ? "gpt-4o" : "claude-3-opus"
-                    }
-                    onChange={(e) =>
-                      setConfig({ ...config, model: e.target.value })
-                    }
-                    className={inputClass}
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className={labelClass}>API Key</label>
-                  <input
-                    type="password"
-                    value={config.apiKey || ""}
-                    onChange={(e) =>
-                      setConfig({ ...config, apiKey: e.target.value })
-                    }
-                    className={inputClass}
-                  />
-                </div>
+                {(() => {
+                  const providerInfo = getCloudProvider(config.provider);
+                  const defaultModels = providerInfo?.defaultModels || [];
+                  return (
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <label className={labelClass}>Model</label>
+                        {defaultModels.length > 0 && (
+                          <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 ${t.surfaceInput}`}>
+                            {defaultModels.map((name) => (
+                              <button
+                                key={name}
+                                onClick={() => setConfig({ ...config, model: name })}
+                                className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                                  config.model === name
+                                    ? "bg-purple-500/10 text-purple-400"
+                                    : `${t.surfaceHover} ${t.textMuted}`
+                                }`}
+                              >
+                                {name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <input
+                          type="text"
+                          value={config.model}
+                          placeholder={providerInfo?.placeholder || "model-name"}
+                          onChange={(e) =>
+                            setConfig({ ...config, model: e.target.value })
+                          }
+                          className={inputClass}
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className={labelClass}>API Key</label>
+                        <input
+                          type="password"
+                          value={config.apiKey || ""}
+                          onChange={(e) =>
+                            setConfig({ ...config, apiKey: e.target.value })
+                          }
+                          className={inputClass}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
               </motion.div>
             )}
             </AnimatePresence>

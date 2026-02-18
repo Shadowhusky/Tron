@@ -2,8 +2,8 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "../../../contexts/ThemeContext";
 import type { AIConfig } from "../../../types";
-import { aiService } from "../../../services/ai";
-import { Shield, Monitor, Brain, Check, Gem } from "lucide-react";
+import { aiService, getCloudProviderList } from "../../../services/ai";
+import { Monitor, Brain, Gem } from "lucide-react";
 import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
 import FeatureIcon from "../../../components/ui/FeatureIcon";
 import {
@@ -19,11 +19,6 @@ interface OnboardingWizardProps {
 }
 
 const STEPS = [
-  {
-    id: "permissions",
-    title: "System Check",
-    description: "We need to verify system permissions to run terminals.",
-  },
   {
     id: "theme",
     title: "Appearance",
@@ -57,9 +52,6 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const isWindowTooSmall = windowSize.width < 600 || windowSize.height < 600;
   const [currentStep, setCurrentStep] = useState(0);
   const [stepDirection, setStepDirection] = useState(1); // 1 = forward, -1 = back
-  const [permissionStatus, setPermissionStatus] = useState<
-    "idle" | "fixing" | "waitingForUser" | "success" | "error"
-  >("idle");
   const [aiConfig, setAiConfig] = useState<AIConfig>(aiService.getConfig());
   const [connectionStatus, setConnectionStatus] = useState<
     "idle" | "testing" | "success" | "error"
@@ -68,33 +60,6 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const { data: allModels = [] } = useModelsWithCaps(aiConfig.baseUrl);
   const invalidateModels = useInvalidateModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
-
-  const handleFixPermissions = async () => {
-    setPermissionStatus("fixing");
-    try {
-      if (!window.electron?.ipcRenderer?.checkPermissions) {
-        setPermissionStatus("error");
-        alert(
-          "Update incomplete. Please restart the app (Ctrl+C in terminal, then npm run dev) to apply changes.",
-        );
-        return;
-      }
-
-      const hasFDA = await window.electron.ipcRenderer.checkPermissions();
-
-      if (!hasFDA) {
-        await window.electron.ipcRenderer.openPrivacySettings();
-        setPermissionStatus("waitingForUser");
-        return;
-      }
-
-      const success = await window.electron.ipcRenderer.fixPermissions();
-      setPermissionStatus(success ? "success" : "error");
-    } catch (e) {
-      console.error(e);
-      setPermissionStatus("error");
-    }
-  };
 
   const handleTestConnection = async () => {
     setConnectionStatus("testing");
@@ -130,116 +95,6 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
 
   const renderStepContent = () => {
     switch (STEPS[currentStep].id) {
-      case "permissions":
-        return (
-          <motion.div
-            variants={staggerContainer}
-            initial="hidden"
-            animate="visible"
-            className="flex flex-col items-center gap-6 py-8"
-          >
-            <motion.div variants={scalePop}>
-              <FeatureIcon
-                icon={
-                  permissionStatus === "success"
-                    ? Check
-                    : Shield
-                }
-                color={
-                  permissionStatus === "success"
-                    ? "green"
-                    : permissionStatus === "waitingForUser"
-                      ? "orange"
-                      : "purple"
-                }
-                size="lg"
-              />
-            </motion.div>
-
-            <motion.div variants={staggerItem} className="text-center space-y-2 max-w-sm">
-              <h3 className="font-medium text-lg">
-                {permissionStatus === "waitingForUser"
-                  ? "Enable Full Disk Access"
-                  : "Grant Permissions"}
-              </h3>
-
-              {permissionStatus === "waitingForUser" ? (
-                <div className="space-y-3">
-                  <p className="text-sm text-gray-500">
-                    Please toggle the switch for <b>Tron</b> in the settings
-                    window.
-                  </p>
-                  <div className="flex items-center justify-center gap-2 text-xs text-gray-400 bg-white/5 py-1.5 px-3 rounded-full border border-white/5 mx-auto w-fit">
-                    <span>Privacy & Security</span>
-                    <span>→</span>
-                    <span>Full Disk Access</span>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-gray-500">
-                  Tron needs Full Disk Access to power your terminal sessions.
-                </p>
-              )}
-            </motion.div>
-
-            <AnimatePresence mode="wait">
-              {permissionStatus === "success" ? (
-                <motion.div
-                  key="success"
-                  variants={scalePop}
-                  initial="hidden"
-                  animate="visible"
-                  exit="exit"
-                  className="flex items-center gap-2 text-green-500 font-medium bg-green-500/10 px-4 py-2 rounded-full border border-green-500/20"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>Permissions Verified</span>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="actions"
-                  variants={staggerItem}
-                  initial="hidden"
-                  animate="visible"
-                  className="flex flex-col items-center gap-3"
-                >
-                  <motion.button
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.97 }}
-                    onClick={handleFixPermissions}
-                    disabled={permissionStatus === "fixing"}
-                    className={`px-6 py-2.5 rounded-xl font-medium text-sm transition-all shadow-lg ${
-                      permissionStatus === "fixing"
-                        ? "bg-gray-100 text-gray-400 shadow-none"
-                        : permissionStatus === "waitingForUser"
-                          ? "bg-orange-500 text-white shadow-orange-500/20"
-                          : "bg-purple-600 text-white shadow-purple-500/20"
-                    }`}
-                  >
-                    {permissionStatus === "fixing"
-                      ? "Checking..."
-                      : permissionStatus === "waitingForUser"
-                        ? "I've Enabled It, Verify"
-                        : permissionStatus === "error"
-                          ? "Open Settings & Retry"
-                          : "Open System Settings"}
-                  </motion.button>
-
-                  {(permissionStatus === "error" ||
-                    permissionStatus === "waitingForUser") && (
-                    <button
-                      onClick={() => setPermissionStatus("success")}
-                      className="text-xs text-gray-400 hover:text-gray-300 underline underline-offset-2 transition-colors"
-                    >
-                      Skip verification (Development Mode)
-                    </button>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        );
-
       case "theme":
         return (
           <motion.div
@@ -348,12 +203,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   <option value="ollama" className="text-gray-900 bg-white">
                     Ollama (Local)
                   </option>
-                  <option value="openai" className="text-gray-900 bg-white">
-                    OpenAI
-                  </option>
-                  <option value="anthropic" className="text-gray-900 bg-white">
-                    Anthropic
-                  </option>
+                  {getCloudProviderList().map(({ id, info }) => (
+                    <option key={id} value={id} className="text-gray-900 bg-white">
+                      {info.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -652,10 +506,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
             onClick={handleNext}
-            disabled={
-              STEPS[currentStep].id === "permissions" &&
-              permissionStatus !== "success"
-            }
+            disabled={false}
             className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-purple-900/20"
           >
             {currentStep === STEPS.length - 1 ? "Get Started" : "Next"}
