@@ -1,105 +1,146 @@
 @import "tailwindcss";
 
 :root {
-    font-family: 'JetBrains Mono', monospace;
-    line-height: 1.5;
-    font-weight: 400;
+  font-family: "JetBrains Mono", monospace;
+  line-height: 1.5;
+  font-weight: 400;
 
-    color-scheme: light dark;
-    color: rgba(255, 255, 255, 0.87);
-    background-color: #242424;
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
 
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-    margin: 0;
-    min-width: 320px;
-    min-height: 100vh;
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
 }
 
-button, [role="button"] {
-    cursor: pointer;
+button,
+[role="button"] {
+  cursor: pointer;
 }
 
 button:disabled {
-    cursor: not-allowed;
+  cursor: not-allowed;
 }
 
 .drag-region {
-    -webkit-app-region: drag;
+  -webkit-app-region: drag;
 }
 
-/* Custom Scrollbar */
+/* Thin modern scrollbar */
 ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
-    background: transparent;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #333;
-    border-radius: 5px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #444;
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .no-scrollbar::-webkit-scrollbar {
-    display: none;
+  display: none;
 }
 
 .no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.terminal.xterm {
+  height: 100%;
+
+  & .xterm-scrollable-element {
+    height: 100%;
+  }
+
+  & .xterm-viewport::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  & .xterm-viewport::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+  }
+
+  & .xterm-viewport::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
 }
 
 /* Markdown content styles for agent thinking panel */
-.markdown-content p { margin: 0.25em 0; }
-.markdown-content p:first-child { margin-top: 0; }
-.markdown-content p:last-child { margin-bottom: 0; }
+.markdown-content p {
+  margin: 0.25em 0;
+}
+.markdown-content p:first-child {
+  margin-top: 0;
+}
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
 .markdown-content code {
-    background: rgba(255, 255, 255, 0.08);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.95em;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.95em;
 }
 .markdown-content pre {
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 4px;
-    padding: 0.5em;
-    margin: 0.4em 0;
-    overflow-x: auto;
-    font-size: 0.95em;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 0.5em;
+  margin: 0.4em 0;
+  overflow-x: auto;
+  font-size: 0.95em;
 }
 .markdown-content pre code {
-    background: none;
-    padding: 0;
+  background: none;
+  padding: 0;
 }
-.markdown-content ul, .markdown-content ol {
-    margin: 0.3em 0;
-    padding-left: 1.5em;
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0.3em 0;
+  padding-left: 1.5em;
 }
-.markdown-content li { margin: 0.15em 0; }
-.markdown-content strong { font-weight: 600; }
-.markdown-content h1, .markdown-content h2, .markdown-content h3 {
-    font-weight: 600;
-    margin: 0.5em 0 0.25em;
+.markdown-content li {
+  margin: 0.15em 0;
 }
-.markdown-content h1 { font-size: 1.1em; }
-.markdown-content h2 { font-size: 1.05em; }
-.markdown-content h3 { font-size: 1em; }
+.markdown-content strong {
+  font-weight: 600;
+}
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  font-weight: 600;
+  margin: 0.5em 0 0.25em;
+}
+.markdown-content h1 {
+  font-size: 1.1em;
+}
+.markdown-content h2 {
+  font-size: 1.05em;
+}
+.markdown-content h3 {
+  font-size: 1em;
+}
 .markdown-content blockquote {
-    border-left: 2px solid rgba(168, 85, 247, 0.3);
-    padding-left: 0.75em;
-    margin: 0.3em 0;
-    opacity: 0.85;
+  border-left: 2px solid rgba(168, 85, 247, 0.3);
+  padding-left: 0.75em;
+  margin: 0.3em 0;
+  opacity: 0.85;
 }

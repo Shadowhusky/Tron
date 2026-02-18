@@ -7,7 +7,10 @@ import {
   isDefinitelyNaturalLanguage,
   isKnownExecutable,
   isScannedCommand,
+  isLikelyImperative,
   loadScannedCommands,
+  invalidateScannedCommands,
+  getCommandCompletions,
 } from "../../../utils/commandClassifier";
 import { aiService } from "../../../services/ai";
 import { useHistory } from "../../../contexts/HistoryContext";
@@ -15,6 +18,8 @@ import { Terminal, Bot, ChevronRight, Lightbulb, Zap } from "lucide-react";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
 import { useLayout } from "../../../contexts/LayoutContext";
+import { useConfig } from "../../../contexts/ConfigContext";
+import { matchesHotkey } from "../../../hooks/useHotkey";
 import { slideDown, fadeScale } from "../../../utils/motion";
 
 interface SmartInputProps {
@@ -38,13 +43,18 @@ const SmartInput: React.FC<SmartInputProps> = ({
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId } = useLayout();
-  const { stopAgent, thinkingEnabled, setThinkingEnabled } = useAgent(activeSessionId || "");
+  const { stopAgent, thinkingEnabled, setThinkingEnabled } = useAgent(
+    activeSessionId || "",
+  );
+  const { hotkeys } = useConfig();
 
   const { history, addToHistory } = useHistory();
   const [value, setValue] = useState("");
   // Mode State
   const [isAuto, setIsAuto] = useState(!defaultAgentMode);
-  const [mode, setMode] = useState<"command" | "advice" | "agent">(defaultAgentMode ? "agent" : "command");
+  const [mode, setMode] = useState<"command" | "advice" | "agent">(
+    defaultAgentMode ? "agent" : "command",
+  );
 
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedCommand, setSuggestedCommand] = useState<string | null>(null);
@@ -69,26 +79,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
   // Per-session command history (for completions — not global)
   const sessionCommandsRef = useRef<string[]>([]);
 
-  // Scan system commands once on first mount (cached across renders)
+  // Scan system commands on mount and rescan periodically
   const commandsScanDone = useRef(false);
-  useEffect(() => {
-    if (commandsScanDone.current) return;
-    commandsScanDone.current = true;
+  const CACHE_KEY = "tron.scannedCommands";
+  const CACHE_TS_KEY = "tron.scannedCommandsTs";
+  const CACHE_TTL = 600_000; // 10 minutes
 
-    // Check localStorage cache first (< 1 hour old)
-    const CACHE_KEY = "tron.scannedCommands";
-    const CACHE_TS_KEY = "tron.scannedCommandsTs";
-    const cached = localStorage.getItem(CACHE_KEY);
-    const cachedTs = Number(localStorage.getItem(CACHE_TS_KEY) || 0);
-    if (cached && Date.now() - cachedTs < 3600_000) {
-      try {
-        loadScannedCommands(JSON.parse(cached));
-        return;
-      } catch { /* re-scan */ }
-    }
-
-    // Scan in background
-    window.electron?.ipcRenderer?.scanCommands?.()
+  const doScanCommands = useCallback(() => {
+    window.electron?.ipcRenderer
+      ?.scanCommands?.()
       .then((cmds: string[]) => {
         if (cmds.length > 0) {
           loadScannedCommands(cmds);
@@ -96,8 +95,40 @@ const SmartInput: React.FC<SmartInputProps> = ({
           localStorage.setItem(CACHE_TS_KEY, String(Date.now()));
         }
       })
-      .catch(() => { /* non-critical */ });
+      .catch(() => {
+        /* non-critical */
+      });
   }, []);
+
+  useEffect(() => {
+    if (commandsScanDone.current) return;
+    commandsScanDone.current = true;
+
+    // Check localStorage cache first
+    const cached = localStorage.getItem(CACHE_KEY);
+    const cachedTs = Number(localStorage.getItem(CACHE_TS_KEY) || 0);
+    if (cached && Date.now() - cachedTs < CACHE_TTL) {
+      try {
+        loadScannedCommands(JSON.parse(cached));
+        return;
+      } catch {
+        /* re-scan */
+      }
+    }
+
+    doScanCommands();
+  }, [doScanCommands]);
+
+  // Rescan when agent finishes (newly installed tools become available)
+  const prevAgentRunning = useRef(isAgentRunning);
+  useEffect(() => {
+    if (prevAgentRunning.current && !isAgentRunning) {
+      // Agent just finished — rescan commands in background
+      invalidateScannedCommands();
+      doScanCommands();
+    }
+    prevAgentRunning.current = isAgentRunning;
+  }, [isAgentRunning, doScanCommands]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const completionsRef = useRef<HTMLDivElement>(null);
@@ -143,6 +174,38 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return () => clearTimeout(timer);
     }
   }, [feedbackMsg]);
+
+  // Window-level hotkeys for advice suggestion (works even when input is blurred)
+  useEffect(() => {
+    if (!suggestedCommand || isLoading) return;
+    const handler = (e: globalThis.KeyboardEvent) => {
+      // Skip if input already focused — its own onKeyDown handles it
+      if (document.activeElement === inputRef.current) return;
+      if (e.key === "Tab") {
+        e.preventDefault();
+        setValue(suggestedCommand);
+        setSuggestedCommand(null);
+        setIsAuto(false);
+        setMode("command");
+        inputRef.current?.focus();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const cmd = suggestedCommand;
+        setSuggestedCommand(null);
+        trackCommand(cmd);
+        onSend(cmd);
+        setValue("");
+        setGhostText("");
+        setCompletions([]);
+        setShowCompletions(false);
+      } else if (e.key === "Escape") {
+        setSuggestedCommand(null);
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [suggestedCommand, isLoading]);
 
   // Auto-focus when session becomes active
   useEffect(() => {
@@ -195,6 +258,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
     // 4. Check scanned commands cache (instant, no IPC)
     if (isScannedCommand(firstWord)) {
+      if (isLikelyImperative(value)) {
+        setMode("agent");
+        return;
+      }
       setMode("command");
       return;
     }
@@ -205,7 +272,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       window.electron.ipcRenderer
         .checkCommand(words[0])
         .then((exists: boolean) => {
-          setMode(exists ? "command" : "agent");
+          setMode(exists && !isLikelyImperative(value) ? "command" : "agent");
         });
     } else {
       setMode("agent");
@@ -228,10 +295,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return;
       }
 
-      // Show local history matches immediately (no debounce)
+      // Show local matches immediately (no debounce): history + known commands
       const trimmedInput = input.trim().toLowerCase();
       const sessionCmds = sessionCommandsRef.current;
-      const instantMatches = sessionCmds
+      const instantHistory = sessionCmds
         .filter(
           (cmd) =>
             cmd.toLowerCase().startsWith(trimmedInput) &&
@@ -239,8 +306,28 @@ const SmartInput: React.FC<SmartInputProps> = ({
         )
         .reverse()
         .slice(0, 5);
+      // Only match known commands when typing the first word (no spaces yet)
+      const isFirstWord = !input.trim().includes(" ");
+      const instantCmds = isFirstWord
+        ? getCommandCompletions(input.trim(), 8)
+        : [];
+      // Dedupe instant results
+      const instantSeen = new Set<string>();
+      const instantMatches: string[] = [];
+      for (const h of instantHistory) {
+        if (!instantSeen.has(h.toLowerCase())) {
+          instantSeen.add(h.toLowerCase());
+          instantMatches.push(h);
+        }
+      }
+      for (const c of instantCmds) {
+        if (!instantSeen.has(c)) {
+          instantSeen.add(c);
+          instantMatches.push(c);
+        }
+      }
       if (instantMatches.length > 0) {
-        setCompletions(instantMatches);
+        setCompletions(instantMatches.slice(0, 15));
         setShowCompletions(true);
         setSelectedIndex(0);
       }
@@ -268,14 +355,32 @@ const SmartInput: React.FC<SmartInputProps> = ({
             .reverse() // most recent first
             .slice(0, 5);
 
-          // Dedupe: history first, then shell completions
+          // Local known-command matches (first word only)
+          const isFirstWord = !input.trim().includes(" ");
+          const localCmdMatches = isFirstWord
+            ? getCommandCompletions(input.trim(), 8)
+            : [];
+
+          // Dedupe: history first, then local commands, then shell completions
           const seen = new Set<string>();
           const merged: string[] = [];
           for (const h of historyMatches) {
-            if (!seen.has(h)) { seen.add(h); merged.push(h); }
+            if (!seen.has(h)) {
+              seen.add(h);
+              merged.push(h);
+            }
+          }
+          for (const c of localCmdMatches) {
+            if (!seen.has(c)) {
+              seen.add(c);
+              merged.push(c);
+            }
           }
           for (const r of results) {
-            if (!seen.has(r)) { seen.add(r); merged.push(r); }
+            if (!seen.has(r)) {
+              seen.add(r);
+              merged.push(r);
+            }
           }
           const finalResults = merged.slice(0, 15);
 
@@ -338,7 +443,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
   const acceptCompletion = (completion: string) => {
     // If the completion starts with the entire current input, it's a full-line match (history)
-    if (completion.toLowerCase().startsWith(value.trim().toLowerCase()) && completion.includes(" ")) {
+    if (
+      completion.toLowerCase().startsWith(value.trim().toLowerCase()) &&
+      completion.includes(" ")
+    ) {
       setValue(completion + " ");
     } else {
       const parts = value.trimEnd().split(/\s+/);
@@ -406,6 +514,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
     // Tab / Right Arrow: Accept Ghost Text OR Selected Completion OR Placeholder
     // Strict Tab behavior: Only accept, never cycle
     if (e.key === "Tab" || e.key === "ArrowRight") {
+      // Accept advice suggestion into input box for editing
+      if (e.key === "Tab" && suggestedCommand) {
+        e.preventDefault();
+        setValue(suggestedCommand);
+        setSuggestedCommand(null);
+        setIsAuto(false);
+        setMode("command");
+        return;
+      }
       if (ghostText || (showCompletions && completions.length > 0)) {
         e.preventDefault();
         if (showCompletions && completions[selectedIndex]) {
@@ -420,9 +537,6 @@ const SmartInput: React.FC<SmartInputProps> = ({
         setValue(aiPlaceholder);
         setAiPlaceholder("");
       } else if (e.key === "Tab") {
-        // If nothing to complete, prevent default Tab behavior (blur) to keep focus?
-        // Or let it blur? User said "replace tab hot key for accept... use shift to switch".
-        // Usually better to prevent blur in a terminal input.
         e.preventDefault();
       }
       return;
@@ -437,26 +551,26 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    // Mode Switching Hotkeys
-    if (e.metaKey && e.key === "1") {
+    // Mode Switching Hotkeys (from config)
+    if (matchesHotkey(e, hotkeys.modeCommand)) {
       e.preventDefault();
       setIsAuto(false);
       setMode("command");
       return;
     }
-    if (e.metaKey && e.key === "2") {
+    if (matchesHotkey(e, hotkeys.modeAdvice)) {
       e.preventDefault();
       setIsAuto(false);
       setMode("advice");
       return;
     }
-    if (e.metaKey && e.key === "3") {
+    if (matchesHotkey(e, hotkeys.modeAgent)) {
       e.preventDefault();
       setIsAuto(false);
       setMode("agent");
       return;
     }
-    if (e.metaKey && e.key === "0") {
+    if (matchesHotkey(e, hotkeys.modeAuto)) {
       e.preventDefault();
       setIsAuto(true);
       return;
@@ -517,6 +631,24 @@ const SmartInput: React.FC<SmartInputProps> = ({
     // Enter
     if (e.key === "Enter") {
       e.stopPropagation(); // Prevent terminal from also receiving this Enter
+
+      // Cmd+Enter: force send as command
+      if (e.metaKey || matchesHotkey(e, hotkeys.forceCommand)) {
+        e.preventDefault();
+        const finalVal = value.trim();
+        if (!finalVal) return;
+        setFeedbackMsg("");
+        trackCommand(finalVal);
+        onSend(finalVal);
+        setValue("");
+        setGhostText("");
+        setCompletions([]);
+        setShowCompletions(false);
+        setHistoryIndex(-1);
+        return;
+      }
+
+      // Shift+Enter: force agent
       if (e.shiftKey) {
         e.preventDefault();
         setFeedbackMsg("Agent Started");
@@ -537,12 +669,19 @@ const SmartInput: React.FC<SmartInputProps> = ({
         setGhostText("");
       }
 
-      if (showCompletions && navigatedCompletionsRef.current && completions[selectedIndex]) {
+      if (
+        showCompletions &&
+        navigatedCompletionsRef.current &&
+        completions[selectedIndex]
+      ) {
         const selected = completions[selectedIndex];
         // Apply completion and EXECUTE immediately
         let finalVal: string;
         // Full-line history match: use completion as-is
-        if (selected.toLowerCase().startsWith(value.trim().toLowerCase()) && selected.includes(" ")) {
+        if (
+          selected.toLowerCase().startsWith(value.trim().toLowerCase()) &&
+          selected.includes(" ")
+        ) {
           finalVal = selected.trim();
         } else {
           const parts = value.trimEnd().split(/\s+/);
@@ -604,6 +743,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
           setSuggestedCommand(null);
         } finally {
           setIsLoading(false);
+          // Re-focus input after suggestion arrives (disabled state lost focus)
+          setTimeout(() => inputRef.current?.focus(), 50);
         }
         return;
       }
@@ -623,7 +764,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
       : null;
 
   return (
-    <div className="w-full flex flex-col relative gap-2 z-100">
+    <div
+      className="w-full flex flex-col relative gap-2 z-100"
+      data-tutorial="smart-input"
+    >
       <div
         className={`relative w-full transition-all duration-300 rounded-lg border px-3 py-2 flex flex-col gap-1 z-10 ${
           mode === "agent"
@@ -646,6 +790,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           <div className="relative">
             <button
               ref={modeBtnRef}
+              data-tutorial="mode-switcher"
               className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors ${
                 isAuto
                   ? "bg-teal-500/10 text-teal-400"
@@ -685,7 +830,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     style={{
                       ...(modeBtnRef.current
                         ? (() => {
-                            const rect = modeBtnRef.current!.getBoundingClientRect();
+                            const rect =
+                              modeBtnRef.current!.getBoundingClientRect();
                             return {
                               bottom: window.innerHeight - rect.top + 4,
                               left: rect.left,
@@ -748,7 +894,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
                           {m.icon}
                         </span>
                         <span className="flex-1">{m.label}</span>
-                        <span className="text-[10px] opacity-40">{m.shortcut}</span>
+                        <span className="text-[10px] opacity-40">
+                          {m.shortcut}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -862,23 +1010,25 @@ const SmartInput: React.FC<SmartInputProps> = ({
           {feedbackMsg && (
             <span className="animate-in fade-in opacity-70">{feedbackMsg}</span>
           )}
-          {mode === "agent" && (modelCapabilities.length === 0 || modelCapabilities.includes("thinking")) && (
-            <button
-              onClick={() => setThinkingEnabled(!thinkingEnabled)}
-              className={`px-1 py-px rounded border transition-colors ${
-                thinkingEnabled
-                  ? theme === "light"
-                    ? "border-purple-300 text-purple-600 bg-purple-50"
-                    : "border-purple-500/30 text-purple-400 bg-purple-500/10"
-                  : theme === "light"
-                    ? "border-gray-300 text-gray-400 bg-gray-50"
-                    : "border-white/10 text-gray-500 bg-white/5"
-              }`}
-              title={thinkingEnabled ? "Disable thinking" : "Enable thinking"}
-            >
-              think {thinkingEnabled ? "on" : "off"}
-            </button>
-          )}
+          {mode === "agent" &&
+            (modelCapabilities.length === 0 ||
+              modelCapabilities.includes("thinking")) && (
+              <button
+                onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                className={`px-1 py-px rounded border transition-colors ${
+                  thinkingEnabled
+                    ? theme === "light"
+                      ? "border-purple-300 text-purple-600 bg-purple-50"
+                      : "border-purple-500/30 text-purple-400 bg-purple-500/10"
+                    : theme === "light"
+                      ? "border-gray-300 text-gray-400 bg-gray-50"
+                      : "border-white/10 text-gray-500 bg-white/5"
+                }`}
+                title={thinkingEnabled ? "Disable thinking" : "Enable thinking"}
+              >
+                think {thinkingEnabled ? "on" : "off"}
+              </button>
+            )}
         </div>
 
         {/* Right: shortcuts */}
@@ -890,6 +1040,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
           <span>⇧⇧ next mode</span>
           <span className="opacity-40 mx-1">·</span>
           <span>⇧↵ agent</span>
+          <span className="opacity-40 mx-1">·</span>
+          <span>⌘↵ cmd</span>
           <span className="opacity-40 mx-1">·</span>
           <span>⌘0-3 mode</span>
           <span className="opacity-40 mx-1">·</span>
@@ -944,20 +1096,32 @@ const SmartInput: React.FC<SmartInputProps> = ({
             initial="hidden"
             animate="visible"
             exit="exit"
-            className="absolute bottom-full left-0 mb-2 w-full bg-[#1a1a1a]/90 backdrop-blur border border-purple-500/20 rounded-lg p-3 shadow-xl z-10 max-h-48 overflow-y-auto"
+            className={`absolute bottom-full left-0 mb-2 w-full backdrop-blur border rounded-lg p-3 shadow-xl z-10 max-h-48 overflow-y-auto ${
+              theme === "light"
+                ? "bg-white/95 border-blue-200"
+                : "bg-[#1a1a1a]/90 border-purple-500/20"
+            }`}
           >
             <div className="flex items-start gap-3">
               <Lightbulb
                 className={`w-4 h-4 text-purple-400 mt-0.5 shrink-0 ${isLoading ? "animate-pulse" : ""}`}
               />
               <div className="flex-1">
-                <div className="text-purple-200 text-sm font-medium mb-1">
+                <div
+                  className={`text-sm font-medium mb-1 ${theme === "light" ? "text-purple-700" : "text-purple-200"}`}
+                >
                   AI Suggestion
                 </div>
-                <div className="text-gray-300 text-xs leading-relaxed font-mono">
+                <div
+                  className={`text-xs leading-relaxed font-mono ${theme === "light" ? "text-gray-700" : "text-gray-300"}`}
+                >
                   {suggestion ||
                     (isLoading ? (
-                      <span className="text-gray-500 italic">Generating...</span>
+                      <span
+                        className={`italic ${theme === "light" ? "text-gray-400" : "text-gray-500"}`}
+                      >
+                        Generating...
+                      </span>
                     ) : (
                       ""
                     ))}
@@ -965,6 +1129,69 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     <span className="inline-block w-1.5 h-3 bg-purple-400/60 animate-pulse ml-0.5 align-middle" />
                   )}
                 </div>
+                {/* Accept / Run buttons */}
+                {suggestion && !isLoading && (
+                  <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/10">
+                    <button
+                      onClick={() => {
+                        setValue(suggestion);
+                        setSuggestedCommand(null);
+                        setIsAuto(false);
+                        setMode("command");
+                        inputRef.current?.focus();
+                      }}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors flex items-center gap-1 ${
+                        theme === "light"
+                          ? "bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200"
+                          : "bg-white/10 hover:bg-white/15 text-gray-300 border border-white/10"
+                      }`}
+                    >
+                      <span
+                        className={`text-[9px] px-1 py-px rounded ${theme === "light" ? "bg-gray-200 text-gray-500" : "bg-white/10 text-gray-500"}`}
+                      >
+                        Tab
+                      </span>
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => {
+                        const cmd = suggestion;
+                        setSuggestedCommand(null);
+                        trackCommand(cmd);
+                        onSend(cmd);
+                        setValue("");
+                        setGhostText("");
+                        setCompletions([]);
+                        setShowCompletions(false);
+                      }}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors flex items-center gap-1 ${
+                        theme === "light"
+                          ? "bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-200"
+                          : "bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/20"
+                      }`}
+                    >
+                      <span
+                        className={`text-[9px] px-1 py-px rounded ${theme === "light" ? "bg-blue-200 text-blue-500" : "bg-purple-500/20 text-purple-400"}`}
+                      >
+                        ↵
+                      </span>
+                      Run
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSuggestedCommand(null);
+                        inputRef.current?.focus();
+                      }}
+                      className={`px-2 py-1 text-[11px] rounded transition-colors ${
+                        theme === "light"
+                          ? "text-gray-400 hover:text-gray-600"
+                          : "text-gray-500 hover:text-gray-300"
+                      }`}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </motion.div>

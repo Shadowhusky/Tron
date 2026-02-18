@@ -6,6 +6,8 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import { getTheme } from "../../../utils/theme";
 import { useLayout } from "../../../contexts/LayoutContext";
 import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
+import { useConfig, DEFAULT_HOTKEYS } from "../../../contexts/ConfigContext";
+import { formatHotkey, eventToCombo } from "../../../hooks/useHotkey";
 import { STORAGE_KEYS } from "../../../constants/storage";
 import {
   Gem,
@@ -18,6 +20,11 @@ import {
   Check,
   Terminal,
   Bot,
+  Keyboard,
+  RotateCcw,
+  Cpu,
+  Palette,
+  Monitor,
 } from "lucide-react";
 import { staggerContainer, staggerItem } from "../../../utils/motion";
 
@@ -35,9 +42,30 @@ function saveProviderCache(cache: ProviderCache) {
   localStorage.setItem(STORAGE_KEYS.PROVIDER_CONFIGS, JSON.stringify(cache));
 }
 
+const HOTKEY_LABELS: Record<string, string> = {
+  openSettings: "Open Settings",
+  toggleOverlay: "Toggle Agent Panel",
+  stopAgent: "Stop Agent",
+  clearTerminal: "Clear Terminal",
+  modeCommand: "Command Mode",
+  modeAdvice: "Advice Mode",
+  modeAgent: "Agent Mode",
+  modeAuto: "Auto Mode",
+  forceAgent: "Force Agent (in input)",
+  forceCommand: "Force Command (in input)",
+};
+
+const NAV_SECTIONS = [
+  { id: "ai", label: "AI", icon: Cpu },
+  { id: "view", label: "View Mode", icon: Monitor },
+  { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
+] as const;
+
 const SettingsPane = () => {
   const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
   const { sessions, updateSessionConfig } = useLayout();
+  const { hotkeys, updateHotkey, resetHotkeys } = useConfig();
   const t = getTheme(resolvedTheme);
   const [config, setConfig] = useState<AIConfig>(aiService.getConfig());
   const [initialConfig, setInitialConfig] = useState<string>(
@@ -48,6 +76,60 @@ const SettingsPane = () => {
   >("idle");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
   const providerCacheRef = useRef<ProviderCache>(loadProviderCache());
+
+  // Hotkey recording state
+  const [recordingAction, setRecordingAction] = useState<string | null>(null);
+
+  // Sidebar active section tracking
+  const [activeSection, setActiveSection] = useState<string>("ai");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // IntersectionObserver to highlight active sidebar item on scroll
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setActiveSection(entry.target.id);
+          }
+        }
+      },
+      { root: container, rootMargin: "-20% 0px -60% 0px", threshold: 0 },
+    );
+    for (const sec of NAV_SECTIONS) {
+      const el = sectionRefs.current[sec.id];
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, []);
+
+  const scrollToSection = (id: string) => {
+    const el = sectionRefs.current[id];
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // Listen for keydown when recording a hotkey
+  useEffect(() => {
+    if (!recordingAction) return;
+    const handler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Escape cancels recording without saving
+      if (e.key === "Escape") {
+        setRecordingAction(null);
+        return;
+      }
+      const combo = eventToCombo(e);
+      if (!combo) return; // modifier-only press
+      updateHotkey(recordingAction, combo);
+      setRecordingAction(null);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [recordingAction, updateHotkey]);
 
   const { data: allModels = [] } = useModelsWithCaps(
     config.provider === "ollama" ? config.baseUrl : undefined,
@@ -139,30 +221,43 @@ const SettingsPane = () => {
   const cardClass = `p-3 rounded-xl ${t.surface} ${t.glass}`;
 
   return (
-    <div
-      className={`w-full h-full overflow-y-auto p-4 flex flex-col items-center ${t.appBg}`}
-    >
-      <motion.div
-        variants={staggerContainer}
-        initial="hidden"
-        animate="visible"
-        className="w-full max-w-xl flex flex-col gap-4 pb-16"
+    <div className={`w-full h-full flex ${t.appBg}`}>
+      {/* Sidebar */}
+      <nav
+        className={`shrink-0 w-40 flex flex-col border-r pt-4 pb-4 gap-1 px-2 ${
+          resolvedTheme === "light"
+            ? "bg-gray-50/80 border-gray-200"
+            : resolvedTheme === "modern"
+              ? "bg-white/[0.02] border-white/6"
+              : "bg-[#0a0a0a] border-white/5"
+        }`}
       >
-        {/* Header */}
-        <motion.div
-          variants={staggerItem}
-          className={`flex items-center justify-between ${t.borderSubtle} border-b pb-3`}
-        >
-          <div>
-            <h1 className={`text-base font-bold ${t.text}`}>Settings</h1>
-            <p className={`${t.textFaint} text-[11px] mt-0.5`}>
-              Manage AI providers, models, and appearance.
-            </p>
-          </div>
+        <div className={`px-2 pb-3 mb-1 border-b ${t.borderSubtle}`}>
+          <h1 className={`text-sm font-bold ${t.text}`}>Settings</h1>
+        </div>
+        {NAV_SECTIONS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => scrollToSection(id)}
+            className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${
+              activeSection === id
+                ? resolvedTheme === "light"
+                  ? "bg-purple-50 text-purple-700 font-medium"
+                  : "bg-purple-500/10 text-purple-300 font-medium"
+                : `${t.textMuted} hover:${t.surfaceHover}`
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5 shrink-0" />
+            {label}
+          </button>
+        ))}
+
+        {/* Save button at bottom of sidebar */}
+        <div className="mt-auto pt-3">
           <button
             onClick={handleSave}
             disabled={!hasChanges && saveStatus !== "saved"}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium text-xs transition-all ${
+            className={`w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-xs transition-all ${
               saveStatus === "saved"
                 ? "bg-green-500/20 text-green-500"
                 : hasChanges
@@ -173,427 +268,527 @@ const SettingsPane = () => {
             <Save className="w-3.5 h-3.5" />
             {saveStatus === "saved" ? "Saved" : "Save"}
           </button>
-        </motion.div>
+        </div>
+      </nav>
 
-        {/* AI Settings */}
-        <motion.div variants={staggerItem} className="space-y-3">
-          <h3
-            className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+      {/* Content */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 flex flex-col items-center">
+        <motion.div
+          variants={staggerContainer}
+          initial="hidden"
+          animate="visible"
+          className="w-full max-w-xl flex flex-col gap-6 pb-16"
+        >
+          {/* AI Configuration */}
+          <motion.div
+            variants={staggerItem}
+            id="ai"
+            ref={(el) => { sectionRefs.current.ai = el; }}
+            className="space-y-3 scroll-mt-4"
           >
-            AI Configuration
-          </h3>
+            <h3
+              className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+            >
+              <Cpu className="w-3.5 h-3.5" />
+              AI Configuration
+            </h3>
 
-          <div className={`grid gap-3 ${cardClass}`}>
-            {/* Provider */}
-            <div className="flex flex-col gap-1">
-              <label className={labelClass}>Provider</label>
-              <div className="relative">
-                <select
-                  value={config.provider}
-                  onChange={(e) => handleProviderChange(e.target.value)}
-                  className={selectClass}
-                >
-                  <option value="ollama">Ollama (Local)</option>
-                  {getCloudProviderList().map(({ id, info }) => (
-                    <option key={id} value={id}>{info.label}</option>
-                  ))}
-                </select>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
-                  <ChevronDown className="w-3.5 h-3.5" />
+            <div className={`grid gap-3 ${cardClass}`}>
+              {/* Provider */}
+              <div className="flex flex-col gap-1">
+                <label className={labelClass}>Provider</label>
+                <div className="relative">
+                  <select
+                    value={config.provider}
+                    onChange={(e) => handleProviderChange(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="ollama">Ollama (Local)</option>
+                    {getCloudProviderList().map(({ id, info }) => (
+                      <option key={id} value={id}>{info.label}</option>
+                    ))}
+                  </select>
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <AnimatePresence mode="wait">
-            {config.provider === "ollama" ? (
-              <motion.div
-                key="ollama-settings"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-3 overflow-hidden"
-              >
-                {/* Models List with Capability Badges */}
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between">
-                    <label className={labelClass}>Model</label>
-                    <button
-                      onClick={() => invalidateModels(config.baseUrl)}
-                      title="Refresh Models"
-                      className={`p-1 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
-                    >
-                      <svg
-                        className="w-3.5 h-3.5 opacity-70"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                  <div className={`rounded-lg border overflow-hidden max-h-48 overflow-y-auto ${t.surfaceInput}`}>
-                    {ollamaModels.length === 0 && (
-                      <div className={`px-3 py-2 text-xs italic ${t.textFaint}`}>
-                        No models found
-                      </div>
-                    )}
-                    {ollamaModels.map((m) => (
+              <AnimatePresence mode="wait">
+              {config.provider === "ollama" ? (
+                <motion.div
+                  key="ollama-settings"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-3 overflow-hidden"
+                >
+                  {/* Models List with Capability Badges */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <label className={labelClass}>Model</label>
                       <button
-                        key={m.name}
-                        onClick={() => setConfig({ ...config, model: m.name })}
-                        className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
-                          config.model === m.name
-                            ? "bg-purple-500/10 text-purple-400"
-                            : `${t.surfaceHover} ${t.textMuted}`
-                        }`}
+                        onClick={() => invalidateModels(config.baseUrl)}
+                        title="Refresh Models"
+                        className={`p-1 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                       >
-                        <span className="flex-1 truncate">{m.name}</span>
-                        <div className="flex gap-1 shrink-0">
-                          {m.capabilities?.map((cap) => (
-                            <span
-                              key={cap}
-                              className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                                cap === "thinking"
-                                  ? "bg-purple-500/20 text-purple-400"
-                                  : cap === "vision"
-                                    ? "bg-blue-500/20 text-blue-400"
-                                    : cap === "tools"
-                                      ? "bg-green-500/20 text-green-400"
-                                      : "bg-gray-500/20 text-gray-400"
-                              }`}
-                            >
-                              {cap}
-                            </span>
-                          ))}
-                        </div>
+                        <svg
+                          className="w-3.5 h-3.5 opacity-70"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                          />
+                        </svg>
                       </button>
-                    ))}
-                    {!ollamaModels.find((m) => m.name === config.model) &&
-                      config.model && (
-                        <div className={`px-3 py-1.5 text-xs ${t.textFaint}`}>
-                          {config.model} (not found)
+                    </div>
+                    <div className={`rounded-lg border overflow-hidden max-h-48 overflow-y-auto ${t.surfaceInput}`}>
+                      {ollamaModels.length === 0 && (
+                        <div className={`px-3 py-2 text-xs italic ${t.textFaint}`}>
+                          No models found
                         </div>
                       )}
-                  </div>
-                </div>
-
-                {/* Base URL Input */}
-                <div className="flex flex-col gap-1">
-                  <label className={labelClass}>Ollama Base URL</label>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      value={config.baseUrl || "http://localhost:11434"}
-                      onChange={(e) =>
-                        setConfig({ ...config, baseUrl: e.target.value })
-                      }
-                      onBlur={() => invalidateModels(config.baseUrl)}
-                      placeholder="http://localhost:11434"
-                      className={inputClass}
-                    />
-                    <button
-                      onClick={() => invalidateModels(config.baseUrl)}
-                      title="Confirm URL"
-                      className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
-                    >
-                      <Check className="w-4 h-4 opacity-70" />
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="cloud-settings"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
-                className="space-y-3 overflow-hidden"
-              >
-                {(() => {
-                  const providerInfo = getCloudProvider(config.provider);
-                  const defaultModels = providerInfo?.defaultModels || [];
-                  return (
-                    <>
-                      <div className="flex flex-col gap-1">
-                        <label className={labelClass}>Model</label>
-                        {defaultModels.length > 0 && (
-                          <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 ${t.surfaceInput}`}>
-                            {defaultModels.map((name) => (
-                              <button
-                                key={name}
-                                onClick={() => setConfig({ ...config, model: name })}
-                                className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                                  config.model === name
-                                    ? "bg-purple-500/10 text-purple-400"
-                                    : `${t.surfaceHover} ${t.textMuted}`
+                      {ollamaModels.map((m) => (
+                        <button
+                          key={m.name}
+                          onClick={() => setConfig({ ...config, model: m.name })}
+                          className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
+                            config.model === m.name
+                              ? "bg-purple-500/10 text-purple-400"
+                              : `${t.surfaceHover} ${t.textMuted}`
+                          }`}
+                        >
+                          <span className="flex-1 truncate">{m.name}</span>
+                          <div className="flex gap-1 shrink-0">
+                            {m.capabilities?.map((cap) => (
+                              <span
+                                key={cap}
+                                className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
+                                  cap === "thinking"
+                                    ? "bg-purple-500/20 text-purple-400"
+                                    : cap === "vision"
+                                      ? "bg-blue-500/20 text-blue-400"
+                                      : cap === "tools"
+                                        ? "bg-green-500/20 text-green-400"
+                                        : "bg-gray-500/20 text-gray-400"
                                 }`}
                               >
-                                {name}
-                              </button>
+                                {cap}
+                              </span>
                             ))}
                           </div>
+                        </button>
+                      ))}
+                      {!ollamaModels.find((m) => m.name === config.model) &&
+                        config.model && (
+                          <div className={`px-3 py-1.5 text-xs ${t.textFaint}`}>
+                            {config.model} (not found)
+                          </div>
                         )}
-                        <input
-                          type="text"
-                          value={config.model}
-                          placeholder={providerInfo?.placeholder || "model-name"}
-                          onChange={(e) =>
-                            setConfig({ ...config, model: e.target.value })
-                          }
-                          className={inputClass}
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <label className={labelClass}>API Key</label>
-                        <input
-                          type="password"
-                          value={config.apiKey || ""}
-                          onChange={(e) =>
-                            setConfig({ ...config, apiKey: e.target.value })
-                          }
-                          className={inputClass}
-                        />
-                      </div>
-                    </>
-                  );
-                })()}
-              </motion.div>
-            )}
-            </AnimatePresence>
+                    </div>
+                  </div>
 
-            {/* Test Connection Button */}
-            <div className="flex justify-end pt-1">
-              <button
-                onClick={handleTestConnection}
-                disabled={testStatus === "testing" || !config.model}
-                className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${
-                  testStatus === "success"
-                    ? "border-green-500/50 text-green-400 bg-green-500/10"
-                    : testStatus === "error"
-                      ? "border-red-500/50 text-red-400 bg-red-500/10"
-                      : `${t.border} ${t.textMuted} ${t.surfaceHover}`
-                }`}
+                  {/* Base URL Input */}
+                  <div className="flex flex-col gap-1">
+                    <label className={labelClass}>Ollama Base URL</label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={config.baseUrl || "http://localhost:11434"}
+                        onChange={(e) =>
+                          setConfig({ ...config, baseUrl: e.target.value })
+                        }
+                        onBlur={() => invalidateModels(config.baseUrl)}
+                        placeholder="http://localhost:11434"
+                        className={inputClass}
+                      />
+                      <button
+                        onClick={() => invalidateModels(config.baseUrl)}
+                        title="Confirm URL"
+                        className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
+                      >
+                        <Check className="w-4 h-4 opacity-70" />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="cloud-settings"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-3 overflow-hidden"
+                >
+                  {(() => {
+                    const providerInfo = getCloudProvider(config.provider);
+                    const defaultModels = providerInfo?.defaultModels || [];
+                    return (
+                      <>
+                        <div className="flex flex-col gap-1">
+                          <label className={labelClass}>Model</label>
+                          {defaultModels.length > 0 && (
+                            <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 ${t.surfaceInput}`}>
+                              {defaultModels.map((name) => (
+                                <button
+                                  key={name}
+                                  onClick={() => setConfig({ ...config, model: name })}
+                                  className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                                    config.model === name
+                                      ? "bg-purple-500/10 text-purple-400"
+                                      : `${t.surfaceHover} ${t.textMuted}`
+                                  }`}
+                                >
+                                  {name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <input
+                            type="text"
+                            value={config.model}
+                            placeholder={providerInfo?.placeholder || "model-name"}
+                            onChange={(e) =>
+                              setConfig({ ...config, model: e.target.value })
+                            }
+                            className={inputClass}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className={labelClass}>API Key</label>
+                          <input
+                            type="password"
+                            value={config.apiKey || ""}
+                            onChange={(e) =>
+                              setConfig({ ...config, apiKey: e.target.value })
+                            }
+                            className={inputClass}
+                          />
+                        </div>
+                      </>
+                    );
+                  })()}
+                </motion.div>
+              )}
+              </AnimatePresence>
+
+              {/* Test Connection Button */}
+              <div className="flex justify-end pt-1">
+                <button
+                  onClick={handleTestConnection}
+                  disabled={testStatus === "testing" || !config.model}
+                  className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${
+                    testStatus === "success"
+                      ? "border-green-500/50 text-green-400 bg-green-500/10"
+                      : testStatus === "error"
+                        ? "border-red-500/50 text-red-400 bg-red-500/10"
+                        : `${t.border} ${t.textMuted} ${t.surfaceHover}`
+                  }`}
+                >
+                  {testStatus === "testing"
+                    ? "Testing..."
+                    : testStatus === "success"
+                      ? "Connection Verified"
+                      : testStatus === "error"
+                        ? "Connection Failed"
+                        : "Test Connection"}
+                </button>
+              </div>
+            </div>
+
+            {/* Context Window Setting */}
+            <div className={`${cardClass} flex flex-col gap-2`}>
+              <div className="flex items-center justify-between">
+                <label
+                  className={`text-xs font-medium flex items-center gap-1.5 ${t.textMuted}`}
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  Context Window
+                </label>
+                <div className={`text-[10px] ${t.textFaint}`}>
+                  Max tokens sent to AI
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="1000"
+                  max="128000"
+                  step="1000"
+                  value={config.contextWindow || 4000}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      contextWindow: Number(e.target.value),
+                    })
+                  }
+                  className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${
+                    resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
+                  }`}
+                />
+                <span
+                  className={`text-xs font-mono min-w-12 text-right ${t.accent}`}
+                >
+                  {((config.contextWindow || 4000) / 1000).toFixed(0)}k
+                </span>
+              </div>
+            </div>
+
+            {/* Max Agent Steps Setting */}
+            <div className={`${cardClass} flex flex-col gap-2`}>
+              <div className="flex items-center justify-between">
+                <label
+                  className={`text-xs font-medium flex items-center gap-1.5 ${t.textMuted}`}
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  Max Agent Steps
+                </label>
+                <div className={`text-[10px] ${t.textFaint}`}>
+                  Loop iterations before stopping
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="10"
+                  max="200"
+                  step="10"
+                  value={config.maxAgentSteps || 100}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      maxAgentSteps: Number(e.target.value),
+                    })
+                  }
+                  className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${
+                    resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
+                  }`}
+                />
+                <span
+                  className={`text-xs font-mono min-w-12 text-right ${t.accent}`}
+                >
+                  {config.maxAgentSteps || 100}
+                </span>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* View Mode */}
+          <motion.div
+            variants={staggerItem}
+            id="view"
+            ref={(el) => { sectionRefs.current.view = el; }}
+            className="space-y-3 scroll-mt-4"
+          >
+            <h3
+              className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+            >
+              <Monitor className="w-3.5 h-3.5" />
+              View Mode
+            </h3>
+
+            <div className={cardClass}>
+              <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>
+                Interface Style
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  {
+                    id: "terminal" as const,
+                    label: "Terminal",
+                    desc: "Classic terminal + AI overlay",
+                    icon: Terminal,
+                    iconBg: "bg-gray-700 text-green-300",
+                    activeBorder: "border-blue-500 bg-blue-500/10",
+                  },
+                  {
+                    id: "agent" as const,
+                    label: "Agent",
+                    desc: "Chat-focused, AI-first",
+                    icon: Bot,
+                    iconBg: "bg-purple-500/30 text-purple-300",
+                    activeBorder: "border-purple-500 bg-purple-500/10 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
+                  },
+                ] as const).map(({ id, label, desc, icon: Icon, iconBg, activeBorder }) => (
+                  <motion.button
+                    key={id}
+                    whileHover={{ scale: 1.04 }}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => setViewMode(id)}
+                    className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${
+                      viewMode === id
+                        ? activeBorder
+                        : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
+                    }`}
+                  >
+                    <div className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}>
+                      <Icon className="w-3 h-3" />
+                    </div>
+                    <span className="text-[10px] font-medium">{label}</span>
+                    <span className={`text-[9px] ${t.textFaint}`}>{desc}</span>
+                  </motion.button>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Appearance */}
+          <motion.div
+            variants={staggerItem}
+            id="appearance"
+            ref={(el) => { sectionRefs.current.appearance = el; }}
+            className="space-y-3 scroll-mt-4"
+          >
+            <h3
+              className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+            >
+              <Palette className="w-3.5 h-3.5" />
+              Appearance
+            </h3>
+
+            <div className={cardClass}>
+              <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>
+                Theme
+              </label>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {(
+                  [
+                    {
+                      id: "light" as const,
+                      label: "Light",
+                      icon: Sun,
+                      iconBg: "bg-amber-100 text-amber-600",
+                      activeBorder: "border-blue-500 bg-blue-500/10",
+                    },
+                    {
+                      id: "dark" as const,
+                      label: "Dark",
+                      icon: Moon,
+                      iconBg: "bg-gray-700 text-blue-300",
+                      activeBorder: "border-blue-500 bg-blue-500/10",
+                    },
+                    {
+                      id: "system" as const,
+                      label: "System",
+                      icon: Laptop,
+                      iconBg: "bg-gray-600 text-white",
+                      activeBorder: "border-blue-500 bg-blue-500/10",
+                    },
+                    {
+                      id: "modern" as const,
+                      label: "Modern",
+                      icon: Gem,
+                      iconBg: "bg-purple-500/30 text-purple-300",
+                      activeBorder:
+                        "border-purple-500 bg-purple-500/10 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
+                    },
+                  ] as const
+                ).map(({ id, label, icon: Icon, iconBg, activeBorder }) => (
+                  <motion.button
+                    key={id}
+                    whileHover={{ scale: 1.04 }}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => setTheme(id)}
+                    className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${
+                      theme === id
+                        ? activeBorder
+                        : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
+                    }`}
+                  >
+                    <div
+                      className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}
+                    >
+                      <Icon className="w-3 h-3" />
+                    </div>
+                    <span className="text-[10px] font-medium">{label}</span>
+                  </motion.button>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Keyboard Shortcuts */}
+          <motion.div
+            variants={staggerItem}
+            id="shortcuts"
+            ref={(el) => { sectionRefs.current.shortcuts = el; }}
+            className="space-y-3 scroll-mt-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3
+                className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
               >
-                {testStatus === "testing"
-                  ? "Testing..."
-                  : testStatus === "success"
-                    ? "Connection Verified"
-                    : testStatus === "error"
-                      ? "Connection Failed"
-                      : "Test Connection"}
+                <Keyboard className="w-3.5 h-3.5" />
+                Keyboard Shortcuts
+              </h3>
+              <button
+                onClick={resetHotkeys}
+                className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+                title="Reset all shortcuts to defaults"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Reset
               </button>
             </div>
-          </div>
 
-          {/* Context Window Setting */}
-          <div className={`${cardClass} flex flex-col gap-2`}>
-            <div className="flex items-center justify-between">
-              <label
-                className={`text-xs font-medium flex items-center gap-1.5 ${t.textMuted}`}
-              >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-                Context Window
-              </label>
-              <div className={`text-[10px] ${t.textFaint}`}>
-                Max tokens sent to AI
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min="1000"
-                max="128000"
-                step="1000"
-                value={config.contextWindow || 4000}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    contextWindow: Number(e.target.value),
-                  })
-                }
-                className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${
-                  resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
-                }`}
-              />
-              <span
-                className={`text-xs font-mono min-w-12 text-right ${t.accent}`}
-              >
-                {((config.contextWindow || 4000) / 1000).toFixed(0)}k
-              </span>
-            </div>
-          </div>
-
-          {/* Max Agent Steps Setting */}
-          <div className={`${cardClass} flex flex-col gap-2`}>
-            <div className="flex items-center justify-between">
-              <label
-                className={`text-xs font-medium flex items-center gap-1.5 ${t.textMuted}`}
-              >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-                Max Agent Steps
-              </label>
-              <div className={`text-[10px] ${t.textFaint}`}>
-                Loop iterations before stopping
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min="10"
-                max="200"
-                step="10"
-                value={config.maxAgentSteps || 100}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    maxAgentSteps: Number(e.target.value),
-                  })
-                }
-                className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${
-                  resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
-                }`}
-              />
-              <span
-                className={`text-xs font-mono min-w-12 text-right ${t.accent}`}
-              >
-                {config.maxAgentSteps || 100}
-              </span>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* View Mode */}
-        <motion.div variants={staggerItem} className="space-y-3">
-          <h3
-            className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider`}
-          >
-            View Mode
-          </h3>
-
-          <div className={cardClass}>
-            <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>
-              Interface Style
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                {
-                  id: "terminal" as const,
-                  label: "Terminal",
-                  desc: "Classic terminal + AI overlay",
-                  icon: Terminal,
-                  iconBg: "bg-gray-700 text-green-300",
-                  activeBorder: "border-blue-500 bg-blue-500/10",
-                },
-                {
-                  id: "agent" as const,
-                  label: "Agent",
-                  desc: "Chat-focused, AI-first",
-                  icon: Bot,
-                  iconBg: "bg-purple-500/30 text-purple-300",
-                  activeBorder: "border-purple-500 bg-purple-500/10 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
-                },
-              ] as const).map(({ id, label, desc, icon: Icon, iconBg, activeBorder }) => (
-                <motion.button
-                  key={id}
-                  whileHover={{ scale: 1.04 }}
-                  whileTap={{ scale: 0.96 }}
-                  onClick={() => setViewMode(id)}
-                  className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${
-                    viewMode === id
-                      ? activeBorder
-                      : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
-                  }`}
-                >
-                  <div className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}>
-                    <Icon className="w-3 h-3" />
-                  </div>
-                  <span className="text-[10px] font-medium">{label}</span>
-                  <span className={`text-[9px] ${t.textFaint}`}>{desc}</span>
-                </motion.button>
-              ))}
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Appearance Settings */}
-        <motion.div variants={staggerItem} className="space-y-3">
-          <h3
-            className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider`}
-          >
-            Appearance
-          </h3>
-
-          <div className={cardClass}>
-            <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>
-              Theme
-            </label>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              {(
-                [
-                  {
-                    id: "light" as const,
-                    label: "Light",
-                    icon: Sun,
-                    iconBg: "bg-amber-100 text-amber-600",
-                    activeBorder: "border-blue-500 bg-blue-500/10",
-                  },
-                  {
-                    id: "dark" as const,
-                    label: "Dark",
-                    icon: Moon,
-                    iconBg: "bg-gray-700 text-blue-300",
-                    activeBorder: "border-blue-500 bg-blue-500/10",
-                  },
-                  {
-                    id: "system" as const,
-                    label: "System",
-                    icon: Laptop,
-                    iconBg: "bg-gray-600 text-white",
-                    activeBorder: "border-blue-500 bg-blue-500/10",
-                  },
-                  {
-                    id: "modern" as const,
-                    label: "Modern",
-                    icon: Gem,
-                    iconBg: "bg-purple-500/30 text-purple-300",
-                    activeBorder:
-                      "border-purple-500 bg-purple-500/10 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
-                  },
-                ] as const
-              ).map(({ id, label, icon: Icon, iconBg, activeBorder }) => (
-                <motion.button
-                  key={id}
-                  whileHover={{ scale: 1.04 }}
-                  whileTap={{ scale: 0.96 }}
-                  onClick={() => setTheme(id)}
-                  className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${
-                    theme === id
-                      ? activeBorder
-                      : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
-                  }`}
-                >
+            <div className={`${cardClass} divide-y ${resolvedTheme === "light" ? "divide-gray-100" : "divide-white/5"}`}>
+              {Object.entries(HOTKEY_LABELS).map(([action, label]) => {
+                const combo = hotkeys[action] || DEFAULT_HOTKEYS[action] || "";
+                const isRecording = recordingAction === action;
+                const isDefault = combo === DEFAULT_HOTKEYS[action];
+                return (
                   <div
-                    className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}
+                    key={action}
+                    className="flex items-center justify-between py-2 first:pt-0 last:pb-0"
                   >
-                    <Icon className="w-3 h-3" />
+                    <span className={`text-xs ${t.textMuted}`}>{label}</span>
+                    <button
+                      onClick={() => setRecordingAction(isRecording ? null : action)}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition-colors ${
+                        isRecording
+                          ? "bg-purple-500/20 border border-purple-500 text-purple-300 ring-2 ring-purple-500/30"
+                          : `${t.surface} border ${t.borderSubtle} ${t.surfaceHover} ${t.text}`
+                      }`}
+                      title={isRecording ? "Press a key combo... (Esc to cancel)" : "Click to change"}
+                    >
+                      {isRecording ? (
+                        <span className="text-[11px]">Press keys...</span>
+                      ) : (
+                        <>
+                          {formatHotkey(combo).split("").map((ch, i) => (
+                            <span
+                              key={i}
+                              className={`inline-flex items-center justify-center min-w-[18px] h-5 px-1 rounded text-[11px] font-medium ${
+                                resolvedTheme === "light"
+                                  ? "bg-gray-100 text-gray-700 border border-gray-200"
+                                  : "bg-white/10 text-gray-200 border border-white/10"
+                              }`}
+                            >
+                              {ch}
+                            </span>
+                          ))}
+                          {!isDefault && (
+                            <span className="text-[9px] text-purple-400 ml-1">edited</span>
+                          )}
+                        </>
+                      )}
+                    </button>
                   </div>
-                  <span className="text-[10px] font-medium">{label}</span>
-                </motion.button>
-              ))}
+                );
+              })}
             </div>
-          </div>
+          </motion.div>
         </motion.div>
-      </motion.div>
+      </div>
     </div>
   );
 };

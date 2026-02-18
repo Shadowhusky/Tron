@@ -121,6 +121,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             { summary?: string; sourceLength?: number } | undefined
           >,
         ),
+        sessionDirtyFlags: Array.from(sessions.entries()).reduce(
+          (acc, [id, session]) => ({
+            ...acc,
+            [id]: session.dirty ?? false,
+          }),
+          {} as Record<string, boolean>,
+        ),
       };
       localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
     }
@@ -163,6 +170,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 const aiConfig = (parsed.sessionConfigs || {})[oldId];
                 const interactions = (parsed.sessionInteractions || {})[oldId];
                 const summaryConstant = (parsed.sessionSummaries || {})[oldId];
+                const wasDirty =
+                  (parsed.sessionDirtyFlags || {})[oldId] ?? false;
 
                 const newId = await createPTY(cwd, oldId);
                 const reconnected = newId === oldId;
@@ -178,6 +187,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                   interactions: interactions || [],
                   contextSummary: summaryConstant?.summary,
                   contextSummarySourceLength: summaryConstant?.sourceLength,
+                  dirty: wasDirty,
                 });
                 return { ...node, sessionId: newId };
               } else {
@@ -541,9 +551,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   /** Update tab title for the tab containing a given session */
   const renameTab = (sessionId: string, title: string) => {
     setTabs((prev) =>
-      prev.map((t) =>
-        t.activeSessionId === sessionId ? { ...t, title } : t,
-      ),
+      prev.map((t) => (t.activeSessionId === sessionId ? { ...t, title } : t)),
     );
   };
 

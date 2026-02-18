@@ -11,7 +11,6 @@ import { themeClass } from "../../utils/theme";
 import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
 import { useModelsWithCaps } from "../../hooks/useModels";
 
-
 // SVG Ring component for context usage visualization
 const ContextRing: React.FC<{ percent: number; size?: number }> = ({
   percent,
@@ -197,6 +196,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
 
   return (
     <div
+      data-tutorial="context-bar"
       className={`w-full h-8 border-t flex items-center justify-between px-3 transition-all duration-200 select-none shrink-0 overflow-hidden whitespace-nowrap ${themeClass(
         theme,
         {
@@ -214,7 +214,8 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
           title={`Current directory: ${cwd}\nClick to change`}
           onClick={async () => {
             if (!window.electron?.ipcRenderer?.selectFolder) return;
-            const selected = await window.electron.ipcRenderer.selectFolder(cwd);
+            const selected =
+              await window.electron.ipcRenderer.selectFolder(cwd);
             if (selected && sessionId) {
               // cd into the selected directory via the PTY
               window.electron.ipcRenderer.send("terminal.write", {
@@ -281,12 +282,15 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
                   : {}),
               }}
             >
-              <div className={`px-2 py-1 rounded text-[10px] whitespace-nowrap shadow-lg ${
-                theme === "light"
-                  ? "bg-gray-800 text-white"
-                  : "bg-[#1a1a1a] text-gray-200 border border-white/10"
-              }`}>
-                {contextLength.toLocaleString()} / {maxContext.toLocaleString()} chars
+              <div
+                className={`px-2 py-1 rounded text-[10px] whitespace-nowrap shadow-lg ${
+                  theme === "light"
+                    ? "bg-gray-800 text-white"
+                    : "bg-[#1a1a1a] text-gray-200 border border-white/10"
+                }`}
+              >
+                {contextLength.toLocaleString()} / {maxContext.toLocaleString()}{" "}
+                chars
               </div>
             </div>,
             document.body,

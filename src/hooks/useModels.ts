@@ -25,11 +25,12 @@ export function useModelCapabilities(modelName: string, baseUrl?: string) {
  * Fetch all models, then enrich each Ollama model with its capabilities.
  * Returns a flat list with `.capabilities` populated.
  */
-export function useModelsWithCaps(baseUrl?: string) {
+export function useModelsWithCaps(baseUrl?: string, enabled: boolean = true) {
   const queryClient = useQueryClient();
 
   return useQuery<AIModel[]>({
     queryKey: ["modelsWithCaps", baseUrl],
+    enabled,
     queryFn: async () => {
       const list = await aiService.getModels(baseUrl);
       const ollamaModels = list.filter((m) => m.provider === "ollama");

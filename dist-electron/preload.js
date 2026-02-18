@@ -15,6 +15,8 @@ const ALLOWED_INVOKE_CHANNELS = [
     "terminal.scanCommands",
     "ai.testConnection",
     "system.selectFolder",
+    "config.read",
+    "config.write",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -73,6 +75,9 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         scanCommands: () => electron_1.ipcRenderer.invoke("terminal.scanCommands"),
         exec: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.exec", { sessionId, command }),
         execInTerminal: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
+        // Config
+        readConfig: () => electron_1.ipcRenderer.invoke("config.read"),
+        writeConfig: (data) => electron_1.ipcRenderer.invoke("config.write", data),
         // System
         testAIConnection: (config) => electron_1.ipcRenderer.invoke("ai.testConnection", config),
         selectFolder: (defaultPath) => electron_1.ipcRenderer.invoke("system.selectFolder", defaultPath),

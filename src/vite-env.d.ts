@@ -28,6 +28,8 @@ interface Window {
         baseUrl?: string;
       }) => Promise<boolean>;
       selectFolder: (defaultPath?: string) => Promise<string | null>;
+      readConfig: () => Promise<Record<string, unknown> | null>;
+      writeConfig: (data: Record<string, unknown>) => Promise<boolean>;
     };
   };
 }

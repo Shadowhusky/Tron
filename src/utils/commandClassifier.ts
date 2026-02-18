@@ -192,92 +192,211 @@ function isLikelyErrorPaste(input: string): boolean {
   return errorPatterns.some((pattern) => lower.includes(pattern));
 }
 
-// Unambiguous commands (never English verbs in common usage)
+// Imperative verbs: words that exist in PATH (e.g. /usr/bin/install) but are
+// almost always natural-language requests when followed by a plain noun.
+const IMPERATIVE_VERBS = new Set([
+  "install", "uninstall", "reinstall",
+  "setup", "configure",
+  "deploy", "upgrade", "downgrade",
+  "enable", "disable",
+  "update", "add", "remove",
+  "fix", "debug", "troubleshoot",
+  "create", "init", "initialize",
+  "start", "stop", "restart",
+  "build", "compile", "run",
+]);
+
+/**
+ * Returns true if the input looks like an imperative natural-language request
+ * (e.g. "install nvm", "setup docker") rather than a real shell command.
+ * Single-word inputs return false (let shell decide).
+ * Inputs with shell syntax (flags, pipes, paths) return false.
+ */
+export function isLikelyImperative(input: string): boolean {
+  const words = input.trim().split(/\s+/);
+  if (words.length < 2) return false;
+  if (!IMPERATIVE_VERBS.has(words[0].toLowerCase())) return false;
+  // If remaining args have shell syntax (flags, paths, pipes), it's a real command
+  return !hasCommandSyntax(input, words);
+}
+
+// Unambiguous commands — names that are never English verbs/nouns in common
+// usage.  This is the fast-path baseline; the dynamic scan (phase 2) and live
+// `which` check (phase 3) cover everything else.
 const UNAMBIGUOUS_COMMANDS = new Set([
-  "cd",
-  "ls",
-  "pwd",
-  "mkdir",
-  "rm",
-  "cp",
-  "mv",
-  "touch",
-  "cat",
-  "less",
-  "head",
-  "tail",
-  "find",
-  "grep",
-  "git",
-  "npm",
-  "node",
-  "yarn",
-  "pnpm",
-  "bun",
-  "docker",
-  "kubectl",
-  "ssh",
-  "scp",
-  "curl",
-  "wget",
-  "echo",
-  "printf",
-  "history",
-  "clear",
-  "exit",
-  "source",
-  "export",
-  "unset",
-  "env",
-  "vi",
-  "vim",
-  "nano",
-  "code",
-  "python",
-  "python3",
-  "pip",
-  "pip3",
-  "top",
-  "htop",
-  "ps",
-  "kill",
-  "sudo",
-  "chmod",
-  "chown",
-  "tar",
-  "zip",
-  "unzip",
-  "brew",
-  "apt",
-  "which",
-  "man",
-  // Expanded list
+  // ── Shell builtins & core POSIX ────────────────────────────────────────
+  "cd", "ls", "pwd", "mkdir", "rmdir", "rm", "cp", "mv", "ln",
+  "touch", "cat", "less", "more", "head", "tail", "tee",
+  "echo", "printf", "readlink", "realpath", "basename", "dirname",
+  "find", "grep", "egrep", "fgrep", "sed", "awk", "sort", "uniq",
+  "wc", "tr", "cut", "paste", "xargs", "tee",
+  "chmod", "chown", "chgrp", "chflags", "umask",
+  "diff", "comm", "cmp", "patch",
+  "source", "export", "unset", "alias", "unalias",
+  "history", "clear", "exit", "logout", "exec",
+  "env", "printenv", "which", "whence", "whereis", "type",
+  "man", "info", "apropos",
+  "true", "false", "yes", "test",
+  "sleep", "date", "cal", "bc",
+  "whoami", "id", "groups", "hostname", "uname",
+  "sudo", "su", "doas",
+
+  // ── File & Disk ────────────────────────────────────────────────────────
+  "tar", "zip", "unzip", "gzip", "gunzip", "bzip2", "xz", "zstd",
+  "file", "stat", "dd", "df", "du", "mount", "umount",
+  "rsync", "scp", "sftp",
+  "mdls", "mdfind", "xattr",                  // macOS
+  "lsblk", "fdisk", "mkfs",                   // Linux
+
+  // ── Process & System ───────────────────────────────────────────────────
+  "ps", "kill", "killall", "pkill", "pgrep",
+  "top", "htop", "btop", "atop",
+  "lsof", "fuser", "nohup", "disown", "jobs", "fg", "bg", "wait",
+  "nice", "renice", "ionice",
+  "strace", "dtrace", "ltrace",               // tracing
+  "dmesg", "journalctl", "sysctl", "systemctl", "launchctl",
+  "crontab", "at",
+  "uptime", "free", "vmstat", "iostat",
+
+  // ── Network ────────────────────────────────────────────────────────────
+  "curl", "wget", "httpie",
+  "ssh", "ssh-keygen", "ssh-add", "ssh-agent",
+  "ping", "traceroute", "mtr", "dig", "nslookup", "host",
+  "nc", "ncat", "netcat", "socat",
+  "netstat", "ss", "ip", "ifconfig", "route", "arp",
+  "iptables", "nft", "ufw",
+  "telnet", "ftp",
+  "openssl",
+
+  // ── Git & VCS ──────────────────────────────────────────────────────────
+  "git", "gh", "hub",
+  "svn", "hg",
+
+  // ── Editors ────────────────────────────────────────────────────────────
+  "vi", "vim", "nvim", "nano", "emacs", "pico",
+  "code", "subl", "atom", "zed",
+  "ed", "ex",
+
+  // ── JavaScript / TypeScript ────────────────────────────────────────────
+  "node", "npm", "npx", "yarn", "pnpm", "bun", "bunx",
+  "deno", "tsx", "ts-node",
+  "esbuild", "vite", "webpack", "rollup", "parcel", "turbo",
+  "eslint", "prettier", "tsc", "swc",
+  "jest", "vitest", "mocha", "cypress", "playwright",
+  "next", "nuxt", "astro", "svelte-kit", "remix",
+
+  // ── Python ─────────────────────────────────────────────────────────────
+  "python", "python3", "python2",
+  "pip", "pip3", "pipx",
+  "poetry", "pipenv", "pdm", "uv", "hatch",
+  "pytest", "mypy", "ruff", "black", "isort", "flake8",
+  "jupyter", "ipython",
+  "django-admin", "flask", "uvicorn", "gunicorn", "celery",
+
+  // ── Ruby ───────────────────────────────────────────────────────────────
+  "ruby", "gem", "bundle", "bundler",
+  "rails", "rake", "rspec", "irb",
+
+  // ── Go ─────────────────────────────────────────────────────────────────
+  "go", "gofmt", "golint", "gopls",
+
+  // ── Rust ───────────────────────────────────────────────────────────────
+  "cargo", "rustc", "rustfmt", "clippy",
+
+  // ── Java / JVM ─────────────────────────────────────────────────────────
+  "java", "javac", "jar", "jshell",
+  "gradle", "gradlew", "mvn", "ant", "sbt",
+  "kotlin", "kotlinc", "scala", "scalac", "groovy", "clojure",
+
+  // ── C / C++ ────────────────────────────────────────────────────────────
+  "gcc", "g++", "cc", "c++", "clang", "clang++",
+  "make", "cmake", "ninja", "meson", "autoconf", "automake",
+  "gdb", "lldb", "valgrind",
+  "ld", "ldd", "nm", "objdump", "strip",
+
+  // ── Other languages ────────────────────────────────────────────────────
+  "php", "composer", "artisan",
+  "perl", "cpan",
+  "lua", "luarocks",
+  "r", "Rscript",
+  "swift", "swiftc", "xcodebuild", "xcrun",
+  "elixir", "mix", "iex",
+  "erlang", "erl", "rebar3",
+  "haskell", "ghc", "ghci", "cabal", "stack",
+  "zig", "nim", "crystal", "v",
+  "dart", "pub",
+  "dotnet", "csc",
+  "julia",
+  "ocaml", "opam",
+
+  // ── Package managers (system) ──────────────────────────────────────────
+  "brew", "apt", "apt-get", "dpkg",
+  "yum", "dnf", "rpm", "zypper",
+  "pacman", "yay", "paru",
+  "snap", "flatpak", "nix", "nix-env",
+  "port",                                       // macOS MacPorts
+  "choco", "scoop", "winget",                   // Windows
+  "pkg",                                         // FreeBSD / Termux
+
+  // ── Containers & Orchestration ─────────────────────────────────────────
+  "docker", "docker-compose", "podman", "buildah", "skopeo",
+  "kubectl", "k9s", "minikube", "kind", "microk8s",
+  "helm", "kustomize", "istioctl", "argocd",
+  "vagrant",
+
+  // ── Cloud & IaC ────────────────────────────────────────────────────────
+  "aws", "gcloud", "az", "doctl", "linode-cli",
+  "terraform", "tofu", "pulumi", "cdktf",
+  "ansible", "ansible-playbook",
+  "packer", "vault", "consul", "nomad",
+  "serverless", "sam", "cdk",
+  "fly", "vercel", "netlify", "heroku", "railway", "render",
+  "wrangler",                                    // Cloudflare
+
+  // ── Databases ──────────────────────────────────────────────────────────
+  "mysql", "psql", "sqlite3", "mongosh", "mongo", "redis-cli",
+  "pgcli", "mycli", "litecli",
+  "prisma", "drizzle-kit", "sequelize",
+
+  // ── DevOps & CI tools ──────────────────────────────────────────────────
+  "nginx", "caddy", "apache2", "httpd",
+  "pm2", "forever", "supervisor",
+  "tmux", "screen", "byobu",
+  "jq", "yq", "xq", "fx",                      // JSON/YAML/XML
+  "fzf", "rg", "fd", "bat", "eza", "exa", "zoxide",  // modern CLI
+  "tree", "watch", "entr", "parallel",
+  "age", "gpg", "ssh-keygen",
+  "certbot", "mkcert",
+
+  // ── AI / ML ────────────────────────────────────────────────────────────
   "ollama",
-  "go",
-  "cargo",
-  "rustc",
-  "ruby",
-  "gem",
-  "rails",
-  "php",
-  "composer",
-  "dotnet",
-  "terraform",
-  "ansible",
-  "npx",
-  "make",
-  "cmake",
-  "gradle",
-  "mvn",
-  "ant",
-  "java",
-  "javac",
-  "perl",
-  "lua",
-  "r",
-  "swift",
-  "scala",
-  "kotlin",
+  "transformers-cli", "huggingface-cli",
+
+  // ── Version / environment managers (often shell functions) ─────────────
+  "nvm", "fnm", "n",
+  "pyenv", "virtualenv", "venv",
+  "rbenv", "rvm", "chruby",
+  "sdkman", "jabba",
+  "asdf", "mise", "rtx",
+  "volta", "rustup",
+  "conda", "mamba", "micromamba",
+  "goenv", "nodenv",
+  "direnv",
+
+  // ── Mobile ─────────────────────────────────────────────────────────────
+  "flutter", "dart",
+  "react-native", "expo",
+  "adb", "fastboot", "emulator",
+  "pod", "xcodebuild", "xcrun",
+  "gradle", "gradlew",
+
+  // ── Misc tools ─────────────────────────────────────────────────────────
+  "ffmpeg", "ffprobe", "imagemagick", "convert",
+  "pandoc", "latex", "pdflatex",
+  "graphviz", "dot",
+  "gh", "hub", "gitlab",
+  "stripe", "twilio",
+  "ngrok", "localtunnel",
 ]);
 
 // Dynamic command set populated by system scan
@@ -288,6 +407,11 @@ export function loadScannedCommands(commands: string[]) {
   scannedCommands = new Set(commands.map((c) => c.toLowerCase()));
 }
 
+/** Clear the scanned commands cache so next scan starts fresh. */
+export function invalidateScannedCommands() {
+  scannedCommands = null;
+}
+
 /** Check if a word is in the scanned commands list. */
 export function isScannedCommand(word: string): boolean {
   return scannedCommands?.has(word.toLowerCase()) ?? false;
@@ -295,6 +419,32 @@ export function isScannedCommand(word: string): boolean {
 
 export function isKnownExecutable(word: string): boolean {
   return UNAMBIGUOUS_COMMANDS.has(word);
+}
+
+/** Return commands matching a prefix from the static list + scanned cache. */
+export function getCommandCompletions(prefix: string, limit = 10): string[] {
+  if (!prefix) return [];
+  const lower = prefix.toLowerCase();
+  const matches: string[] = [];
+  // Exact match first — so the user can just Tab/Enter to confirm
+  if (UNAMBIGUOUS_COMMANDS.has(lower) || scannedCommands?.has(lower)) {
+    matches.push(lower);
+  }
+  // Static list (instant, most common)
+  for (const cmd of UNAMBIGUOUS_COMMANDS) {
+    if (cmd.startsWith(lower) && cmd !== lower) matches.push(cmd);
+    if (matches.length >= limit) return matches;
+  }
+  // Then scanned commands
+  if (scannedCommands) {
+    for (const cmd of scannedCommands) {
+      if (cmd.startsWith(lower) && cmd !== lower && !UNAMBIGUOUS_COMMANDS.has(cmd)) {
+        matches.push(cmd);
+      }
+      if (matches.length >= limit) return matches;
+    }
+  }
+  return matches;
 }
 
 export function isCommand(input: string): boolean {

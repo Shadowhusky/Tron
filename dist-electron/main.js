@@ -41,12 +41,14 @@ const path_1 = __importDefault(require("path"));
 const terminal_1 = require("./ipc/terminal");
 const system_1 = require("./ipc/system");
 const ai_1 = require("./ipc/ai");
+const config_1 = require("./ipc/config");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
 }
 // Suppress Chromium GPU SharedImageManager / mailbox errors on macOS.
-electron_1.app.commandLine.appendSwitch("disable-gpu-compositing");
+electron_1.app.commandLine.appendSwitch("disable-gpu");
+electron_1.app.commandLine.appendSwitch("disable-software-rasterizer");
 // --- Global State ---
 let mainWindow = null;
 let forceQuit = false;
@@ -155,6 +157,7 @@ const createWindow = () => {
 (0, terminal_1.registerTerminalHandlers)(() => mainWindow);
 (0, system_1.registerSystemHandlers)();
 (0, ai_1.registerAIHandlers)();
+(0, config_1.registerConfigHandlers)();
 // --- Window close response from renderer ---
 electron_1.ipcMain.on("window.closeConfirmed", () => {
     forceQuit = true;

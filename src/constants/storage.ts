@@ -9,4 +9,5 @@ export const STORAGE_KEYS = {
   GLOBAL_HISTORY: "tron_global_history",
   AGENT_STATE: "tron_agent_state",
   VIEW_MODE: "tron_view_mode",
+  TUTORIAL_COMPLETED: "tron_tutorial_completed",
 } as const;

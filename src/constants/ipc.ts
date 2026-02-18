@@ -31,6 +31,10 @@ export const IPC = {
   MENU_CREATE_TAB: "menu.createTab",
   MENU_CLOSE_TAB: "menu.closeTab",
 
+  // Config — invoke
+  CONFIG_READ: "config.read",
+  CONFIG_WRITE: "config.write",
+
   // Window — main→renderer events
   WINDOW_CONFIRM_CLOSE: "window.confirmClose",
   // Window — renderer→main (send)

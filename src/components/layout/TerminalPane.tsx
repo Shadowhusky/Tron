@@ -8,7 +8,9 @@ import ContextBar from "./ContextBar";
 import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAgentRunner } from "../../hooks/useAgentRunner";
+import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
+import { useHotkey } from "../../hooks/useHotkey";
 
 interface TerminalPaneProps {
   sessionId: string;
@@ -35,29 +37,71 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     setThinkingEnabled,
     modelCapabilities,
     handleCommand,
+    handleCommandInOverlay,
     handleAgentRun,
     handlePermission,
   } = useAgentRunner(sessionId, session);
+
+  const { stopAgent, setAgentThread } = useAgent(sessionId);
 
   // Input Queue
   const [inputQueue, setInputQueue] = useState<
     Array<{ type: "command" | "agent"; content: string }>
   >([]);
 
-  // Cmd+. to toggle agent panel (no-op in agent view mode — overlay is always visible)
-  useEffect(() => {
-    if (!isActive || isAgentMode) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === ".") {
-        e.preventDefault();
-        if (agentThread.length > 0) {
-          setIsOverlayVisible(!isOverlayVisible);
-        }
+  // Toggle agent panel (no-op in agent view mode — overlay is always visible)
+  useHotkey(
+    "toggleOverlay",
+    () => {
+      if (!isActive || isAgentMode) return;
+      if (agentThread.length > 0) setIsOverlayVisible(!isOverlayVisible);
+    },
+    [
+      isActive,
+      isAgentMode,
+      isOverlayVisible,
+      agentThread.length,
+      setIsOverlayVisible,
+    ],
+  );
+
+  // Stop running agent
+  useHotkey(
+    "stopAgent",
+    () => {
+      if (!isActive || !isAgentRunning) return;
+      stopAgent();
+    },
+    [isActive, isAgentRunning, stopAgent],
+  );
+
+  // Clear terminal / agent thread
+  useHotkey(
+    "clearTerminal",
+    () => {
+      if (!isActive) return;
+      if (isAgentMode) {
+        setAgentThread([]);
+      } else {
+        // Signal Terminal component to clear xterm (SmartInput may have focus)
+        window.dispatchEvent(
+          new CustomEvent("tron:clearTerminal", { detail: { sessionId } }),
+        );
       }
+    },
+    [isActive, isAgentMode, setAgentThread, sessionId],
+  );
+
+  // Listen for tutorial test-run event
+  useEffect(() => {
+    if (!isActive) return;
+    const handler = (e: Event) => {
+      const prompt = (e as CustomEvent).detail?.prompt;
+      if (prompt) handleAgentRun(prompt);
     };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [isActive, isAgentMode, isOverlayVisible, agentThread.length, setIsOverlayVisible]);
+    window.addEventListener("tutorial-run-agent", handler);
+    return () => window.removeEventListener("tutorial-run-agent", handler);
+  }, [isActive, handleAgentRun]);
 
   // Process Queue Effect
   useEffect(() => {
@@ -66,12 +110,23 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       setInputQueue((prev) => prev.slice(1));
 
       if (nextItem.type === "command") {
-        handleCommand(nextItem.content);
+        if (isAgentMode) {
+          handleCommandInOverlay(nextItem.content);
+        } else {
+          handleCommand(nextItem.content);
+        }
       } else {
         handleAgentRun(nextItem.content);
       }
     }
-  }, [isAgentRunning, inputQueue, handleCommand, handleAgentRun]);
+  }, [
+    isAgentRunning,
+    inputQueue,
+    handleCommand,
+    handleCommandInOverlay,
+    handleAgentRun,
+    isAgentMode,
+  ]);
 
   const queueItem = (item: { type: "command" | "agent"; content: string }) => {
     setInputQueue((prev) => [...prev, item]);
@@ -79,7 +134,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
   const wrappedHandleCommand = (cmd: string, queueCallback?: any) => {
     markSessionDirty(sessionId);
-    handleCommand(cmd, queueCallback);
+    if (isAgentMode) {
+      handleCommandInOverlay(cmd, queueCallback);
+    } else {
+      handleCommand(cmd, queueCallback);
+    }
   };
 
   const wrappedHandleAgentRun = async (prompt: string, queueCallback?: any) => {
@@ -100,15 +159,22 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         <>
           {/* Agent View Mode: info header + full-height overlay */}
           <div
-            className={`flex items-center gap-2 px-3 py-1.5 border-b shrink-0 ${themeClass(resolvedTheme, {
-              dark: "bg-[#0a0a0a] border-white/5",
-              modern: "bg-white/[0.02] border-white/6 backdrop-blur-2xl",
-              light: "bg-gray-50 border-gray-200",
-            })}`}
+            className={`flex items-center gap-2 px-3 py-1.5 border-b shrink-0 ${themeClass(
+              resolvedTheme,
+              {
+                dark: "bg-[#0a0a0a] border-white/5",
+                modern: "bg-white/[0.02] border-white/6 backdrop-blur-2xl",
+                light: "bg-gray-50 border-gray-200",
+              },
+            )}`}
           >
-            <Folder className={`w-3 h-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`} />
-            <span className={`text-[11px] font-mono truncate ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
-              {session?.cwd || "~"}
+            <Folder
+              className={`w-3 h-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}
+            />
+            <span
+              className={`text-[11px] font-mono truncate ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}
+            >
+              {(session?.cwd || "~").replace(/\/Users\/[^/]+/, "~")}
             </span>
           </div>
 
@@ -140,7 +206,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           {/* Terminal View Mode: xterm + overlay */}
           <div className="flex-1 min-h-0">
             <Terminal
-              className="h-full w-full"
+              className="w-full h-full"
               sessionId={sessionId}
               onActivity={() => markSessionDirty(sessionId)}
               isActive={isActive}
@@ -149,28 +215,28 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
           {/* Agent Overlay — in flex flow so terminal shrinks to fit */}
           <AnimatePresence>
-          {(isOverlayVisible || isAgentRunning) && (
-            <AgentOverlay
-              isThinking={isThinking}
-              isAgentRunning={isAgentRunning}
-              agentThread={agentThread}
-              pendingCommand={pendingCommand}
-              autoExecuteEnabled={alwaysAllowSession}
-              onToggleAutoExecute={() =>
-                setAlwaysAllowSession(!alwaysAllowSession)
-              }
-              thinkingEnabled={thinkingEnabled}
-              onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
-              onClose={() => setIsOverlayVisible(false)}
-              onPermission={handlePermission}
-              isExpanded={isOverlayVisible}
-              onExpand={() => setIsOverlayVisible(true)}
-              onRunAgent={(prompt) =>
-                wrappedHandleAgentRun(prompt, queueItem as any)
-              }
-              modelCapabilities={modelCapabilities}
-            />
-          )}
+            {(isOverlayVisible || isAgentRunning) && (
+              <AgentOverlay
+                isThinking={isThinking}
+                isAgentRunning={isAgentRunning}
+                agentThread={agentThread}
+                pendingCommand={pendingCommand}
+                autoExecuteEnabled={alwaysAllowSession}
+                onToggleAutoExecute={() =>
+                  setAlwaysAllowSession(!alwaysAllowSession)
+                }
+                thinkingEnabled={thinkingEnabled}
+                onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
+                onClose={() => setIsOverlayVisible(false)}
+                onPermission={handlePermission}
+                isExpanded={isOverlayVisible}
+                onExpand={() => setIsOverlayVisible(true)}
+                onRunAgent={(prompt) =>
+                  wrappedHandleAgentRun(prompt, queueItem as any)
+                }
+                modelCapabilities={modelCapabilities}
+              />
+            )}
           </AnimatePresence>
         </>
       )}
@@ -190,9 +256,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             })}`}
           >
             <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap">
-              <span className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${
-                resolvedTheme === "light" ? "text-amber-600" : "text-amber-400/70"
-              }`}>
+              <span
+                className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${
+                  resolvedTheme === "light"
+                    ? "text-amber-600"
+                    : "text-amber-400/70"
+                }`}
+              >
                 Queue ({inputQueue.length})
               </span>
               {inputQueue.map((item, i) => (
@@ -215,7 +285,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   )}
                   <span className="truncate">{item.content}</span>
                   <button
-                    onClick={() => setInputQueue(prev => prev.filter((_, idx) => idx !== i))}
+                    onClick={() =>
+                      setInputQueue((prev) =>
+                        prev.filter((_, idx) => idx !== i),
+                      )
+                    }
                     className="shrink-0 opacity-40 hover:opacity-100 transition-opacity"
                   >
                     <X className="w-3 h-3" />
