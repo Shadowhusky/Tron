@@ -1,9 +1,11 @@
 import type {
   AIConfig,
   AIModel,
+  AIProvider,
   AgentResult as BaseAgentResult,
 } from "../../types";
 import { STORAGE_KEYS } from "../../constants/storage";
+import agentPrompt from "./agent.md?raw";
 
 // Extend AgentResult locally if not updating types.d.ts yet, or assume it's there
 interface AgentResult extends BaseAgentResult {
@@ -11,6 +13,77 @@ interface AgentResult extends BaseAgentResult {
 }
 
 export type { AIConfig, AIModel, AgentResult };
+
+// ---------------------------------------------------------------------------
+// Provider Configuration — all OpenAI-compatible providers share one handler
+// ---------------------------------------------------------------------------
+
+interface ProviderInfo {
+  chatUrl: string;
+  defaultModels: string[];
+  /** Placeholder model name for settings input */
+  placeholder: string;
+  label: string;
+}
+
+const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
+  openai: {
+    chatUrl: "https://api.openai.com/v1/chat/completions",
+    defaultModels: ["gpt-5.2", "gpt-5.2-codex", "o3", "o4-mini", "gpt-4.1", "gpt-4o"],
+    placeholder: "gpt-5.2",
+    label: "OpenAI",
+  },
+  anthropic: {
+    chatUrl: "https://api.anthropic.com/v1/messages",
+    defaultModels: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+    placeholder: "claude-sonnet-4-6",
+    label: "Anthropic",
+  },
+  gemini: {
+    chatUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    defaultModels: ["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+    placeholder: "gemini-2.5-flash",
+    label: "Gemini (Google)",
+  },
+  deepseek: {
+    chatUrl: "https://api.deepseek.com/chat/completions",
+    defaultModels: ["deepseek-chat", "deepseek-reasoner"],
+    placeholder: "deepseek-chat",
+    label: "DeepSeek",
+  },
+  kimi: {
+    chatUrl: "https://api.moonshot.cn/v1/chat/completions",
+    defaultModels: ["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"],
+    placeholder: "kimi-k2.5",
+    label: "Kimi (Moonshot)",
+  },
+  qwen: {
+    chatUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    defaultModels: ["qwen3.5-plus", "qwen3-max", "qwen-plus-latest"],
+    placeholder: "qwen3.5-plus",
+    label: "Qwen (Alibaba)",
+  },
+  glm: {
+    chatUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    defaultModels: ["glm-5", "glm-4.5", "glm-4-plus"],
+    placeholder: "glm-5",
+    label: "GLM (Zhipu)",
+  },
+};
+
+/** Get the provider info, or undefined if not a known cloud provider. */
+export function getCloudProvider(provider: string): ProviderInfo | undefined {
+  return CLOUD_PROVIDERS[provider];
+}
+
+/** Get all cloud provider entries for settings UI. */
+export function getCloudProviderList(): { id: string; info: ProviderInfo }[] {
+  return Object.entries(CLOUD_PROVIDERS).map(([id, info]) => ({ id, info }));
+}
+
+function isOpenAICompatible(provider: string): boolean {
+  return provider !== "ollama" && provider !== "anthropic" && provider in CLOUD_PROVIDERS;
+}
 
 class AIService {
   private config: AIConfig = {
@@ -117,14 +190,15 @@ class AIService {
       console.warn("Failed to fetch Ollama models", e);
     }
 
-    // 2. Cloud models — only show if API key is configured
-    if (this.config.apiKey && this.config.provider === "openai") {
-      models.push({ name: "gpt-4o", provider: "openai" });
-      models.push({ name: "gpt-3.5-turbo", provider: "openai" });
-    }
-    if (this.config.apiKey && this.config.provider === "anthropic") {
-      models.push({ name: "claude-3-opus", provider: "anthropic" });
-      models.push({ name: "claude-3-sonnet", provider: "anthropic" });
+    // 2. Cloud models — show defaults for current provider if API key is set
+    const provider = this.config.provider;
+    if (this.config.apiKey && provider !== "ollama") {
+      const info = CLOUD_PROVIDERS[provider];
+      if (info) {
+        for (const name of info.defaultModels) {
+          models.push({ name, provider: provider as AIProvider });
+        }
+      }
     }
 
     return models;
@@ -149,26 +223,6 @@ class AIService {
         return data.response?.trim() || history;
       }
 
-      if (provider === "openai" && apiKey) {
-        const response = await fetch(
-          "https://api.openai.com/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model,
-              messages: [{ role: "user", content: prompt }],
-              max_tokens: 500,
-            }),
-          },
-        );
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content?.trim() || history;
-      }
-
       if (provider === "anthropic" && apiKey) {
         const response = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
@@ -185,6 +239,16 @@ class AIService {
         });
         const data = await response.json();
         return data.content?.[0]?.text?.trim() || history;
+      }
+
+      // OpenAI-compatible providers (openai, deepseek, kimi, gemini, glm)
+      if (apiKey && isOpenAICompatible(provider)) {
+        const result = await this.openAIChatSimple(
+          provider, model, apiKey,
+          [{ role: "user", content: prompt }],
+          500, baseUrl,
+        );
+        return result || history;
       }
     } catch (e) {
       console.warn("Context compression failed, using raw history", e);
@@ -310,6 +374,147 @@ class AIService {
     return { content: fullText, thinking: thinkingText };
   }
 
+  // ---------------------------------------------------------------------------
+  // Generic OpenAI-compatible methods (DeepSeek, Kimi, Gemini, GLM, OpenAI)
+  // ---------------------------------------------------------------------------
+
+  /** Resolve the chat completions URL for a given provider+config. */
+  private getOpenAIChatUrl(provider: string, baseUrl?: string): string {
+    if (baseUrl) {
+      // User override — append /chat/completions if not already there
+      const url = baseUrl.replace(/\/+$/, "");
+      return url.endsWith("/chat/completions") ? url : `${url}/chat/completions`;
+    }
+    return CLOUD_PROVIDERS[provider]?.chatUrl || `${baseUrl}/v1/chat/completions`;
+  }
+
+  /** Non-streaming OpenAI-compatible chat completion. */
+  private async openAIChatSimple(
+    provider: string,
+    model: string,
+    apiKey: string,
+    messages: any[],
+    maxTokens?: number,
+    baseUrl?: string,
+  ): Promise<string> {
+    const url = this.getOpenAIChatUrl(provider, baseUrl);
+    const body: any = { model, messages, stream: false };
+    if (maxTokens) body.max_tokens = maxTokens;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`${provider} API error ${response.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || "";
+  }
+
+  /** Streaming OpenAI-compatible chat completion. Returns { content, thinking }. */
+  private async streamOpenAIChat(
+    provider: string,
+    model: string,
+    apiKey: string,
+    messages: any[],
+    onToken?: (token: string, thinking?: string) => void,
+    signal?: AbortSignal,
+    responseFormat?: string,
+    baseUrl?: string,
+  ): Promise<{ content: string; thinking: string }> {
+    const url = this.getOpenAIChatUrl(provider, baseUrl);
+    const body: any = { model, messages, stream: true };
+    if (responseFormat === "json") {
+      body.response_format = { type: "json_object" };
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    // Retry without response_format if 400 (some models don't support it)
+    if (response.status === 400 && body.response_format) {
+      delete body.response_format;
+      const retry = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!retry.ok) throw new Error(`${provider} API error: ${retry.status}`);
+      return this.parseOpenAIStream(retry, onToken);
+    }
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`${provider} API error ${response.status}: ${errText.slice(0, 200)}`);
+    }
+    return this.parseOpenAIStream(response, onToken);
+  }
+
+  /** Parse an SSE stream from an OpenAI-compatible API. */
+  private async parseOpenAIStream(
+    response: Response,
+    onToken?: (token: string, thinking?: string) => void,
+  ): Promise<{ content: string; thinking: string }> {
+    if (!response.body) throw new Error("No response body for streaming");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+    let thinkingText = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const payload = trimmed.slice(6);
+        if (payload === "[DONE]") continue;
+
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices?.[0]?.delta;
+          if (!delta) continue;
+
+          // Handle reasoning_content (DeepSeek, GLM, Kimi K2)
+          if (delta.reasoning_content) {
+            thinkingText += delta.reasoning_content;
+            if (onToken) onToken("", delta.reasoning_content);
+          }
+          if (delta.content) {
+            fullText += delta.content;
+            if (onToken) onToken(delta.content);
+          }
+        } catch {
+          /* skip malformed SSE lines */
+        }
+      }
+    }
+    return { content: fullText, thinking: thinkingText };
+  }
+
   async generateCommand(
     prompt: string,
     onToken?: (token: string) => void,
@@ -341,32 +546,8 @@ class AIService {
         }
       }
 
-      if (provider === "openai") {
-        if (!apiKey) throw new Error("OpenAI API Key required");
-        const response = await fetch(
-          "https://api.openai.com/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model: model,
-              messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: prompt },
-              ],
-            }),
-          },
-        );
-        const data = await response.json();
-        return data.choices[0].message.content.trim();
-      }
-
       if (provider === "anthropic") {
         if (!apiKey) throw new Error("Anthropic API Key required");
-        // checking anthropic format (messages API)
         const response = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
@@ -381,9 +562,21 @@ class AIService {
             messages: [{ role: "user", content: prompt }],
           }),
         });
-        // Note: Anthropic might require proxy due to CORS in browser
         const data = await response.json();
         return data.content[0].text.trim();
+      }
+
+      // OpenAI-compatible providers (openai, deepseek, kimi, gemini, glm)
+      if (isOpenAICompatible(provider)) {
+        if (!apiKey) throw new Error(`${CLOUD_PROVIDERS[provider]?.label || provider} API Key required`);
+        return await this.openAIChatSimple(
+          provider, model, apiKey,
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: prompt },
+          ],
+          100, baseUrl,
+        );
       }
 
       throw new Error(
@@ -430,35 +623,6 @@ class AIService {
         }
       }
 
-      if (provider === "openai" && apiKey) {
-        const response = await fetch(
-          "https://api.openai.com/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model,
-              messages: [
-                { role: "system", content: systemPrompt },
-                {
-                  role: "user",
-                  content: `Recent terminal output:\n${context.slice(-500)}`,
-                },
-              ],
-              max_tokens: 30,
-            }),
-          },
-        );
-        const data = await response.json();
-        const result = (data.choices?.[0]?.message?.content || "")
-          .trim()
-          .replace(/^`+|`+$/g, "");
-        return result.length <= 80 ? result : "";
-      }
-
       if (provider === "anthropic" && apiKey) {
         const response = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
@@ -484,6 +648,20 @@ class AIService {
           .trim()
           .replace(/^`+|`+$/g, "");
         return result.length <= 80 ? result : "";
+      }
+
+      // OpenAI-compatible providers
+      if (apiKey && isOpenAICompatible(provider)) {
+        const result = await this.openAIChatSimple(
+          provider, model, apiKey,
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `Recent terminal output:\n${context.slice(-500)}` },
+          ],
+          30, baseUrl,
+        );
+        const clean = result.replace(/^`+|`+$/g, "");
+        return clean.length <= 80 ? clean : "";
       }
     } catch {
       // Silently fail — placeholder is non-critical
@@ -528,30 +706,6 @@ class AIService {
         }
       }
 
-      if (provider === "openai" && apiKey) {
-        const response = await fetch(
-          "https://api.openai.com/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model,
-              messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: prompt.slice(0, 200) },
-              ],
-              max_tokens: 15,
-            }),
-          },
-        );
-        const data = await response.json();
-        const result = (data.choices?.[0]?.message?.content || "").trim().replace(/^["'`]+|["'`]+$/g, "");
-        return result.length > 0 && result.length <= 30 ? result : "";
-      }
-
       if (provider === "anthropic" && apiKey) {
         const response = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
@@ -571,6 +725,20 @@ class AIService {
         const result = (data.content?.[0]?.text || "").trim().replace(/^["'`]+|["'`]+$/g, "");
         return result.length > 0 && result.length <= 30 ? result : "";
       }
+
+      // OpenAI-compatible providers
+      if (apiKey && isOpenAICompatible(provider)) {
+        const result = await this.openAIChatSimple(
+          provider, model, apiKey,
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: prompt.slice(0, 200) },
+          ],
+          15, baseUrl,
+        );
+        const clean = result.replace(/^["'`]+|["'`]+$/g, "");
+        return clean.length > 0 && clean.length <= 30 ? clean : "";
+      }
     } catch {
       // Non-critical
     }
@@ -586,7 +754,7 @@ class AIService {
     signal?: AbortSignal,
     thinkingEnabled: boolean = true,
   ): Promise<AgentResult> {
-    const { provider, model, baseUrl } = sessionConfig || this.config;
+    const { provider, model, baseUrl, apiKey } = sessionConfig || this.config;
 
     const history: any[] = [
       {
@@ -618,6 +786,8 @@ RULES:
 
     history[0].content += `
 For file operations always use execute_command with cat heredoc or printf. Use run_in_terminal only for cd/servers/interactive.
+
+${agentPrompt}
 `;
 
     let parseFailures = 0;
@@ -663,21 +833,79 @@ For file operations always use execute_command with cat heredoc or printf. Use r
             // For non-thinking models: ensure thinking state is cleared
             onUpdate("thinking_done", "");
           }
-        } else {
-          // ... (fallback same as before)
-          await fetch("https://api.openai.com/v1/chat/completions", {
+        } else if (provider === "anthropic" && apiKey) {
+          // Anthropic Messages API with streaming
+          let contentAccumulated = "";
+          const response = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${this.config.apiKey}`,
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+              "content-type": "application/json",
             },
             body: JSON.stringify({
-              model: model,
-              messages: history,
+              model,
+              max_tokens: 4096,
+              system: history[0].content,
+              messages: history.slice(1),
+              stream: true,
             }),
+            signal,
           });
+          if (!response.ok) throw new Error(`Anthropic API error: ${response.status}`);
+          if (!response.body) throw new Error("No response body");
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data: ")) continue;
+              try {
+                const evt = JSON.parse(trimmed.slice(6));
+                if (evt.type === "content_block_delta" && evt.delta?.text) {
+                  contentAccumulated += evt.delta.text;
+                  onUpdate("streaming_response", contentAccumulated);
+                }
+              } catch {}
+            }
+          }
+          responseText = contentAccumulated;
+          onUpdate("thinking_done", "");
+        } else if (isOpenAICompatible(provider) && apiKey) {
+          // OpenAI-compatible cloud providers with streaming
+          let thinkingAccumulated = "";
+          let contentAccumulated = "";
+          const result = await this.streamOpenAIChat(
+            provider, model, apiKey, history,
+            (token, thinking) => {
+              if (thinking && thinkingEnabled) {
+                thinkingAccumulated += thinking;
+                onUpdate("streaming_thinking", thinkingAccumulated);
+              }
+              if (token) {
+                contentAccumulated += token;
+                onUpdate("streaming_response", contentAccumulated);
+              }
+            },
+            signal, "json", baseUrl,
+          );
+          responseText = result.content;
+          thinkingText = result.thinking;
+          if (thinkingAccumulated) {
+            onUpdate("thinking_complete", thinkingAccumulated);
+          } else {
+            onUpdate("thinking_done", "");
+          }
+        } else {
           throw new Error(
-            "Agent Mode currently only supports Ollama (beta). Switch provider to Ollama.",
+            `Provider "${provider}" requires an API key. Configure it in Settings.`,
           );
         }
       } catch (e: any) {

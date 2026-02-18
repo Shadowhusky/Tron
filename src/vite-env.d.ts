@@ -21,13 +21,11 @@ interface Window {
         sessionId: string,
         command: string,
       ) => Promise<{ stdout: string; exitCode: number }>;
-      fixPermissions: () => Promise<boolean>;
-      checkPermissions: () => Promise<boolean>;
-      openPrivacySettings: () => Promise<void>;
       testAIConnection: (config: {
         provider: string;
         model: string;
         apiKey?: string;
+        baseUrl?: string;
       }) => Promise<boolean>;
       selectFolder: (defaultPath?: string) => Promise<string | null>;
     };

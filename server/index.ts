@@ -6,7 +6,6 @@ import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import * as terminal from "./handlers/terminal.js";
-import * as system from "./handlers/system.js";
 import * as ai from "./handlers/ai.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -101,12 +100,6 @@ async function handleInvoke(
       return terminal.getCompletions(data);
     case "terminal.getHistory":
       return terminal.getHistory(data);
-    case "system.fixPermissions":
-      return system.fixPermissions();
-    case "system.checkPermissions":
-      return system.checkPermissions();
-    case "system.openPrivacySettings":
-      return system.openPrivacySettings();
     case "ai.testConnection":
       return ai.testConnection(data);
     default:

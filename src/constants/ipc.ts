@@ -22,9 +22,6 @@ export const IPC = {
   TERMINAL_EXIT: "terminal.exit",
 
   // System — invoke
-  SYSTEM_FIX_PERMISSIONS: "system.fixPermissions",
-  SYSTEM_CHECK_PERMISSIONS: "system.checkPermissions",
-  SYSTEM_OPEN_PRIVACY_SETTINGS: "system.openPrivacySettings",
   SYSTEM_SELECT_FOLDER: "system.selectFolder",
 
   // AI — invoke
@@ -33,6 +30,12 @@ export const IPC = {
   // Menu — main→renderer events
   MENU_CREATE_TAB: "menu.createTab",
   MENU_CLOSE_TAB: "menu.closeTab",
+
+  // Window — main→renderer events
+  WINDOW_CONFIRM_CLOSE: "window.confirmClose",
+  // Window — renderer→main (send)
+  WINDOW_CLOSE_CONFIRMED: "window.closeConfirmed",
+  WINDOW_CLOSE_CANCELLED: "window.closeCancelled",
 } as const;
 
 /** Dynamic channel: terminal echo for a specific session */

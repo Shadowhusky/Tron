@@ -13,9 +13,6 @@ const ALLOWED_INVOKE_CHANNELS = [
     "terminal.getCompletions",
     "terminal.getHistory",
     "terminal.scanCommands",
-    "system.fixPermissions",
-    "system.checkPermissions",
-    "system.openPrivacySettings",
     "ai.testConnection",
     "system.selectFolder",
 ];
@@ -23,12 +20,15 @@ const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
     "terminal.resize",
     "terminal.close",
+    "window.closeConfirmed",
+    "window.closeCancelled",
 ];
 const ALLOWED_RECEIVE_CHANNELS = [
     "terminal.incomingData",
     "terminal.exit",
     "menu.createTab",
     "menu.closeTab",
+    "window.confirmClose",
 ];
 const invokeSet = new Set(ALLOWED_INVOKE_CHANNELS);
 const sendSet = new Set(ALLOWED_SEND_CHANNELS);
@@ -74,9 +74,6 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         exec: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.exec", { sessionId, command }),
         execInTerminal: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
         // System
-        fixPermissions: () => electron_1.ipcRenderer.invoke("system.fixPermissions"),
-        checkPermissions: () => electron_1.ipcRenderer.invoke("system.checkPermissions"),
-        openPrivacySettings: () => electron_1.ipcRenderer.invoke("system.openPrivacySettings"),
         testAIConnection: (config) => electron_1.ipcRenderer.invoke("ai.testConnection", config),
         selectFolder: (defaultPath) => electron_1.ipcRenderer.invoke("system.selectFolder", defaultPath),
     },

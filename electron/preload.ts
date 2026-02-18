@@ -13,9 +13,6 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.getCompletions",
   "terminal.getHistory",
   "terminal.scanCommands",
-  "system.fixPermissions",
-  "system.checkPermissions",
-  "system.openPrivacySettings",
   "ai.testConnection",
   "system.selectFolder",
 ] as const;
@@ -24,6 +21,8 @@ const ALLOWED_SEND_CHANNELS = [
   "terminal.write",
   "terminal.resize",
   "terminal.close",
+  "window.closeConfirmed",
+  "window.closeCancelled",
 ] as const;
 
 const ALLOWED_RECEIVE_CHANNELS = [
@@ -31,6 +30,7 @@ const ALLOWED_RECEIVE_CHANNELS = [
   "terminal.exit",
   "menu.createTab",
   "menu.closeTab",
+  "window.confirmClose",
 ] as const;
 
 type InvokeChannel = (typeof ALLOWED_INVOKE_CHANNELS)[number];
@@ -88,9 +88,6 @@ contextBridge.exposeInMainWorld("electron", {
     execInTerminal: (sessionId: string, command: string) =>
       ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
     // System
-    fixPermissions: () => ipcRenderer.invoke("system.fixPermissions"),
-    checkPermissions: () => ipcRenderer.invoke("system.checkPermissions"),
-    openPrivacySettings: () => ipcRenderer.invoke("system.openPrivacySettings"),
     testAIConnection: (config: {
       provider: string;
       model: string;

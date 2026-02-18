@@ -1,7 +1,9 @@
 // --- AI Types ---
 
+export type AIProvider = "ollama" | "openai" | "anthropic" | "gemini" | "deepseek" | "kimi" | "qwen" | "glm";
+
 export interface AIConfig {
-  provider: "ollama" | "openai" | "anthropic" | "gemini";
+  provider: AIProvider;
   model: string;
   apiKey?: string;
   baseUrl?: string;
@@ -11,7 +13,7 @@ export interface AIConfig {
 
 export interface AIModel {
   name: string;
-  provider: "ollama" | "openai" | "anthropic" | "gemini";
+  provider: AIProvider;
   capabilities?: string[];
 }
 
