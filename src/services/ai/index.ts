@@ -614,6 +614,7 @@ RULES:
 
     const maxSteps = sessionConfig?.maxAgentSteps || 100;
     const executedCommands = new Set<string>();
+    let hasActed = false; // Track if agent has executed or sent any command
 
     history[0].content += `
 For file operations always use execute_command with cat heredoc or printf. Use run_in_terminal only for cd/servers/interactive.
@@ -797,6 +798,15 @@ For file operations always use execute_command with cat heredoc or printf. Use r
 
       // 3. Execute Tool
       if (action.tool === "final_answer") {
+        // Guard: require at least one command execution before accepting final_answer
+        if (!hasActed) {
+          history.push({
+            role: "user",
+            content:
+              'You have not executed any commands yet. Do NOT give a final_answer without first using execute_command or run_in_terminal to actually perform the task. Start by running a command.',
+          });
+          continue;
+        }
         return { success: true, message: action.content, type: "success" };
       }
 
@@ -809,6 +819,7 @@ For file operations always use execute_command with cat heredoc or printf. Use r
       }
 
       if (action.tool === "run_in_terminal") {
+        hasActed = true;
         writeToTerminal(action.command + "\n");
         onUpdate("executed", action.command);
         history.push({
@@ -826,6 +837,7 @@ For file operations always use execute_command with cat heredoc or printf. Use r
           continue;
         }
         executedCommands.add(action.command);
+        hasActed = true;
 
         onUpdate("executing", action.command);
         try {
