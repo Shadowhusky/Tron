@@ -6,12 +6,10 @@ import {
   ipcMain,
 } from "electron";
 import path from "path";
-import {
-  registerTerminalHandlers,
-  cleanupAllSessions,
-} from "./ipc/terminal";
+import { registerTerminalHandlers, cleanupAllSessions } from "./ipc/terminal";
 import { registerSystemHandlers } from "./ipc/system";
 import { registerAIHandlers } from "./ipc/ai";
+import { registerConfigHandlers } from "./ipc/config";
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -19,7 +17,8 @@ if (require("electron-squirrel-startup")) {
 }
 
 // Suppress Chromium GPU SharedImageManager / mailbox errors on macOS.
-app.commandLine.appendSwitch("disable-gpu-compositing");
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("disable-software-rasterizer");
 
 // --- Global State ---
 let mainWindow: BrowserWindow | null = null;
@@ -135,9 +134,10 @@ const createWindow = () => {
 };
 
 // --- Register all IPC handlers ---
-registerTerminalHandlers(() => mainWindow);
+registerTerminalHandlers(() => mainWindow, app.getPath("userData"));
 registerSystemHandlers();
 registerAIHandlers();
+registerConfigHandlers();
 
 // --- Window close response from renderer ---
 ipcMain.on("window.closeConfirmed", () => {

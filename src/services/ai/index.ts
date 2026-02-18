@@ -800,6 +800,22 @@ RULES:
     const maxSteps = sessionConfig?.maxAgentSteps || 100;
     const executedCommands = new Set<string>();
     let hasActed = false; // Track if agent has executed or sent any command
+    let hasSubstantiveAction = false; // Track if agent actually changed something (not just echo/ls/cat)
+
+    // Read-only/diagnostic commands that don't count as "substantive" work
+    const READ_ONLY_PREFIXES = [
+      "echo ", "echo\t", "pwd", "ls", "cat ", "head ", "tail ", "which ", "type ",
+      "uname", "whoami", "id", "env", "printenv", "hostname", "date",
+      "df ", "du ", "free", "top", "ps ", "sysctl", "system_profiler",
+      "find ", "grep ", "wc ", "file ", "stat ", "readlink", "realpath",
+      "git status", "git log", "git diff", "git branch",
+    ];
+    const isReadOnly = (cmd: string): boolean => {
+      const trimmed = cmd.trim().toLowerCase();
+      return READ_ONLY_PREFIXES.some((p) =>
+        trimmed === p.trim() || trimmed.startsWith(p),
+      );
+    };
 
     history[0].content += `
 For file operations always use execute_command with cat heredoc or printf. Use run_in_terminal only for cd/servers/interactive.
@@ -1043,12 +1059,20 @@ ${agentPrompt}
 
       // 3. Execute Tool
       if (action.tool === "final_answer") {
-        // Guard: require at least one command execution before accepting final_answer
+        // Guard: require at least one substantive command before accepting final_answer
         if (!hasActed) {
           history.push({
             role: "user",
             content:
               'You have not executed any commands yet. Do NOT give a final_answer without first using execute_command or run_in_terminal to actually perform the task. Start by running a command.',
+          });
+          continue;
+        }
+        if (!hasSubstantiveAction) {
+          history.push({
+            role: "user",
+            content:
+              'You have only run diagnostic/read-only commands (echo, ls, cat, etc.) so far. You have NOT actually completed the task. Use execute_command to perform the actual work before giving a final_answer.',
           });
           continue;
         }
@@ -1065,6 +1089,7 @@ ${agentPrompt}
 
       if (action.tool === "run_in_terminal") {
         hasActed = true;
+        if (!isReadOnly(action.command)) hasSubstantiveAction = true;
         writeToTerminal(action.command + "\n");
         onUpdate("executed", action.command);
         history.push({
@@ -1083,6 +1108,7 @@ ${agentPrompt}
         }
         executedCommands.add(action.command);
         hasActed = true;
+        if (!isReadOnly(action.command)) hasSubstantiveAction = true;
 
         onUpdate("executing", action.command);
         try {
@@ -1090,10 +1116,10 @@ ${agentPrompt}
           if (!output || output.trim() === "") {
             output = "(Command executed successfully with no output)";
           }
-          onUpdate("executed", output);
+          onUpdate("executed", action.command + "\n---\n" + output);
           history.push({ role: "user", content: `Command Output:\n${output}` });
         } catch (err: any) {
-          onUpdate("failed", `${action.command}\n${err.message}`);
+          onUpdate("failed", action.command + "\n---\n" + err.message);
           history.push({
             role: "user",
             content: `Command Failed:\n${err.message}`,

@@ -27,6 +27,30 @@ export interface AgentStep {
   output: string;
 }
 
+// --- Config Types ---
+
+export interface HotkeyMap {
+  openSettings: string;
+  toggleOverlay: string;
+  stopAgent: string;
+  clearTerminal: string;
+  modeCommand: string;
+  modeAdvice: string;
+  modeAgent: string;
+  modeAuto: string;
+  forceAgent: string;
+  [key: string]: string;
+}
+
+export interface TronConfig {
+  ai?: AIConfig;
+  providerConfigs?: Record<string, { model?: string; apiKey?: string; baseUrl?: string }>;
+  theme?: string;
+  viewMode?: string;
+  configured?: boolean;
+  hotkeys?: HotkeyMap;
+}
+
 // --- Terminal & Layout Types ---
 
 export interface TerminalSession {

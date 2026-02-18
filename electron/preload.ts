@@ -15,6 +15,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.scanCommands",
   "ai.testConnection",
   "system.selectFolder",
+  "config.read",
+  "config.write",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -87,6 +89,11 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("terminal.exec", { sessionId, command }),
     execInTerminal: (sessionId: string, command: string) =>
       ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
+    // Config
+    readConfig: () =>
+      ipcRenderer.invoke("config.read") as Promise<Record<string, unknown> | null>,
+    writeConfig: (data: Record<string, unknown>) =>
+      ipcRenderer.invoke("config.write", data) as Promise<boolean>,
     // System
     testAIConnection: (config: {
       provider: string;

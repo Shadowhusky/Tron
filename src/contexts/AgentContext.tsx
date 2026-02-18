@@ -1,6 +1,14 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 import type { AgentStep } from "../types";
 import { STORAGE_KEYS } from "../constants/storage";
+import { IPC } from "../constants/ipc";
 
 interface AgentState {
   agentThread: AgentStep[];
@@ -58,11 +66,42 @@ function loadPersistedAgentState(): Map<string, AgentState> {
   try {
     const saved = localStorage.getItem(STORAGE_KEYS.AGENT_STATE);
     if (saved) {
-      const parsed: Record<string, { agentThread: AgentStep[] }> = JSON.parse(saved);
+      const parsed: Record<string, { agentThread: AgentStep[] }> =
+        JSON.parse(saved);
       const map = new Map<string, AgentState>();
       for (const [id, data] of Object.entries(parsed)) {
         if (data.agentThread?.length > 0) {
-          map.set(id, { ...defaultState, agentThread: data.agentThread, isOverlayVisible: true });
+          // Clean up in-progress steps that indicate the agent was interrupted
+          // (e.g. by a page refresh while running)
+          const transientSteps = new Set([
+            "thinking",
+            "streaming",
+            "executing",
+          ]);
+          let wasInterrupted = false;
+          const cleanedThread = data.agentThread.filter((s) => {
+            if (transientSteps.has(s.step)) {
+              wasInterrupted = true;
+              return false;
+            }
+            return true;
+          });
+
+          // If the agent was mid-run when interrupted, add an aborted marker
+          if (wasInterrupted && cleanedThread.length > 0) {
+            cleanedThread.push({
+              step: "stopped",
+              output: "Aborted (page was refreshed)",
+            });
+          }
+
+          if (cleanedThread.length > 0) {
+            map.set(id, {
+              ...defaultState,
+              agentThread: cleanedThread,
+              isOverlayVisible: true,
+            });
+          }
         }
       }
       return map;
@@ -76,8 +115,8 @@ function loadPersistedAgentState(): Map<string, AgentState> {
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [agentStates, setAgentStates] = useState<Map<string, AgentState>>(
-    () => loadPersistedAgentState(),
+  const [agentStates, setAgentStates] = useState<Map<string, AgentState>>(() =>
+    loadPersistedAgentState(),
   );
 
   // Store abort controllers in ref since they aren't needed for rendering
@@ -103,9 +142,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         }
       }
-      localStorage.setItem(STORAGE_KEYS.AGENT_STATE, JSON.stringify(serializable));
+      localStorage.setItem(
+        STORAGE_KEYS.AGENT_STATE,
+        JSON.stringify(serializable),
+      );
     }, 500); // 500ms debounce to avoid thrashing during streaming
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, [agentStates]);
 
   const getAgentState = useCallback(
@@ -207,54 +251,87 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
     [],
   );
 
-  const stopAgent = useCallback(
-    (sessionId: string) => {
-      const controller = abortControllers.current.get(sessionId);
-      if (controller) {
-        controller.abort();
-        abortControllers.current.delete(sessionId);
+  const stopAgent = useCallback((sessionId: string) => {
+    const controller = abortControllers.current.get(sessionId);
+    if (controller) {
+      controller.abort();
+      abortControllers.current.delete(sessionId);
+    }
+    // Resolve any pending permission promise so the agent loop unblocks
+    setAgentStates((prev) => {
+      const current = prev.get(sessionId) || defaultState;
+      if (current.permissionResolve) {
+        current.permissionResolve(false);
       }
-      // Resolve any pending permission promise so the agent loop unblocks
-      setAgentStates((prev) => {
-        const current = prev.get(sessionId) || defaultState;
-        if (current.permissionResolve) {
-          current.permissionResolve(false);
-        }
-        const next = new Map(prev);
-        next.set(sessionId, {
-          ...current,
-          isAgentRunning: false,
-          isThinking: false,
-          pendingCommand: null,
-          permissionResolve: null,
-          isOverlayVisible: true, // Keep panel visible so user can see abort result
-          agentThread: [
-            ...current.agentThread,
-            { step: "error", output: "Aborted by user." },
-          ],
-        });
-        return next;
+      const next = new Map(prev);
+      next.set(sessionId, {
+        ...current,
+        isAgentRunning: false,
+        isThinking: false,
+        pendingCommand: null,
+        permissionResolve: null,
+        isOverlayVisible: true, // Keep panel visible so user can see abort result
+        agentThread: [
+          ...current.agentThread,
+          { step: "stopped", output: "Stopped" },
+        ],
       });
-    },
-    [],
-  );
+      return next;
+    });
+  }, []);
 
-  const resetSession = useCallback(
-    (sessionId: string) => {
-      setAgentStates((prev) => {
-        const next = new Map(prev);
-        next.delete(sessionId);
-        return next;
-      });
-      // Also clear abort controller
-      const controller = abortControllers.current.get(sessionId);
-      if (controller) {
-        controller.abort();
-        abortControllers.current.delete(sessionId);
+  // Stop ALL running agents (used on refresh / window close)
+  const stopAllAgents = useCallback(() => {
+    for (const [sessionId, state] of agentStates) {
+      if (state.isAgentRunning) {
+        stopAgent(sessionId);
       }
-    },
-    [],
-  );
+    }
+  }, [agentStates, stopAgent]);
+
+  // Abort running agents on page refresh or Electron window close
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Synchronously abort all controllers — stopAgent uses setState
+      // which won't commit during unload, but aborting the controllers
+      // is the critical part to cancel in-flight requests.
+      for (const [, controller] of abortControllers.current) {
+        controller.abort();
+      }
+      abortControllers.current.clear();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    // Also stop agents when the Electron close confirmation fires
+    let cleanupIpc: (() => void) | undefined;
+    if (window.electron?.ipcRenderer?.on) {
+      cleanupIpc = window.electron.ipcRenderer.on(
+        IPC.WINDOW_CONFIRM_CLOSE,
+        () => {
+          stopAllAgents();
+        },
+      );
+    }
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      cleanupIpc?.();
+    };
+  }, [stopAllAgents]);
+
+  const resetSession = useCallback((sessionId: string) => {
+    setAgentStates((prev) => {
+      const next = new Map(prev);
+      next.delete(sessionId);
+      return next;
+    });
+    // Also clear abort controller
+    const controller = abortControllers.current.get(sessionId);
+    if (controller) {
+      controller.abort();
+      abortControllers.current.delete(sessionId);
+    }
+  }, []);
 
   return (
     <AgentContext.Provider

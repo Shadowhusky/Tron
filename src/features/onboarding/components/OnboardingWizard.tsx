@@ -3,8 +3,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "../../../contexts/ThemeContext";
 import type { AIConfig } from "../../../types";
 import { aiService, getCloudProviderList } from "../../../services/ai";
-import { Monitor, Brain, Gem, Terminal, Bot } from "lucide-react";
-import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
+import { Monitor, Gem, Terminal, Bot } from "lucide-react";
+import {
+  useModelsWithCaps,
+  useInvalidateModels,
+} from "../../../hooks/useModels";
 import FeatureIcon from "../../../components/ui/FeatureIcon";
 import {
   fadeScale,
@@ -44,14 +47,21 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   });
 
   useEffect(() => {
+    let rafId: number;
     const handleResize = () => {
-      setWindowSize({
-        width: window.innerWidth,
-        height: window.innerHeight,
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        setWindowSize({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
       });
     };
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      cancelAnimationFrame(rafId);
+    };
   }, []);
 
   const isWindowTooSmall = windowSize.width < 600 || windowSize.height < 600;
@@ -61,8 +71,13 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const [connectionStatus, setConnectionStatus] = useState<
     "idle" | "testing" | "success" | "error"
   >("idle");
+  const [showValidationWarn, setShowValidationWarn] = useState(false);
 
-  const { data: allModels = [] } = useModelsWithCaps(aiConfig.baseUrl);
+  const isAiStep = STEPS[currentStep].id === "ai";
+  const { data: allModels = [] } = useModelsWithCaps(
+    aiConfig.baseUrl,
+    isAiStep && aiConfig.provider === "ollama",
+  );
   const invalidateModels = useInvalidateModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
 
@@ -81,7 +96,16 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
     if (currentStep < STEPS.length - 1) {
       setStepDirection(1);
       setCurrentStep((c) => c + 1);
+      setShowValidationWarn(false);
     } else {
+      // Warn if no model or connection not tested, but allow skip
+      if (!aiConfig.model || connectionStatus !== "success") {
+        if (!showValidationWarn) {
+          setShowValidationWarn(true);
+          return;
+        }
+        // Second click = user wants to skip
+      }
       aiService.saveConfig(aiConfig);
       onComplete();
     }
@@ -94,8 +118,16 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
 
   const stepVariants = {
     hidden: { opacity: 0, x: stepDirection > 0 ? 40 : -40 },
-    visible: { opacity: 1, x: 0, transition: { duration: 0.3, ease: "easeOut" as const } },
-    exit: { opacity: 0, x: stepDirection > 0 ? -40 : 40, transition: { duration: 0.2, ease: "easeIn" as const } },
+    visible: {
+      opacity: 1,
+      x: 0,
+      transition: { duration: 0.3, ease: "easeOut" as const },
+    },
+    exit: {
+      opacity: 0,
+      x: stepDirection > 0 ? -40 : 40,
+      transition: { duration: 0.2, ease: "easeIn" as const },
+    },
   };
 
   const renderStepContent = () => {
@@ -106,7 +138,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             variants={staggerContainer}
             initial="hidden"
             animate="visible"
-            className="flex flex-col items-center gap-6 py-8"
+            className="flex flex-col items-center gap-4 py-4"
           >
             <motion.div variants={scalePop}>
               <FeatureIcon
@@ -115,7 +147,10 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                 size="lg"
               />
             </motion.div>
-            <motion.div variants={staggerItem} className="text-center space-y-2">
+            <motion.div
+              variants={staggerItem}
+              className="text-center space-y-2"
+            >
               <h3 className="font-medium text-lg">Choose Appearance</h3>
               <p className="text-sm text-gray-500 max-w-xs">
                 Select a theme that best suits your working environment.
@@ -129,19 +164,41 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               className="grid grid-cols-2 gap-3 w-full"
             >
               {[
-                { id: "light" as const, label: "Light", swatch: <div className="w-8 h-8 rounded-full bg-gray-200 border border-gray-300" /> },
-                { id: "dark" as const, label: "Dark", swatch: <div className="w-8 h-8 rounded-full bg-gray-900 border border-gray-700" /> },
-                { id: "system" as const, label: "Auto", swatch: (
-                  <div className="w-8 h-8 rounded-full border border-gray-500/30 overflow-hidden flex relative">
-                    <div className="flex-1 bg-gray-200" />
-                    <div className="flex-1 bg-gray-900" />
-                  </div>
-                ) },
-                { id: "modern" as const, label: "Modern", swatch: (
-                  <div className={`p-1.5 rounded-lg transition-colors ${theme === "modern" ? "bg-purple-500/20 text-purple-400" : "text-gray-400"}`}>
-                    <Gem className="w-6 h-6" />
-                  </div>
-                ) },
+                {
+                  id: "light" as const,
+                  label: "Light",
+                  swatch: (
+                    <div className="w-8 h-8 rounded-full bg-gray-200 border border-gray-300" />
+                  ),
+                },
+                {
+                  id: "dark" as const,
+                  label: "Dark",
+                  swatch: (
+                    <div className="w-8 h-8 rounded-full bg-gray-900 border border-gray-700" />
+                  ),
+                },
+                {
+                  id: "system" as const,
+                  label: "Auto",
+                  swatch: (
+                    <div className="w-8 h-8 rounded-full border border-gray-500/30 overflow-hidden flex relative">
+                      <div className="flex-1 bg-gray-200" />
+                      <div className="flex-1 bg-gray-900" />
+                    </div>
+                  ),
+                },
+                {
+                  id: "modern" as const,
+                  label: "Modern",
+                  swatch: (
+                    <div
+                      className={`p-1.5 rounded-lg transition-colors ${theme === "modern" ? "bg-purple-500/20 text-purple-400" : "text-gray-400"}`}
+                    >
+                      <Gem className="w-6 h-6" />
+                    </div>
+                  ),
+                },
               ].map(({ id, label, swatch }) => (
                 <motion.button
                   key={id}
@@ -152,7 +209,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   className={`p-3 border rounded-xl flex flex-col items-center gap-2 transition-colors ${
                     theme === id
                       ? id === "modern"
-                        ? "border-purple-500/50 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50 backdrop-blur-xl"
+                        ? "border-purple-500/50 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50"
                         : "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500"
                       : "border-transparent hover:bg-white/5 bg-white/5"
                   }`}
@@ -171,12 +228,15 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             variants={staggerContainer}
             initial="hidden"
             animate="visible"
-            className="flex flex-col items-center gap-6 py-8"
+            className="flex flex-col items-center gap-4 py-4"
           >
             <motion.div variants={scalePop}>
               <FeatureIcon icon={Monitor} color="blue" size="lg" />
             </motion.div>
-            <motion.div variants={staggerItem} className="text-center space-y-2">
+            <motion.div
+              variants={staggerItem}
+              className="text-center space-y-2"
+            >
               <h3 className="font-medium text-lg">Choose Your View</h3>
               <p className="text-sm text-gray-500 max-w-xs">
                 Pick the interface that fits your workflow.
@@ -189,22 +249,26 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               animate="visible"
               className="grid grid-cols-2 gap-3 w-full"
             >
-              {([
-                {
-                  id: "terminal" as const,
-                  label: "Terminal",
-                  desc: "Traditional terminal with AI overlay",
-                  icon: Terminal,
-                  activeBorder: "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500",
-                },
-                {
-                  id: "agent" as const,
-                  label: "Agent",
-                  desc: "Chat-focused, AI-first interface",
-                  icon: Bot,
-                  activeBorder: "border-purple-500/50 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50 backdrop-blur-xl",
-                },
-              ] as const).map(({ id, label, desc, icon: Icon, activeBorder }) => (
+              {(
+                [
+                  {
+                    id: "terminal" as const,
+                    label: "Terminal",
+                    desc: "Traditional terminal with AI overlay",
+                    icon: Terminal,
+                    activeBorder:
+                      "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500",
+                  },
+                  {
+                    id: "agent" as const,
+                    label: "Agent",
+                    desc: "Chat-focused, AI-first interface",
+                    icon: Bot,
+                    activeBorder:
+                      "border-purple-500/50 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50",
+                  },
+                ] as const
+              ).map(({ id, label, desc, icon: Icon, activeBorder }) => (
                 <motion.button
                   key={id}
                   variants={staggerItem}
@@ -217,13 +281,19 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                       : "border-transparent hover:bg-white/5 bg-white/5"
                   }`}
                 >
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                    id === "terminal" ? "bg-gray-700 text-green-300" : "bg-purple-500/30 text-purple-300"
-                  }`}>
+                  <div
+                    className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                      id === "terminal"
+                        ? "bg-gray-700 text-green-300"
+                        : "bg-purple-500/30 text-purple-300"
+                    }`}
+                  >
                     <Icon className="w-5 h-5" />
                   </div>
                   <span className="text-sm font-medium">{label}</span>
-                  <span className="text-[11px] text-gray-500 text-center">{desc}</span>
+                  <span className="text-[11px] text-gray-500 text-center">
+                    {desc}
+                  </span>
                 </motion.button>
               ))}
             </motion.div>
@@ -236,19 +306,9 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             variants={staggerContainer}
             initial="hidden"
             animate="visible"
-            className="flex flex-col items-center gap-6 py-8"
+            className="flex flex-col gap-3 py-2"
           >
-            <motion.div variants={scalePop}>
-              <FeatureIcon icon={Brain} color="orange" size="lg" />
-            </motion.div>
-            <motion.div variants={staggerItem} className="text-center space-y-2">
-              <h3 className="font-medium text-lg">Configure Intelligence</h3>
-              <p className="text-sm text-gray-500 max-w-xs">
-                Choose your preferred AI provider and model to power Tron's
-                intelligent features.
-              </p>
-            </motion.div>
-            <motion.div variants={staggerItem} className="space-y-4 w-full">
+            <motion.div variants={staggerItem} className="space-y-3 w-full">
               <div className="flex flex-col gap-2">
                 <label className="text-sm font-medium opacity-80">
                   AI Provider
@@ -262,7 +322,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                       model: "",
                     }))
                   }
-                  className={`w-full p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                  className={`w-full p-2.5 pr-8 rounded-lg border outline-none focus:border-purple-500 transition-colors
                       ${
                         resolvedTheme === "light"
                           ? "bg-white border-gray-200 text-gray-900 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
@@ -274,7 +334,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     Ollama (Local)
                   </option>
                   {getCloudProviderList().map(({ id, info }) => (
-                    <option key={id} value={id} className="text-gray-900 bg-white">
+                    <option
+                      key={id}
+                      value={id}
+                      className="text-gray-900 bg-white"
+                    >
                       {info.label}
                     </option>
                   ))}
@@ -321,7 +385,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                           onClick={() => {
                             invalidateModels(aiConfig.baseUrl);
                           }}
-                          className={`px-3 py-2 rounded-lg border transition-colors ${
+                          className={`shrink-0 px-2.5 py-2 rounded-lg border text-xs transition-colors ${
                             resolvedTheme === "light"
                               ? "border-gray-200 hover:bg-gray-50 text-gray-600"
                               : "border-white/10 hover:bg-white/5 text-gray-400"
@@ -338,7 +402,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                         Model
                       </label>
                       <div
-                        className={`w-full rounded-lg border overflow-hidden max-h-48 overflow-y-auto ${
+                        className={`w-full rounded-lg border overflow-hidden max-h-24 overflow-y-auto ${
                           resolvedTheme === "light"
                             ? "bg-white border-gray-200"
                             : "bg-black/20 border-white/10"
@@ -472,7 +536,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
       <AnimatePresence>
         {isWindowTooSmall && (
           <motion.div
@@ -481,9 +545,14 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             initial="hidden"
             animate="visible"
             exit="exit"
-            className="absolute inset-0 z-60 flex items-center justify-center bg-black/90 backdrop-blur-md text-center p-8"
+            className="absolute inset-0 z-60 flex items-center justify-center bg-black/95 text-center p-8"
           >
-            <motion.div variants={fadeScale} initial="hidden" animate="visible" className="space-y-4 max-w-md">
+            <motion.div
+              variants={fadeScale}
+              initial="hidden"
+              animate="visible"
+              className="space-y-4 max-w-md"
+            >
               <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Monitor className="w-8 h-8 text-red-500" />
               </div>
@@ -504,15 +573,15 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
         variants={fadeScale}
         initial="hidden"
         animate="visible"
-        className={`w-full max-w-[500px] flex flex-col rounded-2xl shadow-2xl overflow-hidden
+        className={`w-full max-w-[360px] flex flex-col rounded-2xl shadow-2xl overflow-hidden
           ${resolvedTheme === "light" ? "bg-white text-gray-900 border border-gray-200" : ""}
           ${resolvedTheme === "dark" ? "bg-gray-900 text-white border border-white/10" : ""}
-          ${resolvedTheme === "modern" ? "bg-black/80 text-white border border-white/10 backdrop-blur-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)]" : ""}
+          ${resolvedTheme === "modern" ? "bg-[#0d0d0d] text-white border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]" : ""}
         `}
       >
         {/* Header */}
         <div
-          className="p-6 border-b border-white/5 flex items-center justify-between drag-region"
+          className="px-5 py-4 border-b border-white/5 flex items-center justify-between drag-region"
           style={{ WebkitAppRegion: "drag", appRegion: "drag" } as any}
         >
           <div>
@@ -528,7 +597,12 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                 key={i}
                 animate={{
                   scale: i === currentStep ? 1.3 : 1,
-                  backgroundColor: i === currentStep ? "#a855f7" : i < currentStep ? "#a855f7" : "rgba(107,114,128,0.3)",
+                  backgroundColor:
+                    i === currentStep
+                      ? "#a855f7"
+                      : i < currentStep
+                        ? "#a855f7"
+                        : "rgba(107,114,128,0.3)",
                 }}
                 transition={{ type: "spring", stiffness: 400, damping: 25 }}
                 className="w-2 h-2 rounded-full"
@@ -538,7 +612,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
         </div>
 
         {/* Content */}
-        <div className="p-6 min-h-[300px] overflow-hidden">
+        <div className="px-5 py-4 min-h-[240px] overflow-hidden">
           <motion.div
             key={currentStep}
             className="mb-4 text-sm opacity-70"
@@ -562,25 +636,35 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-white/5 flex justify-between items-center bg-black/20">
-          <motion.button
-            whileHover={currentStep > 0 ? { x: -2 } : {}}
-            whileTap={currentStep > 0 ? { scale: 0.95 } : {}}
-            onClick={handleBack}
-            disabled={currentStep === 0}
-            className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/5 disabled:opacity-0 transition-all"
-          >
-            Back
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={handleNext}
-            disabled={false}
-            className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-purple-900/20"
-          >
-            {currentStep === STEPS.length - 1 ? "Get Started" : "Next"}
-          </motion.button>
+        <div className="px-5 py-3 border-t border-white/5 flex flex-col gap-2 bg-black/20">
+          {showValidationWarn && (
+            <motion.p
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="text-xs text-amber-400 text-center"
+            >
+              No model validated yet. Click "Get Started" again to skip.
+            </motion.p>
+          )}
+          <div className="flex justify-between items-center">
+            <motion.button
+              whileHover={currentStep > 0 ? { x: -2 } : {}}
+              whileTap={currentStep > 0 ? { scale: 0.95 } : {}}
+              onClick={handleBack}
+              disabled={currentStep === 0}
+              className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/5 disabled:opacity-0 transition-all"
+            >
+              Back
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={handleNext}
+              className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-purple-900/20"
+            >
+              {currentStep === STEPS.length - 1 ? "Get Started" : "Next"}
+            </motion.button>
+          </div>
         </div>
       </motion.div>
     </div>

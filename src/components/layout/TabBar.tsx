@@ -54,12 +54,12 @@ const TabBar: React.FC<TabBarProps> = ({
 
   return (
     <div
+      data-tutorial="tab-bar"
       className={`flex items-center h-10 px-2 gap-2 border-b select-none shrink-0 ${themeClass(
         resolvedTheme,
         {
           dark: "bg-[#111111] border-white/5",
-          modern:
-            "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl",
+          modern: "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl",
           light: "bg-gray-100 border-gray-200",
         },
       )}`}
@@ -108,13 +108,14 @@ const TabBar: React.FC<TabBarProps> = ({
                       dark: "bg-[#1e1e1e] text-white border-white/10",
                       modern:
                         "bg-white/[0.06] text-white border-white/[0.1] backdrop-blur-xl",
-                      light:
-                        "bg-white text-gray-900 border-gray-300 shadow-sm",
+                      light: "bg-white text-gray-900 border-gray-300 shadow-sm",
                     })
                   : themeClass(resolvedTheme, {
                       dark: "bg-[#161616] border-white/5 hover:bg-[#1a1a1a] text-gray-500 hover:text-gray-300",
-                      modern: "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300",
-                      light: "bg-gray-100/80 border-gray-200/60 text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                      modern:
+                        "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300",
+                      light:
+                        "bg-gray-100/80 border-gray-200/60 text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
                     })
               }`}
               onClick={() => onSelect(tab.id)}
@@ -132,11 +133,14 @@ const TabBar: React.FC<TabBarProps> = ({
                     onClose(tab.id);
                   }
                 }}
-                className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""} ${themeClass(resolvedTheme, {
-                  dark: "hover:bg-white/20",
-                  modern: "hover:bg-white/20",
-                  light: "hover:bg-black/10",
-                })}`}
+                className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""} ${themeClass(
+                  resolvedTheme,
+                  {
+                    dark: "hover:bg-white/20",
+                    modern: "hover:bg-white/20",
+                    light: "hover:bg-black/10",
+                  },
+                )}`}
               >
                 <svg
                   className="w-3 h-3"
@@ -160,11 +164,14 @@ const TabBar: React.FC<TabBarProps> = ({
           whileTap={{ scale: 0.9 }}
           onClick={onCreate}
           style={{ WebkitAppRegion: "no-drag" } as any}
-          className={`p-1.5 rounded-md transition-colors ${themeClass(resolvedTheme, {
-            dark: "hover:bg-white/10 text-gray-500",
-            modern: "hover:bg-white/10 text-gray-500",
-            light: "hover:bg-gray-200 text-gray-500",
-          })}`}
+          className={`p-1.5 rounded-md transition-colors ${themeClass(
+            resolvedTheme,
+            {
+              dark: "hover:bg-white/10 text-gray-500",
+              modern: "hover:bg-white/10 text-gray-500",
+              light: "hover:bg-gray-200 text-gray-500",
+            },
+          )}`}
         >
           <svg
             className="w-4 h-4"
@@ -185,11 +192,15 @@ const TabBar: React.FC<TabBarProps> = ({
       {/* Settings Button */}
       <button
         onClick={onOpenSettings}
-        className={`p-2 rounded-md transition-colors ${themeClass(resolvedTheme, {
-          dark: "hover:bg-white/10 text-gray-500",
-          modern: "hover:bg-white/[0.08] text-purple-300/70 hover:text-purple-200",
-          light: "hover:bg-gray-100 text-gray-500",
-        })}`}
+        className={`p-2 rounded-md transition-colors ${themeClass(
+          resolvedTheme,
+          {
+            dark: "hover:bg-white/10 text-gray-500",
+            modern:
+              "hover:bg-white/[0.08] text-purple-300/70 hover:text-purple-200",
+            light: "hover:bg-gray-100 text-gray-500",
+          },
+        )}`}
         title="Settings (Cmd+,)"
         style={{ WebkitAppRegion: "no-drag" } as any}
       >

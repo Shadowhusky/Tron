@@ -125,12 +125,20 @@ export function registerTerminalHandlers(
       const sessionId = randomUUID();
 
       try {
+        // Clean environment: strip Electron/Node npm vars that conflict
+        // with user tools like nvm (which rejects npm_config_prefix).
+        const cleanEnv: Record<string, string> = { ...process.env as Record<string, string>, PROMPT_EOL_MARK: "" };
+        delete cleanEnv.npm_config_prefix;
+        delete cleanEnv.npm_config_loglevel;
+        delete cleanEnv.npm_config_production;
+        delete cleanEnv.NODE_ENV;
+
         const ptyProcess = pty.spawn(shell, shellArgs, {
           name: "xterm-256color",
           cols: cols || 80,
           rows: rows || 30,
           cwd: cwd || os.homedir(),
-          env: { ...process.env, PROMPT_EOL_MARK: "" },
+          env: cleanEnv,
         });
 
         sessionHistory.set(sessionId, "");
@@ -194,6 +202,8 @@ export function registerTerminalHandlers(
   });
 
   ipcMain.handle("terminal.checkCommand", async (_event, command) => {
+    // Sanitize: only allow alphanumeric, dashes, underscores, dots
+    if (!/^[a-zA-Z0-9._-]+$/.test(command)) return false;
     try {
       const checkCmd =
         os.platform() === "win32" ? `where ${command}` : `which ${command}`;
@@ -291,18 +301,42 @@ export function registerTerminalHandlers(
   });
 
   // Scan all available commands on the system (for auto-mode classification)
+  // Two-phase: fast non-interactive scan first, then interactive scan for shell
+  // functions (nvm, pyenv, rvm) that are only loaded in interactive shells.
   ipcMain.handle("terminal.scanCommands", async () => {
     const isWin = os.platform() === "win32";
+    const results: string[] = [];
 
-    try {
-      const cmd = isWin
-        ? `powershell -NoProfile -Command "Get-Command -CommandType Application,Cmdlet | Select-Object -ExpandProperty Name -First 500"`
-        : `bash -c 'compgen -abck 2>/dev/null | sort -u | head -500'`;
-      const { stdout } = await trackedExec(cmd, { timeout: 10000 });
-      return stdout.trim().split("\n").filter(Boolean);
-    } catch {
-      return [];
+    if (isWin) {
+      try {
+        const cmd = `powershell -NoProfile -Command "Get-Command -CommandType Application,Cmdlet | Select-Object -ExpandProperty Name -First 500"`;
+        const { stdout } = await trackedExec(cmd, { timeout: 10000 });
+        results.push(...stdout.trim().split("\n").filter(Boolean));
+      } catch { /* non-critical */ }
+    } else {
+      // Phase 1: Fast non-interactive scan (PATH commands, builtins, aliases)
+      try {
+        const { stdout } = await trackedExec(
+          `bash -c 'compgen -abck 2>/dev/null | sort -u | head -1000'`,
+          { timeout: 5000 },
+        );
+        results.push(...stdout.trim().split("\n").filter(Boolean));
+      } catch { /* non-critical */ }
+
+      // Phase 2: Interactive shell scan to find shell functions (nvm, pyenv, etc.)
+      // These are sourced in .bashrc/.zshrc which only load in interactive mode.
+      try {
+        const shell = process.env.SHELL || "/bin/bash";
+        const isBash = shell.endsWith("/bash");
+        const funcCmd = isBash
+          ? `${shell} -lic 'compgen -A function 2>/dev/null' </dev/null`
+          : `${shell} -lic 'print -l \${(ok)functions} 2>/dev/null' </dev/null`;
+        const { stdout } = await trackedExec(funcCmd, { timeout: 8000 });
+        results.push(...stdout.trim().split("\n").filter(Boolean));
+      } catch { /* non-critical — interactive scan can fail */ }
     }
+
+    return [...new Set(results)];
   });
 
   // Execute a command visibly in the PTY and capture output via sentinel marker.

@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
+import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import "@xterm/xterm/css/xterm.css";
 
@@ -41,12 +42,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
   const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
   const { isAgentRunning, stopAgent } = useAgent(sessionId);
+  const { hotkeys } = useConfig();
 
   // Refs for values accessed inside stable closures
   const isAgentRunningRef = useRef(isAgentRunning);
   useEffect(() => { isAgentRunningRef.current = isAgentRunning; }, [isAgentRunning]);
   const stopAgentRef = useRef(stopAgent);
   useEffect(() => { stopAgentRef.current = stopAgent; }, [stopAgent]);
+  const hotkeysRef = useRef(hotkeys);
+  useEffect(() => { hotkeysRef.current = hotkeys; }, [hotkeys]);
 
   // ---- Main effect: create terminal (once per sessionId) ----
   useEffect(() => {
@@ -80,14 +84,28 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
     term.focus();
 
-    // Custom key handling
+    // Custom key handling — intercept configurable hotkeys before xterm
     term.attachCustomKeyEventHandler((e) => {
-      const key = e.key.toLowerCase();
-      if ((e.metaKey || e.ctrlKey) && key === "k") {
+      // Parse the clearTerminal hotkey to check dynamically
+      const clearCombo = hotkeysRef.current.clearTerminal || "meta+k";
+      const overlayCombo = hotkeysRef.current.toggleOverlay || "meta+.";
+
+      // Helper: check if event matches a combo string
+      const matches = (combo: string) => {
+        const parts = combo.toLowerCase().split("+");
+        const baseKey = parts[parts.length - 1];
+        const needsMeta = parts.includes("meta") || parts.includes("cmd");
+        const needsCtrl = parts.includes("ctrl");
+        if (needsMeta && !e.metaKey) return false;
+        if (needsCtrl && !e.ctrlKey) return false;
+        return e.key.toLowerCase() === baseKey;
+      };
+
+      if (matches(clearCombo)) {
         term.clear();
         return false;
       }
-      if ((e.metaKey || e.ctrlKey) && key === ".") {
+      if (matches(overlayCombo)) {
         return false;
       }
       return true;
@@ -212,6 +230,18 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       disposableOnData.dispose();
     };
   }, [sessionId]); // Only recreate on session change — NOT on theme change
+
+  // ---- Listen for programmatic clear requests (from useHotkey when SmartInput has focus) ----
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId && xtermRef.current) {
+        xtermRef.current.clear();
+      }
+    };
+    window.addEventListener("tron:clearTerminal", handler);
+    return () => window.removeEventListener("tron:clearTerminal", handler);
+  }, [sessionId]);
 
   // ---- Theme update — lightweight, no terminal recreation ----
   useEffect(() => {

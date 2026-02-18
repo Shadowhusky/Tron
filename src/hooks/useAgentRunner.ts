@@ -48,9 +48,11 @@ export function useAgentRunner(
   // Fetch capabilities when session config model changes
   useEffect(() => {
     const model = session?.aiConfig?.model || aiService.getConfig().model;
-    const provider = session?.aiConfig?.provider || aiService.getConfig().provider;
+    const provider =
+      session?.aiConfig?.provider || aiService.getConfig().provider;
     if (model && provider === "ollama") {
-      const baseUrl = session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
+      const baseUrl =
+        session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
       aiService.getModelCapabilities(model, baseUrl).then(setModelCapabilities);
     } else {
       setModelCapabilities([]);
@@ -120,6 +122,81 @@ export function useAgentRunner(
     addToHistory(cmd);
   };
 
+  /** Execute a command via exec() and display result in agent overlay. */
+  const handleCommandInOverlay = async (
+    cmd: string,
+    queueCallback?: (item: { type: "command"; content: string }) => void,
+  ) => {
+    if (isAgentRunning && queueCallback) {
+      queueCallback({ type: "command", content: cmd });
+      return;
+    }
+
+    if (!window.electron) return;
+
+    addToHistory(cmd);
+    setIsOverlayVisible(true);
+
+    // Add executing step
+    setAgentThread((prev) => [...prev, { step: "executing", output: cmd }]);
+
+    try {
+      const result = await window.electron.ipcRenderer.exec(sessionId, cmd);
+      let output = result.stdout || "";
+
+      // If the command is a `cd`, also write it to the PTY so the shell's CWD
+      // updates and getCwdForPid returns the correct path on next poll.
+      const trimmed = cmd.trim();
+      if (/^cd(\s|$)/.test(trimmed) && result.exitCode === 0) {
+        writeCommandToTerminal(trimmed, true);
+      }
+
+      if (result.exitCode !== 0) {
+        output = result.stderr || result.stdout || "Command failed";
+        setAgentThread((prev) => {
+          const updated = [...prev];
+          for (let j = updated.length - 1; j >= 0; j--) {
+            if (updated[j].step === "executing") {
+              updated[j] = { step: "failed", output: cmd + "\n---\n" + output };
+              break;
+            }
+          }
+          return updated;
+        });
+      } else {
+        if (!output.trim())
+          output = "(Command executed successfully with no output)";
+        setAgentThread((prev) => {
+          const updated = [...prev];
+          for (let j = updated.length - 1; j >= 0; j--) {
+            if (updated[j].step === "executing") {
+              updated[j] = {
+                step: "executed",
+                output: cmd + "\n---\n" + output,
+              };
+              break;
+            }
+          }
+          return updated;
+        });
+      }
+    } catch (err: any) {
+      setAgentThread((prev) => {
+        const updated = [...prev];
+        for (let j = updated.length - 1; j >= 0; j--) {
+          if (updated[j].step === "executing") {
+            updated[j] = {
+              step: "failed",
+              output: cmd + "\n---\n" + err.message,
+            };
+            break;
+          }
+        }
+        return updated;
+      });
+    }
+  };
+
   const handleAgentRun = async (
     prompt: string,
     queueCallback?: (item: { type: "agent"; content: string }) => void,
@@ -134,7 +211,8 @@ export function useAgentRunner(
     registerAbortController(controller);
 
     setIsAgentRunning(true);
-    const modelSupportsThinking = modelCapabilities.length === 0 || modelCapabilities.includes("thinking");
+    const modelSupportsThinking =
+      modelCapabilities.length === 0 || modelCapabilities.includes("thinking");
     if (thinkingEnabled && modelSupportsThinking) {
       setIsThinking(true);
     }
@@ -233,18 +311,18 @@ Task: ${prompt}
 
           addToHistory(cmd.trim());
 
-          // Write command to terminal for visibility, then exec in
-          // background for clean output capture (no sentinel pollution).
-          writeCommandToTerminal(cmd);
-
-          // Small delay to let the PTY echo start before background exec
-          await new Promise((r) => setTimeout(r, 100));
+          // Write a comment to the terminal so the user sees activity
+          // without actually executing the command (exec handles that).
+          const preview = cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
+          writeCommandToTerminal(`# [agent] ${preview}`, true);
 
           // Execute via background child_process (clean stdout)
           const result = await window.electron.ipcRenderer.exec(sessionId, cmd);
 
           if (result.exitCode !== 0) {
-            throw new Error(`Exit Code ${result.exitCode}: ${result.stderr || result.stdout || "Command failed"}`);
+            throw new Error(
+              `Exit Code ${result.exitCode}: ${result.stderr || result.stdout || "Command failed"}`,
+            );
           }
 
           return (
@@ -307,7 +385,10 @@ Task: ${prompt}
               if (step === "executed" || step === "failed") {
                 let lastExecIdx = -1;
                 for (let j = updated.length - 1; j >= 0; j--) {
-                  if (updated[j].step === "executing") { lastExecIdx = j; break; }
+                  if (updated[j].step === "executing") {
+                    lastExecIdx = j;
+                    break;
+                  }
                 }
                 if (lastExecIdx >= 0) {
                   updated[lastExecIdx] = { step, output };
@@ -319,7 +400,10 @@ Task: ${prompt}
               // Transform streaming entry in-place if present, otherwise append
               let lastStreamIdx = -1;
               for (let j = updated.length - 1; j >= 0; j--) {
-                if (updated[j].step === "streaming") { lastStreamIdx = j; break; }
+                if (updated[j].step === "streaming") {
+                  lastStreamIdx = j;
+                  break;
+                }
               }
               if (lastStreamIdx >= 0) {
                 updated[lastStreamIdx] = { step, output };
@@ -338,26 +422,35 @@ Task: ${prompt}
       );
       // Ensure successful completion clears active state
       setIsAgentRunning(false);
-      // Explicitly clear any lingering streaming steps (e.g. from final_answer)
-      setAgentThread((prev) => prev.filter((s) => s.step !== "streaming"));
 
-      // Update Agent Thread with Final Status
-      if (finalAnswer.type === "question") {
-        setAgentThread((prev) => [
-          ...prev,
-          { step: "question", output: finalAnswer.message || "" },
-        ]);
-      } else if (finalAnswer.success) {
-        setAgentThread((prev) => [
-          ...prev,
-          { step: "done", output: finalAnswer.message || "Task Completed" },
-        ]);
-      } else {
-        setAgentThread((prev) => [
-          ...prev,
-          { step: "failed", output: finalAnswer.message || "Task Failed" },
-        ]);
-      }
+      // Update Agent Thread with Final Status — atomic: transform streaming in-place + add final step
+      const finalStep =
+        finalAnswer.type === "question"
+          ? "question"
+          : finalAnswer.success
+            ? "done"
+            : "failed";
+      const finalOutput =
+        finalAnswer.message ||
+        (finalAnswer.success ? "Task Completed" : "Task Failed");
+
+      setAgentThread((prev) => {
+        // Try to replace last streaming entry in-place
+        let lastStreamIdx = -1;
+        for (let j = prev.length - 1; j >= 0; j--) {
+          if (prev[j].step === "streaming") {
+            lastStreamIdx = j;
+            break;
+          }
+        }
+        if (lastStreamIdx >= 0) {
+          const updated = [...prev];
+          updated[lastStreamIdx] = { step: finalStep, output: finalOutput };
+          return updated;
+        }
+        // No streaming entry — just append
+        return [...prev, { step: finalStep, output: finalOutput }];
+      });
 
       // Persist Agent Conclusion to Session State (Invisible Context)
       if (sessionId && finalAnswer.message) {
@@ -378,19 +471,20 @@ Task: ${prompt}
           .catch(() => {});
       }
     } catch (error: any) {
-      if (error.name === "AbortError") {
-        setAgentThread((prev) => [
-          ...prev,
-          { step: "error", output: "Agent stopped by user." },
-        ]);
-      } else {
+      const isAbort =
+        error.name === "AbortError" ||
+        error.message?.toLowerCase().includes("abort");
+      if (!isAbort) {
+        // Only add error for non-abort failures.
+        // Abort is handled by stopAgent() which already adds a "stopped" step.
         console.error(error);
         setAgentThread((prev) => [
           ...prev,
           { step: "error", output: `Error: ${error.message}` },
         ]);
+        setIsAgentRunning(false);
       }
-      setIsAgentRunning(false);
+      // For aborts, stopAgent() already set isAgentRunning=false and added the stopped step
     } finally {
       setIsThinking(false);
       // unregisterAbortController(controller); // Not available in context
@@ -425,6 +519,7 @@ Task: ${prompt}
     modelCapabilities,
     // Actions
     handleCommand,
+    handleCommandInOverlay,
     handleAgentRun,
     handlePermission,
   };
