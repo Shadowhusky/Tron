@@ -6,7 +6,7 @@ const electron_1 = require("electron");
 const PROVIDER_URLS = {
     openai: "https://api.openai.com/v1/chat/completions",
     deepseek: "https://api.deepseek.com/chat/completions",
-    kimi: "https://api.moonshot.cn/v1/chat/completions",
+    kimi: "https://api.moonshot.ai/v1/chat/completions",
     gemini: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     glm: "https://open.bigmodel.cn/api/paas/v4/chat/completions",

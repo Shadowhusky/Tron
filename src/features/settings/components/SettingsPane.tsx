@@ -98,10 +98,10 @@ const SettingsPane = () => {
     };
     saveProviderCache(cache);
 
-    // For cloud providers, don't persist the Ollama baseUrl
+    // For cloud providers, explicitly clear baseUrl so it doesn't leak from Ollama
     const configToSave = { ...config };
-    if (config.provider !== "ollama" && !configToSave.baseUrl) {
-      delete configToSave.baseUrl;
+    if (config.provider !== "ollama") {
+      configToSave.baseUrl = undefined;
     }
 
     // Save globally
