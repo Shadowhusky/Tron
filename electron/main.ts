@@ -18,6 +18,9 @@ if (require("electron-squirrel-startup")) {
   app.quit();
 }
 
+// Suppress Chromium GPU SharedImageManager / mailbox errors on macOS.
+app.commandLine.appendSwitch("disable-gpu-compositing");
+
 // --- Global State ---
 let mainWindow: BrowserWindow | null = null;
 let forceQuit = false;

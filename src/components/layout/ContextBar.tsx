@@ -344,10 +344,19 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
                     <button
                       key={`${m.provider}-${m.name}`}
                       onClick={() => {
-                        updateSessionConfig(sessionId, {
+                        const update: Record<string, any> = {
                           provider: m.provider as any,
                           model: m.name,
-                        });
+                        };
+                        // Carry apiKey from global config so cloud providers
+                        // don't end up with an empty key in the session.
+                        if (m.provider !== "ollama") {
+                          const globalCfg = aiService.getConfig();
+                          if (globalCfg.apiKey) {
+                            update.apiKey = globalCfg.apiKey;
+                          }
+                        }
+                        updateSessionConfig(sessionId, update);
                         setShowModelMenu(false);
                       }}
                       className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center gap-2 group ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
