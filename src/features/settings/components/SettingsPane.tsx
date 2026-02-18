@@ -16,6 +16,8 @@ import {
   Save,
   ChevronDown,
   Check,
+  Terminal,
+  Bot,
 } from "lucide-react";
 import { staggerContainer, staggerItem } from "../../../utils/motion";
 
@@ -34,7 +36,7 @@ function saveProviderCache(cache: ProviderCache) {
 }
 
 const SettingsPane = () => {
-  const { theme, resolvedTheme, setTheme } = useTheme();
+  const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
   const { sessions, updateSessionConfig } = useLayout();
   const t = getTheme(resolvedTheme);
   const [config, setConfig] = useState<AIConfig>(aiService.getConfig());
@@ -466,6 +468,59 @@ const SettingsPane = () => {
               >
                 {config.maxAgentSteps || 100}
               </span>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* View Mode */}
+        <motion.div variants={staggerItem} className="space-y-3">
+          <h3
+            className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider`}
+          >
+            View Mode
+          </h3>
+
+          <div className={cardClass}>
+            <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>
+              Interface Style
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                {
+                  id: "terminal" as const,
+                  label: "Terminal",
+                  desc: "Classic terminal + AI overlay",
+                  icon: Terminal,
+                  iconBg: "bg-gray-700 text-green-300",
+                  activeBorder: "border-blue-500 bg-blue-500/10",
+                },
+                {
+                  id: "agent" as const,
+                  label: "Agent",
+                  desc: "Chat-focused, AI-first",
+                  icon: Bot,
+                  iconBg: "bg-purple-500/30 text-purple-300",
+                  activeBorder: "border-purple-500 bg-purple-500/10 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
+                },
+              ] as const).map(({ id, label, desc, icon: Icon, iconBg, activeBorder }) => (
+                <motion.button
+                  key={id}
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
+                  onClick={() => setViewMode(id)}
+                  className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${
+                    viewMode === id
+                      ? activeBorder
+                      : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
+                  }`}
+                >
+                  <div className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}>
+                    <Icon className="w-3 h-3" />
+                  </div>
+                  <span className="text-[10px] font-medium">{label}</span>
+                  <span className={`text-[9px] ${t.textFaint}`}>{desc}</span>
+                </motion.button>
+              ))}
             </div>
           </div>
         </motion.div>

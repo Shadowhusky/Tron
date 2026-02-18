@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "../../../contexts/ThemeContext";
 import type { AIConfig } from "../../../types";
 import { aiService, getCloudProviderList } from "../../../services/ai";
-import { Monitor, Brain, Gem } from "lucide-react";
+import { Monitor, Brain, Gem, Terminal, Bot } from "lucide-react";
 import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
 import FeatureIcon from "../../../components/ui/FeatureIcon";
 import {
@@ -25,6 +25,11 @@ const STEPS = [
     description: "Choose your preferred look and feel.",
   },
   {
+    id: "viewmode",
+    title: "View Mode",
+    description: "Choose your preferred interface style.",
+  },
+  {
     id: "ai",
     title: "Intelligence",
     description: "Configure your AI assistant.",
@@ -32,7 +37,7 @@ const STEPS = [
 ];
 
 const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
-  const { theme, resolvedTheme, setTheme } = useTheme();
+  const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
   const [windowSize, setWindowSize] = useState({
     width: window.innerWidth,
     height: window.innerHeight,
@@ -154,6 +159,71 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                 >
                   {swatch}
                   <span className="text-sm font-medium">{label}</span>
+                </motion.button>
+              ))}
+            </motion.div>
+          </motion.div>
+        );
+
+      case "viewmode":
+        return (
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            animate="visible"
+            className="flex flex-col items-center gap-6 py-8"
+          >
+            <motion.div variants={scalePop}>
+              <FeatureIcon icon={Monitor} color="blue" size="lg" />
+            </motion.div>
+            <motion.div variants={staggerItem} className="text-center space-y-2">
+              <h3 className="font-medium text-lg">Choose Your View</h3>
+              <p className="text-sm text-gray-500 max-w-xs">
+                Pick the interface that fits your workflow.
+              </p>
+            </motion.div>
+
+            <motion.div
+              variants={staggerContainer}
+              initial="hidden"
+              animate="visible"
+              className="grid grid-cols-2 gap-3 w-full"
+            >
+              {([
+                {
+                  id: "terminal" as const,
+                  label: "Terminal",
+                  desc: "Traditional terminal with AI overlay",
+                  icon: Terminal,
+                  activeBorder: "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500",
+                },
+                {
+                  id: "agent" as const,
+                  label: "Agent",
+                  desc: "Chat-focused, AI-first interface",
+                  icon: Bot,
+                  activeBorder: "border-purple-500/50 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50 backdrop-blur-xl",
+                },
+              ] as const).map(({ id, label, desc, icon: Icon, activeBorder }) => (
+                <motion.button
+                  key={id}
+                  variants={staggerItem}
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => setViewMode(id)}
+                  className={`p-4 border rounded-xl flex flex-col items-center gap-2 transition-colors ${
+                    viewMode === id
+                      ? activeBorder
+                      : "border-transparent hover:bg-white/5 bg-white/5"
+                  }`}
+                >
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                    id === "terminal" ? "bg-gray-700 text-green-300" : "bg-purple-500/30 text-purple-300"
+                  }`}>
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <span className="text-sm font-medium">{label}</span>
+                  <span className="text-[11px] text-gray-500 text-center">{desc}</span>
                 </motion.button>
               ))}
             </motion.div>

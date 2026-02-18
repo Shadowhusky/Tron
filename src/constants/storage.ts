@@ -8,4 +8,5 @@ export const STORAGE_KEYS = {
   THEME: "tron_theme",
   GLOBAL_HISTORY: "tron_global_history",
   AGENT_STATE: "tron_agent_state",
+  VIEW_MODE: "tron_view_mode",
 } as const;
