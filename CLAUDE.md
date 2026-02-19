@@ -135,3 +135,8 @@ npm run lint          # ESLint
 - `agent.md` is appended to the agent system prompt — keep it compact (< 10 lines) since it's sent on every LLM call
 - `AgentOverlay` uses `summarizeCommand()` for human-readable step titles and `describeStreamingContent()` for live streaming labels (write_file, read_file, edit_file supported)
 - Agent exec uses `execInTerminal` IPC — runs command in visible PTY with sentinel-based completion detection and display buffering to strip internal markers
+
+## Workflow
+
+- After finishing a feature or batch of fixes, commit and push **without** Claude as co-author
+- Update `CLAUDE.md` periodically to reflect new architecture, patterns, and conventions as the codebase evolves
