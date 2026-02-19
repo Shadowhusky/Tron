@@ -13,6 +13,7 @@ import { themeClass } from "../../utils/theme";
 import { useHotkey } from "../../hooks/useHotkey";
 import { isInteractiveCommand, smartQuotePaths } from "../../utils/commandClassifier";
 import { IPC } from "../../constants/ipc";
+import { abbreviateHome } from "../../utils/platform";
 import type { AttachedImage } from "../../types";
 
 interface TerminalPaneProps {
@@ -303,7 +304,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             <span
               className={`text-[11px] font-mono truncate ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}
             >
-              {(session?.cwd || "~").replace(/\/Users\/[^/]+/, "~")}
+              {abbreviateHome(session?.cwd || "~")}
             </span>
           </div>
 

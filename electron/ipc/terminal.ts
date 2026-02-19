@@ -9,7 +9,15 @@ import { exec, ChildProcess } from "child_process";
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
 function detectShell(): { shell: string; args: string[] } {
   if (os.platform() === "win32") {
-    return { shell: "powershell.exe", args: [] };
+    // Prefer PowerShell 7+ (pwsh), fall back to Windows PowerShell, then cmd
+    const winCandidates = ["pwsh.exe", "powershell.exe", "cmd.exe"];
+    for (const candidate of winCandidates) {
+      try {
+        require("child_process").execSync(`where ${candidate}`, { stdio: "ignore" });
+        return { shell: candidate, args: candidate === "cmd.exe" ? [] : ["-NoLogo"] };
+      } catch { /* not found, try next */ }
+    }
+    return { shell: "cmd.exe", args: [] };
   }
   // Prefer user's SHELL env, then try common paths
   const candidates = [
@@ -69,10 +77,17 @@ async function getCwdForPid(pid: number): Promise<string | null> {
       const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
       return stdout.trim() || null;
     } else if (os.platform() === "win32") {
-      const { stdout } = await trackedExec(
-        `powershell -NoProfile -Command "(Get-Process -Id ${pid}).Path"`,
-      );
-      return stdout.trim() || null;
+      // Use CIM to get the ExecutablePath, then derive its parent directory.
+      // This is best-effort — Windows has no reliable cross-process CWD API.
+      try {
+        const { stdout } = await trackedExec(
+          `powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p -and $p.ExecutablePath) { Split-Path $p.ExecutablePath -Parent }"`,
+          { timeout: 5000 },
+        );
+        return stdout.trim() || null;
+      } catch {
+        return null;
+      }
     }
     return null;
   } catch {
@@ -133,7 +148,9 @@ export function registerTerminalHandlers(
       try {
         // Clean environment: strip Electron/Node npm vars that conflict
         // with user tools like nvm (which rejects npm_config_prefix).
-        const cleanEnv: Record<string, string> = { ...process.env as Record<string, string>, PROMPT_EOL_MARK: "" };
+        const cleanEnv: Record<string, string> = { ...process.env as Record<string, string> };
+        // Suppress zsh end-of-line mark (Unix only; harmless but unnecessary on Windows)
+        if (os.platform() !== "win32") cleanEnv.PROMPT_EOL_MARK = "";
         delete cleanEnv.npm_config_prefix;
         delete cleanEnv.npm_config_loglevel;
         delete cleanEnv.npm_config_production;
@@ -149,14 +166,16 @@ export function registerTerminalHandlers(
 
         sessionHistory.set(sessionId, "");
 
-        // Helper: strip sentinel patterns from display data
+        // Helper: strip sentinel patterns from display data (Unix printf + Windows Write-Host)
         const stripSentinels = (text: string): string => {
           let d = text;
-          // Strip "; printf '\n__TRON_DONE_...' $?" from command echo
+          // Unix: "; printf '\n__TRON_DONE_...' $?"
           d = d.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-          // Strip standalone printf sentinel (if split across chunks)
           d = d.replace(/printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-          // Strip sentinel output itself (e.g. __TRON_DONE_abc12345__0)
+          // Windows: '; Write-Host "__TRON_DONE_...$LASTEXITCODE"'
+          d = d.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+          d = d.replace(/Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+          // Sentinel output itself (e.g. __TRON_DONE_abc12345__0)
           d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__\d+\n?/g, "");
           return d;
         };
@@ -425,9 +444,11 @@ export function registerTerminalHandlers(
       let clean = history.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
       // Handle \r overwrites (keep only text after last \r on each segment)
       clean = clean.replace(/[^\n]*\r(?!\n)/g, "");
-      // Strip sentinel patterns so agent doesn't see internal markers
+      // Strip sentinel patterns so agent doesn't see internal markers (Unix + Windows)
       clean = clean.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
       clean = clean.replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "");
+      clean = clean.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+      clean = clean.replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
       clean = clean.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
       // Strip remaining control characters (except newline/tab)
       // eslint-disable-next-line no-control-regex
@@ -485,11 +506,8 @@ export function registerTerminalHandlers(
             const remaining = buf.data;
             buf.data = "";
             if (remaining) {
-              // Strip sentinels from the accumulated buffer
-              let cleaned = remaining;
-              cleaned = cleaned.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-              cleaned = cleaned.replace(/printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-              cleaned = cleaned.replace(/\n?__TRON_DONE_[a-z0-9]+__\d+\n?/g, "");
+              // Strip sentinels from the accumulated buffer (reuse same patterns)
+              const cleaned = stripSentinels(remaining);
               const mainWindow = getMainWindow();
               if (mainWindow && !mainWindow.isDestroyed() && cleaned) {
                 mainWindow.webContents.send("terminal.incomingData", {
@@ -639,6 +657,8 @@ export function registerTerminalHandlers(
         terminalOutput = terminalOutput.replace(/[^\n]*\r(?!\n)/g, "");
         terminalOutput = terminalOutput.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
         terminalOutput = terminalOutput.replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "");
+        terminalOutput = terminalOutput.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+        terminalOutput = terminalOutput.replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
         terminalOutput = terminalOutput.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
         // eslint-disable-next-line no-control-regex
         terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
@@ -740,9 +760,11 @@ function cleanOutput(output: string, sentinel: string) {
     captured = captured.slice(firstNewline + 1);
   }
 
-  // Strip any remaining sentinel printf fragments
+  // Strip any remaining sentinel fragments (Unix printf + Windows Write-Host)
   captured = captured.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
   captured = captured.replace(/; printf [^\n]*$/m, "");
+  captured = captured.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+  captured = captured.replace(/; Write-Host [^\n]*$/m, "");
   // eslint-disable-next-line no-control-regex
   captured = captured.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
   captured = captured.trim();
