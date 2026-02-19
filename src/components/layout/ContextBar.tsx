@@ -8,6 +8,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { Folder, X, Loader2 } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
+import { abbreviateHome } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
 import { useAllConfiguredModels } from "../../hooks/useModels";
@@ -228,7 +229,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
     }
   };
 
-  const displayCwd = cwd.replace(/\/Users\/[^/]+/, "~");
+  const displayCwd = abbreviateHome(cwd);
   const contextPercent = Math.min(
     100,
     Math.round((contextLength / maxContext) * 100),

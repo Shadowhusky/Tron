@@ -7,7 +7,14 @@ import { exec, ChildProcess } from "child_process";
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
 function detectShell(): { shell: string; args: string[] } {
   if (os.platform() === "win32") {
-    return { shell: "powershell.exe", args: [] };
+    const winCandidates = ["pwsh.exe", "powershell.exe", "cmd.exe"];
+    for (const candidate of winCandidates) {
+      try {
+        require("child_process").execSync(`where ${candidate}`, { stdio: "ignore" });
+        return { shell: candidate, args: candidate === "cmd.exe" ? [] : ["-NoLogo"] };
+      } catch { /* not found, try next */ }
+    }
+    return { shell: "cmd.exe", args: [] };
   }
   const candidates = [
     process.env.SHELL,
@@ -61,6 +68,16 @@ async function getCwdForPid(pid: number): Promise<string | null> {
     } else if (os.platform() === "linux") {
       const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
       return stdout.trim() || null;
+    } else if (os.platform() === "win32") {
+      try {
+        const { stdout } = await trackedExec(
+          `powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p -and $p.ExecutablePath) { Split-Path $p.ExecutablePath -Parent }"`,
+          { timeout: 5000 },
+        );
+        return stdout.trim() || null;
+      } catch {
+        return null;
+      }
     }
     return null;
   } catch {
@@ -130,8 +147,11 @@ export function createSession(
     name: "xterm-256color",
     cols: cols || 80,
     rows: rows || 30,
-    cwd: cwd || process.env.HOME,
-    env: { ...process.env, PROMPT_EOL_MARK: "" } as Record<string, string>,
+    cwd: cwd || os.homedir(),
+    env: {
+      ...process.env,
+      ...(os.platform() !== "win32" ? { PROMPT_EOL_MARK: "" } : {}),
+    } as Record<string, string>,
   });
 
   sessionHistory.set(sessionId, "");
@@ -190,7 +210,7 @@ export async function checkCommand(command: string): Promise<boolean> {
 
 async function getSessionCwd(sessionId: string): Promise<string> {
   const session = sessions.get(sessionId);
-  let cwd = process.env.HOME || "/";
+  let cwd = os.homedir() || "/";
   if (session) {
     const resolved = await getCwdForPid(session.pid);
     if (resolved) cwd = resolved;
@@ -250,22 +270,23 @@ export async function getCompletions({ prefix, cwd, sessionId }: { prefix: strin
 
   try {
     const parts = prefix.trim().split(/\s+/);
+    const isWin = os.platform() === "win32";
 
     if (parts.length <= 1) {
       const word = parts[0] || "";
-      const { stdout } = await trackedExec(
-        `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`,
-        { cwd: workDir }
-      );
+      const cmd = isWin
+        ? `powershell -NoProfile -Command "Get-Command '${word}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+        : `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`;
+      const { stdout } = await trackedExec(cmd, { cwd: workDir });
       const results = stdout.trim().split("\n").filter(Boolean);
       return [...new Set(results)].sort((a, b) => a.length - b.length).slice(0, 15);
     }
 
     const lastWord = parts[parts.length - 1];
-    const { stdout } = await trackedExec(
-      `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`,
-      { cwd: workDir }
-    );
+    const cmd = isWin
+      ? `powershell -NoProfile -Command "Get-ChildItem '${lastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+      : `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`;
+    const { stdout } = await trackedExec(cmd, { cwd: workDir });
     const results = stdout.trim().split("\n").filter(Boolean);
     return [...new Set(results)].sort((a, b) => a.length - b.length).slice(0, 15);
   } catch {

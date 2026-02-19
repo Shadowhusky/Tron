@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { extractDirectory } from "../../../utils/platform";
 import {
   Bot,
   Command,
@@ -36,11 +37,11 @@ function describeStreamingContent(raw: string): {
     if (obj.tool === "run_in_terminal" && obj.command)
       return { label: "Sending to terminal", detail: obj.command };
     if (obj.tool === "write_file" && obj.path)
-      return { label: "Writing file", detail: obj.path.split("/").pop() };
+      return { label: "Writing file", detail: obj.path.split(/[\\/]/).pop() };
     if (obj.tool === "read_file" && obj.path)
-      return { label: "Reading file", detail: obj.path.split("/").pop() };
+      return { label: "Reading file", detail: obj.path.split(/[\\/]/).pop() };
     if (obj.tool === "edit_file" && obj.path)
-      return { label: "Editing file", detail: obj.path.split("/").pop() };
+      return { label: "Editing file", detail: obj.path.split(/[\\/]/).pop() };
     if (obj.tool === "final_answer") return { label: "Composing answer" };
     if (obj.tool) return { label: `Tool: ${obj.tool}` };
   } catch {
@@ -75,25 +76,25 @@ function summarizeCommand(cmd: string): string {
   // File operations (from write_file, read_file, edit_file tools)
   if (/^Wrote file:\s/.test(base)) {
     const filePath = base.replace(/^Wrote file:\s*/, "").trim();
-    return `Wrote ${filePath.split("/").pop() || "file"}`;
+    return `Wrote ${filePath.split(/[\\/]/).pop() || "file"}`;
   }
   if (/^Read file:\s/.test(base)) {
     const filePath = base.replace(/^Read file:\s*/, "").replace(/\s*\(\d+ chars?\)$/, "").trim();
-    return `Read ${filePath.split("/").pop() || "file"}`;
+    return `Read ${filePath.split(/[\\/]/).pop() || "file"}`;
   }
   if (/^Edited file:\s/.test(base)) {
     const filePath = base.replace(/^Edited file:\s*/, "").replace(/\s*\(\d+ replacements?\)$/, "").trim();
-    return `Edited ${filePath.split("/").pop() || "file"}`;
+    return `Edited ${filePath.split(/[\\/]/).pop() || "file"}`;
   }
 
   // Common patterns
   if (/^mkdir\s/.test(base)) {
     const dir = base.replace(/^mkdir\s+(-p\s+)?/, "").split(/\s/)[0];
-    return `Created directory ${dir.split("/").pop()}`;
+    return `Created directory ${dir.split(/[\\/]/).pop()}`;
   }
   if (/^cat\s.*<</.test(base) || /^printf\s/.test(base) || /^cat\s*>/.test(base)) {
     const fileMatch = base.match(/(?:>\s*|<<\s*\S+\s+)(\S+)/);
-    if (fileMatch) return `Wrote file ${fileMatch[1].split("/").pop()}`;
+    if (fileMatch) return `Wrote file ${fileMatch[1].split(/[\\/]/).pop()}`;
     return "Wrote file";
   }
   if (/^(npm|npx|yarn|pnpm)\s+(create|init)/.test(base)) {
@@ -116,14 +117,14 @@ function summarizeCommand(cmd: string): string {
   if (/^ls\b/.test(base)) return "Listed directory contents";
   if (/^cat\s/.test(base)) {
     const file = base.replace(/^cat\s+/, "").split(/\s/)[0];
-    return `Read file ${file.split("/").pop()}`;
+    return `Read file ${file.split(/[\\/]/).pop()}`;
   }
   if (/^rm\s/.test(base)) return "Removed files";
   if (/^cp\s/.test(base)) return "Copied files";
   if (/^mv\s/.test(base)) return "Moved/renamed files";
   if (/^cd\s/.test(base)) {
     const dir = base.replace(/^cd\s+/, "").split(/\s/)[0];
-    return `Changed directory to ${dir.split("/").pop()}`;
+    return `Changed directory to ${dir.split(/[\\/]/).pop()}`;
   }
   if (/^chmod\s/.test(base)) return "Changed file permissions";
   if (/^curl\s|^wget\s/.test(base)) return "Downloaded resource";
@@ -131,7 +132,7 @@ function summarizeCommand(cmd: string): string {
   if (/^echo\s/.test(base)) return "Printed output";
   if (/^touch\s/.test(base)) {
     const file = base.replace(/^touch\s+/, "").split(/\s/)[0];
-    return `Created file ${file.split("/").pop()}`;
+    return `Created file ${file.split(/[\\/]/).pop()}`;
   }
   if (/^open\s/.test(base)) return "Opened file/URL";
 
@@ -211,13 +212,17 @@ function extToLang(filePath: string): string {
 
 /** Pre-process text to linkify absolute file paths for markdown rendering */
 function linkifyPaths(text: string): string {
-  // Replace absolute paths (not already inside markdown links or URLs) with file:// links.
-  // Allows spaces in path segments (e.g. "Application Support") and encodes them in the URL.
-  // (?<!\/) prevents matching paths preceded by another slash (e.g. https://host/path)
-  return text.replace(
+  // Unix paths: /foo/bar/file.ext (not preceded by another / to avoid matching URLs)
+  let result = text.replace(
     /(?<!\[)(?<!\()(?<!\/)(\/([\w][\w./ _-]*)?[\w]+\.\w+)/g,
     (match) => `[${match}](file://${encodeURI(match)})`,
   );
+  // Windows paths: C:\foo\bar\file.ext (drive letter + backslash path)
+  result = result.replace(
+    /(?<!\[)(?<!\()([A-Z]:\\(?:[\w ._-]+\\)*[\w ._-]+\.\w+)/gi,
+    (match) => `[${match}](file:///${encodeURI(match.replace(/\\/g, "/"))})`,
+  );
+  return result;
 }
 
 /** Renders "done" step content with clickable URLs and file paths */
@@ -1294,7 +1299,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             if (isFileWrite && execOutput) {
                               const writtenPath = execCommand.replace("Wrote file: ", "").trim();
                               const lang = extToLang(writtenPath);
-                              const fileName = writtenPath.split("/").pop() || writtenPath;
+                              const fileName = writtenPath.split(/[\\/]/).pop() || writtenPath;
                               const fenced = "```" + lang + "\n" + execOutput + "\n```";
                               return (
                                 <div>
@@ -1308,7 +1313,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                   >
                                     <span>{fileName}</span>
                                     <span className={`text-[9px] ${isLight ? "text-gray-400" : "text-gray-600"}`}>
-                                      {writtenPath.includes("/") ? writtenPath.slice(0, writtenPath.lastIndexOf("/")) : ""}
+                                      {extractDirectory(writtenPath)}
                                     </span>
                                   </div>
                                   <details className="group">
@@ -1336,7 +1341,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             const isFileEdit = execCommand.startsWith("Edited file:");
                             if (isFileEdit && execOutput) {
                               const editPath = execCommand.replace(/^Edited file:\s*/, "").replace(/\s*\(\d+ replacements?\)$/, "").trim();
-                              const fileName = editPath.split("/").pop() || editPath;
+                              const fileName = editPath.split(/[\\/]/).pop() || editPath;
                               // Parse diff: "--- search\n{search}\n+++ replace\n{replace}"
                               const searchMatch = execOutput.match(/^--- search\n([\s\S]*?)\n\+\+\+ replace\n([\s\S]*)$/);
                               const searchText = searchMatch?.[1] || "";
@@ -1353,7 +1358,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                   >
                                     <span>{fileName}</span>
                                     <span className={`text-[9px] ${isLight ? "text-gray-400" : "text-gray-600"}`}>
-                                      {editPath.includes("/") ? editPath.slice(0, editPath.lastIndexOf("/")) : ""}
+                                      {extractDirectory(editPath)}
                                     </span>
                                   </div>
                                   <details className="group">

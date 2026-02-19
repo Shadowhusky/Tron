@@ -198,10 +198,20 @@ class AIService {
     localStorage.setItem(STORAGE_KEYS.AI_CONFIG, JSON.stringify(this.config));
   }
 
-  /** Build JSON headers, optionally including Bearer auth. */
+  /** Build JSON headers for OpenAI-compatible APIs, optionally including Bearer auth. */
   private jsonHeaders(apiKey?: string): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
     if (apiKey) h.Authorization = `Bearer ${apiKey}`;
+    return h;
+  }
+
+  /** Build JSON headers for Anthropic APIs, optionally including x-api-key. */
+  private anthropicHeaders(apiKey?: string): Record<string, string> {
+    const h: Record<string, string> = {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+    };
+    if (apiKey) h["x-api-key"] = apiKey;
     return h;
   }
 
@@ -378,8 +388,7 @@ class AIService {
     if (provider === "anthropic-compat" && baseUrl) {
       try {
         const url = baseUrl.replace(/\/+$/, "");
-        const headers: Record<string, string> = { "anthropic-version": "2023-06-01" };
-        if (this.config.apiKey) headers["x-api-key"] = this.config.apiKey;
+        const headers = this.anthropicHeaders(this.config.apiKey);
         const response = await fetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
@@ -520,8 +529,7 @@ class AIService {
       if (provider === "anthropic-compat" && baseUrl) {
         try {
           const url = baseUrl.replace(/\/+$/, "");
-          const headers: Record<string, string> = { "anthropic-version": "2023-06-01" };
-          if (apiKey) headers["x-api-key"] = apiKey;
+          const headers = this.anthropicHeaders(apiKey);
           const response = await fetch(`${url}/v1/models`, { headers });
           if (response.ok) {
             const data = await response.json();
@@ -568,11 +576,7 @@ class AIService {
       if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
-          headers: {
-            ...(apiKey ? { "x-api-key": apiKey } : {}),
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
+          headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model,
             max_tokens: 500,
@@ -751,12 +755,9 @@ class AIService {
     const body: any = { model, messages, stream: false };
     if (maxTokens) body.max_tokens = maxTokens;
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-
     const response = await fetch(url, {
       method: "POST",
-      headers,
+      headers: this.jsonHeaders(apiKey || undefined),
       body: JSON.stringify(body),
     });
     if (!response.ok) {
@@ -784,12 +785,9 @@ class AIService {
       body.response_format = { type: "json_object" };
     }
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-
     const response = await fetch(url, {
       method: "POST",
-      headers,
+      headers: this.jsonHeaders(apiKey || undefined),
       body: JSON.stringify(body),
       signal,
     });
@@ -799,7 +797,7 @@ class AIService {
       delete body.response_format;
       const retry = await fetch(url, {
         method: "POST",
-        headers,
+        headers: this.jsonHeaders(apiKey || undefined),
         body: JSON.stringify(body),
         signal,
       });
@@ -898,11 +896,7 @@ class AIService {
         if (!apiKey && provider === "anthropic") throw new Error("Anthropic API Key required");
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
-          headers: {
-            ...(apiKey ? { "x-api-key": apiKey } : {}),
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
+          headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model: model,
             max_tokens: 100,
@@ -977,11 +971,7 @@ class AIService {
       if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
-          headers: {
-            ...(apiKey ? { "x-api-key": apiKey } : {}),
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
+          headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model,
             max_tokens: 100,
@@ -1007,11 +997,9 @@ class AIService {
       // OpenAI-compatible providers
       if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
         const url = this.getOpenAIChatUrl(provider, baseUrl);
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
         const response = await fetch(url, {
           method: "POST",
-          headers,
+          headers: this.jsonHeaders(apiKey || undefined),
           body: JSON.stringify({
             model,
             messages: [
@@ -1080,11 +1068,7 @@ class AIService {
       if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
-          headers: {
-            ...(apiKey ? { "x-api-key": apiKey } : {}),
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
+          headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model,
             max_tokens: 15,
@@ -1171,11 +1155,7 @@ class AIService {
       }));
       const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
         method: "POST",
-        headers: {
-          ...(apiKey ? { "x-api-key": apiKey } : {}),
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
+        headers: this.anthropicHeaders(apiKey),
         body: JSON.stringify({
           model,
           max_tokens: 4096,
@@ -1429,11 +1409,7 @@ ${agentPrompt}
           let contentAccumulated = "";
           const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
             method: "POST",
-            headers: {
-              ...(apiKey ? { "x-api-key": apiKey } : {}),
-              "anthropic-version": "2023-06-01",
-              "content-type": "application/json",
-            },
+            headers: this.anthropicHeaders(apiKey),
             body: JSON.stringify({
               model,
               max_tokens: 4096,

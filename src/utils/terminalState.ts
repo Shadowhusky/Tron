@@ -60,6 +60,10 @@ export function classifyTerminalOutput(output: string): TerminalState {
   const lastLine = lines.filter(l => l.trim()).slice(-1)[0]?.trim() || "";
   // Shell prompt at end → process finished, terminal idle
   if (/[$%#>]\s*$/.test(lastLines) || /^\S+@\S+.*[%$#>]\s*$/m.test(lastLines)) return "idle";
+  // Windows PowerShell prompt: PS C:\Users\foo>  or  PS>
+  if (/^PS\s+[A-Z]:\\[^>]*>\s*$/m.test(lastLines)) return "idle";
+  // Windows cmd.exe prompt: C:\Users\foo>
+  if (/^[A-Z]:\\[^>]*>\s*$/m.test(lastLines)) return "idle";
   // Dev server / listener patterns → safe to Ctrl+C
   if (/localhost:\d+|127\.0\.0\.1:\d+|ready in|listening on|VITE.*ready|press h.*enter/i.test(lastLines)) return "server";
   // Input prompt detection — process waiting for user to type something

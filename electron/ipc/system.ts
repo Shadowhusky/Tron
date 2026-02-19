@@ -1,4 +1,10 @@
 import { ipcMain, dialog, shell, BrowserWindow } from "electron";
+import path from "path";
+
+/** Cross-platform absolute path check (Unix / and Windows C:\ or UNC \\). */
+function isAbsolutePath(p: string): boolean {
+  return path.isAbsolute(p);
+}
 
 export function registerSystemHandlers() {
   ipcMain.handle("system.selectFolder", async (_event, defaultPath?: string) => {
@@ -20,14 +26,14 @@ export function registerSystemHandlers() {
   });
 
   ipcMain.handle("shell.openPath", async (_event, filePath: string) => {
-    if (typeof filePath === "string" && filePath.startsWith("/")) {
+    if (typeof filePath === "string" && isAbsolutePath(filePath)) {
       return await shell.openPath(filePath);
     }
     return "Invalid path";
   });
 
   ipcMain.handle("shell.showItemInFolder", (_event, filePath: string) => {
-    if (typeof filePath === "string" && filePath.startsWith("/")) {
+    if (typeof filePath === "string" && isAbsolutePath(filePath)) {
       shell.showItemInFolder(filePath);
     }
   });

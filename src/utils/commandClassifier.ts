@@ -162,9 +162,10 @@ function hasNaturalLanguagePattern(words: string[]): boolean {
 function hasCommandSyntax(input: string, words: string[]): boolean {
   // Pipe, redirect, chain, semicolon
   if (/[|><;&]/.test(input)) return true;
-  // Any word starts with - (flag) or ./ or / or ~ (path)
+  // Any word starts with - (flag), path prefix (./  ../  ~/  /), or Windows path (C:\)
   for (let i = 1; i < words.length; i++) {
     if (/^[-./~$]/.test(words[i])) return true;
+    if (/^[a-zA-Z]:[/\\]/.test(words[i]) || words[i].startsWith(".\\") || words[i].startsWith("..\\")) return true;
   }
   return false;
 }
@@ -458,8 +459,8 @@ export function isCommand(input: string): boolean {
   const words = trimmed.split(/\s+/);
   const firstWord = words[0];
 
-  // Path-based invocations are always commands
-  if (firstWord.startsWith("./") || firstWord.startsWith("/")) return true;
+  // Path-based invocations are always commands (Unix and Windows)
+  if (firstWord.startsWith("./") || firstWord.startsWith(".\\") || firstWord.startsWith("/") || /^[a-zA-Z]:[/\\]/.test(firstWord)) return true;
 
   // Explicit command syntax overrides everything
   if (hasCommandSyntax(trimmed, words)) return true;
@@ -477,7 +478,7 @@ export function isCommand(input: string): boolean {
       // Otherwise assume it's a natural language query for the agent
       const hasFlags = words.some((w) => w.startsWith("-"));
       const hasPaths = words.some(
-        (w) => w.includes("/") || w === "." || w === "~",
+        (w) => w.includes("/") || w.includes("\\") || w === "." || w === "~" || /^[a-zA-Z]:[/\\]/.test(w),
       );
       if (!hasFlags && !hasPaths) {
         return false; // Treat as agent prompt
@@ -557,13 +558,17 @@ export function isInteractiveCommand(cmd: string): boolean {
   return false;
 }
 
-/** Returns true if token looks like the start of a file path */
+/** Returns true if token looks like the start of a file path (Unix or Windows) */
 function isPathLike(token: string): boolean {
   return (
     token.startsWith("/") ||
     token.startsWith("./") ||
     token.startsWith("../") ||
-    token.startsWith("~/")
+    token.startsWith("~/") ||
+    /^[a-zA-Z]:[/\\]/.test(token) || // C:\ or C:/
+    token.startsWith(".\\") ||
+    token.startsWith("..\\") ||
+    token.startsWith("~\\")
   );
 }
 

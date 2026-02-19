@@ -13,6 +13,7 @@ src/
     agent.md          # Compact system prompt appended to agent instructions (keep concise — sent every call)
   hooks/              # Custom React hooks (useAgentRunner)
   utils/
+    platform.ts           # Cross-platform path utilities (isWindows, extractFilename, abbreviateHome, etc.)
     commandClassifier.ts  # Command classification, smartQuotePaths(), isInteractiveCommand()
     terminalState.ts      # Terminal state classifier (idle/busy/server/input_needed), scaffold duplicate check, autoCd
     contextCleaner.ts     # ANSI stripping, output collapsing, truncation
@@ -89,7 +90,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **mentionsError filter**: Rejects final_answer that mentions errors without resolution words — but bypassed when user's prompt itself mentioned errors (`userMentionedError`).
 
 ### Terminal State Classification (`src/utils/terminalState.ts`)
-- `idle` — shell prompt visible (`$`, `%`, `#`, `>` at end)
+- `idle` — shell prompt visible (`$`, `%`, `#`, `>` at end, plus Windows `PS C:\>` and `C:\>` patterns)
 - `server` — dev server running (localhost, VITE ready, etc.)
 - `input_needed` — password/confirmation prompts OR TUI menus (●○ radio buttons, ◆◇ prompts, box drawing chars)
 - `busy` — process actively running (default fallback)
@@ -135,6 +136,18 @@ npm run lint          # ESLint
 - `agent.md` is appended to the agent system prompt — keep it compact (< 10 lines) since it's sent on every LLM call
 - `AgentOverlay` uses `summarizeCommand()` for human-readable step titles and `describeStreamingContent()` for live streaming labels (write_file, read_file, edit_file supported)
 - Agent exec uses `execInTerminal` IPC — runs command in visible PTY with sentinel-based completion detection and display buffering to strip internal markers
+
+## Cross-Platform (Windows) Support
+
+- **Platform utility**: `src/utils/platform.ts` provides `isWindows()`, `extractFilename()`, `extractDirectory()`, `isAbsolutePath()`, `abbreviateHome()`, `isPathLikeToken()` — used throughout renderer code
+- **Shell detection**: Windows tries `pwsh.exe` → `powershell.exe` → `cmd.exe` fallback chain (both `electron/ipc/terminal.ts` and `server/handlers/terminal.ts`)
+- **Sentinels**: Unix uses `printf "__TRON_DONE_..."`, Windows uses `Write-Host "__TRON_DONE_..."` — all sentinel stripping handles both patterns
+- **Prompt detection**: `terminalState.ts` and `contextCleaner.ts` recognize `PS C:\path>` (PowerShell) and `C:\path>` (cmd) prompts
+- **Path handling**: `commandClassifier.ts` recognizes Windows paths (`C:\`, `.\\`, `..\\`); `AgentOverlay` linkifies Windows paths and splits on `[\\/]`
+- **Home abbreviation**: `abbreviateHome()` handles `/Users/x` (macOS), `/home/x` (Linux), `C:\Users\x` (Windows) — used in `ContextBar` and `TerminalPane`
+- **Window creation**: `electron/main.ts` uses `vibrancy`/`titleBarStyle` on macOS, `backgroundMaterial: "mica"` on Windows
+- **CWD detection**: `getCwdForPid` uses `lsof` on macOS, `/proc/PID/cwd` on Linux, `Get-CimInstance Win32_Process` on Windows
+- **AI headers**: `jsonHeaders()` and `anthropicHeaders()` helpers in `ai/index.ts` ensure consistent auth headers across all providers
 
 ## Workflow
 

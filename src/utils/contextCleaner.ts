@@ -211,7 +211,8 @@ function truncateLongOutputs(
   };
 
   for (const line of lines) {
-    const isPrompt = /^[^\s]*[@$%#>]\s/.test(line) || /^\s*\$\s/.test(line);
+    const isPrompt = /^[^\s]*[@$%#>]\s/.test(line) || /^\s*\$\s/.test(line) ||
+      /^PS\s+[A-Z]:\\[^>]*>\s/.test(line) || /^[A-Z]:\\[^>]*>\s/.test(line);
 
     if (isPrompt) {
       if (inOutput) {
@@ -247,6 +248,9 @@ export function cleanContextForAI(rawHistory: string): string {
   cleaned = cleaned.replace(/^➜\s+/gm, "");
   cleaned = cleaned.replace(/^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+.*[%$#]\s*/gm, "");
   cleaned = cleaned.replace(/^[%$#>]\s*/gm, "");
+  // Windows prompts: PS C:\path>  and  C:\path>
+  cleaned = cleaned.replace(/^PS\s+[A-Z]:\\[^\n>]*>\s*/gm, "");
+  cleaned = cleaned.replace(/^[A-Z]:\\[^\n>]*>\s*/gm, "");
 
   // 4. Collapse excessive blank lines
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
