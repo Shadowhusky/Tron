@@ -211,10 +211,11 @@ function extToLang(filePath: string): string {
 
 /** Pre-process text to linkify absolute file paths for markdown rendering */
 function linkifyPaths(text: string): string {
-  // Replace absolute paths (not already inside markdown links) with file:// links.
+  // Replace absolute paths (not already inside markdown links or URLs) with file:// links.
   // Allows spaces in path segments (e.g. "Application Support") and encodes them in the URL.
+  // (?<!\/) prevents matching paths preceded by another slash (e.g. https://host/path)
   return text.replace(
-    /(?<!\[)(?<!\()(\/[\w./ _-]+\.\w+)/g,
+    /(?<!\[)(?<!\()(?<!\/)(\/([\w][\w./ _-]*)?[\w]+\.\w+)/g,
     (match) => `[${match}](file://${encodeURI(match)})`,
   );
 }
