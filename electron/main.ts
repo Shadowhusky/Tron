@@ -134,7 +134,7 @@ const createWindow = () => {
 };
 
 // --- Register all IPC handlers ---
-registerTerminalHandlers(() => mainWindow, app.getPath("userData"));
+registerTerminalHandlers(() => mainWindow);
 registerSystemHandlers();
 registerAIHandlers();
 registerConfigHandlers();

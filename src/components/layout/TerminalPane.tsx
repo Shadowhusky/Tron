@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Bot, ChevronRight, Folder } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
@@ -11,6 +11,9 @@ import { useAgentRunner } from "../../hooks/useAgentRunner";
 import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
 import { useHotkey } from "../../hooks/useHotkey";
+import { isInteractiveCommand, smartQuotePaths } from "../../utils/commandClassifier";
+import { IPC } from "../../constants/ipc";
+import type { AttachedImage } from "../../types";
 
 interface TerminalPaneProps {
   sessionId: string;
@@ -42,12 +45,36 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     handlePermission,
   } = useAgentRunner(sessionId, session);
 
-  const { stopAgent, setAgentThread } = useAgent(sessionId);
+  const { stopAgent: stopAgentRaw, resetSession, overlayHeight, setOverlayHeight, draftInput, setDraftInput, setAgentThread } = useAgent(sessionId);
+
+  // Stable refs for SmartInput memo
+  const stopAgentRef = useRef(stopAgentRaw);
+  stopAgentRef.current = stopAgentRaw;
+  const stableStopAgent = useCallback(() => stopAgentRef.current(), []);
+
+  const setThinkingEnabledRef = useRef(setThinkingEnabled);
+  setThinkingEnabledRef.current = setThinkingEnabled;
+  const stableSetThinkingEnabled = useCallback((v: boolean) => setThinkingEnabledRef.current(v), []);
+
+  const setDraftInputRef = useRef(setDraftInput);
+  setDraftInputRef.current = setDraftInput;
+  const stableSetDraftInput = useCallback((v: string | undefined) => setDraftInputRef.current(v), []);
+
+  // Stable callback refs for SmartInput memo (assigned after functions are defined below)
+  const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => {});
+  const wrappedHandleAgentRunRef = useRef<(prompt: string, queueCallback?: any, images?: AttachedImage[]) => void>(() => {});
+  const handleSlashCommandRef = useRef<(cmd: string) => void>(() => {});
+  const stableOnSend = useCallback((cmd: string) => wrappedHandleCommandRef.current(cmd), []);
+  const stableOnRunAgent = useCallback(async (prompt: string, images?: AttachedImage[]) => wrappedHandleAgentRunRef.current(prompt, undefined, images), []);
+  const stableSlashCommand = useCallback((cmd: string) => handleSlashCommandRef.current(cmd), []);
 
   // Input Queue
   const [inputQueue, setInputQueue] = useState<
     Array<{ type: "command" | "agent"; content: string }>
   >([]);
+
+  // In agent view: show embedded terminal when user runs a command
+  const [showEmbeddedTerminal, setShowEmbeddedTerminal] = useState(false);
 
   // Toggle agent panel (no-op in agent view mode — overlay is always visible)
   useHotkey(
@@ -70,26 +97,38 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     "stopAgent",
     () => {
       if (!isActive || !isAgentRunning) return;
-      stopAgent();
+      stopAgentRaw();
     },
-    [isActive, isAgentRunning, stopAgent],
+    [isActive, isAgentRunning, stopAgentRaw],
   );
 
-  // Clear terminal / agent thread
+  // Clear terminal (+ agent thread so it doesn't come back on refresh)
   useHotkey(
     "clearTerminal",
     () => {
       if (!isActive) return;
       if (isAgentMode) {
-        setAgentThread([]);
+        resetSession();
       } else {
-        // Signal Terminal component to clear xterm (SmartInput may have focus)
+        // Clear xterm
         window.dispatchEvent(
           new CustomEvent("tron:clearTerminal", { detail: { sessionId } }),
         );
+        // Also clear agent thread so it doesn't reappear on refresh
+        resetSession();
       }
     },
-    [isActive, isAgentMode, setAgentThread, sessionId],
+    [isActive, isAgentMode, resetSession, sessionId],
+  );
+
+  // Clear agent panel only (Cmd+Shift+K)
+  useHotkey(
+    "clearAgent",
+    () => {
+      if (!isActive) return;
+      resetSession();
+    },
+    [isActive, resetSession],
   );
 
   // Listen for tutorial test-run event
@@ -111,7 +150,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
       if (nextItem.type === "command") {
         if (isAgentMode) {
-          handleCommandInOverlay(nextItem.content);
+          if (isInteractiveCommand(nextItem.content)) {
+            setShowEmbeddedTerminal(true);
+            handleCommand(nextItem.content);
+          } else {
+            handleCommandInOverlay(nextItem.content);
+          }
         } else {
           handleCommand(nextItem.content);
         }
@@ -132,19 +176,104 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     setInputQueue((prev) => [...prev, item]);
   };
 
-  const wrappedHandleCommand = (cmd: string, queueCallback?: any) => {
+  // Close embedded terminal: aggressively exit whatever is running, wait for cleanup, then hide
+  const closeEmbeddedTerminal = useCallback(() => {
+    if (window.electron) {
+      const write = (data: string) =>
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data });
+      // 1. Escape + :q! — exit vi/vim/nvim (Escape exits insert mode, :q! force quits)
+      write("\x1B\x1B:q!\r");
+      // 2. After brief delay, Ctrl+C x2 + Ctrl+D — exit processes / REPLs
+      setTimeout(() => {
+        write("\x03\x03");
+        setTimeout(() => write("\x04"), 50);
+      }, 100);
+    }
+    // Wait for exit sequences to be processed by the PTY before hiding
+    setTimeout(() => setShowEmbeddedTerminal(false), 350);
+  }, [sessionId]);
+
+  const wrappedHandleCommand = useCallback((cmd: string, queueCallback?: any) => {
+    const fixed = smartQuotePaths(cmd);
     markSessionDirty(sessionId);
     if (isAgentMode) {
-      handleCommandInOverlay(cmd, queueCallback);
+      if (isInteractiveCommand(fixed)) {
+        // Interactive command → show embedded terminal for TUI / REPL interaction
+        setShowEmbeddedTerminal(true);
+        handleCommand(fixed, queueCallback);
+      } else {
+        // Non-interactive → run via sentinel exec, output in agent overlay
+        handleCommandInOverlay(fixed, queueCallback);
+      }
     } else {
-      handleCommand(cmd, queueCallback);
+      handleCommand(fixed, queueCallback);
     }
-  };
+  }, [isAgentMode, markSessionDirty, sessionId, handleCommand, handleCommandInOverlay]);
 
-  const wrappedHandleAgentRun = async (prompt: string, queueCallback?: any) => {
+  const wrappedHandleAgentRun = useCallback(async (prompt: string, queueCallback?: any, images?: AttachedImage[]) => {
     markSessionDirty(sessionId);
-    await handleAgentRun(prompt, queueCallback);
-  };
+    await handleAgentRun(prompt, queueCallback, images);
+  }, [markSessionDirty, sessionId, handleAgentRun]);
+
+  const handleSlashCommand = useCallback(async (command: string) => {
+    if (command === "/log") {
+      try {
+        // Assemble session metadata (strip secrets)
+        const meta: Record<string, unknown> = {
+          id: sessionId,
+          title: session?.title || "Terminal",
+          cwd: session?.cwd,
+          provider: session?.aiConfig?.provider,
+          model: session?.aiConfig?.model,
+        };
+
+        const result = await window.electron.ipcRenderer.saveSessionLog({
+          sessionId,
+          session: meta,
+          interactions: session?.interactions || [],
+          agentThread: agentThread.map((s) => ({ step: s.step, output: s.output })),
+          contextSummary: session?.contextSummary,
+        });
+
+        if (result.success && result.filePath && result.logId) {
+          // Copy file path to clipboard
+          try {
+            await navigator.clipboard.writeText(result.filePath);
+          } catch {
+            // Clipboard may not be available
+          }
+
+          // Push system step to agent thread
+          setAgentThread((prev) => [
+            ...prev,
+            {
+              step: "system",
+              output: `Session log saved: **${result.logId}**\n\n${result.filePath}\n\nPath copied to clipboard.`,
+            },
+          ]);
+
+          // Show overlay if hidden
+          if (!isOverlayVisible) setIsOverlayVisible(true);
+        } else {
+          setAgentThread((prev) => [
+            ...prev,
+            { step: "system", output: `Failed to save log: ${result.error || "Unknown error"}` },
+          ]);
+          if (!isOverlayVisible) setIsOverlayVisible(true);
+        }
+      } catch (err: any) {
+        setAgentThread((prev) => [
+          ...prev,
+          { step: "system", output: `Error saving log: ${err.message}` },
+        ]);
+        if (!isOverlayVisible) setIsOverlayVisible(true);
+      }
+    }
+  }, [sessionId, session, agentThread, setAgentThread, isOverlayVisible, setIsOverlayVisible]);
+  // Update refs after function definitions so stable callbacks always call the latest version
+  wrappedHandleCommandRef.current = wrappedHandleCommand;
+  wrappedHandleAgentRunRef.current = wrappedHandleAgentRun;
+  handleSlashCommandRef.current = handleSlashCommand;
 
   const handlePaneFocus = () => {
     if (!isActive) focusSession(sessionId);
@@ -191,15 +320,56 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             thinkingEnabled={thinkingEnabled}
             onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
             onClose={() => {}}
+            onClear={() => resetSession()}
             onPermission={handlePermission}
             isExpanded={true}
             onExpand={() => {}}
-            onRunAgent={(prompt) =>
-              wrappedHandleAgentRun(prompt, queueItem as any)
+            onRunAgent={(prompt, images) =>
+              wrappedHandleAgentRun(prompt, queueItem as any, images)
             }
             modelCapabilities={modelCapabilities}
             fullHeight
           />
+
+          {/* Embedded terminal — shown when user runs a command in agent mode */}
+          <AnimatePresence>
+            {showEmbeddedTerminal && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "40%", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className={`relative border-t shrink-0 ${themeClass(resolvedTheme, {
+                  dark: "border-white/10",
+                  modern: "border-white/10",
+                  light: "border-gray-300",
+                })}`}
+              >
+                {/* Header bar with close button */}
+                <div
+                  className={`absolute top-0 right-0 z-10 flex items-center gap-1 px-2 py-1`}
+                >
+                  <button
+                    onClick={closeEmbeddedTerminal}
+                    className={`p-1 rounded transition-colors ${themeClass(resolvedTheme, {
+                      dark: "hover:bg-white/10 text-gray-400 hover:text-white",
+                      modern: "hover:bg-white/10 text-gray-400 hover:text-white",
+                      light: "hover:bg-gray-200 text-gray-500 hover:text-gray-800",
+                    })}`}
+                    title="Close terminal (sends Ctrl+C)"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <Terminal
+                  className="w-full h-full"
+                  sessionId={sessionId}
+                  onActivity={() => markSessionDirty(sessionId)}
+                  isActive={isActive}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </>
       ) : (
         <>
@@ -228,6 +398,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 thinkingEnabled={thinkingEnabled}
                 onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
                 onClose={() => setIsOverlayVisible(false)}
+                onClear={() => resetSession()}
                 onPermission={handlePermission}
                 isExpanded={isOverlayVisible}
                 onExpand={() => setIsOverlayVisible(true)}
@@ -235,6 +406,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   wrappedHandleAgentRun(prompt, queueItem as any)
                 }
                 modelCapabilities={modelCapabilities}
+                overlayHeight={overlayHeight}
+                onResizeHeight={setOverlayHeight}
               />
             )}
           </AnimatePresence>
@@ -309,15 +482,21 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         })}`}
       >
         <SmartInput
-          onSend={(cmd) => wrappedHandleCommand(cmd, queueItem as any)}
-          onRunAgent={(prompt) =>
-            wrappedHandleAgentRun(prompt, queueItem as any)
-          }
+          onSend={stableOnSend}
+          onRunAgent={stableOnRunAgent}
           isAgentRunning={isAgentRunning}
           pendingCommand={pendingCommand}
           sessionId={sessionId}
           modelCapabilities={modelCapabilities}
+          sessionAIConfig={session?.aiConfig}
           defaultAgentMode={isAgentMode}
+          draftInput={draftInput}
+          onDraftChange={stableSetDraftInput}
+          onSlashCommand={stableSlashCommand}
+          stopAgent={stableStopAgent}
+          thinkingEnabled={thinkingEnabled}
+          setThinkingEnabled={stableSetThinkingEnabled}
+          activeSessionId={activeSessionId}
         />
       </div>
       <div className="relative z-30">

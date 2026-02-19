@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "../../../contexts/ThemeContext";
 import type { AIConfig } from "../../../types";
-import { aiService, getCloudProviderList } from "../../../services/ai";
+import { aiService, getCloudProviderList, providerUsesBaseUrl } from "../../../services/ai";
 import { Monitor, Gem, Terminal, Bot } from "lucide-react";
 import {
   useModelsWithCaps,
@@ -74,12 +74,15 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const [showValidationWarn, setShowValidationWarn] = useState(false);
 
   const isAiStep = STEPS[currentStep].id === "ai";
+  const isLocalProvider = aiConfig.provider === "ollama" || aiConfig.provider === "lmstudio";
   const { data: allModels = [] } = useModelsWithCaps(
-    aiConfig.baseUrl,
-    isAiStep && aiConfig.provider === "ollama",
+    providerUsesBaseUrl(aiConfig.provider) ? aiConfig.baseUrl : undefined,
+    isAiStep && isLocalProvider,
+    aiConfig.provider,
   );
   const invalidateModels = useInvalidateModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
+  const lmstudioModels = allModels.filter((m) => m.provider === "lmstudio");
 
   const handleTestConnection = async () => {
     setConnectionStatus("testing");
@@ -315,13 +318,19 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                 </label>
                 <select
                   value={aiConfig.provider}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const newProvider = e.target.value;
+                    const defaultBaseUrls: Record<string, string> = {
+                      ollama: "http://localhost:11434",
+                      lmstudio: "http://127.0.0.1:1234",
+                    };
                     setAiConfig((c) => ({
                       ...c,
-                      provider: e.target.value as any,
+                      provider: newProvider as any,
                       model: "",
-                    }))
-                  }
+                      baseUrl: providerUsesBaseUrl(newProvider) ? (defaultBaseUrls[newProvider] || "") : undefined,
+                    }));
+                  }}
                   className={`w-full p-2.5 pr-8 rounded-lg border outline-none focus:border-purple-500 transition-colors
                       ${
                         resolvedTheme === "light"
@@ -330,25 +339,28 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                       }
                     `}
                 >
-                  <option value="ollama" className="text-gray-900 bg-white">
-                    Ollama (Local)
-                  </option>
-                  {getCloudProviderList().map(({ id, info }) => (
-                    <option
-                      key={id}
-                      value={id}
-                      className="text-gray-900 bg-white"
-                    >
-                      {info.label}
-                    </option>
-                  ))}
+                  <optgroup label="Local">
+                    <option value="ollama" className="text-gray-900 bg-white">Ollama (Local)</option>
+                    <option value="lmstudio" className="text-gray-900 bg-white">LM Studio (Local)</option>
+                  </optgroup>
+                  <optgroup label="Cloud">
+                    {getCloudProviderList()
+                      .filter(({ id }) => !["lmstudio", "openai-compat", "anthropic-compat"].includes(id))
+                      .map(({ id, info }) => (
+                        <option key={id} value={id} className="text-gray-900 bg-white">{info.label}</option>
+                      ))}
+                  </optgroup>
+                  <optgroup label="Custom">
+                    <option value="openai-compat" className="text-gray-900 bg-white">OpenAI Compatible</option>
+                    <option value="anthropic-compat" className="text-gray-900 bg-white">Anthropic Compatible</option>
+                  </optgroup>
                 </select>
               </div>
 
               <AnimatePresence mode="wait">
-                {aiConfig.provider === "ollama" ? (
+                {isLocalProvider ? (
                   <motion.div
-                    key="ollama"
+                    key="local"
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: "auto" }}
                     exit={{ opacity: 0, height: 0 }}
@@ -357,18 +369,18 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   >
                     <div className="flex flex-col gap-2">
                       <label className="text-sm font-medium opacity-80">
-                        Ollama URL
+                        {aiConfig.provider === "lmstudio" ? "LM Studio" : "Ollama"} URL
                       </label>
                       <div className="flex gap-2">
                         <input
                           type="text"
-                          value={aiConfig.baseUrl || "http://localhost:11434"}
+                          value={aiConfig.baseUrl || (aiConfig.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434")}
                           onChange={(e) => {
                             const newUrl = e.target.value;
                             setAiConfig((c) => ({ ...c, baseUrl: newUrl }));
                           }}
                           onBlur={() => {
-                            invalidateModels(aiConfig.baseUrl);
+                            invalidateModels(aiConfig.baseUrl, aiConfig.provider);
                           }}
                           className={`flex-1 p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
                             ${
@@ -377,13 +389,13 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                                 : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
                             }
                           `}
-                          placeholder="http://localhost:11434"
+                          placeholder={aiConfig.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434"}
                         />
                         <motion.button
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => {
-                            invalidateModels(aiConfig.baseUrl);
+                            invalidateModels(aiConfig.baseUrl, aiConfig.provider);
                           }}
                           className={`shrink-0 px-2.5 py-2 rounded-lg border text-xs transition-colors ${
                             resolvedTheme === "light"
@@ -399,59 +411,85 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
 
                     <div className="flex flex-col gap-2">
                       <label className="text-sm font-medium opacity-80">
+                        API Key (optional)
+                      </label>
+                      <input
+                        type="password"
+                        value={aiConfig.apiKey || ""}
+                        onChange={(e) =>
+                          setAiConfig((c) => ({ ...c, apiKey: e.target.value }))
+                        }
+                        placeholder="Leave empty if not required"
+                        className={`w-full p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                          ${
+                            resolvedTheme === "light"
+                              ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
+                              : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                          }
+                        `}
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <label className="text-sm font-medium opacity-80">
                         Model
                       </label>
-                      <div
-                        className={`w-full rounded-lg border overflow-hidden max-h-24 overflow-y-auto ${
-                          resolvedTheme === "light"
-                            ? "bg-white border-gray-200"
-                            : "bg-black/20 border-white/10"
-                        }`}
-                      >
-                        {ollamaModels.length === 0 && (
-                          <div className="px-3 py-2 text-xs italic text-gray-500">
-                            No models found
-                          </div>
-                        )}
-                        {ollamaModels.map((m, i) => (
-                          <motion.button
-                            key={m.name}
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: i * 0.03 }}
-                            onClick={() =>
-                              setAiConfig((c) => ({ ...c, model: m.name }))
-                            }
-                            className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                              aiConfig.model === m.name
-                                ? "bg-purple-500/10 text-purple-400"
-                                : resolvedTheme === "light"
-                                  ? "text-gray-700 hover:bg-gray-50"
-                                  : "text-gray-300 hover:bg-white/5"
+                      {(() => {
+                        const localModels = aiConfig.provider === "lmstudio" ? lmstudioModels : ollamaModels;
+                        return (
+                          <div
+                            className={`w-full rounded-lg border overflow-hidden max-h-24 overflow-y-auto ${
+                              resolvedTheme === "light"
+                                ? "bg-white border-gray-200"
+                                : "bg-black/20 border-white/10"
                             }`}
                           >
-                            <span className="flex-1 truncate">{m.name}</span>
-                            <div className="flex gap-1 shrink-0">
-                              {m.capabilities?.map((cap) => (
-                                <span
-                                  key={cap}
-                                  className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                                    cap === "thinking"
-                                      ? "bg-purple-500/20 text-purple-400"
-                                      : cap === "vision"
-                                        ? "bg-blue-500/20 text-blue-400"
-                                        : cap === "tools"
-                                          ? "bg-green-500/20 text-green-400"
-                                          : "bg-gray-500/20 text-gray-400"
-                                  }`}
-                                >
-                                  {cap}
-                                </span>
-                              ))}
-                            </div>
-                          </motion.button>
-                        ))}
-                      </div>
+                            {localModels.length === 0 && (
+                              <div className="px-3 py-2 text-xs italic text-gray-500">
+                                No models found
+                              </div>
+                            )}
+                            {localModels.map((m, i) => (
+                              <motion.button
+                                key={m.name}
+                                initial={{ opacity: 0, x: -10 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ delay: i * 0.03 }}
+                                onClick={() =>
+                                  setAiConfig((c) => ({ ...c, model: m.name }))
+                                }
+                                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                                  aiConfig.model === m.name
+                                    ? "bg-purple-500/10 text-purple-400"
+                                    : resolvedTheme === "light"
+                                      ? "text-gray-700 hover:bg-gray-50"
+                                      : "text-gray-300 hover:bg-white/5"
+                                }`}
+                              >
+                                <span className="flex-1 truncate">{m.name}</span>
+                                <div className="flex gap-1 shrink-0">
+                                  {m.capabilities?.map((cap) => (
+                                    <span
+                                      key={cap}
+                                      className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
+                                        cap === "thinking"
+                                          ? "bg-purple-500/20 text-purple-400"
+                                          : cap === "vision"
+                                            ? "bg-blue-500/20 text-blue-400"
+                                            : cap === "tools"
+                                              ? "bg-green-500/20 text-green-400"
+                                              : "bg-gray-500/20 text-gray-400"
+                                      }`}
+                                    >
+                                      {cap}
+                                    </span>
+                                  ))}
+                                </div>
+                              </motion.button>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </motion.div>
                 ) : (
@@ -463,6 +501,28 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     transition={{ duration: 0.25 }}
                     className="space-y-4 overflow-hidden"
                   >
+                    {(aiConfig.provider === "openai-compat" || aiConfig.provider === "anthropic-compat") && (
+                      <div className="flex flex-col gap-2">
+                        <label className="text-sm font-medium opacity-80">
+                          Base URL
+                        </label>
+                        <input
+                          type="text"
+                          value={aiConfig.baseUrl || ""}
+                          onChange={(e) =>
+                            setAiConfig((c) => ({ ...c, baseUrl: e.target.value }))
+                          }
+                          placeholder={aiConfig.provider === "anthropic-compat" ? "https://your-proxy.example.com" : "https://your-api.example.com/v1"}
+                          className={`w-full p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                            ${
+                              resolvedTheme === "light"
+                                ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
+                                : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                            }
+                          `}
+                        />
+                      </div>
+                    )}
                     <div className="flex flex-col gap-2">
                       <label className="text-sm font-medium opacity-80">
                         Model Name
@@ -485,7 +545,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     </div>
                     <div className="flex flex-col gap-2">
                       <label className="text-sm font-medium opacity-80">
-                        API Key
+                        API Key{(aiConfig.provider === "openai-compat" || aiConfig.provider === "anthropic-compat") ? " (optional)" : ""}
                       </label>
                       <input
                         type="password"

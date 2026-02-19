@@ -112,6 +112,20 @@ button:disabled {
   background: none;
   padding: 0;
 }
+
+/* Light theme overrides for markdown code blocks */
+.markdown-light code {
+  background: rgba(0, 0, 0, 0.05) !important;
+  color: #1f2937;
+}
+.markdown-light pre {
+  background: rgba(249, 250, 251, 0.9) !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+  color: #374151;
+}
+.markdown-light pre code {
+  color: inherit;
+}
 .markdown-content ul,
 .markdown-content ol {
   margin: 0.3em 0;
@@ -143,4 +157,18 @@ button:disabled {
   padding-left: 0.75em;
   margin: 0.3em 0;
   opacity: 0.85;
+}
+
+/* Clickable links in agent done output */
+.linkified-content a {
+  color: rgba(96, 165, 250, 0.9);
+  text-decoration: underline;
+  text-decoration-color: rgba(96, 165, 250, 0.3);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+.linkified-content a:hover {
+  color: rgba(96, 165, 250, 1);
+  text-decoration-color: rgba(96, 165, 250, 0.7);
 }

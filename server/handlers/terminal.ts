@@ -198,14 +198,38 @@ async function getSessionCwd(sessionId: string): Promise<string> {
   return cwd;
 }
 
-export async function execCommand(sessionId: string, command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+export async function execCommand(sessionId: string, command: string): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
   const cwd = await getSessionCwd(sessionId);
-  try {
-    const { stdout, stderr } = await trackedExec(command, { cwd });
-    return { stdout, stderr, exitCode: 0 };
-  } catch (e: any) {
-    return { stdout: "", stderr: e.message, exitCode: e.code || 1 };
-  }
+  return new Promise((resolve) => {
+    const child = exec(
+      command,
+      { cwd, timeout: 30000 },
+      (error, stdout, stderr) => {
+        activeChildProcesses.delete(child);
+        if (error && (error as any).killed) {
+          resolve({
+            stdout: (stdout as string) || "",
+            stderr: (stderr as string) || "",
+            exitCode: 124,
+            timedOut: true,
+          });
+        } else if (error) {
+          resolve({
+            stdout: (stdout as string) || "",
+            stderr: (stderr as string) || error.message,
+            exitCode: (error as any).code || 1,
+          });
+        } else {
+          resolve({
+            stdout: (stdout as string) || "",
+            stderr: (stderr as string) || "",
+            exitCode: 0,
+          });
+        }
+      },
+    );
+    activeChildProcesses.add(child);
+  });
 }
 
 export async function getCwd(sessionId: string): Promise<string | null> {

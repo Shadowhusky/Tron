@@ -178,11 +178,11 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
 
   return (
     <div className="fixed inset-0 z-9999" style={{ pointerEvents: "auto" }}>
-      {/* Backdrop with cutout */}
+      {/* Backdrop with cutout — pointer-events: none so skip button stays clickable */}
       {targetRect ? (
         <svg
           className="absolute inset-0 w-full h-full"
-          style={{ pointerEvents: "auto" }}
+          style={{ pointerEvents: "none" }}
         >
           <defs>
             <mask id="tutorial-mask">
@@ -206,7 +206,7 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
           />
         </svg>
       ) : (
-        <div className="absolute inset-0 bg-black/65" />
+        <div className="absolute inset-0 bg-black/65" style={{ pointerEvents: "none" }} />
       )}
 
       {/* Spotlight glow ring */}

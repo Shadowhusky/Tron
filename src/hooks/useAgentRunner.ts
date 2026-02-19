@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import type { TerminalSession } from "../types";
-import { aiService } from "../services/ai";
+import type { TerminalSession, AttachedImage } from "../types";
+import { aiService, type AgentContinuation } from "../services/ai";
 import { useHistory } from "../contexts/HistoryContext";
 import { useAgent } from "../contexts/AgentContext";
 import { useLayout } from "../contexts/LayoutContext";
@@ -42,18 +42,36 @@ export function useAgentRunner(
     registerAbortController,
   } = useAgent(sessionId);
 
-  // Model capabilities state
-  const [modelCapabilities, setModelCapabilities] = useState<string[]>([]);
+  // Model capabilities state — null means "unknown" (cloud providers), [] means "known but none"
+  const [modelCapabilities, setModelCapabilities] = useState<string[] | null>(null);
+
+  // Persisted agent state for resuming after ask_question
+  const continuationRef = useRef<AgentContinuation | null>(null);
+  // Track whether tab title has been generated (only once per session)
+  const titleGeneratedRef = useRef(false);
 
   // Fetch capabilities when session config model changes
   useEffect(() => {
     const model = session?.aiConfig?.model || aiService.getConfig().model;
     const provider =
       session?.aiConfig?.provider || aiService.getConfig().provider;
-    if (model && provider === "ollama") {
+    if (model && (provider === "ollama" || provider === "lmstudio")) {
       const baseUrl =
         session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
-      aiService.getModelCapabilities(model, baseUrl).then(setModelCapabilities);
+      aiService.getModelCapabilities(model, baseUrl, provider).then(setModelCapabilities);
+    } else if (model) {
+      // Cloud providers — infer thinking from model name
+      const m = model.toLowerCase();
+      const caps: string[] = [];
+      // Known thinking/reasoning models
+      if (
+        provider === "anthropic" || provider === "anthropic-compat" || // All modern Claude models support extended thinking
+        /\b(o[134]|reasoner|thinking|r1|qwq)\b/.test(m) ||           // OpenAI o-series, DeepSeek reasoner, QwQ
+        /\bgemini.*\b/.test(m)                                        // Gemini models support thinking
+      ) {
+        caps.push("thinking");
+      }
+      setModelCapabilities(caps);
     } else {
       setModelCapabilities([]);
     }
@@ -73,6 +91,7 @@ export function useAgentRunner(
   const writeCommandToTerminal = (
     cmd: string,
     skipInterrupt = false,
+    addNewLine = true,
   ): Promise<void> => {
     return new Promise((resolve) => {
       if (!window.electron) {
@@ -83,7 +102,7 @@ export function useAgentRunner(
       const sendCommand = () => {
         window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
           id: sessionId,
-          data: cmd + "\r",
+          data: addNewLine ? cmd + "\r" : cmd,
         });
         resolve();
       };
@@ -122,7 +141,7 @@ export function useAgentRunner(
     addToHistory(cmd);
   };
 
-  /** Execute a command via exec() and display result in agent overlay. */
+  /** Execute a command via execInTerminal() and display result in agent overlay. */
   const handleCommandInOverlay = async (
     cmd: string,
     queueCallback?: (item: { type: "command"; content: string }) => void,
@@ -141,18 +160,31 @@ export function useAgentRunner(
     setAgentThread((prev) => [...prev, { step: "executing", output: cmd }]);
 
     try {
-      const result = await window.electron.ipcRenderer.exec(sessionId, cmd);
+      // Use execInTerminal to run in the visible PTY and capture output
+      // This handles writing to the terminal internally, so we don't need writeCommandToTerminal here
+      const result = await window.electron.ipcRenderer.invoke(IPC.TERMINAL_EXEC_IN_TERMINAL, {
+        sessionId,
+        command: cmd,
+      });
+
       let output = result.stdout || "";
+      const exitCode = result.exitCode;
 
-      // If the command is a `cd`, also write it to the PTY so the shell's CWD
-      // updates and getCwdForPid returns the correct path on next poll.
-      const trimmed = cmd.trim();
-      if (/^cd(\s|$)/.test(trimmed) && result.exitCode === 0) {
-        writeCommandToTerminal(trimmed, true);
-      }
-
-      if (result.exitCode !== 0) {
-        output = result.stderr || result.stdout || "Command failed";
+      // Handle timeout (exitCode 124)
+      if (exitCode === 124) {
+        output = output || "(Long-running process — still running in terminal)";
+        setAgentThread((prev) => {
+          const updated = [...prev];
+          for (let j = updated.length - 1; j >= 0; j--) {
+            if (updated[j].step === "executing") {
+              updated[j] = { step: "executed", output: cmd + "\n---\n" + output };
+              break;
+            }
+          }
+          return updated;
+        });
+      } else if (exitCode !== 0) {
+        output = result.stderr || output || "Command failed";
         setAgentThread((prev) => {
           const updated = [...prev];
           for (let j = updated.length - 1; j >= 0; j--) {
@@ -200,6 +232,7 @@ export function useAgentRunner(
   const handleAgentRun = async (
     prompt: string,
     queueCallback?: (item: { type: "agent"; content: string }) => void,
+    images?: AttachedImage[],
   ) => {
     if (isAgentRunning && queueCallback) {
       queueCallback({ type: "agent", content: prompt });
@@ -211,15 +244,92 @@ export function useAgentRunner(
     registerAbortController(controller);
 
     setIsAgentRunning(true);
-    const modelSupportsThinking =
-      modelCapabilities.length === 0 || modelCapabilities.includes("thinking");
+    const modelSupportsThinking = modelCapabilities?.includes("thinking") ?? false;
     if (thinkingEnabled && modelSupportsThinking) {
       setIsThinking(true);
     }
     setIsOverlayVisible(true);
 
-    // Add a run separator (always, including first run)
-    setAgentThread((prev) => [...prev, { step: "separator", output: prompt }]);
+    // Add a run separator (always, including first run) — encode images if present
+    const separatorOutput = images && images.length > 0
+      ? prompt + "\n---images---\n" + JSON.stringify(images.map(img => ({ base64: img.base64, mediaType: img.mediaType, name: img.name })))
+      : prompt;
+    setAgentThread((prev) => [...prev, { step: "separator", output: separatorOutput }]);
+
+    // Generate tab title once — on first agent command, fire-and-forget concurrent with agent
+    if (!titleGeneratedRef.current && sessionId) {
+      titleGeneratedRef.current = true;
+      aiService
+        .generateTabTitle(prompt, session?.aiConfig)
+        .then((title) => { if (title) renameTab(sessionId, title); })
+        .catch(() => {});
+    }
+
+    // --- Image analysis shortcut: bypass agent loop entirely ---
+    if (images && images.length > 0) {
+      // Build conversation history from recent interactions so model has context
+      const recentInteractions = (session?.interactions || []).slice(-10);
+      const conversationHistory = recentInteractions.map((i) => ({
+        role: i.role === "user" ? "user" as const : "assistant" as const,
+        content: i.content,
+      }));
+
+      try {
+        let accumulated = "";
+        const result = await aiService.analyzeImages(
+          prompt,
+          images,
+          (token) => {
+            accumulated += token;
+            setAgentThread((prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].step === "streaming") {
+                const updated = [...prev];
+                updated[lastIdx] = { step: "streaming", output: accumulated };
+                return updated;
+              }
+              return [...prev, { step: "streaming", output: accumulated }];
+            });
+          },
+          session?.aiConfig,
+          controller.signal,
+          conversationHistory,
+        );
+        const finalText = result || accumulated || "Could not analyze the image.";
+        setAgentThread((prev) => {
+          const updated = [...prev];
+          // Replace streaming entry with done
+          for (let j = updated.length - 1; j >= 0; j--) {
+            if (updated[j].step === "streaming") {
+              updated[j] = { step: "done", output: finalText };
+              return updated;
+            }
+          }
+          return [...prev, { step: "done", output: finalText }];
+        });
+        // Persist to session interactions using addInteraction (avoids stale closure)
+        if (sessionId) {
+          addInteraction(sessionId, { role: "user", content: prompt, timestamp: Date.now() });
+          addInteraction(sessionId, { role: "agent", content: finalText, timestamp: Date.now() });
+        }
+      } catch (error: any) {
+        const isAbort = error.name === "AbortError" || error.message?.toLowerCase().includes("abort");
+        if (!isAbort) {
+          setAgentThread((prev) => [
+            ...prev,
+            { step: "error", output: `Error: ${error.message}` },
+          ]);
+        }
+      } finally {
+        setIsAgentRunning(false);
+        setIsThinking(false);
+      }
+      return;
+    }
+
+    // Check if this is a continuation from a previous ask_question
+    const currentContinuation = continuationRef.current;
+    continuationRef.current = null;
 
     try {
       // 0. Persist User Prompt to Session State (Invisible Context)
@@ -233,14 +343,49 @@ export function useAgentRunner(
         });
       }
 
-      // 1. Fetch & Clean Session History
+      let finalPrompt: string;
+
+      if (currentContinuation) {
+        // Continuing from a question — pass raw answer, history is in continuation
+        finalPrompt = prompt;
+      } else {
+      // 1. Fetch & Clean Session History & Environment
       let sessionHistory = "";
+      let cwd = "";
+      let systemPathsStr = "";
+
+      let projectFiles = "";
+
       if (window.electron) {
-        const rawHistory = await window.electron.ipcRenderer.invoke(
-          IPC.TERMINAL_GET_HISTORY,
-          sessionId,
-        );
+        // Run fetches in parallel for speed
+        const [rawHistory, fetchedCwd, paths, dirListing] = await Promise.all([
+          window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_HISTORY, sessionId),
+          window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_CWD, sessionId),
+          window.electron.ipcRenderer.invoke(IPC.CONFIG_GET_SYSTEM_PATHS).catch(() => null),
+          // Get project file listing so the agent knows what already exists
+          window.electron.ipcRenderer.invoke(IPC.TERMINAL_EXEC, {
+            sessionId,
+            command: "find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/build/*' 2>/dev/null | head -100",
+          }).catch(() => null),
+        ]);
+
         sessionHistory = cleanContextForAI(rawHistory);
+        cwd = fetchedCwd || "";
+
+        if (dirListing?.stdout) {
+          projectFiles = dirListing.stdout.trim();
+        }
+
+        if (paths) {
+          systemPathsStr = `
+System Paths:
+- Home: ${paths.home}
+- Desktop: ${paths.desktop}
+- Documents: ${paths.documents}
+- Downloads: ${paths.downloads}
+- Temp: ${paths.temp}
+`;
+        }
       }
 
       // 2. Context Compression
@@ -275,35 +420,57 @@ export function useAgentRunner(
       const interactionContext = recentInteractions
         ? `\n[RECENT INTERACTION HISTORY]\n${recentInteractions}\nUser: ${prompt}` // Prompt is already in valid history? No, `interactions` update might be async.
         : // Actually, let's just use the `prompt` argument as the latest user message.
-          // And `recentInteractions` should exclude the one we just added?
-          // Let's just build it fresh.
-          "";
+        // And `recentInteractions` should exclude the one we just added?
+        // Let's just build it fresh.
+        "";
 
-      const augmentedPrompt = `
-Context (Terminal Output):
+      if (images && images.length > 0) {
+        // Image analysis mode: strip noisy terminal context to avoid the model
+        // latching onto project files / history and executing random commands.
+        // Put the image instruction front-and-center.
+        finalPrompt = `[IMAGE ANALYSIS — READ CAREFULLY]
+The user has attached ${images.length} image(s). The images are ALREADY EMBEDDED in this message — you can SEE them directly as inline visual content. You do NOT need to open, read, or access any files. Do NOT use read_file, execute_command, or ls to find the images. They are RIGHT HERE in this conversation.
+
+Current Working Directory: ${cwd || "Unknown"}
+
+User: ${prompt}
+
+Respond with {"tool":"final_answer","content":"your detailed description of what you see in the image(s), plus any response to the user's request"}. If the user explicitly asks you to perform actions based on the image (e.g. "implement this design"), you may then use other tools AFTER first describing what you see.`;
+      } else {
+        finalPrompt = `
+[ENVIRONMENT]
+Current Working Directory: ${cwd || "Unknown"}${systemPathsStr}
+${projectFiles ? `\n[PROJECT FILES]\n${projectFiles}\n` : ""}
+[TERMINAL OUTPUT]
 ${sessionHistory}
 
 ${interactionContext ? interactionContext : `User: ${prompt}`}
 
 Task: ${prompt}
 `;
+      }
+      } // end else (new run — not continuing from question)
 
       const finalAnswer = await aiService.runAgent(
-        augmentedPrompt,
+        finalPrompt,
         async (cmd) => {
-          // Check Permissions — use ref for latest value
-          if (!alwaysAllowRef.current) {
-            setPendingCommand(cmd);
-            const allowed = await new Promise<boolean>((resolve) => {
-              setPermissionResolve(resolve);
-            });
-            setPendingCommand(null);
-            setPermissionResolve(null);
+          // Helper: Check Permissions — use ref for latest value
+          const checkPermission = async (command: string) => {
+            if (!alwaysAllowRef.current) {
+              setPendingCommand(command);
+              const allowed = await new Promise<boolean>((resolve) => {
+                setPermissionResolve(resolve);
+              });
+              setPendingCommand(null);
+              setPermissionResolve(null);
 
-            if (!allowed) {
-              throw new Error("User denied command execution.");
+              if (!allowed) {
+                throw new Error("User denied command execution.");
+              }
             }
-          }
+          };
+
+          await checkPermission(cmd);
 
           if (!sessionId) {
             throw new Error("No terminal session found.");
@@ -311,29 +478,91 @@ Task: ${prompt}
 
           addToHistory(cmd.trim());
 
-          // Write a comment to the terminal so the user sees activity
-          // without actually executing the command (exec handles that).
-          const preview = cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
-          writeCommandToTerminal(`# [agent] ${preview}`, true);
+          // Execute via execInTerminal (runs in PTY, captures output)
+          const result = await window.electron.ipcRenderer.invoke(IPC.TERMINAL_EXEC_IN_TERMINAL, {
+            sessionId,
+            command: cmd,
+          });
 
-          // Execute via background child_process (clean stdout)
-          const result = await window.electron.ipcRenderer.exec(sessionId, cmd);
+          // Timeout — process is still running (not killed). Agent can interact via send_text + read_terminal.
+          if (result.exitCode === 124) {
+            const partial = result.stdout || "";
+            return partial
+              ? `(Command is still running. Output so far:)\n${partial}\n\n(Use send_text to respond to prompts, then read_terminal to check the result. For dev servers, use run_in_terminal instead.)`
+              : "(Command is running with no output yet. Use read_terminal to check later.)";
+          }
 
+          // Error
           if (result.exitCode !== 0) {
             throw new Error(
               `Exit Code ${result.exitCode}: ${result.stderr || result.stdout || "Command failed"}`,
             );
           }
 
-          return (
-            result.stdout || "(Command executed successfully with no output)"
-          );
+          // Success
+          return result.stdout || "(Command executed successfully with no output)";
         },
-        (cmd) => {
-          // writeToTerminal: abort pending input, then fire & forget
+        async (cmd: string, isRawInput?: boolean, checkPerm?: boolean) => {
+          // writeToTerminal: used for run_in_terminal AND send_text
+          // For send_text (isRawInput=true, no checkPerm): write directly, no permission
+          // For run_in_terminal (isRawInput=true, checkPerm=true): check permission, then raw write
+          if (isRawInput) {
+            if (checkPerm && !alwaysAllowRef.current) {
+              // Show permission dialog (strip trailing \r for display)
+              const displayCmd = cmd.replace(/\r$/, "");
+              setPendingCommand(displayCmd);
+              const allowed = await new Promise<boolean>((resolve) => {
+                setPermissionResolve(resolve);
+              });
+              setPendingCommand(null);
+              setPermissionResolve(null);
+              if (!allowed) {
+                throw new Error("User denied command execution.");
+              }
+            }
+            if (!window.electron) return;
+            window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+              id: sessionId,
+              data: cmd,
+            });
+            if (checkPerm) addToHistory(cmd.replace(/\r$/, "").trim());
+            return;
+          }
+
+          // For other commands: check permission, send with Ctrl+C prefix
+          const checkPermission = async (command: string) => {
+            if (!alwaysAllowRef.current) {
+              setPendingCommand(command);
+              const allowed = await new Promise<boolean>((resolve) => {
+                setPermissionResolve(resolve);
+              });
+              setPendingCommand(null);
+              setPermissionResolve(null);
+
+              if (!allowed) {
+                throw new Error("User denied command execution.");
+              }
+            }
+          }
+
+          await checkPermission(cmd);
+
           const cleaned = cmd.endsWith("\n") ? cmd.slice(0, -1) : cmd;
           writeCommandToTerminal(cleaned);
           addToHistory(cmd.trim());
+        },
+        async (lines) => {
+          if (!sessionId) return "No terminal session";
+          try {
+            const result = await window.electron.ipcRenderer.invoke(IPC.TERMINAL_READ_HISTORY, {
+              sessionId,
+              lines,
+            });
+            return result || "(No output yet)";
+          } catch (err: any) {
+            console.error("readTerminal IPC failed:", err);
+            return `(Read terminal error: ${err.message})`;
+          }
         },
         (step, output) => {
           if (step === "streaming_thinking") {
@@ -376,7 +605,10 @@ Task: ${prompt}
               return [...prev, { step: "streaming", output }];
             });
             setIsThinking(false);
-          } else if (step !== "thinking") {
+          } else if (step === "thinking") {
+            // Always show thinking indicator — even for non-thinking models
+            setIsThinking(true);
+          } else {
             // Real step arrived — update in-place where possible to avoid layout shift
             setAgentThread((prev) => {
               const updated = [...prev];
@@ -412,14 +644,20 @@ Task: ${prompt}
               return [...updated, { step, output }];
             });
             setIsThinking(false);
-          } else if (thinkingEnabled && modelSupportsThinking) {
-            setIsThinking(true);
           }
         },
         session?.aiConfig,
         controller.signal,
         thinkingEnabled && modelSupportsThinking,
+        currentContinuation || undefined,
+        images,
       );
+
+      // Save continuation for question follow-ups
+      if (finalAnswer.continuation) {
+        continuationRef.current = finalAnswer.continuation;
+      }
+
       // Ensure successful completion clears active state
       setIsAgentRunning(false);
 
@@ -461,15 +699,7 @@ Task: ${prompt}
         });
       }
 
-      // Generate AI tab title (fire-and-forget, non-blocking)
-      if (sessionId) {
-        aiService
-          .generateTabTitle(prompt, session?.aiConfig)
-          .then((title) => {
-            if (title) renameTab(sessionId, title);
-          })
-          .catch(() => {});
-      }
+      // Tab title already generated at start of first run (titleGeneratedRef)
     } catch (error: any) {
       const isAbort =
         error.name === "AbortError" ||

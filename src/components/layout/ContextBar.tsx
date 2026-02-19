@@ -2,14 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLayout } from "../../contexts/LayoutContext";
-import { aiService } from "../../services/ai";
+import { aiService, providerUsesBaseUrl } from "../../services/ai";
+import { STORAGE_KEYS } from "../../constants/storage";
 import { useTheme } from "../../contexts/ThemeContext";
 import { Folder, X, Loader2 } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
-import { useModelsWithCaps } from "../../hooks/useModels";
+import { useAllConfiguredModels } from "../../hooks/useModels";
 
 // SVG Ring component for context usage visualization
 const ContextRing: React.FC<{ percent: number; size?: number }> = ({
@@ -86,7 +87,46 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
   const [showCtxTooltip, setShowCtxTooltip] = useState(false);
   const ctxRingRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLDivElement>(null);
-  const { data: availableModels = [] } = useModelsWithCaps();
+  const { data: availableModels = [] } = useAllConfiguredModels();
+
+  // Auto-select model if current model is empty or unavailable — prefer user's saved choice
+  useEffect(() => {
+    if (availableModels.length === 0) return;
+    const modelStillAvailable = activeModel && availableModels.some((m) => m.name === activeModel);
+    if (!modelStillAvailable) {
+      // 1. Try to find the user's saved preferred model from provider cache
+      let target = availableModels[0];
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
+        if (raw) {
+          const cache = JSON.parse(raw);
+          // Check each available model — prefer one that matches a cached provider's saved model
+          for (const m of availableModels) {
+            if (cache[m.provider]?.model === m.name) {
+              target = m;
+              break;
+            }
+          }
+        }
+      } catch {}
+      // 2. Also check the global saved config (may be more recent than cache)
+      const globalCfg = aiService.getConfig();
+      const globalMatch = globalCfg.model && availableModels.find((m) => m.name === globalCfg.model);
+      if (globalMatch) target = globalMatch;
+
+      let providerCfg: { apiKey?: string; baseUrl?: string } | undefined;
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
+        if (raw) providerCfg = JSON.parse(raw)[target.provider];
+      } catch {}
+      const apiKey = providerCfg?.apiKey || (target.provider === globalCfg.provider ? globalCfg.apiKey : undefined);
+      const baseUrl = providerCfg?.baseUrl || (target.provider === globalCfg.provider ? globalCfg.baseUrl : undefined);
+      const update: Record<string, any> = { provider: target.provider, model: target.name };
+      if (apiKey) update.apiKey = apiKey;
+      if (providerUsesBaseUrl(target.provider) && baseUrl) update.baseUrl = baseUrl;
+      updateSessionConfig(sessionId, update);
+    }
+  }, [activeModel, availableModels, sessionId, updateSessionConfig]);
 
   // Update local state when session changes
   useEffect(() => {
@@ -352,14 +392,17 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
                           provider: m.provider as any,
                           model: m.name,
                         };
-                        // Carry apiKey from global config so cloud providers
-                        // don't end up with an empty key in the session.
-                        if (m.provider !== "ollama") {
-                          const globalCfg = aiService.getConfig();
-                          if (globalCfg.apiKey) {
-                            update.apiKey = globalCfg.apiKey;
-                          }
-                        }
+                        // Resolve apiKey and baseUrl from provider configs or global config
+                        const globalCfg = aiService.getConfig();
+                        let providerCfg: { apiKey?: string; baseUrl?: string } | undefined;
+                        try {
+                          const raw = localStorage.getItem("tron_provider_configs");
+                          if (raw) providerCfg = JSON.parse(raw)[m.provider];
+                        } catch {}
+                        const apiKey = providerCfg?.apiKey || (m.provider === globalCfg.provider ? globalCfg.apiKey : undefined);
+                        const baseUrl = providerCfg?.baseUrl || (m.provider === globalCfg.provider ? globalCfg.baseUrl : undefined);
+                        if (apiKey) update.apiKey = apiKey;
+                        if (providerUsesBaseUrl(m.provider) && baseUrl) update.baseUrl = baseUrl;
                         updateSessionConfig(sessionId, update);
                         setShowModelMenu(false);
                       }}
@@ -510,7 +553,7 @@ const ContextBar: React.FC<ContextBarProps> = ({ sessionId }) => {
 
               {/* Context Content */}
               <pre
-                className={`flex-1 overflow-auto p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap ${
+                className={`flex-1 overflow-y-auto overflow-x-hidden p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words ${
                   theme === "light" ? "text-gray-700" : "text-gray-300"
                 }`}
               >

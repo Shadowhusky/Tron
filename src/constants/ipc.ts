@@ -11,11 +11,18 @@ export const IPC = {
   TERMINAL_GET_COMPLETIONS: "terminal.getCompletions",
   TERMINAL_GET_HISTORY: "terminal.getHistory",
   TERMINAL_SCAN_COMMANDS: "terminal.scanCommands",
+  TERMINAL_EXEC_IN_TERMINAL: "terminal.execInTerminal",
 
   // Terminal — send (fire-and-forget)
   TERMINAL_WRITE: "terminal.write",
   TERMINAL_RESIZE: "terminal.resize",
   TERMINAL_CLOSE: "terminal.close",
+  TERMINAL_READ_HISTORY: "terminal.readHistory",
+
+  // File — invoke
+  FILE_WRITE: "file.writeFile",
+  FILE_READ: "file.readFile",
+  FILE_EDIT: "file.editFile",
 
   // Terminal — main→renderer events
   TERMINAL_INCOMING_DATA: "terminal.incomingData",
@@ -23,6 +30,12 @@ export const IPC = {
 
   // System — invoke
   SYSTEM_SELECT_FOLDER: "system.selectFolder",
+  SHELL_OPEN_EXTERNAL: "shell.openExternal",
+  SHELL_OPEN_PATH: "shell.openPath",
+  SHELL_SHOW_ITEM: "shell.showItemInFolder",
+
+  // Log — invoke
+  LOG_SAVE_SESSION: "log.saveSessionLog",
 
   // AI — invoke
   AI_TEST_CONNECTION: "ai.testConnection",
@@ -34,6 +47,7 @@ export const IPC = {
   // Config — invoke
   CONFIG_READ: "config.read",
   CONFIG_WRITE: "config.write",
+  CONFIG_GET_SYSTEM_PATHS: "config.getSystemPaths",
 
   // Window — main→renderer events
   WINDOW_CONFIRM_CLOSE: "window.confirmClose",
