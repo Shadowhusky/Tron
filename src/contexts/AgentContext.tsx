@@ -7,7 +7,6 @@ import React, {
   useRef,
 } from "react";
 import type { AgentStep } from "../types";
-import { STORAGE_KEYS } from "../constants/storage";
 import { IPC } from "../constants/ipc";
 
 interface AgentState {
@@ -19,6 +18,10 @@ interface AgentState {
   alwaysAllowSession: boolean;
   isOverlayVisible: boolean;
   thinkingEnabled: boolean;
+  /** Custom overlay height (px) set by drag resize. undefined = default (50vh). */
+  overlayHeight?: number;
+  /** Draft input text preserved across tab switches. */
+  draftInput?: string;
 }
 
 const defaultState: AgentState = {
@@ -57,57 +60,69 @@ interface AgentContextType {
   ) => void;
   stopAgent: (sessionId: string) => void;
   resetSession: (sessionId: string) => void;
+  // Cross-tab notifications
+  crossTabNotifications: CrossTabNotification[];
+  dismissNotification: (id: number) => void;
+  setActiveSessionForNotifications: (sessionId: string | null) => void;
+}
+
+export interface CrossTabNotification {
+  id: number;
+  sessionId: string;
+  message: string;
+  timestamp: number;
 }
 
 const AgentContext = createContext<AgentContextType | null>(null);
 
-/** Load persisted agent threads from localStorage */
-function loadPersistedAgentState(): Map<string, AgentState> {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.AGENT_STATE);
-    if (saved) {
-      const parsed: Record<string, { agentThread: AgentStep[] }> =
-        JSON.parse(saved);
-      const map = new Map<string, AgentState>();
-      for (const [id, data] of Object.entries(parsed)) {
-        if (data.agentThread?.length > 0) {
-          // Clean up in-progress steps that indicate the agent was interrupted
-          // (e.g. by a page refresh while running)
-          const transientSteps = new Set([
-            "thinking",
-            "streaming",
-            "executing",
-          ]);
-          let wasInterrupted = false;
-          const cleanedThread = data.agentThread.filter((s) => {
-            if (transientSteps.has(s.step)) {
-              wasInterrupted = true;
-              return false;
-            }
-            return true;
-          });
+type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string };
 
-          // If the agent was mid-run when interrupted, add an aborted marker
-          if (wasInterrupted && cleanedThread.length > 0) {
-            cleanedThread.push({
-              step: "stopped",
-              output: "Aborted (page was refreshed)",
-            });
-          }
+/** Parse raw persisted data into an AgentState Map */
+function parsePersistedData(parsed: Record<string, PersistedSession>): Map<string, AgentState> {
+  const map = new Map<string, AgentState>();
+  const transientSteps = new Set(["thinking", "streaming", "executing"]);
 
-          if (cleanedThread.length > 0) {
-            map.set(id, {
-              ...defaultState,
-              agentThread: cleanedThread,
-              isOverlayVisible: true,
-            });
-          }
+  for (const [id, data] of Object.entries(parsed)) {
+    const hasThread = data.agentThread?.length > 0;
+    const hasDraft = !!data.draftInput;
+    const hasHeight = typeof data.overlayHeight === "number";
+
+    if (hasThread || hasDraft || hasHeight) {
+      let wasInterrupted = false;
+      const cleanedThread = (data.agentThread || []).filter((s) => {
+        if (transientSteps.has(s.step)) {
+          wasInterrupted = true;
+          return false;
         }
+        return true;
+      });
+
+      if (wasInterrupted && cleanedThread.length > 0) {
+        cleanedThread.push({
+          step: "stopped",
+          output: "Aborted (page was refreshed)",
+        });
       }
-      return map;
+
+      map.set(id, {
+        ...defaultState,
+        agentThread: cleanedThread,
+        isOverlayVisible: cleanedThread.length > 0,
+        overlayHeight: data.overlayHeight,
+        draftInput: data.draftInput,
+      });
     }
+  }
+  return map;
+}
+
+/** Load persisted agent sessions from file via IPC */
+async function loadPersistedAgentState(): Promise<Map<string, AgentState>> {
+  try {
+    const saved = await window.electron?.ipcRenderer?.readSessions();
+    if (saved) return parsePersistedData(saved as Record<string, PersistedSession>);
   } catch (e) {
-    console.warn("Failed to load persisted agent state:", e);
+    console.warn("Failed to load persisted agent state from file:", e);
   }
   return new Map();
 }
@@ -115,8 +130,8 @@ function loadPersistedAgentState(): Map<string, AgentState> {
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [agentStates, setAgentStates] = useState<Map<string, AgentState>>(() =>
-    loadPersistedAgentState(),
+  const [agentStates, setAgentStates] = useState<Map<string, AgentState>>(
+    () => new Map(),
   );
 
   // Store abort controllers in ref since they aren't needed for rendering
@@ -125,27 +140,47 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
     new Map(),
   );
 
-  // Persist agent threads to localStorage (debounced)
+  // Track whether initial load from file has completed (skip saving until loaded)
+  const hasLoadedRef = useRef(false);
+
+  // Load persisted state from file on mount
+  useEffect(() => {
+    loadPersistedAgentState().then((loaded) => {
+      if (loaded.size > 0) {
+        setAgentStates(loaded);
+      }
+      hasLoadedRef.current = true;
+    });
+  }, []);
+
+  // Persist agent state to file via IPC (debounced)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    // Don't save until initial load completes (would overwrite file with empty data)
+    if (!hasLoadedRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      const serializable: Record<string, { agentThread: AgentStep[] }> = {};
+      const serializable: Record<string, PersistedSession> = {};
       for (const [id, state] of agentStates) {
-        if (state.agentThread.length > 0) {
+        const hasThread = state.agentThread.length > 0;
+        const hasDraft = !!state.draftInput;
+        const hasHeight = typeof state.overlayHeight === "number";
+
+        if (hasThread || hasDraft || hasHeight) {
           // Only persist completed steps, not transient ones like "thinking"
           const persistableThread = state.agentThread.filter(
             (s) => s.step !== "thinking",
           );
-          if (persistableThread.length > 0) {
-            serializable[id] = { agentThread: persistableThread };
-          }
+          serializable[id] = {
+            agentThread: persistableThread,
+            ...(hasHeight ? { overlayHeight: state.overlayHeight } : {}),
+            ...(hasDraft ? { draftInput: state.draftInput } : {}),
+          };
         }
       }
-      localStorage.setItem(
-        STORAGE_KEYS.AGENT_STATE,
-        JSON.stringify(serializable),
-      );
+      window.electron?.ipcRenderer?.writeSessions(serializable).catch((e: unknown) => {
+        console.warn("Failed to persist agent sessions:", e);
+      });
     }, 500); // 500ms debounce to avoid thrashing during streaming
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -271,10 +306,20 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
         pendingCommand: null,
         permissionResolve: null,
         isOverlayVisible: true, // Keep panel visible so user can see abort result
-        agentThread: [
-          ...current.agentThread,
-          { step: "stopped", output: "Stopped" },
-        ],
+        agentThread: (() => {
+          const hadInflight = current.agentThread.some(
+            (s) => s.step === "executing" || s.step === "streaming"
+          );
+          const cleaned = current.agentThread.map((s) =>
+            s.step === "executing" || s.step === "streaming"
+              ? { ...s, step: "stopped" as const }
+              : s
+          );
+          // Only append explicit "Stopped" if no in-flight steps were converted
+          return hadInflight
+            ? cleaned
+            : [...cleaned, { step: "stopped", output: "Stopped" }];
+        })(),
       });
       return next;
     });
@@ -333,6 +378,58 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, []);
 
+  // --- Cross-tab notifications ---
+  const [crossTabNotifications, setCrossTabNotifications] = useState<CrossTabNotification[]>([]);
+  const notifIdRef = useRef(0);
+  // Track previous isAgentRunning for each session to detect transitions
+  const prevRunningRef = useRef<Map<string, boolean>>(new Map());
+
+  // Inject activeSessionId from LayoutContext via a prop or by reading it directly
+  // We'll use a ref that App.tsx can update
+  const activeSessionIdRef = useRef<string | null>(null);
+
+  // Watch for agent completion on non-active sessions
+  useEffect(() => {
+    for (const [sessionId, state] of agentStates) {
+      const wasRunning = prevRunningRef.current.get(sessionId) ?? false;
+      const isRunning = state.isAgentRunning;
+
+      // Detect transition: was running → now stopped
+      if (wasRunning && !isRunning && sessionId !== activeSessionIdRef.current) {
+        // Find the last "done"/"error"/"stopped" step for the message
+        const lastStep = state.agentThread[state.agentThread.length - 1];
+        const msg = lastStep
+          ? lastStep.step === "done" || lastStep.step === "success"
+            ? `Agent completed: ${lastStep.output.slice(0, 80)}`
+            : lastStep.step === "stopped"
+              ? "Agent stopped"
+              : lastStep.step === "error"
+                ? `Agent error: ${lastStep.output.slice(0, 80)}`
+                : "Agent finished"
+          : "Agent finished";
+
+        const id = ++notifIdRef.current;
+        setCrossTabNotifications((prev) => [...prev, { id, sessionId, message: msg, timestamp: Date.now() }]);
+
+        // Auto-dismiss after 8 seconds
+        setTimeout(() => {
+          setCrossTabNotifications((prev) => prev.filter((n) => n.id !== id));
+        }, 8000);
+      }
+
+      prevRunningRef.current.set(sessionId, isRunning);
+    }
+  }, [agentStates]);
+
+  const dismissNotification = useCallback((id: number) => {
+    setCrossTabNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
+  // Expose activeSessionId setter for App.tsx to call
+  const setActiveSessionForNotifications = useCallback((sessionId: string | null) => {
+    activeSessionIdRef.current = sessionId;
+  }, []);
+
   return (
     <AgentContext.Provider
       value={{
@@ -349,6 +446,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
         registerAbortController,
         stopAgent,
         resetSession,
+        crossTabNotifications,
+        dismissNotification,
+        setActiveSessionForNotifications,
       }}
     >
       {children}
@@ -358,6 +458,13 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
 
 // Export Context for LayoutProvider usage
 export { AgentContext };
+
+/** Access global agent context (cross-tab notifications, etc.) */
+export const useAgentContext = () => {
+  const context = useContext(AgentContext);
+  if (!context) throw new Error("useAgentContext must be used within an AgentProvider");
+  return context;
+};
 
 export const useAgent = (sessionId: string) => {
   const context = useContext(AgentContext);
@@ -386,6 +493,16 @@ export const useAgent = (sessionId: string) => {
     isOverlayVisible: state.isOverlayVisible,
     setIsOverlayVisible: (visible: boolean) =>
       context.updateAgentState(sessionId, { isOverlayVisible: visible }),
+
+    // Overlay Height (drag resize)
+    overlayHeight: state.overlayHeight,
+    setOverlayHeight: (height: number | undefined) =>
+      context.updateAgentState(sessionId, { overlayHeight: height }),
+
+    // Draft Input
+    draftInput: state.draftInput,
+    setDraftInput: (text: string | undefined) =>
+      context.updateAgentState(sessionId, { draftInput: text }),
 
     // Thinking
     thinkingEnabled: state.thinkingEnabled,

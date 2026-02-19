@@ -1,6 +1,6 @@
 // --- AI Types ---
 
-export type AIProvider = "ollama" | "openai" | "anthropic" | "gemini" | "deepseek" | "kimi" | "qwen" | "glm";
+export type AIProvider = "ollama" | "lmstudio" | "openai" | "anthropic" | "gemini" | "deepseek" | "kimi" | "qwen" | "glm" | "openai-compat" | "anthropic-compat";
 
 export interface AIConfig {
   provider: AIProvider;
@@ -27,6 +27,12 @@ export interface AgentStep {
   output: string;
 }
 
+export interface AttachedImage {
+  base64: string;      // raw base64 data (no data: prefix)
+  mediaType: string;   // image/jpeg, image/png, image/webp, image/gif
+  name: string;        // original filename
+}
+
 // --- Config Types ---
 
 export interface HotkeyMap {
@@ -34,6 +40,7 @@ export interface HotkeyMap {
   toggleOverlay: string;
   stopAgent: string;
   clearTerminal: string;
+  clearAgent: string;
   modeCommand: string;
   modeAdvice: string;
   modeAgent: string;

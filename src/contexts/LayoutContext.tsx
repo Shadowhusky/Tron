@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import type {
   LayoutNode,
   Tab,
@@ -39,6 +39,8 @@ interface LayoutContextType {
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
   renameTab: (sessionId: string, title: string) => void;
+  /** Stop auto-saving layout and clear persisted data. Call before window close without saving. */
+  discardPersistedLayout: () => void;
   isHydrated: boolean;
 }
 
@@ -77,8 +79,31 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  // Flag to disable auto-save when user chose "Exit Without Saving"
+  const skipSaveRef = useRef(false);
+  // Guard: prevent double-init from React StrictMode (effects fire twice in dev)
+  const initCalledRef = useRef(false);
+
+  const discardPersistedLayout = useCallback(async () => {
+    skipSaveRef.current = true;
+    // Clear persisted data
+    localStorage.removeItem(STORAGE_KEYS.LAYOUT);
+    // Write discard flag to sessions file (fs.writeFileSync — guaranteed on disk)
+    // On next startup, hydration checks this flag and ignores localStorage
+    await window.electron?.ipcRenderer?.writeSessions({ _discardLayout: true }).catch(() => {});
+    // Clear in-memory state so auto-save effect has nothing to re-save
+    setTabs([]);
+    setSessions(new Map());
+    setActiveTabId("");
+  }, []);
+
   // Persistence Logic
   useEffect(() => {
+    if (skipSaveRef.current) {
+      // Actively clear any stale saved state after "Exit Without Saving"
+      localStorage.removeItem(STORAGE_KEYS.LAYOUT);
+      return;
+    }
     if (tabs.length > 0) {
       const state = {
         tabs,
@@ -135,7 +160,24 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Hydration / Initialization
   useEffect(() => {
+    if (initCalledRef.current) return;
+    initCalledRef.current = true;
+
     const init = async () => {
+      // Check file-based discard flag (written by "Exit Without Saving")
+      // This is reliable because fs.writeFileSync guarantees it's on disk
+      try {
+        const sessionsData = await window.electron?.ipcRenderer?.readSessions();
+        if (sessionsData && (sessionsData as any)._discardLayout) {
+          // Clear stale localStorage and reset sessions file
+          localStorage.removeItem(STORAGE_KEYS.LAYOUT);
+          window.electron?.ipcRenderer?.writeSessions({}).catch(() => {});
+          // Fall through to create fresh tab
+          createTab();
+          return;
+        }
+      } catch { /* ignore — continue with normal hydration */ }
+
       const saved = localStorage.getItem(STORAGE_KEYS.LAYOUT);
       if (saved) {
         try {
@@ -280,6 +322,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId(newTabId);
   };
 
+  const creatingTabRef = useRef(false); // Guard against double-create in StrictMode
   const closeTab = (tabId: string) => {
     // Find tab to close
     const tab = tabs.find((t) => t.id === tabId);
@@ -297,7 +340,18 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
     setTabs((prev) => {
       const newTabs = prev.filter((t) => t.id !== tabId);
-      if (tabId === activeTabId && newTabs.length > 0) {
+      if (newTabs.length === 0) {
+        // Always keep at least one tab open — create outside the updater to avoid StrictMode double-call
+        if (!creatingTabRef.current) {
+          creatingTabRef.current = true;
+          // Use setTimeout to escape the setState updater — createTab is async and calls setTabs itself
+          setTimeout(() => {
+            createTab().finally(() => { creatingTabRef.current = false; });
+          }, 0);
+        }
+        return newTabs;
+      }
+      if (tabId === activeTabId) {
         setActiveTabId(newTabs[newTabs.length - 1].id);
       }
       return newTabs;
@@ -673,6 +727,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         focusSession,
         renameTab,
         addInteraction,
+        discardPersistedLayout,
         isHydrated,
       }}
     >

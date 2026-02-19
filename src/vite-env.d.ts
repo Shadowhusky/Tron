@@ -16,7 +16,7 @@ interface Window {
       exec: (
         sessionId: string,
         command: string,
-      ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+      ) => Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }>;
       execInTerminal: (
         sessionId: string,
         command: string,
@@ -30,6 +30,24 @@ interface Window {
       selectFolder: (defaultPath?: string) => Promise<string | null>;
       readConfig: () => Promise<Record<string, unknown> | null>;
       writeConfig: (data: Record<string, unknown>) => Promise<boolean>;
+      readSessions: () => Promise<Record<string, unknown> | null>;
+      writeSessions: (data: Record<string, unknown>) => Promise<boolean>;
+      openExternal: (url: string) => Promise<void>;
+      openPath: (filePath: string) => Promise<string>;
+      showItemInFolder: (filePath: string) => Promise<void>;
+      flushStorage: () => Promise<void>;
+      saveSessionLog: (data: {
+        sessionId: string;
+        session: Record<string, unknown>;
+        interactions: unknown[];
+        agentThread: unknown[];
+        contextSummary?: string;
+      }) => Promise<{
+        success: boolean;
+        logId?: string;
+        filePath?: string;
+        error?: string;
+      }>;
     };
   };
 }

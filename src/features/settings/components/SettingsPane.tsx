@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AIConfig, AIProvider } from "../../../types";
-import { aiService, getCloudProvider, getCloudProviderList } from "../../../services/ai";
+import { aiService, getCloudProvider, getCloudProviderList, providerUsesBaseUrl, isProviderUsable } from "../../../services/ai";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { getTheme } from "../../../utils/theme";
 import { useLayout } from "../../../contexts/LayoutContext";
@@ -47,6 +47,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   toggleOverlay: "Toggle Agent Panel",
   stopAgent: "Stop Agent",
   clearTerminal: "Clear Terminal",
+  clearAgent: "Clear Agent Panel",
   modeCommand: "Command Mode",
   modeAdvice: "Advice Mode",
   modeAgent: "Agent Mode",
@@ -131,11 +132,15 @@ const SettingsPane = () => {
     return () => window.removeEventListener("keydown", handler, true);
   }, [recordingAction, updateHotkey]);
 
-  const { data: allModels = [] } = useModelsWithCaps(
-    config.provider === "ollama" ? config.baseUrl : undefined,
+  const { data: allModels = [], isFetching: isModelsFetching } = useModelsWithCaps(
+    providerUsesBaseUrl(config.provider) ? config.baseUrl : undefined,
+    true,
+    config.provider,
   );
   const invalidateModels = useInvalidateModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
+  const lmstudioModels = allModels.filter((m) => m.provider === "lmstudio");
+  const compatModels = allModels.filter((m) => m.provider === "openai-compat" || m.provider === "anthropic-compat");
 
   // Load initial config
   useEffect(() => {
@@ -160,16 +165,36 @@ const SettingsPane = () => {
     // Load cached config for new provider (or defaults)
     const cached = cache[newProvider];
     const providerInfo = getCloudProvider(newProvider);
-    setConfig({
+    const defaultBaseUrls: Record<string, string> = {
+      ollama: "http://localhost:11434",
+      lmstudio: "http://127.0.0.1:1234",
+    };
+    const newConfig = {
       ...config,
       provider: newProvider as AIProvider,
       model: cached?.model || providerInfo?.defaultModels?.[0] || "",
       apiKey: cached?.apiKey || "",
-      baseUrl: newProvider === "ollama"
-        ? (cached?.baseUrl || "http://localhost:11434")
+      baseUrl: providerUsesBaseUrl(newProvider)
+        ? (cached?.baseUrl || defaultBaseUrls[newProvider] || "")
         : (cached?.baseUrl || undefined),
-    });
+    };
+    setConfig(newConfig);
+    setInitialConfig(JSON.stringify(newConfig));
     setTestStatus("idle");
+
+    // Auto-save the provider switch so new tabs immediately use the new provider
+    const configToSave = { ...newConfig };
+    if (!providerUsesBaseUrl(newProvider)) {
+      configToSave.baseUrl = undefined;
+    }
+    aiService.saveConfig(configToSave);
+
+    // Propagate to all existing sessions
+    sessions.forEach((_, sessionId) => {
+      if (sessionId !== "settings") {
+        updateSessionConfig(sessionId, configToSave);
+      }
+    });
   };
 
   const handleSave = () => {
@@ -182,9 +207,9 @@ const SettingsPane = () => {
     };
     saveProviderCache(cache);
 
-    // For cloud providers, explicitly clear baseUrl so it doesn't leak from Ollama
+    // For non-baseUrl providers, explicitly clear baseUrl so it doesn't leak
     const configToSave = { ...config };
-    if (config.provider !== "ollama") {
+    if (!providerUsesBaseUrl(config.provider)) {
       configToSave.baseUrl = undefined;
     }
 
@@ -193,6 +218,9 @@ const SettingsPane = () => {
     setInitialConfig(JSON.stringify(config));
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 2000);
+
+    // Refresh model queries (including ContextBar's allConfiguredModels)
+    invalidateModels(config.baseUrl, config.provider);
 
     // Propagate to all existing sessions
     sessions.forEach((_, sessionId) => {
@@ -303,10 +331,21 @@ const SettingsPane = () => {
                     onChange={(e) => handleProviderChange(e.target.value)}
                     className={selectClass}
                   >
-                    <option value="ollama">Ollama (Local)</option>
-                    {getCloudProviderList().map(({ id, info }) => (
-                      <option key={id} value={id}>{info.label}</option>
-                    ))}
+                    <optgroup label="Local">
+                      <option value="ollama">Ollama (Local)</option>
+                      <option value="lmstudio">LM Studio (Local)</option>
+                    </optgroup>
+                    <optgroup label="Cloud">
+                      {getCloudProviderList()
+                        .filter(({ id }) => !["lmstudio", "openai-compat", "anthropic-compat"].includes(id))
+                        .map(({ id, info }) => (
+                          <option key={id} value={id}>{info.label}</option>
+                        ))}
+                    </optgroup>
+                    <optgroup label="Custom">
+                      <option value="openai-compat">OpenAI Compatible</option>
+                      <option value="anthropic-compat">Anthropic Compatible</option>
+                    </optgroup>
                   </select>
                   <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
                     <ChevronDown className="w-3.5 h-3.5" />
@@ -315,9 +354,9 @@ const SettingsPane = () => {
               </div>
 
               <AnimatePresence mode="wait">
-              {config.provider === "ollama" ? (
+              {config.provider === "ollama" || config.provider === "lmstudio" ? (
                 <motion.div
-                  key="ollama-settings"
+                  key="local-settings"
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
@@ -329,7 +368,7 @@ const SettingsPane = () => {
                     <div className="flex items-center justify-between">
                       <label className={labelClass}>Model</label>
                       <button
-                        onClick={() => invalidateModels(config.baseUrl)}
+                        onClick={() => invalidateModels(config.baseUrl, config.provider)}
                         title="Refresh Models"
                         className={`p-1 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                       >
@@ -348,68 +387,100 @@ const SettingsPane = () => {
                         </svg>
                       </button>
                     </div>
-                    <div className={`rounded-lg border overflow-hidden max-h-48 overflow-y-auto ${t.surfaceInput}`}>
-                      {ollamaModels.length === 0 && (
-                        <div className={`px-3 py-2 text-xs italic ${t.textFaint}`}>
-                          No models found
+                    {(() => {
+                      const localModels = config.provider === "lmstudio" ? lmstudioModels : ollamaModels;
+                      const serverName = config.provider === "lmstudio" ? "LM Studio" : "Ollama";
+                      const defaultUrl = config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434";
+                      return (
+                        <div className={`rounded-lg border overflow-hidden max-h-48 overflow-y-auto ${t.surfaceInput}`}>
+                          {localModels.length === 0 && (
+                            <div className={`px-3 py-2 text-xs ${t.textFaint}`}>
+                              {isModelsFetching ? (
+                                <span className="italic">Scanning models...</span>
+                              ) : (
+                                <span>
+                                  Could not reach {serverName} server at{" "}
+                                  <span className="font-mono opacity-80">{config.baseUrl || defaultUrl}</span>.
+                                  <br />
+                                  Make sure {serverName} is running and the URL is correct.
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {localModels.map((m) => (
+                            <button
+                              key={m.name}
+                              onClick={() => setConfig({ ...config, model: m.name })}
+                              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
+                                config.model === m.name
+                                  ? "bg-purple-500/10 text-purple-400"
+                                  : `${t.surfaceHover} ${t.textMuted}`
+                              }`}
+                            >
+                              <span className="flex-1 truncate">{m.name}</span>
+                              <div className="flex gap-1 shrink-0">
+                                {m.capabilities?.map((cap) => (
+                                  <span
+                                    key={cap}
+                                    className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
+                                      cap === "thinking"
+                                        ? "bg-purple-500/20 text-purple-400"
+                                        : cap === "vision"
+                                          ? "bg-blue-500/20 text-blue-400"
+                                          : cap === "tools"
+                                            ? "bg-green-500/20 text-green-400"
+                                            : "bg-gray-500/20 text-gray-400"
+                                    }`}
+                                  >
+                                    {cap}
+                                  </span>
+                                ))}
+                              </div>
+                            </button>
+                          ))}
+                          {!localModels.find((m) => m.name === config.model) &&
+                            config.model && (
+                              <div className={`px-3 py-1.5 text-xs ${t.textFaint}`}>
+                                {config.model} (not found)
+                              </div>
+                            )}
                         </div>
-                      )}
-                      {ollamaModels.map((m) => (
-                        <button
-                          key={m.name}
-                          onClick={() => setConfig({ ...config, model: m.name })}
-                          className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
-                            config.model === m.name
-                              ? "bg-purple-500/10 text-purple-400"
-                              : `${t.surfaceHover} ${t.textMuted}`
-                          }`}
-                        >
-                          <span className="flex-1 truncate">{m.name}</span>
-                          <div className="flex gap-1 shrink-0">
-                            {m.capabilities?.map((cap) => (
-                              <span
-                                key={cap}
-                                className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                                  cap === "thinking"
-                                    ? "bg-purple-500/20 text-purple-400"
-                                    : cap === "vision"
-                                      ? "bg-blue-500/20 text-blue-400"
-                                      : cap === "tools"
-                                        ? "bg-green-500/20 text-green-400"
-                                        : "bg-gray-500/20 text-gray-400"
-                                }`}
-                              >
-                                {cap}
-                              </span>
-                            ))}
-                          </div>
-                        </button>
-                      ))}
-                      {!ollamaModels.find((m) => m.name === config.model) &&
-                        config.model && (
-                          <div className={`px-3 py-1.5 text-xs ${t.textFaint}`}>
-                            {config.model} (not found)
-                          </div>
-                        )}
-                    </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* API Key (optional for local providers) */}
+                  <div className="flex flex-col gap-1">
+                    <label className={labelClass}>API Key (optional)</label>
+                    <input
+                      type="password"
+                      value={config.apiKey || ""}
+                      onChange={(e) =>
+                        setConfig({ ...config, apiKey: e.target.value })
+                      }
+                      placeholder="Leave empty if not required"
+                      className={inputClass}
+                    />
                   </div>
 
                   {/* Base URL Input */}
                   <div className="flex flex-col gap-1">
-                    <label className={labelClass}>Ollama Base URL</label>
+                    <label className={labelClass}>
+                      {config.provider === "lmstudio" ? "LM Studio" : "Ollama"} Base URL
+                    </label>
                     <div className="flex gap-1.5">
                       <input
                         type="text"
-                        value={config.baseUrl || "http://localhost:11434"}
+                        value={config.baseUrl || (config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434")}
                         onChange={(e) =>
                           setConfig({ ...config, baseUrl: e.target.value })
                         }
-                        onBlur={() => invalidateModels(config.baseUrl)}
-                        placeholder="http://localhost:11434"
+                        onBlur={() => invalidateModels(config.baseUrl, config.provider)}
+                        placeholder={config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434"}
                         className={inputClass}
                       />
                       <button
-                        onClick={() => invalidateModels(config.baseUrl)}
+                        onClick={() => invalidateModels(config.baseUrl, config.provider)}
                         title="Confirm URL"
                         className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                       >
@@ -430,39 +501,83 @@ const SettingsPane = () => {
                   {(() => {
                     const providerInfo = getCloudProvider(config.provider);
                     const defaultModels = providerInfo?.defaultModels || [];
+                    const isCompat = config.provider === "openai-compat" || config.provider === "anthropic-compat";
+                    // For compat providers, show scanned models from the remote server
+                    const scannedModels = isCompat ? compatModels : [];
+                    const modelList = scannedModels.length > 0 ? scannedModels.map((m) => m.name) : defaultModels;
                     return (
                       <>
-                        <div className="flex flex-col gap-1">
-                          <label className={labelClass}>Model</label>
-                          {defaultModels.length > 0 && (
-                            <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 ${t.surfaceInput}`}>
-                              {defaultModels.map((name) => (
-                                <button
-                                  key={name}
-                                  onClick={() => setConfig({ ...config, model: name })}
-                                  className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                                    config.model === name
-                                      ? "bg-purple-500/10 text-purple-400"
-                                      : `${t.surfaceHover} ${t.textMuted}`
-                                  }`}
-                                >
-                                  {name}
-                                </button>
-                              ))}
+                        {isCompat && (
+                          <div className="flex flex-col gap-1">
+                            <label className={labelClass}>Base URL</label>
+                            <div className="flex gap-1.5">
+                              <input
+                                type="text"
+                                value={config.baseUrl || ""}
+                                onChange={(e) =>
+                                  setConfig({ ...config, baseUrl: e.target.value })
+                                }
+                                onBlur={() => invalidateModels(config.baseUrl, config.provider)}
+                                placeholder={config.provider === "anthropic-compat" ? "https://your-proxy.example.com" : "https://your-api.example.com/v1"}
+                                className={inputClass}
+                              />
+                              <button
+                                onClick={() => invalidateModels(config.baseUrl, config.provider)}
+                                title="Scan Models"
+                                className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
+                              >
+                                <Check className="w-4 h-4 opacity-70" />
+                              </button>
                             </div>
-                          )}
-                          <input
-                            type="text"
-                            value={config.model}
-                            placeholder={providerInfo?.placeholder || "model-name"}
-                            onChange={(e) =>
-                              setConfig({ ...config, model: e.target.value })
-                            }
-                            className={inputClass}
-                          />
+                          </div>
+                        )}
+                        <div className="flex flex-col gap-1">
+                          {(() => {
+                            const isCustomModel = !!config.model && modelList.length > 0 && !modelList.includes(config.model);
+                            const customValue = isCustomModel ? config.model : "";
+                            return (
+                              <>
+                                <div className="flex items-center justify-between">
+                                  <label className={labelClass}>Model</label>
+                                  {isCompat && modelList.length === 0 && config.baseUrl && !isModelsFetching && (
+                                    <span className={`text-[10px] ${t.textFaint}`}>
+                                      Could not list models from server — enter name below
+                                    </span>
+                                  )}
+                                </div>
+                                {modelList.length > 0 && (
+                                  <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 transition-opacity ${t.surfaceInput} ${customValue ? "opacity-40 pointer-events-none" : ""}`}>
+                                    {modelList.map((name) => (
+                                      <button
+                                        key={name}
+                                        onClick={() => setConfig({ ...config, model: name })}
+                                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                                          config.model === name
+                                            ? "bg-purple-500/10 text-purple-400"
+                                            : `${t.surfaceHover} ${t.textMuted}`
+                                        }`}
+                                      >
+                                        {name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                <label className={`${labelClass} mt-1`}>Custom Model Name</label>
+                                <input
+                                  type="text"
+                                  value={customValue}
+                                  placeholder={providerInfo?.placeholder || "model-name"}
+                                  onChange={(e) =>
+                                    setConfig({ ...config, model: e.target.value })
+                                  }
+                                  className={inputClass}
+                                />
+                              </>
+                            );
+                          })()}
                         </div>
                         <div className="flex flex-col gap-1">
-                          <label className={labelClass}>API Key</label>
+                          <label className={labelClass}>API Key{isCompat ? " (optional)" : ""}</label>
                           <input
                             type="password"
                             value={config.apiKey || ""}
@@ -479,8 +594,49 @@ const SettingsPane = () => {
               )}
               </AnimatePresence>
 
-              {/* Test Connection Button */}
-              <div className="flex justify-end pt-1">
+              {/* Test Connection + Clear Config */}
+              <div className="flex justify-between items-center pt-1">
+                <button
+                  onClick={() => {
+                    // Clear this provider from cache
+                    const cache = providerCacheRef.current;
+                    delete cache[config.provider];
+                    saveProviderCache(cache);
+
+                    // Find first usable provider from remaining cache
+                    let nextProvider = "ollama";
+                    let nextModel = "";
+                    let nextApiKey = "";
+                    let nextBaseUrl: string | undefined = "http://localhost:11434";
+
+                    for (const [id, cfg] of Object.entries(cache)) {
+                      if (isProviderUsable(id, cfg)) {
+                        const info = getCloudProvider(id);
+                        nextProvider = id;
+                        nextModel = cfg.model || info?.defaultModels?.[0] || "";
+                        nextApiKey = cfg.apiKey || "";
+                        nextBaseUrl = providerUsesBaseUrl(id) ? cfg.baseUrl : undefined;
+                        break;
+                      }
+                    }
+
+                    const newConfig = {
+                      ...config,
+                      provider: nextProvider as AIProvider,
+                      model: nextModel,
+                      apiKey: nextApiKey,
+                      baseUrl: nextBaseUrl,
+                    };
+                    setConfig(newConfig);
+                    setTestStatus("idle");
+                  }}
+                  className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+                >
+                  <span className="flex items-center gap-1">
+                    <RotateCcw className="w-3 h-3" />
+                    Clear Provider
+                  </span>
+                </button>
                 <button
                   onClick={handleTestConnection}
                   disabled={testStatus === "testing" || !config.model}

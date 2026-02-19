@@ -12,11 +12,23 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.getCwd",
   "terminal.getCompletions",
   "terminal.getHistory",
+  "terminal.readHistory",
   "terminal.scanCommands",
   "ai.testConnection",
   "system.selectFolder",
   "config.read",
   "config.write",
+  "config.getSystemPaths",
+  "sessions.read",
+  "sessions.write",
+  "file.writeFile",
+  "file.readFile",
+  "file.editFile",
+  "shell.openExternal",
+  "shell.openPath",
+  "shell.showItemInFolder",
+  "system.flushStorage",
+  "log.saveSessionLog",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -94,6 +106,13 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("config.read") as Promise<Record<string, unknown> | null>,
     writeConfig: (data: Record<string, unknown>) =>
       ipcRenderer.invoke("config.write", data) as Promise<boolean>,
+    // Sessions (agent state)
+    readSessions: () =>
+      ipcRenderer.invoke("sessions.read") as Promise<Record<string, unknown> | null>,
+    writeSessions: (data: Record<string, unknown>) =>
+      ipcRenderer.invoke("sessions.write", data) as Promise<boolean>,
+    getSystemPaths: () =>
+      ipcRenderer.invoke("config.getSystemPaths") as Promise<Record<string, string>>,
     // System
     testAIConnection: (config: {
       provider: string;
@@ -103,5 +122,26 @@ contextBridge.exposeInMainWorld("electron", {
     }) => ipcRenderer.invoke("ai.testConnection", config),
     selectFolder: (defaultPath?: string) =>
       ipcRenderer.invoke("system.selectFolder", defaultPath) as Promise<string | null>,
+    openExternal: (url: string) =>
+      ipcRenderer.invoke("shell.openExternal", url) as Promise<void>,
+    openPath: (filePath: string) =>
+      ipcRenderer.invoke("shell.openPath", filePath) as Promise<string>,
+    showItemInFolder: (filePath: string) =>
+      ipcRenderer.invoke("shell.showItemInFolder", filePath) as Promise<void>,
+    flushStorage: () =>
+      ipcRenderer.invoke("system.flushStorage") as Promise<void>,
+    saveSessionLog: (data: {
+      sessionId: string;
+      session: Record<string, unknown>;
+      interactions: unknown[];
+      agentThread: unknown[];
+      contextSummary?: string;
+    }) =>
+      ipcRenderer.invoke("log.saveSessionLog", data) as Promise<{
+        success: boolean;
+        logId?: string;
+        filePath?: string;
+        error?: string;
+      }>,
   },
 });

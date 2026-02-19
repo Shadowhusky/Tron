@@ -185,6 +185,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
           performResize();
           setTimeout(performResize, 50);
           setTimeout(performResize, 250);
+          // Re-focus after animation may have completed (embedded terminal in agent view)
+          setTimeout(() => { if (xtermRef.current) xtermRef.current.focus(); }, 350);
         });
     } else {
       term.write("\r\n\x1b[33m[Mock Mode] Electron not detected.\x1b[0m\r\n");

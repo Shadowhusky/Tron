@@ -508,3 +508,110 @@ export function isDefinitelyNaturalLanguage(input: string): boolean {
   const words = input.trim().split(/\s+/);
   return hasNaturalLanguagePattern(words);
 }
+
+// Commands that need a real terminal for interactive use (TUI, REPL, editor, etc.)
+const INTERACTIVE_EXECUTABLES = new Set([
+  // Editors
+  "vi", "vim", "nvim", "nano", "emacs", "pico", "ed", "ex",
+  // Pagers / TUI
+  "less", "more", "man", "top", "htop", "btop", "atop", "k9s",
+  // REPLs
+  "python", "python3", "node", "irb", "ruby", "lua", "ghci", "iex",
+  "ipython", "julia", "erl", "r",
+  // DB shells
+  "mysql", "psql", "sqlite3", "mongosh", "mongo", "redis-cli",
+  "pgcli", "mycli", "litecli",
+  // Remote / network
+  "ssh", "telnet", "ftp", "sftp",
+  // Debuggers
+  "gdb", "lldb",
+  // Multiplexers
+  "tmux", "screen", "byobu",
+]);
+
+const INTERACTIVE_PREFIXES = [
+  // Scaffolding tools (prompt for input)
+  "npm create", "npx create", "npm init", "yarn create", "pnpm create", "bun create",
+  // Dev servers (long-running)
+  "npm run dev", "npm start", "npm run start", "yarn dev", "yarn start",
+  "pnpm dev", "pnpm start", "bun dev", "bun run dev",
+  "npx vite", "npx next", "npx serve",
+  // Docker interactive
+  "docker run -it", "docker exec -it",
+  // Docker compose up (long-running)
+  "docker compose up", "docker-compose up",
+];
+
+/**
+ * Returns true if the command likely needs an interactive terminal
+ * (TUI editors, REPLs, dev servers, scaffolding tools, etc.)
+ */
+export function isInteractiveCommand(cmd: string): boolean {
+  const trimmed = cmd.trim();
+  const firstWord = trimmed.split(/\s+/)[0];
+  if (INTERACTIVE_EXECUTABLES.has(firstWord)) return true;
+  const lower = trimmed.toLowerCase();
+  for (const prefix of INTERACTIVE_PREFIXES) {
+    if (lower.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/** Returns true if token looks like the start of a file path */
+function isPathLike(token: string): boolean {
+  return (
+    token.startsWith("/") ||
+    token.startsWith("./") ||
+    token.startsWith("../") ||
+    token.startsWith("~/")
+  );
+}
+
+/**
+ * Auto-quote file paths that contain spaces.
+ * e.g. `cd /Users/foo/Application Support` → `cd "/Users/foo/Application Support"`
+ *
+ * Skips commands that already contain quotes, escapes, pipes, or other
+ * shell meta-characters to avoid breaking intentional syntax.
+ */
+export function smartQuotePaths(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+
+  // Skip if the command already uses quotes, backslash escapes, or shell operators
+  if (/['"`\\|&;$(){}]/.test(trimmed)) return trimmed;
+
+  const parts = trimmed.split(/\s+/);
+  // Nothing to fix if single token or no multi-word path possible
+  if (parts.length < 2) return trimmed;
+
+  const result: string[] = [parts[0]];
+  const args = parts.slice(1);
+  let i = 0;
+
+  while (i < args.length) {
+    const arg = args[i];
+
+    // If this looks like a path start, try to absorb subsequent non-flag,
+    // non-path-start tokens that are likely space-separated path components.
+    if (isPathLike(arg) && i + 1 < args.length) {
+      const pathParts = [arg];
+      let j = i + 1;
+      while (j < args.length && !args[j].startsWith("-") && !isPathLike(args[j])) {
+        pathParts.push(args[j]);
+        j++;
+      }
+      if (pathParts.length > 1) {
+        // Multiple tokens → wrap the reconstructed path in double quotes
+        result.push(`"${pathParts.join(" ")}"`);
+        i = j;
+        continue;
+      }
+    }
+
+    result.push(arg);
+    i++;
+  }
+
+  return result.join(" ");
+}

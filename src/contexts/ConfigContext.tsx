@@ -7,6 +7,7 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   toggleOverlay: "meta+.",
   stopAgent: "ctrl+c",
   clearTerminal: "meta+k",
+  clearAgent: "meta+shift+k",
   modeCommand: "meta+1",
   modeAdvice: "meta+2",
   modeAgent: "meta+3",

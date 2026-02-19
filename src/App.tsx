@@ -4,7 +4,7 @@ import { LayoutProvider, useLayout } from "./contexts/LayoutContext";
 import type { LayoutNode } from "./types";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { HistoryProvider } from "./contexts/HistoryContext";
-import { AgentProvider } from "./contexts/AgentContext";
+import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
 import { ConfigProvider } from "./contexts/ConfigContext";
 import OnboardingWizard from "./features/onboarding/components/OnboardingWizard";
 import TutorialOverlay from "./features/onboarding/components/TutorialOverlay";
@@ -29,9 +29,11 @@ const AppContent = () => {
     openSettingsTab,
     reorderTabs,
     updateSessionConfig,
+    discardPersistedLayout,
     isHydrated,
   } = useLayout();
   const { resolvedTheme } = useTheme();
+  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications } = useAgentContext();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
@@ -84,14 +86,15 @@ const AppContent = () => {
     return cleanup;
   }, []);
 
-  const handleCloseConfirm = (action: "save" | "discard" | "cancel") => {
+  const handleCloseConfirm = async (action: "save" | "discard" | "cancel") => {
     setShowCloseConfirm(false);
     if (action === "cancel") {
       window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CANCELLED, {});
       return;
     }
     if (action === "discard") {
-      localStorage.removeItem(STORAGE_KEYS.LAYOUT);
+      // Clear localStorage + flush to disk before closing window
+      await discardPersistedLayout();
     }
     window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CONFIRMED, {});
   };
@@ -119,6 +122,24 @@ const AppContent = () => {
   // Prevent initial flash/blink by waiting for hydration
   if (!isHydrated) return null;
 
+  // Sync active session ID for cross-tab notification filtering
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+  const activeSessionId = activeTab?.activeSessionId || null;
+  // Using a ref sync via effect would be cleaner, but for simplicity:
+  setActiveSessionForNotifications(activeSessionId);
+
+  // Find session's tab for click-to-switch
+  const findTabForSession = (sessionId: string): string | null => {
+    for (const tab of tabs) {
+      const check = (node: LayoutNode): boolean => {
+        if (node.type === "leaf") return node.sessionId === sessionId;
+        return node.children.some(check);
+      };
+      if (check(tab.root)) return tab.id;
+    }
+    return null;
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -140,44 +161,57 @@ const AppContent = () => {
 
       {/* Main Workspace — all tabs stay mounted to preserve terminal state */}
       <div className="flex-1 relative overflow-hidden">
-        {tabs.length > 0 ? (
-          tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className="absolute inset-0"
-              style={{
-                visibility: tab.id === activeTabId ? "visible" : "hidden",
-                zIndex: tab.id === activeTabId ? 1 : 0,
-              }}
-            >
-              <SplitPane node={tab.root} />
-            </div>
-          ))
-        ) : (
-          <AnimatePresence>
-            <motion.div
-              key="empty"
-              variants={fadeScale}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
-              className="flex items-center justify-center h-full text-gray-500 flex-col gap-4"
-            >
-              <div className="text-xl font-medium">No Open Tabs</div>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={createTab}
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors shadow-lg shadow-purple-900/20"
-              >
-                Create New Terminal
-              </motion.button>
-              <div className="text-xs opacity-50">
-                Press Cmd+T to open a new tab
-              </div>
-            </motion.div>
-          </AnimatePresence>
+        {/* Cross-tab agent notifications */}
+        {crossTabNotifications.length > 0 && (
+          <div className="absolute top-2 right-3 z-50 flex flex-col gap-2" style={{ maxWidth: 340 }}>
+            {crossTabNotifications.map((n) => {
+              const targetTabId = findTabForSession(n.sessionId);
+              const targetTab = targetTabId ? tabs.find(t => t.id === targetTabId) : null;
+              return (
+                <motion.div
+                  key={n.id}
+                  initial={{ opacity: 0, x: 40 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 40 }}
+                  className={`rounded-lg px-3 py-2 text-xs shadow-lg cursor-pointer border backdrop-blur-md ${resolvedTheme === "light"
+                      ? "bg-white/90 border-gray-200 text-gray-700"
+                      : "bg-gray-800/90 border-gray-600 text-gray-200"
+                    }`}
+                  onClick={() => {
+                    if (targetTabId) selectTab(targetTabId);
+                    dismissNotification(n.id);
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-green-400 text-[10px]">●</span>
+                    <span className="font-medium truncate">
+                      {targetTab?.title || "Background tab"}
+                    </span>
+                    <button
+                      className="ml-auto text-gray-400 hover:text-gray-200 text-[10px]"
+                      onClick={(e) => { e.stopPropagation(); dismissNotification(n.id); }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="mt-0.5 truncate opacity-75">{n.message}</div>
+                </motion.div>
+              );
+            })}
+          </div>
         )}
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            className="absolute inset-0"
+            style={{
+              visibility: tab.id === activeTabId ? "visible" : "hidden",
+              zIndex: tab.id === activeTabId ? 1 : 0,
+            }}
+          >
+            <SplitPane node={tab.root} />
+          </div>
+        ))}
       </div>
 
       <AnimatePresence>
@@ -229,13 +263,13 @@ const AppContent = () => {
               animate="visible"
               exit="exit"
               onClick={(e) => e.stopPropagation()}
-              className={`w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden
+              className={`w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden
                 ${resolvedTheme === "light" ? "bg-white text-gray-900 border border-gray-200" : ""}
                 ${resolvedTheme === "dark" ? "bg-gray-900 text-white border border-white/10" : ""}
                 ${resolvedTheme === "modern" ? "bg-[#111] text-white border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]" : ""}
               `}
             >
-              <div className="p-6 space-y-2">
+              <div className="px-6 pt-3 pb-4 space-y-2">
                 <h3 className="text-lg font-semibold">Close Tron?</h3>
                 <p
                   className={`text-sm ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}
@@ -243,12 +277,12 @@ const AppContent = () => {
                   You have active terminal sessions. What would you like to do?
                 </p>
               </div>
-              <div className={`px-6 pb-6 flex flex-row gap-2`}>
+              <div className={`px-6 pb-6 flex flex-row gap-3`}>
                 <motion.button
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => handleCloseConfirm("save")}
-                  className="flex-1 px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-medium transition-colors shadow-lg shadow-purple-900/20"
+                  className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-medium transition-colors shadow-lg shadow-purple-900/20 whitespace-nowrap"
                 >
                   Exit & Save Session
                 </motion.button>
@@ -256,11 +290,10 @@ const AppContent = () => {
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => handleCloseConfirm("discard")}
-                  className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors border ${
-                    resolvedTheme === "light"
-                      ? "border-gray-200 hover:bg-gray-50 text-gray-700"
-                      : "border-white/10 hover:bg-white/5 text-gray-300"
-                  }`}
+                  className={`flex-1 px-3 py-2 rounded-xl text-sm font-medium transition-colors border whitespace-nowrap ${resolvedTheme === "light"
+                    ? "border-gray-200 hover:bg-gray-50 text-gray-700"
+                    : "border-white/10 hover:bg-white/5 text-gray-300"
+                    }`}
                 >
                   Exit Without Saving
                 </motion.button>
@@ -268,11 +301,10 @@ const AppContent = () => {
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => handleCloseConfirm("cancel")}
-                  className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    resolvedTheme === "light"
-                      ? "hover:bg-gray-100 text-gray-500"
-                      : "hover:bg-white/5 text-gray-500"
-                  }`}
+                  className={`flex-1 py-2 rounded-xl text-sm font-medium transition-colors whitespace-nowrap ${resolvedTheme === "light"
+                    ? "hover:bg-gray-100 text-gray-500"
+                    : "hover:bg-white/5 text-gray-500"
+                    }`}
                 >
                   Cancel
                 </motion.button>

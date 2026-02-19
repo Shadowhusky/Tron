@@ -8,13 +8,19 @@ const electron_1 = require("electron");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const CONFIG_FILE = "tron.config.json";
+const SESSIONS_FILE = "tron.sessions.json";
 function getConfigPath() {
     return path_1.default.join(electron_1.app.getPath("userData"), CONFIG_FILE);
 }
+function getSessionsPath() {
+    return path_1.default.join(electron_1.app.getPath("userData"), SESSIONS_FILE);
+}
 function registerConfigHandlers() {
+    // --- App Config ---
     electron_1.ipcMain.handle("config.read", async () => {
         try {
             const configPath = getConfigPath();
+            console.log("Reading config from:", configPath);
             if (!fs_1.default.existsSync(configPath))
                 return null;
             const raw = fs_1.default.readFileSync(configPath, "utf-8");
@@ -35,6 +41,41 @@ function registerConfigHandlers() {
             console.error("Failed to write config:", e);
             return false;
         }
+    });
+    // --- Agent Session State ---
+    electron_1.ipcMain.handle("sessions.read", async () => {
+        try {
+            const sessionsPath = getSessionsPath();
+            if (!fs_1.default.existsSync(sessionsPath))
+                return null;
+            const raw = fs_1.default.readFileSync(sessionsPath, "utf-8");
+            return JSON.parse(raw);
+        }
+        catch (e) {
+            console.error("Failed to read sessions:", e);
+            return null;
+        }
+    });
+    electron_1.ipcMain.handle("sessions.write", async (_event, data) => {
+        try {
+            const sessionsPath = getSessionsPath();
+            fs_1.default.writeFileSync(sessionsPath, JSON.stringify(data, null, 2), "utf-8");
+            return true;
+        }
+        catch (e) {
+            console.error("Failed to write sessions:", e);
+            return false;
+        }
+    });
+    // --- System Paths ---
+    electron_1.ipcMain.handle("config.getSystemPaths", async () => {
+        return {
+            home: electron_1.app.getPath("home"),
+            desktop: electron_1.app.getPath("desktop"),
+            documents: electron_1.app.getPath("documents"),
+            downloads: electron_1.app.getPath("downloads"),
+            temp: electron_1.app.getPath("temp"),
+        };
     });
 }
 //# sourceMappingURL=config.js.map
