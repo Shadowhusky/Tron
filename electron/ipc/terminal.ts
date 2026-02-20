@@ -353,6 +353,18 @@ export function registerTerminalHandlers(
     return getCwdForPid(session.pid);
   });
 
+  // Get system info (OS, shell, arch) for agent environment context
+  ipcMain.handle("terminal.getSystemInfo", async () => {
+    const { shell } = detectShell();
+    const shellName = path.basename(shell).replace(/\.exe$/i, "");
+    return {
+      platform: os.platform(),
+      arch: os.arch(),
+      shell: shellName,
+      release: os.release(),
+    };
+  });
+
   ipcMain.handle(
     "terminal.getCompletions",
     async (
@@ -379,9 +391,11 @@ export function registerTerminalHandlers(
 
         if (parts.length <= 1) {
           const word = parts[0] || "";
+          const safeWinWord = word.replace(/'/g, "''");
+          const safeUnixWord = word.replace(/"/g, '\\"');
           const cmd = isWin
-            ? `powershell -NoProfile -Command "Get-Command '${word}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
-            : `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`;
+            ? `powershell -NoProfile -Command "Get-Command '${safeWinWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+            : `bash -c 'compgen -abck "${safeUnixWord}" 2>/dev/null | sort -u | head -30'`;
           const { stdout } = await trackedExec(cmd, { cwd: workDir });
           const results = stdout.trim().split("\n").filter(Boolean);
           return [...new Set(results)]
@@ -390,9 +404,11 @@ export function registerTerminalHandlers(
         }
 
         const lastWord = parts[parts.length - 1];
+        const safeWinLastWord = lastWord.replace(/'/g, "''");
+        const safeUnixLastWord = lastWord.replace(/"/g, '\\"');
         const cmd = isWin
-          ? `powershell -NoProfile -Command "Get-ChildItem '${lastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
-          : `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`;
+          ? `powershell -NoProfile -Command "Get-ChildItem '${safeWinLastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+          : `bash -c 'compgen -df "${safeUnixLastWord}" 2>/dev/null | head -30'`;
         const { stdout } = await trackedExec(cmd, { cwd: workDir });
         const results = stdout.trim().split("\n").filter(Boolean);
         return [...new Set(results)]
@@ -620,8 +636,9 @@ export function registerTerminalHandlers(
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true });
         }
+        const existed = fs.existsSync(filePath);
         fs.writeFileSync(filePath, content, "utf-8");
-        return { success: true };
+        return { success: true, existed };
       } catch (err: any) {
         return { success: false, error: err.message };
       }
@@ -667,29 +684,36 @@ export function registerTerminalHandlers(
       },
     ) => {
       try {
-        // Read and clean terminal history
-        const rawHistory = sessionHistory.get(sessionId) || "";
-        // eslint-disable-next-line no-control-regex
-        let terminalOutput = rawHistory.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
-        terminalOutput = terminalOutput.replace(/[^\n]*\r(?!\n)/g, "");
-        terminalOutput = terminalOutput.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-        terminalOutput = terminalOutput.replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "");
-        terminalOutput = terminalOutput.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-        terminalOutput = terminalOutput.replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-        terminalOutput = terminalOutput.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
-        // eslint-disable-next-line no-control-regex
-        terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-
         // Filter transient steps from agentThread
         const transientSteps = new Set(["streaming", "thinking", "executing"]);
         const cleanedThread = agentThread.filter((s) => !transientSteps.has(s.step));
 
-        // Strip base64 image data from separator outputs
-        const sanitizedThread = cleanedThread.map((s) => {
+        // Restructure each step into a structured log entry
+        const structuredThread = cleanedThread.map((s) => {
+          // Strip base64 image data from separator outputs
           if (s.step === "separator" && s.output.includes("\n---images---\n")) {
-            return { ...s, output: s.output.slice(0, s.output.indexOf("\n---images---\n")) + "\n(images attached)" };
+            return { step: s.step, prompt: s.output.slice(0, s.output.indexOf("\n---images---\n")), note: "(images attached)" };
           }
-          return s;
+          if (s.step === "separator") {
+            return { step: s.step, prompt: s.output };
+          }
+
+          // Split executed/failed steps on "\n---\n" into command + terminal output
+          if ((s.step === "executed" || s.step === "failed") && s.output.includes("\n---\n")) {
+            const idx = s.output.indexOf("\n---\n");
+            const command = s.output.slice(0, idx);
+            let terminalOutput = s.output.slice(idx + 5);
+            // Clean ANSI codes and sentinels from terminal output
+            // eslint-disable-next-line no-control-regex
+            terminalOutput = terminalOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+            terminalOutput = terminalOutput.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+            // eslint-disable-next-line no-control-regex
+            terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+            return { step: s.step, command, terminalOutput };
+          }
+
+          // For done/question/thought/system/error/warning — keep as-is with a content field
+          return { step: s.step, content: s.output };
         });
 
         // Generate log ID and paths
@@ -702,12 +726,11 @@ export function registerTerminalHandlers(
 
         const logData = {
           logId,
-          version: 1,
+          version: 2,
           generatedAt: new Date().toISOString(),
           session: sessionMeta,
           interactions,
-          agentThread: sanitizedThread,
-          terminalOutput,
+          agentThread: structuredThread,
           contextSummary: contextSummary || undefined,
         };
 

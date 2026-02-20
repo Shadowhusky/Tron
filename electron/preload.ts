@@ -14,6 +14,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.getHistory",
   "terminal.readHistory",
   "terminal.scanCommands",
+  "terminal.getSystemInfo",
   "ai.testConnection",
   "system.selectFolder",
   "config.read",
@@ -113,6 +114,13 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("sessions.write", data) as Promise<boolean>,
     getSystemPaths: () =>
       ipcRenderer.invoke("config.getSystemPaths") as Promise<Record<string, string>>,
+    getSystemInfo: () =>
+      ipcRenderer.invoke("terminal.getSystemInfo") as Promise<{
+        platform: string;
+        arch: string;
+        shell: string;
+        release: string;
+      }>,
     // System
     testAIConnection: (config: {
       provider: string;

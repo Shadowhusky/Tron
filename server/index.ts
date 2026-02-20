@@ -100,6 +100,8 @@ async function handleInvoke(
       return terminal.getCompletions(data);
     case "terminal.getHistory":
       return terminal.getHistory(data);
+    case "terminal.getSystemInfo":
+      return terminal.getSystemInfo();
     case "ai.testConnection":
       return ai.testConnection(data);
     default:

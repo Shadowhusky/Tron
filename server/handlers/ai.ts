@@ -9,7 +9,7 @@ const PROVIDER_URLS: Record<string, string> = {
   minimax: "https://api.minimax.io/v1/text/chatcompletion_v2",
 };
 
-export async function testConnection({ provider, model, apiKey, baseUrl }: { provider: string; model: string; apiKey?: string; baseUrl?: string }): Promise<boolean> {
+export async function testConnection({ provider, model, apiKey, baseUrl }: { provider: string; model: string; apiKey?: string; baseUrl?: string }): Promise<{ success: boolean; error?: string }> {
   try {
     if (provider === "ollama") {
       const url = baseUrl || "http://localhost:11434";
@@ -25,9 +25,12 @@ export async function testConnection({ provider, model, apiKey, baseUrl }: { pro
           options: { num_predict: 5 },
         }),
       });
-      if (!response.ok) return false;
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        return { success: false, error: `HTTP ${response.status}: ${text || response.statusText}` };
+      }
       const data = await response.json();
-      return !!data.message?.content;
+      return { success: !!data.message?.content };
     }
 
     // LM Studio — test via real chat completion
@@ -44,9 +47,12 @@ export async function testConnection({ provider, model, apiKey, baseUrl }: { pro
           max_tokens: 5,
         }),
       });
-      if (!response.ok) return false;
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        return { success: false, error: `HTTP ${response.status}: ${text || response.statusText}` };
+      }
       const data = await response.json();
-      return !!data.choices?.[0]?.message?.content;
+      return { success: !!data.choices?.[0]?.message?.content };
     }
 
     // Anthropic and Anthropic-compatible
@@ -68,7 +74,11 @@ export async function testConnection({ provider, model, apiKey, baseUrl }: { pro
           max_tokens: 5,
         }),
       });
-      return response.ok;
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        return { success: false, error: `HTTP ${response.status}: ${text || response.statusText}` };
+      }
+      return { success: true };
     }
 
     // All OpenAI-compatible providers (openai, deepseek, kimi, gemini, qwen, glm, openai-compat)
@@ -80,7 +90,7 @@ export async function testConnection({ provider, model, apiKey, baseUrl }: { pro
           return `${url}/v1/chat/completions`;
         })()
       : PROVIDER_URLS[provider];
-    if (!chatUrl) return false;
+    if (!chatUrl) return { success: false, error: `Unknown provider: ${provider}` };
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
@@ -94,9 +104,14 @@ export async function testConnection({ provider, model, apiKey, baseUrl }: { pro
         max_tokens: 5,
       }),
     });
-    return response.ok;
-  } catch (e) {
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      return { success: false, error: `HTTP ${response.status}: ${text || response.statusText}` };
+    }
+    return { success: true };
+  } catch (e: any) {
     console.error("AI Connection Test Failed:", e);
-    return false;
+    const msg = e.cause?.code || e.code || e.message || String(e);
+    return { success: false, error: msg };
   }
 }

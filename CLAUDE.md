@@ -77,6 +77,11 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - `ask_question` — returns `AgentContinuation` so conversation can resume after user response.
 - `final_answer` — rejection filters: premature completion, unfinished work, delegation, error mentions (with user-reported-error bypass).
 
+### Agent Environment Context
+- `useAgentRunner.ts` constructs the `[ENVIRONMENT]` section with: CWD, system paths, system info (OS, arch, shell), and project files
+- System info fetched via `terminal.getSystemInfo` IPC (platform, arch, shell name, OS release)
+- The static system prompt in `ai/index.ts` no longer includes OS — it's in the dynamic environment section instead
+
 ### Safety Mechanisms
 - **Loop detection**: Tracks recent actions; blocks after 3 consecutive identical calls or A→B→A→B alternation. Escalates to termination after 3 loop breaks.
 - **Circuit breaker**: After 3 consecutive guard blocks, forces final_answer to prevent infinite loops.
@@ -97,8 +102,9 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 
 ## Session Log (`/log` command)
 
-- SmartInput intercepts `/log`, TerminalPane orchestrates via IPC
-- Handler in `electron/ipc/terminal.ts`: reads sessionHistory, strips ANSI/sentinels, filters transient steps, strips secrets/images
+- SmartInput intercepts `/log` via `onSlashCommand` prop (must be in SmartInputProps), TerminalPane orchestrates via IPC
+- Handler in `electron/ipc/terminal.ts`: filters transient steps, structures each step with per-step terminal output
+- Log format v2: each agentThread entry is structured — `separator` → `{ step, prompt }`, `executed`/`failed` → `{ step, command, terminalOutput }`, others → `{ step, content }`. No separate `terminalOutput` blob.
 - Writes to `app.getPath("userData")/logs/{logId}.json` with 10-char hex ID
 - Path copied to clipboard, shown as "system" step in AgentOverlay (teal border)
 - AgentOverlay linkifies file paths (supports spaces via encodeURI/decodeURI)
@@ -106,7 +112,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 ## SmartInput Features
 
 - **Mode detection**: Classifies input as command vs agent prompt. Multiline input auto-classifies as agent mode.
-- **Slash commands**: `/log` intercepted before mode routing via `onSlashCommand` prop
+- **Slash commands**: `/log` intercepted before mode routing via `onSlashCommand` prop from TerminalPane. Any input starting with `/` is routed through this prop.
 - **History**: Agent prompts tracked alongside commands; up/down arrow navigates without triggering completions dropdown
 - **AI ghost text**: Generates inline suggestions when input is empty (idle prediction, 3s delay)
 - **Smart path quoting**: `smartQuotePaths()` auto-wraps space-containing paths in command mode
@@ -145,9 +151,12 @@ npm run lint          # ESLint
 - **Prompt detection**: `terminalState.ts` and `contextCleaner.ts` recognize `PS C:\path>` (PowerShell) and `C:\path>` (cmd) prompts
 - **Path handling**: `commandClassifier.ts` recognizes Windows paths (`C:\`, `.\\`, `..\\`); `AgentOverlay` linkifies Windows paths and splits on `[\\/]`
 - **Home abbreviation**: `abbreviateHome()` handles `/Users/x` (macOS), `/home/x` (Linux), `C:\Users\x` (Windows) — used in `ContextBar` and `TerminalPane`
-- **Window creation**: `electron/main.ts` uses `vibrancy`/`titleBarStyle` on macOS, `backgroundMaterial: "mica"` on Windows
+- **Window creation**: `electron/main.ts` uses `vibrancy`/`titleBarStyle: "hiddenInset"` on macOS; `titleBarStyle: "hidden"` + `titleBarOverlay` + `backgroundMaterial: "mica"` on Windows. TabBar has left spacer (macOS traffic lights) and right spacer (Windows overlay buttons).
 - **CWD detection**: `getCwdForPid` uses `lsof` on macOS, `/proc/PID/cwd` on Linux, `Get-CimInstance Win32_Process` on Windows
+- **System info IPC**: `terminal.getSystemInfo` exposes OS platform, arch, shell name — used in agent environment context. Mirrored in both `electron/ipc/terminal.ts` and `server/handlers/terminal.ts`.
+- **Project file listing**: Uses `Get-ChildItem` on Windows, `find` on Unix (in `useAgentRunner.ts`)
 - **AI headers**: `jsonHeaders()` and `anthropicHeaders()` helpers in `ai/index.ts` ensure consistent auth headers across all providers
+- **Test connection**: Returns `{ success, error? }` with detailed error messages (HTTP status, network errors). SettingsPane shows error details below the test button.
 
 ## Workflow
 

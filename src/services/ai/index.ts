@@ -216,7 +216,7 @@ class AIService {
       try {
         const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
         if (raw) providerConfigs = JSON.parse(raw);
-      } catch {}
+      } catch { }
 
       let found = false;
       for (const [id, cfg] of Object.entries(providerConfigs)) {
@@ -501,7 +501,7 @@ class AIService {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
       if (raw) providerConfigs = JSON.parse(raw);
-    } catch {}
+    } catch { }
 
     // Only include providers that are properly configured
     const activeProvider = this.config.provider;
@@ -539,7 +539,7 @@ class AIService {
               "ollama",
               apiKey,
             );
-          } catch {}
+          } catch { }
         }
       }
 
@@ -860,22 +860,38 @@ class AIService {
         const payload = trimmed.slice(6);
         if (payload === "[DONE]") continue;
 
+        let chunk: any;
         try {
-          const chunk = JSON.parse(payload);
-          const delta = chunk.choices?.[0]?.delta;
-          if (!delta) continue;
-
-          // Handle reasoning_content (DeepSeek, GLM, Kimi K2)
-          if (delta.reasoning_content) {
-            thinkingText += delta.reasoning_content;
-            if (onToken) onToken("", delta.reasoning_content);
-          }
-          if (delta.content) {
-            fullText += delta.content;
-            if (onToken) onToken(delta.content);
-          }
+          chunk = JSON.parse(payload);
         } catch {
-          /* skip malformed SSE lines */
+          continue; // skip malformed SSE lines
+        }
+
+        if (chunk.error) {
+          const msg =
+            chunk.error.message ||
+            (typeof chunk.error === "string"
+              ? chunk.error
+              : JSON.stringify(chunk.error));
+          throw new Error(`API Error: ${msg}`);
+        }
+        if (chunk.base_resp && chunk.base_resp.status_code !== 0) {
+          throw new Error(
+            `API Error: ${chunk.base_resp.status_msg || chunk.base_resp.status_code}`,
+          );
+        }
+
+        const delta = chunk.choices?.[0]?.delta;
+        if (!delta) continue;
+
+        // Handle reasoning_content (DeepSeek, GLM, Kimi K2)
+        if (delta.reasoning_content) {
+          thinkingText += delta.reasoning_content;
+          if (onToken) onToken("", delta.reasoning_content);
+        }
+        if (delta.content) {
+          fullText += delta.content;
+          if (onToken) onToken(delta.content);
         }
       }
     }
@@ -1047,8 +1063,8 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           messages,
           onToken
             ? (token) => {
-                if (token) onToken(token);
-              }
+              if (token) onToken(token);
+            }
             : undefined,
           combinedSignal,
           undefined,
@@ -1260,7 +1276,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
               fullText += evt.delta.text;
               onToken(evt.delta.text);
             }
-          } catch {}
+          } catch { }
         }
       }
       return fullText;
@@ -1348,7 +1364,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       history = [
         {
           role: "system",
-          content: `Terminal agent. OS: ${navigator.platform}. Respond ONLY with valid JSON.
+          content: `Terminal agent. Respond ONLY with valid JSON.
 
 TOOLS:
 1. {"tool":"execute_command","command":"..."} — Run a non-interactive command, get output. For: ls, mkdir, grep, git, npm install.
@@ -1357,15 +1373,15 @@ TOOLS:
 4. {"tool":"send_text","text":"...","description":"..."} — Send keystrokes. Include description. Keys: \\r=Enter, \\x1B[B=Down, \\x1B[A=Up, \\x03=Ctrl+C.
 5. {"tool":"ask_question","question":"..."} — Ask user for clarification.
 6. {"tool":"final_answer","content":"..."} — Task complete. 1-3 lines.
-7. {"tool":"write_file","path":"/absolute/path","content":"..."} — Write/overwrite a file directly. Use INSTEAD of cat/heredoc for creating or editing files. Much more reliable than heredoc.
+7. {"tool":"write_file","path":"/absolute/path","content":"..."} — Create a NEW file or fully replace a small file. Do NOT use for modifying existing files — use edit_file instead.
 8. {"tool":"read_file","path":"/absolute/path"} — Read a file's content directly. Use INSTEAD of cat through execute_command for reading files.
-9. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — exact string search-and-replace. efficient for changing specific config lines or code blocks.
+9. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — PREFERRED for modifying existing files. Exact string search-and-replace. Use this for any change to an existing file — even multiple edits are better than rewriting the whole file.
 
 RULES:
 1. Execute commands directly. Do not explain what you would do.
 2. On failure, read error, fix root cause.
 3. If user denies permission, STOP.
-4. FILE OPERATIONS: Use read_file to read, write_file to create/overwrite, and edit_file to modify. Do NOT use cat, heredoc, or printf through the terminal.
+4. FILE OPERATIONS: Use read_file to read, edit_file to modify existing files, write_file ONLY for new files. NEVER rewrite an entire existing file with write_file when you only need to change part of it — use edit_file instead (multiple edit_file calls if needed). Do NOT use cat, heredoc, or printf through the terminal.
 5. After interactive command: read_terminal → if menu, send_text → read_terminal again. Loop until done.
 6. START DEV SERVER ONLY AS THE VERY LAST STEP. Do not start it until all files are written, dependencies installed, and configuration is complete. Once started, the terminal is blocked.
 7. SCAFFOLDING: If the target directory might exist, run "rm -rf <dir>" FIRST. Do NOT run "mkdir" before scaffolding tools (npm create, git clone) — let them create the directory. This avoids "Directory not empty" prompts. Use non-interactive flags (e.g. --yes) where possible.
@@ -1550,7 +1566,7 @@ ${agentPrompt}
                   contentAccumulated += evt.delta.text;
                   onUpdate("streaming_response", contentAccumulated);
                 }
-              } catch {}
+              } catch { }
             }
           }
           responseText = contentAccumulated;
@@ -1611,72 +1627,133 @@ ${agentPrompt}
       const fixJsonEscapes = (raw: string): string =>
         raw.replace(/\\x([0-9a-fA-F]{2})/g, "\\u00$1");
 
+      // Known tool names — used to normalize {"tool_name": {...}} into {"tool": "tool_name", ...}
+      const TOOL_NAMES = new Set([
+        "execute_command", "run_in_terminal", "send_text", "read_terminal",
+        "write_file", "read_file", "edit_file", "ask_question", "final_answer",
+      ]);
+
+      // If the model used a tool name as a top-level key (e.g. {"final_answer": {"content":"..."}})
+      // restructure it into {"tool": "final_answer", "content": "..."}
+      const normalizeToolKey = (obj: any): any => {
+        if (!obj || typeof obj !== "object" || obj.tool) return obj;
+        const keys = Object.keys(obj);
+        const toolKey = keys.find((k) => TOOL_NAMES.has(k));
+        if (toolKey) {
+          const val = obj[toolKey];
+          if (typeof val === "string") {
+            // e.g. {"final_answer": "Done."} → {"tool":"final_answer","content":"Done."}
+            return { tool: toolKey, content: val };
+          }
+          if (typeof val === "object" && val !== null) {
+            // e.g. {"final_answer": {"content":"Done."}} → {"tool":"final_answer","content":"Done."}
+            return { tool: toolKey, ...val };
+          }
+          return obj;
+        }
+        // Handle model-specific {"cmd":["bash","-lc","actual_command"]} format (e.g. gpt-oss-120b)
+        if (obj.cmd) {
+          const command = Array.isArray(obj.cmd)
+            ? obj.cmd[obj.cmd.length - 1]
+            : typeof obj.cmd === "string"
+              ? obj.cmd
+              : null;
+          if (typeof command === "string") {
+            return { tool: "execute_command", command };
+          }
+        }
+        return obj;
+      };
+
       const tryParseJson = (text: string): any => {
         if (!text.trim()) return null;
 
         // 1. Try direct parse first (with \x escape fix)
         try {
-          return JSON.parse(fixJsonEscapes(text));
-        } catch {}
+          return normalizeToolKey(JSON.parse(fixJsonEscapes(text)));
+        } catch { }
 
         // 2. Markdown code block extraction (handles ```json, ```JSON, ```, etc.)
         const mdMatch = text.match(/```\w*\s*([\s\S]*?)```/);
         if (mdMatch) {
           try {
-            return JSON.parse(fixJsonEscapes(mdMatch[1].trim()));
-          } catch {}
+            return normalizeToolKey(JSON.parse(fixJsonEscapes(mdMatch[1].trim())));
+          } catch { }
         }
 
-        // 3. Robust extraction: find first '{' and count braces
-        const firstOpen = text.indexOf("{");
-        if (firstOpen === -1) return null;
-
-        let balance = 0;
-        let inString = false;
-        let escape = false;
-
-        for (let i = firstOpen; i < text.length; i++) {
-          const char = text[i];
-
-          if (escape) {
-            escape = false;
-            continue;
+        // 3. Extract JSON from model-specific token-wrapped responses
+        // Some models wrap output in <|channel|>...<|message|>{...} format
+        const lastTokenIdx = text.lastIndexOf("<|");
+        if (lastTokenIdx >= 0) {
+          const closingIdx = text.indexOf("|>", lastTokenIdx);
+          if (closingIdx >= 0) {
+            const afterLastToken = text.slice(closingIdx + 2).trim();
+            if (afterLastToken.startsWith("{")) {
+              try {
+                return normalizeToolKey(
+                  JSON.parse(fixJsonEscapes(afterLastToken)),
+                );
+              } catch { }
+            }
           }
+        }
 
-          if (char === "\\") {
-            escape = true;
-            continue;
-          }
+        // 4. Robust extraction: scan for balanced {} objects and try each
+        let searchFrom = 0;
+        while (searchFrom < text.length) {
+          const openIdx = text.indexOf("{", searchFrom);
+          if (openIdx === -1) break;
 
-          if (char === '"') {
-            inString = !inString;
-            continue;
-          }
+          let balance = 0;
+          let inStr = false;
+          let esc = false;
+          let endIdx = -1;
 
-          if (!inString) {
-            if (char === "{") {
-              balance++;
-            } else if (char === "}") {
-              balance--;
-              if (balance === 0) {
-                const candidate = fixJsonEscapes(text.slice(firstOpen, i + 1));
-                try {
-                  const obj = JSON.parse(candidate);
-                  if (obj.tool || obj.content) return obj;
-                } catch {
-                  // Try fixing trailing commas: ,} → }
-                  const fixed = candidate
-                    .replace(/,\s*}/g, "}")
-                    .replace(/,\s*]/g, "]");
-                  try {
-                    const obj = JSON.parse(fixed);
-                    if (obj.tool || obj.content) return obj;
-                  } catch {}
+          for (let i = openIdx; i < text.length; i++) {
+            const char = text[i];
+            if (esc) {
+              esc = false;
+              continue;
+            }
+            if (char === "\\") {
+              esc = true;
+              continue;
+            }
+            if (char === '"') {
+              inStr = !inStr;
+              continue;
+            }
+            if (!inStr) {
+              if (char === "{") balance++;
+              else if (char === "}") {
+                balance--;
+                if (balance === 0) {
+                  endIdx = i;
+                  break;
                 }
-                break;
               }
             }
           }
+
+          if (endIdx === -1) break; // unbalanced — stop
+
+          const candidate = fixJsonEscapes(text.slice(openIdx, endIdx + 1));
+          try {
+            const obj = normalizeToolKey(JSON.parse(candidate));
+            if (obj.tool || obj.content) return obj;
+          } catch {
+            // Try fixing trailing commas: ,} → }
+            const fixed = candidate
+              .replace(/,\s*}/g, "}")
+              .replace(/,\s*]/g, "]");
+            try {
+              const obj = normalizeToolKey(JSON.parse(fixed));
+              if (obj.tool || obj.content) return obj;
+            } catch { }
+          }
+
+          // This {} didn't match — continue searching after it
+          searchFrom = endIdx + 1;
         }
 
         return null;
@@ -1687,9 +1764,44 @@ ${agentPrompt}
       if (!action?.tool && thinkingText) {
         action = tryParseJson(thinkingText);
       }
-      // Coerce {"content":"..."} without "tool" into final_answer so rejection filters can process it
-      if (action && !action.tool && typeof action.content === "string") {
-        action.tool = "final_answer";
+
+      // Coerce tool-less objects or plain conversational text into proper tool calls
+      if (!action || !action.tool) {
+        if (!action) {
+          const trimmed = (responseText || "").trim();
+          if (trimmed && !trimmed.includes("{")) {
+            // Plain text without JSON braces
+            action = {};
+            if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(trimmed) || trimmed.includes("?")) {
+              action.tool = "ask_question";
+              action.question = trimmed;
+            } else if (trimmed.length < 500) {
+              action.tool = "final_answer";
+              action.content = trimmed;
+            } else {
+              action = null; // Too long, let it fail
+            }
+          }
+        } else if (typeof action.command === "string") {
+          action.tool = "execute_command";
+        } else if (typeof action.question === "string") {
+          action.tool = "ask_question";
+        } else if (typeof action.error === "string") {
+          if (/\b(clarify|understand|help with|what|how|please)\b/i.test(action.error) || action.error.includes("?")) {
+            action.tool = "ask_question";
+            action.question = action.error;
+          } else {
+            action.tool = "final_answer";
+            action.content = action.error;
+          }
+        } else if (typeof action.content === "string") {
+          if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(action.content.trim()) || action.content.includes("?")) {
+            action.tool = "ask_question";
+            action.question = action.content;
+          } else {
+            action.tool = "final_answer";
+          }
+        }
       }
 
       if (!action || !action.tool) {
@@ -1740,11 +1852,11 @@ ${agentPrompt}
         action.tool === "read_terminal"
           ? null
           : JSON.stringify({
-              tool: action.tool,
-              path: action.path,
-              command: action.command,
-              text: action.text,
-            });
+            tool: action.tool,
+            path: action.path,
+            command: action.command,
+            text: action.text,
+          });
 
       // Block actions that previously triggered loop detection
       if (actionKey && blockedActions.has(actionKey)) {
@@ -1769,13 +1881,13 @@ ${agentPrompt}
       const isAlternatingLoop =
         recentActions.length >= 6 &&
         recentActions[recentActions.length - 1] ===
-          recentActions[recentActions.length - 3] &&
+        recentActions[recentActions.length - 3] &&
         recentActions[recentActions.length - 3] ===
-          recentActions[recentActions.length - 5] &&
+        recentActions[recentActions.length - 5] &&
         recentActions[recentActions.length - 2] ===
-          recentActions[recentActions.length - 4] &&
+        recentActions[recentActions.length - 4] &&
         recentActions[recentActions.length - 4] ===
-          recentActions[recentActions.length - 6];
+        recentActions[recentActions.length - 6];
 
       if (isConsecutiveLoop || isAlternatingLoop) {
         loopBreaks++;
@@ -1981,7 +2093,7 @@ ${agentPrompt}
         }
         return {
           success: true,
-          message: action.question,
+          message: action.question || action.content || "Question?",
           type: "question",
           continuation: {
             history: [...history],
@@ -2042,7 +2154,7 @@ ${agentPrompt}
                 onUpdate(
                   "executed",
                   "(Terminal busy — auto-read)\n---\n" +
-                    (output || "(no output)"),
+                  (output || "(no output)"),
                 );
                 history.push({
                   role: "user",
@@ -2297,9 +2409,9 @@ ${agentPrompt}
           // Suppress duplicate UI entries: only show update on first or every 5th identical read
           const previewLines = output
             ? output
-                .split("\n")
-                .filter((l) => l.trim())
-                .slice(-3)
+              .split("\n")
+              .filter((l) => l.trim())
+              .slice(-3)
             : [];
           const firstLine = previewLines[0]?.slice(0, 100) || "(No output)";
           const fullPreview =
@@ -2387,7 +2499,7 @@ ${agentPrompt}
             const preview =
               content.length > MAX_PREVIEW
                 ? content.slice(0, MAX_PREVIEW) +
-                  `\n... (${content.length - MAX_PREVIEW} more characters)`
+                `\n... (${content.length - MAX_PREVIEW} more characters)`
                 : content;
             onUpdate("executed", `Wrote file: ${filePath}\n---\n${preview}`);
             wroteFiles = true;
@@ -2399,7 +2511,9 @@ ${agentPrompt}
             }
             history.push({
               role: "user",
-              content: `(File written successfully: ${filePath})`,
+              content: result.existed
+                ? `(File overwritten: ${filePath}. NOTE: For future edits to existing files, prefer edit_file over write_file to avoid rewriting the entire file.)`
+                : `(File created: ${filePath})`,
             });
           } else {
             throw new Error(result.error || "Unknown write error");
@@ -2433,8 +2547,8 @@ ${agentPrompt}
             const truncated =
               content.length > 10000
                 ? content.slice(0, 5000) +
-                  "\n...(truncated)...\n" +
-                  content.slice(-5000)
+                "\n...(truncated)...\n" +
+                content.slice(-5000)
                 : content;
             onUpdate(
               "executed",
@@ -2495,6 +2609,13 @@ ${agentPrompt}
               "executed",
               `Edited file: ${filePath} (${result.replacements} replacements)\n---\n${truncatedDiff}`,
             );
+            wroteFiles = true;
+            consecutiveGuardBlocks = 0;
+            // Track project root — use the shallowest directory
+            const dir = filePath.substring(0, filePath.lastIndexOf("/"));
+            if (dir && (!lastWriteDir || dir.length < lastWriteDir.length)) {
+              lastWriteDir = dir;
+            }
             history.push({
               role: "user",
               content: `(File edited successfully: ${filePath}. Made ${result.replacements} replacements.)`,
@@ -2584,7 +2705,7 @@ ${agentPrompt}
               onUpdate(
                 "executed",
                 "(Terminal busy — auto-read)\n---\n" +
-                  (output || "(no output)"),
+                (output || "(no output)"),
               );
               history.push({
                 role: "user",
@@ -2632,6 +2753,33 @@ ${agentPrompt}
 
         // Auto-prepend cd if agent wrote files to a project dir but forgot to cd
         let cmd = autoCdCommand(action.command, lastWriteDir);
+
+        // Guard: block recursive ls/find on broad directories to prevent massive output
+        const cmdForCheck = cmd
+          .replace(/^cd\s+\S+\s*&&\s*/, "")
+          .trim()
+          .toLowerCase();
+        if (/^ls\s/.test(cmdForCheck) && /\s-[a-z]*r|-r\b/i.test(cmdForCheck)) {
+          // Extract non-flag args after ls
+          const lsTokens = cmdForCheck.replace(/^ls\s+/, "").split(/\s+/);
+          const dirs = lsTokens.filter((t) => !t.startsWith("-"));
+          const hasSafeTarget = dirs.some(
+            (d) =>
+              d.length > 1 && d !== "." && d !== ".." && d !== "~" && d !== "/",
+          );
+          if (!hasSafeTarget) {
+            onUpdate(
+              "failed",
+              `Blocked: recursive ls without specific directory`,
+            );
+            history.push({
+              role: "user",
+              content: `Error: "ls -R" on the current/home directory produces massive output (recursively lists everything including node_modules). Specify the exact project directory path: "ls -R /absolute/path/to/project"${lastWriteDir ? ` (project directory: "${lastWriteDir}")` : ""}. Or use "ls" (non-recursive) to see what's in the current directory.`,
+            });
+            consecutiveGuardBlocks++;
+            continue;
+          }
+        }
 
         // Only block duplicate scaffold commands in execute_command — read-only commands (ls, cat, find) are safe to re-run
         if (isDuplicateScaffold(cmd, executedCommands)) {

@@ -135,8 +135,18 @@ const createWindow = () => {
                 backgroundColor: "#00000000",
             }
             : {
-                // Windows/Linux: use Mica material on Windows 11, opaque background otherwise
-                ...(process.platform === "win32" ? { backgroundMaterial: "mica" } : {}),
+                // Windows/Linux: hide title bar, use native overlay buttons
+                titleBarStyle: "hidden",
+                ...(process.platform === "win32"
+                    ? {
+                        titleBarOverlay: {
+                            color: "#0a0a0a",
+                            symbolColor: "#ffffff",
+                            height: 40,
+                        },
+                        backgroundMaterial: "mica",
+                    }
+                    : {}),
                 backgroundColor: "#0a0a0a",
             }),
     });

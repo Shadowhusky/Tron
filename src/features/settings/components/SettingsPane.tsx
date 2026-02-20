@@ -75,6 +75,7 @@ const SettingsPane = () => {
   const [testStatus, setTestStatus] = useState<
     "idle" | "testing" | "success" | "error"
   >("idle");
+  const [testError, setTestError] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
   const providerCacheRef = useRef<ProviderCache>(loadProviderCache());
 
@@ -262,14 +263,19 @@ const SettingsPane = () => {
 
   const handleTestConnection = async () => {
     setTestStatus("testing");
+    setTestError("");
     try {
-      const success =
-        await window.electron.ipcRenderer.testAIConnection(config);
+      const result = await window.electron.ipcRenderer.testAIConnection(config);
+      // Support both old (boolean) and new ({ success, error }) response formats
+      const success = typeof result === "boolean" ? result : result?.success;
+      const error = typeof result === "object" ? result?.error : undefined;
       setTestStatus(success ? "success" : "error");
-      setTimeout(() => setTestStatus("idle"), 3000);
-    } catch (e) {
+      if (!success && error) setTestError(error);
+      setTimeout(() => { setTestStatus("idle"); setTestError(""); }, 5000);
+    } catch (e: any) {
       setTestStatus("error");
-      setTimeout(() => setTestStatus("idle"), 3000);
+      setTestError(e.message || "Connection failed");
+      setTimeout(() => { setTestStatus("idle"); setTestError(""); }, 5000);
     }
   };
 
@@ -685,6 +691,11 @@ const SettingsPane = () => {
                         : "Test Connection"}
                 </button>
               </div>
+              {testError && testStatus === "error" && (
+                <div className="text-[10px] text-red-400 bg-red-500/10 rounded-lg px-2 py-1.5 break-all max-h-20 overflow-y-auto">
+                  {testError}
+                </div>
+              )}
             </div>
 
             {/* Context Window Setting */}
