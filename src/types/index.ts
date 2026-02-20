@@ -1,6 +1,6 @@
 // --- AI Types ---
 
-export type AIProvider = "ollama" | "lmstudio" | "openai" | "anthropic" | "gemini" | "deepseek" | "kimi" | "qwen" | "glm" | "openai-compat" | "anthropic-compat";
+export type AIProvider = "ollama" | "lmstudio" | "openai" | "anthropic" | "gemini" | "deepseek" | "kimi" | "qwen" | "glm" | "minimax" | "openai-compat" | "anthropic-compat";
 
 export interface AIConfig {
   provider: AIProvider;

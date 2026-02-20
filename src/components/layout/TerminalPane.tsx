@@ -66,7 +66,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const wrappedHandleAgentRunRef = useRef<(prompt: string, queueCallback?: any, images?: AttachedImage[]) => void>(() => {});
   const handleSlashCommandRef = useRef<(cmd: string) => void>(() => {});
   const stableOnSend = useCallback((cmd: string) => wrappedHandleCommandRef.current(cmd), []);
-  const stableOnRunAgent = useCallback(async (prompt: string, images?: AttachedImage[]) => wrappedHandleAgentRunRef.current(prompt, undefined, images), []);
+  const stableOnRunAgent = useCallback(async (prompt: string, images?: AttachedImage[]) => wrappedHandleAgentRunRef.current(prompt, (item: any) => queueItemRef.current(item), images), []);
   const stableSlashCommand = useCallback((cmd: string) => handleSlashCommandRef.current(cmd), []);
 
   // Stable callback for Terminal memo
@@ -78,6 +78,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const [inputQueue, setInputQueue] = useState<
     Array<{ type: "command" | "agent"; content: string }>
   >([]);
+
+  // Stable ref for queueItem so stableOnRunAgent can use it
+  const queueItemRef = useRef<(item: { type: "command" | "agent"; content: string }) => void>(() => {});
 
   // In agent view: show embedded terminal when user runs a command
   const [showEmbeddedTerminal, setShowEmbeddedTerminal] = useState(false);
@@ -108,23 +111,17 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     [isActive, isAgentRunning, stopAgentRaw],
   );
 
-  // Clear terminal (+ agent thread so it doesn't come back on refresh)
+  // Clear terminal only (Cmd+K) — preserves agent thread
   useHotkey(
     "clearTerminal",
     () => {
       if (!isActive) return;
-      if (isAgentMode) {
-        resetSession();
-      } else {
-        // Clear xterm
-        window.dispatchEvent(
-          new CustomEvent("tron:clearTerminal", { detail: { sessionId } }),
-        );
-        // Also clear agent thread so it doesn't reappear on refresh
-        resetSession();
-      }
+      // Only clear the xterm display, never the agent thread
+      window.dispatchEvent(
+        new CustomEvent("tron:clearTerminal", { detail: { sessionId } }),
+      );
     },
-    [isActive, isAgentMode, resetSession, sessionId],
+    [isActive, sessionId],
   );
 
   // Clear agent panel only (Cmd+Shift+K)
@@ -181,6 +178,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const queueItem = (item: { type: "command" | "agent"; content: string }) => {
     setInputQueue((prev) => [...prev, item]);
   };
+  queueItemRef.current = queueItem;
 
   // Close embedded terminal: aggressively exit whatever is running, wait for cleanup, then hide
   const closeEmbeddedTerminal = useCallback(() => {
@@ -372,6 +370,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   sessionId={sessionId}
                   onActivity={stableOnActivity}
                   isActive={isActive}
+                  isAgentRunning={isAgentRunning}
+                  stopAgent={stableStopAgent}
                 />
               </motion.div>
             )}
@@ -386,6 +386,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               sessionId={sessionId}
               onActivity={stableOnActivity}
               isActive={isActive}
+              isAgentRunning={isAgentRunning}
+              stopAgent={stableStopAgent}
             />
           </div>
 
@@ -495,7 +497,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       <div
         className={`p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
           dark: "bg-[#0a0a0a] border-white/5",
-          modern: "bg-white/2 border-white/6 backdrop-blur-2xl",
+          modern: "bg-[#060618] border-white/6",
           light: "bg-gray-50 border-gray-200",
         })}`}
       >
@@ -518,7 +520,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         />
       </div>
       <div className="relative z-30">
-        <ContextBar sessionId={sessionId} />
+        <ContextBar
+          sessionId={sessionId}
+          hasAgentThread={agentThread.length > 0}
+          isOverlayVisible={isOverlayVisible}
+          onShowOverlay={() => setIsOverlayVisible(true)}
+        />
       </div>
     </div>
   );

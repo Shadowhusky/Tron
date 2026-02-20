@@ -115,29 +115,39 @@ function trackedExec(command, options) {
         activeChildProcesses.add(child);
     });
 }
-/** Get CWD for a PID. Uses trackedExec for proper cleanup. */
+/** CWD cache — avoids spawning lsof/readlink on every IPC call (completions fire per keystroke). */
+const cwdCache = new Map();
+const CWD_CACHE_TTL = 2000; // 2 seconds
+/** Get CWD for a PID. Uses cache to avoid expensive subprocess spawns. */
 async function getCwdForPid(pid) {
+    // Check cache first
+    const cached = cwdCache.get(pid);
+    if (cached && Date.now() - cached.ts < CWD_CACHE_TTL) {
+        return cached.cwd;
+    }
     try {
+        let result = null;
         if (os_1.default.platform() === "darwin") {
             const { stdout } = await trackedExec(`lsof -p ${pid} 2>/dev/null | grep ' cwd ' | awk '{print $NF}'`);
-            return stdout.trim() || null;
+            result = stdout.trim() || null;
         }
         else if (os_1.default.platform() === "linux") {
             const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
-            return stdout.trim() || null;
+            result = stdout.trim() || null;
         }
         else if (os_1.default.platform() === "win32") {
-            // Use CIM to get the ExecutablePath, then derive its parent directory.
-            // This is best-effort — Windows has no reliable cross-process CWD API.
             try {
                 const { stdout } = await trackedExec(`powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p -and $p.ExecutablePath) { Split-Path $p.ExecutablePath -Parent }"`, { timeout: 5000 });
-                return stdout.trim() || null;
+                result = stdout.trim() || null;
             }
             catch {
                 return null;
             }
         }
-        return null;
+        if (result) {
+            cwdCache.set(pid, { cwd: result, ts: Date.now() });
+        }
+        return result;
     }
     catch {
         return null;

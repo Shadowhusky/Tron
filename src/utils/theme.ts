@@ -13,34 +13,34 @@ export interface ThemeTokens {
   appBg: string;
 
   // Surfaces
-  surface: string;           // Card/panel bg + border
-  surfaceHover: string;      // Hover state
-  surfaceActive: string;     // Active/selected state
-  surfaceInput: string;      // Input fields
-  surfaceOverlay: string;    // Modal/overlay panels
+  surface: string; // Card/panel bg + border
+  surfaceHover: string; // Hover state
+  surfaceActive: string; // Active/selected state
+  surfaceInput: string; // Input fields
+  surfaceOverlay: string; // Modal/overlay panels
 
   // Borders
-  border: string;            // Default border
-  borderSubtle: string;      // Subtle/divider border
-  borderFocus: string;       // Focus ring
+  border: string; // Default border
+  borderSubtle: string; // Subtle/divider border
+  borderFocus: string; // Focus ring
 
   // Text
-  text: string;              // Primary text
-  textMuted: string;         // Secondary text
-  textFaint: string;         // Tertiary/hint text
+  text: string; // Primary text
+  textMuted: string; // Secondary text
+  textFaint: string; // Tertiary/hint text
 
   // Bars (tab bar, context bar, footer)
-  bar: string;               // Bar background
-  barBorder: string;         // Bar border
+  bar: string; // Bar background
+  barBorder: string; // Bar border
 
   // Glass effects
-  glass: string;             // Backdrop-blur + transparency
+  glass: string; // Backdrop-blur + transparency
 
   // Accent
-  accent: string;            // Accent text
-  accentMuted: string;       // Muted accent
-  accentBg: string;          // Accent background
-  accentGlow: string;        // Glow shadow
+  accent: string; // Accent text
+  accentMuted: string; // Muted accent
+  accentBg: string; // Accent background
+  accentGlow: string; // Glow shadow
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,8 @@ const darkTheme: ThemeTokens = {
   surface: "bg-white/5 border border-white/5",
   surfaceHover: "hover:bg-white/5",
   surfaceActive: "bg-white/10 border-white/10",
-  surfaceInput: "bg-black/20 border-white/10 text-white focus:bg-black/40 focus:border-purple-500/50",
+  surfaceInput:
+    "bg-black/20 border-white/10 text-white focus:bg-black/40 focus:border-purple-500/50",
   surfaceOverlay: "bg-[#0a0a0a]/95 border-white/10 text-white",
 
   border: "border-white/10",
@@ -83,7 +84,8 @@ const lightTheme: ThemeTokens = {
   surface: "bg-white border border-gray-200",
   surfaceHover: "hover:bg-gray-100",
   surfaceActive: "bg-gray-100 border-gray-300",
-  surfaceInput: "bg-white border-gray-200 text-gray-900 focus:border-purple-500",
+  surfaceInput:
+    "bg-white border-gray-200 text-gray-900 focus:border-purple-500",
   surfaceOverlay: "bg-white/95 border-gray-200 text-gray-900",
 
   border: "border-gray-200",
@@ -107,13 +109,15 @@ const lightTheme: ThemeTokens = {
 
 const modernTheme: ThemeTokens = {
   isLight: false,
-  appBg: "bg-gradient-to-br from-[#020010] via-[#050520] to-[#0a0a2e] text-white",
+  appBg:
+    "bg-gradient-to-br from-[#020010] via-[#050520] to-[#0a0a2e] text-white",
 
-  surface: "bg-white/[0.03] border border-white/[0.06] backdrop-blur-xl",
+  surface: "bg-white/[0.03] border border-white/[0.06]",
   surfaceHover: "hover:bg-white/[0.06]",
-  surfaceActive: "bg-white/[0.08] border-white/[0.1] backdrop-blur-xl",
-  surfaceInput: "bg-white/[0.03] border-white/[0.08] text-white backdrop-blur-xl focus:border-purple-400/30 focus:bg-white/[0.05]",
-  surfaceOverlay: "bg-[#0c0c1e]/60 border-white/[0.06] text-white backdrop-blur-2xl",
+  surfaceActive: "bg-white/[0.08] border-white/[0.1]",
+  surfaceInput:
+    "bg-white/[0.03] border-white/[0.08] text-white focus:border-purple-400/30 focus:bg-white/[0.05]",
+  surfaceOverlay: "bg-[#0c0c1e]/90 border-white/[0.06] text-white",
 
   border: "border-white/[0.08]",
   borderSubtle: "border-white/[0.04]",
@@ -126,7 +130,7 @@ const modernTheme: ThemeTokens = {
   bar: "bg-white/[0.02]",
   barBorder: "border-white/[0.06]",
 
-  glass: "backdrop-blur-2xl",
+  glass: "",
 
   accent: "text-purple-300",
   accentMuted: "text-purple-400/60",
@@ -165,7 +169,12 @@ export function getThemeIds(): string[] {
  */
 export function themeClass(
   resolvedTheme: string,
-  classes: { dark: string; light: string; modern?: string; [key: string]: string | undefined },
+  classes: {
+    dark: string;
+    light: string;
+    modern?: string;
+    [key: string]: string | undefined;
+  },
 ): string {
   return classes[resolvedTheme] ?? classes.dark;
 }

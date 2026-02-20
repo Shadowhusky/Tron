@@ -8,6 +8,7 @@ const PROVIDER_URLS: Record<string, string> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
   qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
   glm: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+  minimax: "https://api.minimax.io/v1/text/chatcompletion_v2",
 };
 
 export function registerAIHandlers() {
