@@ -167,10 +167,11 @@ export function useAgentRunner(
         });
         // Brief delay for shell to process interrupt and show a new prompt
         setTimeout(() => {
-          // Send Ctrl+U (clear line) before command to ensure clean input
+          // Send Ctrl+U (mac/linux) or Esc (win) to clear current line
+          const isWin = navigator.platform?.startsWith("Win") ?? false;
           window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
             id: sessionId,
-            data: "\x15",
+            data: isWin ? "\x1b" : "\x15",
           });
           sendCommand();
         }, 80);
@@ -330,7 +331,7 @@ export function useAgentRunner(
       aiService
         .generateTabTitle(prompt, session?.aiConfig)
         .then((title) => { if (title) renameTab(sessionId, title); })
-        .catch(() => {});
+        .catch(() => { });
     }
 
     // --- Image analysis shortcut: bypass agent loop entirely ---
@@ -420,42 +421,42 @@ export function useAgentRunner(
         // Continuing from a question — pass raw answer, history is in continuation
         finalPrompt = prompt;
       } else {
-      // 1. Fetch & Clean Session History & Environment
-      let sessionHistory = "";
-      let cwd = "";
-      let systemPathsStr = "";
+        // 1. Fetch & Clean Session History & Environment
+        let sessionHistory = "";
+        let cwd = "";
+        let systemPathsStr = "";
 
-      let projectFiles = "";
+        let projectFiles = "";
 
-      if (window.electron) {
-        // Detect platform for cross-platform file listing command
-        const isWin = navigator.platform?.startsWith("Win") ?? false;
-        const listCommand = isWin
-          ? 'Get-ChildItem -Recurse -Depth 2 -Name -Exclude node_modules,.git,dist,.next,__pycache__,venv,.venv,build | Select-Object -First 100'
-          : "find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/build/*' 2>/dev/null | head -100";
+        if (window.electron) {
+          // Detect platform for cross-platform file listing command
+          const isWin = navigator.platform?.startsWith("Win") ?? false;
+          const listCommand = isWin
+            ? 'Get-ChildItem -Recurse -Depth 2 -Name -Exclude node_modules,.git,dist,.next,__pycache__,venv,.venv,build | Select-Object -First 100'
+            : "find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/build/*' 2>/dev/null | head -100";
 
-        // Run fetches in parallel for speed
-        const [rawHistory, fetchedCwd, paths, dirListing, sysInfo] = await Promise.all([
-          window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_HISTORY, sessionId),
-          window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_CWD, sessionId),
-          window.electron.ipcRenderer.invoke(IPC.CONFIG_GET_SYSTEM_PATHS).catch(() => null),
-          // Get project file listing so the agent knows what already exists
-          window.electron.ipcRenderer.invoke(IPC.TERMINAL_EXEC, {
-            sessionId,
-            command: listCommand,
-          }).catch(() => null),
-          window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_SYSTEM_INFO).catch(() => null),
-        ]);
+          // Run fetches in parallel for speed
+          const [rawHistory, fetchedCwd, paths, dirListing, sysInfo] = await Promise.all([
+            window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_HISTORY, sessionId),
+            window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_CWD, sessionId),
+            window.electron.ipcRenderer.invoke(IPC.CONFIG_GET_SYSTEM_PATHS).catch(() => null),
+            // Get project file listing so the agent knows what already exists
+            window.electron.ipcRenderer.invoke(IPC.TERMINAL_EXEC, {
+              sessionId,
+              command: listCommand,
+            }).catch(() => null),
+            window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_SYSTEM_INFO).catch(() => null),
+          ]);
 
-        sessionHistory = cleanContextForAI(rawHistory);
-        cwd = fetchedCwd || "";
+          sessionHistory = cleanContextForAI(rawHistory);
+          cwd = fetchedCwd || "";
 
-        if (dirListing?.stdout) {
-          projectFiles = dirListing.stdout.trim();
-        }
+          if (dirListing?.stdout) {
+            projectFiles = dirListing.stdout.trim();
+          }
 
-        if (paths) {
-          systemPathsStr = `
+          if (paths) {
+            systemPathsStr = `
 System Paths:
 - Home: ${paths.home}
 - Desktop: ${paths.desktop}
@@ -463,53 +464,53 @@ System Paths:
 - Downloads: ${paths.downloads}
 - Temp: ${paths.temp}
 `;
+          }
+
+          if (sysInfo) {
+            const platformNames: Record<string, string> = {
+              darwin: "macOS", win32: "Windows", linux: "Linux",
+            };
+            systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}\n`;
+          }
         }
 
-        if (sysInfo) {
-          const platformNames: Record<string, string> = {
-            darwin: "macOS", win32: "Windows", linux: "Linux",
-          };
-          systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}\n`;
+        // 2. Context Compression
+        const contextLimit =
+          session?.aiConfig?.contextWindow ||
+          aiService.getConfig().contextWindow ||
+          4000;
+
+        if (session?.contextSummary && session.contextSummarySourceLength) {
+          const newContent = sessionHistory.slice(
+            session.contextSummarySourceLength,
+          );
+          sessionHistory = `[PREVIOUS CONTEXT SUMMARIZED]\n${session.contextSummary}\n\n[RECENT TERMINAL OUTPUT]\n${newContent}`;
+        } else if (sessionHistory.length > contextLimit) {
+          const summary = await aiService.summarizeContext(
+            sessionHistory.slice(-contextLimit),
+          );
+          sessionHistory = `[CONTEXT SUMMARIZED]\n${summary}`;
         }
-      }
 
-      // 2. Context Compression
-      const contextLimit =
-        session?.aiConfig?.contextWindow ||
-        aiService.getConfig().contextWindow ||
-        4000;
+        // 3. Construct Augmented Prompt with Prior Agent Interactions
+        // session?.interactions may be stale (from render closure), so read from
+        // the interactions we know exist at this point — the current prompt was
+        // just added but may not be reflected in `session` yet.
+        const priorInteractions = (session?.interactions || [])
+          .slice(-10)
+          .map((i) => `${i.role === "user" ? "User" : "Agent"}: ${i.content}`)
+          .join("\n\n");
 
-      if (session?.contextSummary && session.contextSummarySourceLength) {
-        const newContent = sessionHistory.slice(
-          session.contextSummarySourceLength,
-        );
-        sessionHistory = `[PREVIOUS CONTEXT SUMMARIZED]\n${session.contextSummary}\n\n[RECENT TERMINAL OUTPUT]\n${newContent}`;
-      } else if (sessionHistory.length > contextLimit) {
-        const summary = await aiService.summarizeContext(
-          sessionHistory.slice(-contextLimit),
-        );
-        sessionHistory = `[CONTEXT SUMMARIZED]\n${summary}`;
-      }
+        // Always include history section so the agent sees prior prompts + responses
+        const interactionContext = priorInteractions
+          ? `\n[PRIOR CONVERSATION]\n${priorInteractions}\n`
+          : "";
 
-      // 3. Construct Augmented Prompt with Prior Agent Interactions
-      // session?.interactions may be stale (from render closure), so read from
-      // the interactions we know exist at this point — the current prompt was
-      // just added but may not be reflected in `session` yet.
-      const priorInteractions = (session?.interactions || [])
-        .slice(-10)
-        .map((i) => `${i.role === "user" ? "User" : "Agent"}: ${i.content}`)
-        .join("\n\n");
-
-      // Always include history section so the agent sees prior prompts + responses
-      const interactionContext = priorInteractions
-        ? `\n[PRIOR CONVERSATION]\n${priorInteractions}\n`
-        : "";
-
-      if (images && images.length > 0) {
-        // Image analysis mode: strip noisy terminal context to avoid the model
-        // latching onto project files / history and executing random commands.
-        // Put the image instruction front-and-center.
-        finalPrompt = `[IMAGE ANALYSIS — READ CAREFULLY]
+        if (images && images.length > 0) {
+          // Image analysis mode: strip noisy terminal context to avoid the model
+          // latching onto project files / history and executing random commands.
+          // Put the image instruction front-and-center.
+          finalPrompt = `[IMAGE ANALYSIS — READ CAREFULLY]
 The user has attached ${images.length} image(s). The images are ALREADY EMBEDDED in this message — you can SEE them directly as inline visual content. You do NOT need to open, read, or access any files. Do NOT use read_file, execute_command, or ls to find the images. They are RIGHT HERE in this conversation.
 
 Current Working Directory: ${cwd || "Unknown"}
@@ -517,8 +518,8 @@ Current Working Directory: ${cwd || "Unknown"}
 User: ${prompt}
 
 Respond with {"tool":"final_answer","content":"your detailed description of what you see in the image(s), plus any response to the user's request"}. If the user explicitly asks you to perform actions based on the image (e.g. "implement this design"), you may then use other tools AFTER first describing what you see.`;
-      } else {
-        finalPrompt = `
+        } else {
+          finalPrompt = `
 [ENVIRONMENT]
 Current Working Directory: ${cwd || "Unknown"}${systemPathsStr}
 ${projectFiles ? `\n[PROJECT FILES]\n${projectFiles}\n` : ""}
@@ -529,7 +530,7 @@ User: ${prompt}
 
 Task: ${prompt}
 `;
-      }
+        }
       } // end else (new run — not continuing from question)
 
       const finalAnswer = await aiService.runAgent(
@@ -604,9 +605,10 @@ Task: ${prompt}
             if (!window.electron) return;
             // For run_in_terminal: clear any user-typed text before injecting command
             if (checkPerm) {
+              const isWin = navigator.platform?.startsWith("Win") ?? false;
               window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
                 id: sessionId,
-                data: "\x15", // Ctrl+U: clear current line
+                data: isWin ? "\x1b" : "\x15", // Esc for Win, Ctrl+U for Unix
               });
             }
             window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {

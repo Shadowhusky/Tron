@@ -14,7 +14,8 @@ import {
 } from "../../../utils/commandClassifier";
 import { aiService } from "../../../services/ai";
 import { useHistory } from "../../../contexts/HistoryContext";
-import { Terminal, Bot, ChevronRight, Lightbulb, Zap } from "lucide-react";
+import { Terminal, Bot, ChevronRight, Lightbulb, Zap, ImagePlus, X } from "lucide-react";
+import type { AttachedImage } from "../../../types";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
 import { useLayout } from "../../../contexts/LayoutContext";
@@ -24,7 +25,7 @@ import { slideDown, fadeScale } from "../../../utils/motion";
 
 interface SmartInputProps {
   onSend: (value: string) => void;
-  onRunAgent: (prompt: string) => Promise<void>;
+  onRunAgent: (prompt: string, images?: AttachedImage[]) => Promise<void>;
   isAgentRunning: boolean;
   pendingCommand: string | null;
   sessionId?: string;
@@ -74,7 +75,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const { history, addToHistory } = useHistory();
   const [reactValue, setReactValue] = useState("");
   const [, startTransition] = useTransition();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Initialize from draft input (persisted across tab switches)
   const draftApplied = useRef(false);
@@ -96,6 +97,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
             : valOrUpdater;
         if (inputRef.current && inputRef.current.value !== newVal) {
           inputRef.current.value = newVal;
+          // Reset textarea height when clearing
+          if (!newVal) {
+            inputRef.current.style.height = 'auto';
+          }
         }
         return newVal;
       });
@@ -122,6 +127,61 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const [savedInput, setSavedInput] = useState("");
   // Track whether user explicitly navigated completions with arrow keys
   const navigatedCompletionsRef = useRef(false);
+
+  // Image attachment state
+  const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
+  const MAX_IMAGES = 5;
+  const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+  const readFileAsBase64 = (file: File): Promise<AttachedImage> =>
+    new Promise((resolve, reject) => {
+      if (file.size > MAX_IMAGE_SIZE) {
+        reject(new Error(`File ${file.name} exceeds 20MB limit`));
+        return;
+      }
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        reject(new Error(`Unsupported image type: ${file.type}`));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const base64 = dataUrl.split(",")[1];
+        resolve({ base64, mediaType: file.type, name: file.name });
+      };
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.readAsDataURL(file);
+    });
+
+  const handleImageFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files).filter(f => ALLOWED_TYPES.includes(f.type));
+    const remaining = MAX_IMAGES - attachedImages.length;
+    if (remaining <= 0) return;
+    const toProcess = fileArray.slice(0, remaining);
+    const newImages: AttachedImage[] = [];
+    for (const file of toProcess) {
+      try {
+        newImages.push(await readFileAsBase64(file));
+      } catch {
+        // Skip failed files silently
+      }
+    }
+    if (newImages.length > 0) {
+      setAttachedImages(prev => [...prev, ...newImages]);
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setAttachedImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const supportsVision = modelCapabilities === null || modelCapabilities?.includes("vision");
+
+  // Drag-and-drop state
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
 
   // AI-generated placeholder
   const [aiPlaceholder, setAiPlaceholder] = useState("");
@@ -528,7 +588,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const lastShiftTapRef = useRef(0);
   const DOUBLE_TAP_THRESHOLD = 400; // ms
 
-  const handleKeyUp = (e: KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyUp = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Shift") {
       if (!otherKeyPressedRef.current && shiftPressedRef.current) {
         // Clean shift tap (no other keys pressed during hold)
@@ -557,7 +617,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
     }
   };
 
-  const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Track Shift key state
     if (e.key === "Shift") {
       shiftPressedRef.current = true;
@@ -688,8 +748,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
     if (e.key === "Enter") {
       e.stopPropagation(); // Prevent terminal from also receiving this Enter
 
-      // Cmd+Enter: force send as command
-      if (e.metaKey || matchesHotkey(e, hotkeys.forceCommand)) {
+      // Shift+Enter (without Cmd): insert newline
+      if (e.shiftKey && !e.metaKey) {
+        // Let the textarea handle the newline naturally
+        return;
+      }
+
+      // Cmd+Shift+Enter: force send as command
+      if (e.metaKey && e.shiftKey) {
         e.preventDefault();
         const finalVal = value.trim();
         if (!finalVal) return;
@@ -704,11 +770,13 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return;
       }
 
-      // Shift+Enter: force agent
-      if (e.shiftKey) {
+      // Cmd+Enter: force agent
+      if (e.metaKey) {
         e.preventDefault();
+        const hasImgs = attachedImages.length > 0;
         setFeedbackMsg("Agent Started");
-        onRunAgent(value);
+        onRunAgent(value, hasImgs ? attachedImages : undefined);
+        if (hasImgs) setAttachedImages([]);
         setValue("");
         setGhostText("");
         setCompletions([]);
@@ -758,7 +826,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
       }
 
       const finalVal = value.trim();
-      if (finalVal === "") return;
+      const hasImages = attachedImages.length > 0;
+      if (finalVal === "" && !hasImages) return;
 
       // Intercept slash commands (e.g. /log) before mode routing
       if (finalVal.startsWith("/") && onSlashCommand) {
@@ -783,11 +852,24 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return;
       }
 
+      // If images attached with no text, force agent mode
+      if (hasImages && finalVal === "") {
+        setFeedbackMsg("Agent Started");
+        onRunAgent("Describe the attached image(s)", attachedImages);
+        setAttachedImages([]);
+        setValue("");
+        setGhostText("");
+        setCompletions([]);
+        setHistoryIndex(-1);
+        return;
+      }
+
       // Execute based on active mode
       // When awaiting an agent answer (continuation), force agent mode regardless of classifier
       if (awaitingAnswer || mode === "agent") {
         setFeedbackMsg("Agent Started");
-        onRunAgent(finalVal);
+        onRunAgent(finalVal, hasImages ? attachedImages : undefined);
+        if (hasImages) setAttachedImages([]);
       } else if (mode === "command") {
         setFeedbackMsg("");
         trackCommand(finalVal);
@@ -837,8 +919,37 @@ const SmartInput: React.FC<SmartInputProps> = ({
       data-tutorial="smart-input"
     >
       <div
-        className={`relative w-full transition-all duration-300 rounded-lg border px-3 py-2 flex flex-col gap-1 z-10 ${
-          mode === "agent"
+        onDragEnter={(e) => {
+          if (!supportsVision) return;
+          e.preventDefault();
+          dragCounterRef.current++;
+          if (e.dataTransfer.types.includes("Files")) setIsDragOver(true);
+        }}
+        onDragOver={(e) => {
+          if (!supportsVision) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          dragCounterRef.current--;
+          if (dragCounterRef.current <= 0) {
+            dragCounterRef.current = 0;
+            setIsDragOver(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          dragCounterRef.current = 0;
+          setIsDragOver(false);
+          if (!supportsVision || !e.dataTransfer.files.length) return;
+          handleImageFiles(e.dataTransfer.files);
+        }}
+        className={`relative w-full transition-all duration-300 rounded-lg border px-3 py-2 flex flex-col gap-1 z-10 ${isDragOver
+          ? theme === "light"
+            ? "bg-purple-50 border-purple-400 border-dashed shadow-sm ring-2 ring-purple-300/50"
+            : "bg-purple-950/50 border-purple-400/50 border-dashed shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-2 ring-purple-500/30"
+          : mode === "agent"
             ? theme === "light"
               ? "bg-purple-50 border-purple-300 shadow-sm text-purple-900"
               : "bg-purple-950/40 border-purple-500/30 shadow-[0_0_20px_rgba(168,85,247,0.08)] text-purple-100"
@@ -853,6 +964,40 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   : "bg-[#0e0e0e] border-white/10 text-gray-200 shadow-xl"
         }`}
       >
+        {/* Drop zone hint */}
+        {isDragOver && (
+          <div className={`flex items-center justify-center py-2 text-xs font-medium ${
+            theme === "light" ? "text-purple-600" : "text-purple-300"
+          }`}>
+            <ImagePlus className="w-4 h-4 mr-1.5 opacity-70" />
+            Drop image here
+          </div>
+        )}
+
+        {/* Image thumbnail strip */}
+        {attachedImages.length > 0 && (
+          <div className="flex items-center gap-1.5 px-1 pt-1 pb-1 overflow-x-auto">
+            {attachedImages.map((img, i) => (
+              <div key={i} className="relative shrink-0 group/thumb">
+                <img
+                  src={`data:${img.mediaType};base64,${img.base64}`}
+                  alt={img.name}
+                  className={`h-10 w-10 rounded object-cover border ${
+                    theme === "light" ? "border-gray-200" : "border-white/10"
+                  }`}
+                />
+                <button
+                  onClick={() => removeImage(i)}
+                  className={`absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full text-white flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity shadow-sm ${
+                    theme === "light" ? "bg-red-500" : "bg-red-500/90"
+                  }`}
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           {/* Mode Switcher */}
           <div className="relative">
@@ -973,36 +1118,40 @@ const SmartInput: React.FC<SmartInputProps> = ({
               )}
           </div>
 
-          <div className="relative flex-1">
-            {value.length > 0 && (
-              <div className="absolute inset-0 flex items-center pointer-events-none font-mono text-sm whitespace-pre overflow-hidden">
+          <div className="relative flex-1 flex items-center">
+            {/* Ghost Text Overlay */}
+            {(value.length > 0 || (!value && aiPlaceholder)) && (
+              <div className="absolute inset-0 pointer-events-none font-mono text-sm whitespace-pre-wrap break-words overflow-hidden">
                 <span className="invisible">{value}</span>
-                <span className="text-gray-600 opacity-50">
+                <span className="text-gray-500 opacity-50">
                   {ghostText ||
-                    (currentCompletion && currentCompletion.startsWith(value)
-                      ? currentCompletion.slice(value.length)
+                    (!value && aiPlaceholder ? aiPlaceholder : "") ||
+                    (currentCompletion && currentCompletion.startsWith(value.split('\n').pop() || "")
+                      ? currentCompletion.slice((value.split('\n').pop() || "").length)
                       : "")}
                 </span>
               </div>
             )}
 
-            <input
+            <textarea
               ref={inputRef}
-              type="text"
-              className={`w-full bg-transparent font-mono text-sm outline-none ${
+              rows={1}
+              className={`w-full bg-transparent font-mono text-sm outline-none resize-none overflow-hidden ${
                 theme === "light"
                   ? "text-gray-900 placeholder-gray-400"
                   : "text-gray-100 placeholder-gray-500"
               }`}
+              style={{ minHeight: '1.5em', maxHeight: '8em' }}
               placeholder={
-                aiPlaceholder ||
-                (isAuto
-                  ? "Type a command or ask a question..."
-                  : mode === "command"
-                    ? "Type a command..."
-                    : mode === "agent"
-                      ? "Describe a task for the agent..."
-                      : "Ask AI for advice...")
+                aiPlaceholder
+                  ? "" // AI suggestion shown via ghost text overlay
+                  : isAuto
+                    ? "Type a command or ask a question..."
+                    : mode === "command"
+                      ? "Type a command..."
+                      : mode === "agent"
+                        ? "Describe a task for the agent..."
+                        : "Ask AI for advice..."
               }
               // Value is deliberately uncontrolled to allow native DOM updates for typing performance
               // while React state catches up in a transition
@@ -1016,9 +1165,23 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   if (val.trim() !== "") setAiPlaceholder("");
                   onDraftChange?.(val || undefined);
                 });
+                // Auto-resize textarea
+                const el = e.target;
+                el.style.height = 'auto';
+                el.style.height = el.scrollHeight + 'px';
               }}
               onKeyDown={handleKeyDown}
               onKeyUp={handleKeyUp}
+              onPaste={(e) => {
+                const items = e.clipboardData?.files;
+                if (items && items.length > 0) {
+                  const imageFiles = Array.from(items).filter(f => ALLOWED_TYPES.includes(f.type));
+                  if (imageFiles.length > 0 && supportsVision) {
+                    e.preventDefault();
+                    handleImageFiles(imageFiles);
+                  }
+                }
+              }}
               autoFocus
               disabled={
                 isLoading || (isAgentRunning && pendingCommand !== null)
@@ -1027,6 +1190,33 @@ const SmartInput: React.FC<SmartInputProps> = ({
               autoComplete="off"
             />
           </div>
+
+          {/* Image upload button — visible when model supports vision */}
+          {supportsVision && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) handleImageFiles(e.target.files);
+                  e.target.value = ""; // Reset so same file can be re-selected
+                }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className={`p-1.5 rounded-md transition-colors ${theme === "light"
+                  ? "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+                  : "hover:bg-white/10 text-gray-500 hover:text-gray-300"
+                }`}
+                title={`Attach image (${attachedImages.length}/${MAX_IMAGES})`}
+              >
+                <ImagePlus className="w-4 h-4" />
+              </button>
+            </>
+          )}
 
           <button
             onClick={
@@ -1112,9 +1302,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
         >
           <span>⇧⇧ next mode</span>
           <span className="opacity-40 mx-1">·</span>
-          <span>⇧↵ agent</span>
+          <span>⇧↵ newline</span>
           <span className="opacity-40 mx-1">·</span>
-          <span>⌘↵ cmd</span>
+          <span>⌘↵ agent</span>
+          <span className="opacity-40 mx-1">·</span>
+          <span>⌘⇧↵ cmd</span>
           <span className="opacity-40 mx-1">·</span>
           <span>⌘0-3 mode</span>
           <span className="opacity-40 mx-1">·</span>
