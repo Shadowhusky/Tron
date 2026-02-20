@@ -557,7 +557,9 @@ export function registerTerminalHandlers(
 
         // Clear any text the user may have typed in the terminal before injecting the command.
         // Ctrl+U clears the current line in bash/zsh without killing a running process.
-        session.write("\x15");
+        // On Windows PowerShell/Cmd, Escape (\x1b) clears the line.
+        const clearChar = os.platform() === "win32" ? "\x1b" : "\x15";
+        session.write(clearChar);
 
         // Stall detection: if no new PTY output for 3s, assume process is
         // waiting for input. Return early so agent can interact via send_text.
