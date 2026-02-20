@@ -785,14 +785,16 @@ const SmartInput: React.FC<SmartInputProps> = ({
     if (e.key === "Enter") {
       e.stopPropagation(); // Prevent terminal from also receiving this Enter
 
-      // Cmd+Enter: force send as command
+      // Cmd+Enter: force send as agent
       if (e.metaKey || matchesHotkey(e, hotkeys.forceCommand)) {
         e.preventDefault();
         const finalVal = value.trim();
-        if (!finalVal) return;
-        setFeedbackMsg("");
-        trackCommand(finalVal);
-        onSend(finalVal);
+        const hasImages = attachedImages.length > 0;
+        if (!finalVal && !hasImages) return;
+        setFeedbackMsg("Agent Started");
+        if (finalVal) trackCommand(finalVal);
+        onRunAgent(finalVal || "Describe the attached image(s)", hasImages ? attachedImages : undefined);
+        setAttachedImages([]);
         setValue("");
         setGhostText("");
         setCompletions([]);
@@ -1196,9 +1198,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         >
           <span>⇧⇧ next mode</span>
           <span className="opacity-40 mx-1">·</span>
-          <span>⇧↵ agent</span>
-          <span className="opacity-40 mx-1">·</span>
-          <span>⌘↵ cmd</span>
+          <span>⌘↵ agent</span>
           <span className="opacity-40 mx-1">·</span>
           <span>⌘0-3 mode</span>
           <span className="opacity-40 mx-1">·</span>
