@@ -79,6 +79,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
     providerUsesBaseUrl(aiConfig.provider) ? aiConfig.baseUrl : undefined,
     isAiStep && isLocalProvider,
     aiConfig.provider,
+    aiConfig.apiKey,
   );
   const invalidateModels = useInvalidateModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
@@ -380,7 +381,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                             setAiConfig((c) => ({ ...c, baseUrl: newUrl }));
                           }}
                           onBlur={() => {
-                            invalidateModels(aiConfig.baseUrl, aiConfig.provider);
+                            invalidateModels();
                           }}
                           className={`flex-1 p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
                             ${
@@ -395,7 +396,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => {
-                            invalidateModels(aiConfig.baseUrl, aiConfig.provider);
+                            invalidateModels();
                           }}
                           className={`shrink-0 px-2.5 py-2 rounded-lg border text-xs transition-colors ${
                             resolvedTheme === "light"

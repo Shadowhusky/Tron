@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -262,4 +262,4 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
   return <div className={className} ref={terminalRef} />;
 };
 
-export default Terminal;
+export default React.memo(Terminal);

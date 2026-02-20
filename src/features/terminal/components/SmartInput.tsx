@@ -75,18 +75,31 @@ const SmartInput: React.FC<SmartInputProps> = ({
     defaultAgentMode ? "agent" : "command",
   );
 
-  // Sync draft input back to parent for session persistence (debounced)
+  // Sync draft input back to parent for session persistence (debounced long to avoid context churn)
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
   useEffect(() => {
-    if (!onDraftChange) return;
+    if (!onDraftChangeRef.current) return;
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => {
-      onDraftChange(value || undefined);
-    }, 300);
+      onDraftChangeRef.current?.(valueRef.current || undefined);
+    }, 3000);
     return () => {
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     };
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Flush draft immediately on tab switch or unmount
+  useEffect(() => {
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      onDraftChangeRef.current?.(valueRef.current || undefined);
+    };
+  }, [activeSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedCommand, setSuggestedCommand] = useState<string | null>(null);
@@ -239,7 +252,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
   // No predictions while typing to avoid lag from API calls
   useEffect(() => {
     if (placeholderTimerRef.current) clearTimeout(placeholderTimerRef.current);
-    if (placeholderAbortRef.current) placeholderAbortRef.current.abort();
+    // Always abort any in-flight request when effect re-runs
+    if (placeholderAbortRef.current) {
+      placeholderAbortRef.current.abort();
+      placeholderAbortRef.current = null;
+    }
 
     // Clear suggestion immediately when user starts typing
     if (value.trim() !== "") {
@@ -249,31 +266,49 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
     if (!sessionId || isAgentRunning) return;
 
+    // Create abort controller up-front so cleanup can cancel both timer and in-flight request
+    const abort = new AbortController();
+    placeholderAbortRef.current = abort;
+
     // Only predict when idle (empty input, 3s delay)
     placeholderTimerRef.current = setTimeout(async () => {
-      const abort = new AbortController();
-      placeholderAbortRef.current = abort;
       try {
+        if (abort.signal.aborted) return;
         if (!window.electron?.ipcRenderer?.getHistory) return;
         const termHistory = await window.electron.ipcRenderer.getHistory(sessionId);
         if (abort.signal.aborted) return;
         if (!termHistory || termHistory.length < 10) return;
+        let accumulated = "";
         const suggestion = await aiService.generatePlaceholder(
           termHistory,
           undefined,
           sessionAIConfigRef.current,
           abort.signal,
+          (token) => {
+            if (abort.signal.aborted) return;
+            accumulated += token;
+            const preview = accumulated.replace(/^`+|`+$/g, "").split("\n")[0].trim();
+            if (preview.length <= 80) {
+              setAiPlaceholder(preview);
+            } else {
+              // Got enough text — abort the stream early to save resources
+              abort.abort();
+            }
+          },
         );
         if (abort.signal.aborted) return;
-        setAiPlaceholder(suggestion || "");
+        setAiPlaceholder(suggestion || accumulated.replace(/^`+|`+$/g, "").split("\n")[0].trim() || "");
       } catch {
-        // Non-critical, silently ignore
+        // Non-critical, silently ignore (includes AbortError from early stop)
       }
     }, 3000);
     return () => {
       if (placeholderTimerRef.current)
         clearTimeout(placeholderTimerRef.current);
-      if (placeholderAbortRef.current) placeholderAbortRef.current.abort();
+      if (placeholderAbortRef.current) {
+        placeholderAbortRef.current.abort();
+        placeholderAbortRef.current = null;
+      }
     };
   }, [value, sessionId, isAgentRunning]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -353,40 +388,41 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    // 1. If input is clearly natural language, skip everything
-    if (isDefinitelyNaturalLanguage(lastLine)) {
-      setMode("agent");
-      return;
-    }
-
-    // 2. Static classifier (fast, handles known commands)
-    if (isCommand(lastLine)) {
-      setMode("command");
-      return;
-    }
-
-    const words = lastLine.trim().split(/\s+/);
-    const firstWord = words[0];
-
-    // 3. Known Command Fallback (Ambiguous Verbs)
-    if (isKnownExecutable(firstWord)) {
-      setMode("agent");
-      return;
-    }
-
-    // 4. Check scanned commands cache (instant, no IPC)
-    if (isScannedCommand(firstWord)) {
-      if (isLikelyImperative(lastLine)) {
+    // Debounce classifier checks to avoid synchronous work on every keystroke
+    if (modeCheckRef.current) clearTimeout(modeCheckRef.current);
+    modeCheckRef.current = setTimeout(() => {
+      // 1. If input is clearly natural language, skip everything
+      if (isDefinitelyNaturalLanguage(lastLine)) {
         setMode("agent");
         return;
       }
-      setMode("command");
-      return;
-    }
 
-    // 5. Unknown Word Fallback: Check PATH dynamically via IPC (debounced)
-    if (modeCheckRef.current) clearTimeout(modeCheckRef.current);
-    modeCheckRef.current = setTimeout(() => {
+      // 2. Static classifier (fast, handles known commands)
+      if (isCommand(lastLine)) {
+        setMode("command");
+        return;
+      }
+
+      const words = lastLine.trim().split(/\s+/);
+      const firstWord = words[0];
+
+      // 3. Known Command Fallback (Ambiguous Verbs)
+      if (isKnownExecutable(firstWord)) {
+        setMode("agent");
+        return;
+      }
+
+      // 4. Check scanned commands cache (instant, no IPC)
+      if (isScannedCommand(firstWord)) {
+        if (isLikelyImperative(lastLine)) {
+          setMode("agent");
+          return;
+        }
+        setMode("command");
+        return;
+      }
+
+      // 5. Unknown Word Fallback: Check PATH dynamically via IPC
       if (words.length >= 1 && window.electron?.ipcRenderer?.checkCommand) {
         window.electron.ipcRenderer
           .checkCommand(words[0])
@@ -396,7 +432,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       } else {
         setMode("agent");
       }
-    }, 150);
+    }, 100);
     return () => {
       if (modeCheckRef.current) clearTimeout(modeCheckRef.current);
     };
@@ -422,49 +458,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
         !!window.electron?.ipcRenderer?.getCompletions &&
         (modeRef.current === "command" || isAutoRef.current);
       if (!shouldComplete) {
-        setCompletions([]);
+        // Use functional update to avoid re-render when already empty
+        setCompletions(prev => prev.length === 0 ? prev : []);
         setShowCompletions(false);
         setGhostText("");
         return;
       }
 
-      // Show local matches immediately (no debounce): history + known commands
-      const trimmedInput = input.trim().toLowerCase();
-      const sessionCmds = sessionCommandsRef.current;
-      const instantHistory = sessionCmds
-        .filter(
-          (cmd) =>
-            cmd.toLowerCase().startsWith(trimmedInput) &&
-            cmd.toLowerCase() !== trimmedInput,
-        )
-        .reverse()
-        .slice(0, 5);
-      // Only match known commands when typing the first word (no spaces yet)
-      const isFirstWord = !input.trim().includes(" ");
-      const instantCmds = isFirstWord
-        ? getCommandCompletions(input.trim(), 8)
-        : [];
-      // Dedupe instant results
-      const instantSeen = new Set<string>();
-      const instantMatches: string[] = [];
-      for (const h of instantHistory) {
-        if (!instantSeen.has(h.toLowerCase())) {
-          instantSeen.add(h.toLowerCase());
-          instantMatches.push(h);
-        }
-      }
-      for (const c of instantCmds) {
-        if (!instantSeen.has(c)) {
-          instantSeen.add(c);
-          instantMatches.push(c);
-        }
-      }
-      if (instantMatches.length > 0) {
-        setCompletions(instantMatches.slice(0, 15));
-        setShowCompletions(true);
-        setSelectedIndex(0);
-      }
-
+      // All matching (local + IPC) behind single debounce to keep typing responsive
       debounceRef.current = setTimeout(async () => {
         try {
           const results = await window.electron.ipcRenderer.getCompletions(

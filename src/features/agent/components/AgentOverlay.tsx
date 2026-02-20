@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { extractDirectory } from "../../../utils/platform";
 import {
@@ -1738,4 +1738,13 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   );
 };
 
-export default AgentOverlay;
+// Custom memo: skip function props (event handlers change identity on every parent render
+// but always perform the same logical action). Only compare data props.
+export default React.memo(AgentOverlay, (prev, next) => {
+  const keys = Object.keys(next) as (keyof typeof next)[];
+  for (const key of keys) {
+    if (typeof next[key] === "function") continue;
+    if (prev[key] !== next[key]) return false;
+  }
+  return true;
+});

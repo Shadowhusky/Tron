@@ -17,17 +17,40 @@ export function registerAIHandlers() {
       try {
         if (provider === "ollama") {
           const url = baseUrl || "http://localhost:11434";
-          const response = await fetch(`${url}/api/tags`, { method: "GET" });
-          return response.ok;
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+          const response = await fetch(`${url}/api/chat`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model: model || "llama3",
+              messages: [{ role: "user", content: "hi" }],
+              stream: false,
+              options: { num_predict: 5 },
+            }),
+          });
+          if (!response.ok) return false;
+          const data = await response.json();
+          return !!data.message?.content;
         }
 
-        // LM Studio — test via native /api/v1/models endpoint
+        // LM Studio — test via real chat completion
         if (provider === "lmstudio") {
-          const url = baseUrl || "http://127.0.0.1:1234";
-          const headers: Record<string, string> = {};
+          const url = (baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
           if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-          const response = await fetch(`${url.replace(/\/+$/, "")}/api/v1/models`, { method: "GET", headers });
-          return response.ok;
+          const response = await fetch(`${url}/v1/chat/completions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model: model || "loaded-model",
+              messages: [{ role: "user", content: "hi" }],
+              max_tokens: 5,
+            }),
+          });
+          if (!response.ok) return false;
+          const data = await response.json();
+          return !!data.choices?.[0]?.message?.content;
         }
 
         // Anthropic and Anthropic-compatible

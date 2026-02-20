@@ -1,7 +1,15 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerSystemHandlers = registerSystemHandlers;
 const electron_1 = require("electron");
+const path_1 = __importDefault(require("path"));
+/** Cross-platform absolute path check (Unix / and Windows C:\ or UNC \\). */
+function isAbsolutePath(p) {
+    return path_1.default.isAbsolute(p);
+}
 function registerSystemHandlers() {
     electron_1.ipcMain.handle("system.selectFolder", async (_event, defaultPath) => {
         const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
@@ -22,13 +30,13 @@ function registerSystemHandlers() {
         }
     });
     electron_1.ipcMain.handle("shell.openPath", async (_event, filePath) => {
-        if (typeof filePath === "string" && filePath.startsWith("/")) {
+        if (typeof filePath === "string" && isAbsolutePath(filePath)) {
             return await electron_1.shell.openPath(filePath);
         }
         return "Invalid path";
     });
     electron_1.ipcMain.handle("shell.showItemInFolder", (_event, filePath) => {
-        if (typeof filePath === "string" && filePath.startsWith("/")) {
+        if (typeof filePath === "string" && isAbsolutePath(filePath)) {
             electron_1.shell.showItemInFolder(filePath);
         }
     });

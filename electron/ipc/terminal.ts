@@ -6,6 +6,20 @@ import path from "path";
 import { randomUUID, randomBytes } from "crypto";
 import { exec, ChildProcess } from "child_process";
 
+/** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
+function stripSentinels(text: string): string {
+  let d = text;
+  // Unix: "; printf '\n__TRON_DONE_...' $?"
+  d = d.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
+  d = d.replace(/printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
+  // Windows: '; Write-Host "__TRON_DONE_...$LASTEXITCODE"'
+  d = d.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+  d = d.replace(/Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+  // Sentinel output itself (e.g. __TRON_DONE_abc12345__0)
+  d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__\d+\n?/g, "");
+  return d;
+}
+
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
 function detectShell(): { shell: string; args: string[] } {
   if (os.platform() === "win32") {
@@ -165,20 +179,6 @@ export function registerTerminalHandlers(
         });
 
         sessionHistory.set(sessionId, "");
-
-        // Helper: strip sentinel patterns from display data (Unix printf + Windows Write-Host)
-        const stripSentinels = (text: string): string => {
-          let d = text;
-          // Unix: "; printf '\n__TRON_DONE_...' $?"
-          d = d.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-          d = d.replace(/printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-          // Windows: '; Write-Host "__TRON_DONE_...$LASTEXITCODE"'
-          d = d.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-          d = d.replace(/Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-          // Sentinel output itself (e.g. __TRON_DONE_abc12345__0)
-          d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__\d+\n?/g, "");
-          return d;
-        };
 
         // Helper: flush buffered display data to renderer
         const flushDisplayBuffer = () => {
@@ -525,6 +525,10 @@ export function registerTerminalHandlers(
         let output = "";
         let resolved = false;
         let stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+        // Clear any text the user may have typed in the terminal before injecting the command.
+        // Ctrl+U clears the current line in bash/zsh without killing a running process.
+        session.write("\x15");
 
         // Stall detection: if no new PTY output for 3s, assume process is
         // waiting for input. Return early so agent can interact via send_text.
