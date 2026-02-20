@@ -239,12 +239,19 @@ export function cleanContextForAI(rawHistory: string): string {
   // 1. Emulate terminal to handle \r, \b, and cursor moves
   let cleaned = emulateTerminal(rawHistory);
 
-  // 2. Collapse visual repeats and garbled text
+  // 2. Strip sentinel markers used internally by execInTerminal (Unix + Windows)
+  cleaned = cleaned.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
+  cleaned = cleaned.replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "");
+  cleaned = cleaned.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+  cleaned = cleaned.replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+  cleaned = cleaned.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+
+  // 3. Collapse visual repeats and garbled text
   cleaned = collapseRepeats(cleaned);
   cleaned = collapseGarbled(cleaned);
   cleaned = truncateLongOutputs(cleaned);
 
-  // 3. Strip common prompt prefixes to reduce context noise
+  // 4. Strip common prompt prefixes to reduce context noise
   cleaned = cleaned.replace(/^➜\s+/gm, "");
   cleaned = cleaned.replace(/^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+.*[%$#]\s*/gm, "");
   cleaned = cleaned.replace(/^[%$#>]\s*/gm, "");
@@ -252,7 +259,7 @@ export function cleanContextForAI(rawHistory: string): string {
   cleaned = cleaned.replace(/^PS\s+[A-Z]:\\[^\n>]*>\s*/gm, "");
   cleaned = cleaned.replace(/^[A-Z]:\\[^\n>]*>\s*/gm, "");
 
-  // 4. Collapse excessive blank lines
+  // 5. Collapse excessive blank lines
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
 
   return cleaned.trim();

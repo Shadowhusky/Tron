@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AIConfig, AIProvider } from "../../../types";
 import { aiService, getCloudProvider, getCloudProviderList, providerUsesBaseUrl, isProviderUsable } from "../../../services/ai";
@@ -132,10 +132,37 @@ const SettingsPane = () => {
     return () => window.removeEventListener("keydown", handler, true);
   }, [recordingAction, updateHotkey]);
 
+  // Debounced baseUrl and apiKey — delays model fetches until user stops typing (1s)
+  const [debouncedBaseUrl, setDebouncedBaseUrl] = useState(config.baseUrl);
+  const [debouncedApiKey, setDebouncedApiKey] = useState(config.apiKey);
+  const baseUrlTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const apiKeyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    clearTimeout(baseUrlTimerRef.current);
+    baseUrlTimerRef.current = setTimeout(() => setDebouncedBaseUrl(config.baseUrl), 1000);
+    return () => clearTimeout(baseUrlTimerRef.current);
+  }, [config.baseUrl]);
+
+  useEffect(() => {
+    clearTimeout(apiKeyTimerRef.current);
+    apiKeyTimerRef.current = setTimeout(() => setDebouncedApiKey(config.apiKey), 1000);
+    return () => clearTimeout(apiKeyTimerRef.current);
+  }, [config.apiKey]);
+
+  // Flush debounce immediately (used by confirm buttons)
+  const flushDebounce = useCallback(() => {
+    clearTimeout(baseUrlTimerRef.current);
+    clearTimeout(apiKeyTimerRef.current);
+    setDebouncedBaseUrl(config.baseUrl);
+    setDebouncedApiKey(config.apiKey);
+  }, [config.baseUrl, config.apiKey]);
+
   const { data: allModels = [], isFetching: isModelsFetching } = useModelsWithCaps(
-    providerUsesBaseUrl(config.provider) ? config.baseUrl : undefined,
+    providerUsesBaseUrl(config.provider) ? debouncedBaseUrl : undefined,
     true,
     config.provider,
+    debouncedApiKey,
   );
   const invalidateModels = useInvalidateModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
@@ -181,6 +208,9 @@ const SettingsPane = () => {
     setConfig(newConfig);
     setInitialConfig(JSON.stringify(newConfig));
     setTestStatus("idle");
+    // Sync debounced values immediately on provider switch
+    setDebouncedBaseUrl(newConfig.baseUrl);
+    setDebouncedApiKey(newConfig.apiKey);
 
     // Auto-save the provider switch so new tabs immediately use the new provider
     const configToSave = { ...newConfig };
@@ -220,7 +250,7 @@ const SettingsPane = () => {
     setTimeout(() => setSaveStatus("idle"), 2000);
 
     // Refresh model queries (including ContextBar's allConfiguredModels)
-    invalidateModels(config.baseUrl, config.provider);
+    invalidateModels();
 
     // Propagate to all existing sessions
     sessions.forEach((_, sessionId) => {
@@ -368,7 +398,7 @@ const SettingsPane = () => {
                     <div className="flex items-center justify-between">
                       <label className={labelClass}>Model</label>
                       <button
-                        onClick={() => invalidateModels(config.baseUrl, config.provider)}
+                        onClick={() => invalidateModels()}
                         title="Refresh Models"
                         className={`p-1 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                       >
@@ -475,12 +505,11 @@ const SettingsPane = () => {
                         onChange={(e) =>
                           setConfig({ ...config, baseUrl: e.target.value })
                         }
-                        onBlur={() => invalidateModels(config.baseUrl, config.provider)}
                         placeholder={config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434"}
                         className={inputClass}
                       />
                       <button
-                        onClick={() => invalidateModels(config.baseUrl, config.provider)}
+                        onClick={() => { flushDebounce(); invalidateModels(); }}
                         title="Confirm URL"
                         className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                       >
@@ -517,12 +546,11 @@ const SettingsPane = () => {
                                 onChange={(e) =>
                                   setConfig({ ...config, baseUrl: e.target.value })
                                 }
-                                onBlur={() => invalidateModels(config.baseUrl, config.provider)}
                                 placeholder={config.provider === "anthropic-compat" ? "https://your-proxy.example.com" : "https://your-api.example.com/v1"}
                                 className={inputClass}
                               />
                               <button
-                                onClick={() => invalidateModels(config.baseUrl, config.provider)}
+                                onClick={() => { flushDebounce(); invalidateModels(); }}
                                 title="Scan Models"
                                 className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                               >

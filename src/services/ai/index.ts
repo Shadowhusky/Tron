@@ -223,13 +223,16 @@ class AIService {
     modelName: string,
     baseUrl?: string,
     provider?: string,
+    apiKey?: string,
   ): Promise<string[]> {
+    const effectiveApiKey = apiKey ?? this.config.apiKey;
+
     // LM Studio: fetch capabilities from /api/v1/models
     if (provider === "lmstudio") {
       try {
         const url = (baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
         const headers: Record<string, string> = {};
-        if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
+        if (effectiveApiKey) headers.Authorization = `Bearer ${effectiveApiKey}`;
         const response = await fetch(`${url}/api/v1/models`, { headers });
         if (!response.ok) return [];
         const data = await response.json();
@@ -254,96 +257,100 @@ class AIService {
     }
 
     // Ollama: fetch from /api/show
-    const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
-    try {
-      const response = await fetch(`${url}/api/show`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: modelName }),
-      });
-      if (!response.ok) return [];
-      const data = await response.json();
+    if (provider === "ollama" || !provider) {
+      const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
+      try {
+        const response = await fetch(`${url}/api/show`, {
+          method: "POST",
+          headers: this.jsonHeaders(effectiveApiKey),
+          body: JSON.stringify({ model: modelName }),
+        });
+        if (!response.ok) return [];
+        const data = await response.json();
 
-      // Prefer authoritative capabilities array from newer Ollama versions
-      if (data.capabilities && Array.isArray(data.capabilities)) {
-        return data.capabilities.filter((c: string) => c !== "completion");
+        // Prefer authoritative capabilities array from newer Ollama versions
+        if (data.capabilities && Array.isArray(data.capabilities)) {
+          return data.capabilities.filter((c: string) => c !== "completion");
+        }
+
+        // Fallback: infer from model_info and template (older Ollama)
+        const capabilities: string[] = [];
+        const modelInfo = data.model_info || {};
+        const template = data.template || "";
+        const parameters = data.parameters || "";
+
+        if (
+          template.includes("<think>") ||
+          template.includes("thinking") ||
+          parameters.includes("think")
+        ) {
+          capabilities.push("thinking");
+        }
+
+        const projectorKeys = Object.keys(modelInfo).filter(
+          (k) =>
+            k.includes("vision") ||
+            k.includes("projector") ||
+            k.includes("mmproj"),
+        );
+        if (projectorKeys.length > 0) {
+          capabilities.push("vision");
+        }
+
+        if (
+          template.includes("<tool_call>") ||
+          template.includes("tools") ||
+          template.includes("<function")
+        ) {
+          capabilities.push("tools");
+        }
+
+        return capabilities;
+      } catch (e) {
+        console.warn(`Failed to fetch capabilities for ${modelName}`, e);
+        return [];
       }
-
-      // Fallback: infer from model_info and template (older Ollama)
-      const capabilities: string[] = [];
-      const modelInfo = data.model_info || {};
-      const template = data.template || "";
-      const parameters = data.parameters || "";
-
-      if (
-        template.includes("<think>") ||
-        template.includes("thinking") ||
-        parameters.includes("think")
-      ) {
-        capabilities.push("thinking");
-      }
-
-      const projectorKeys = Object.keys(modelInfo).filter(
-        (k) =>
-          k.includes("vision") ||
-          k.includes("projector") ||
-          k.includes("mmproj"),
-      );
-      if (projectorKeys.length > 0) {
-        capabilities.push("vision");
-      }
-
-      if (
-        template.includes("<tool_call>") ||
-        template.includes("tools") ||
-        template.includes("<function")
-      ) {
-        capabilities.push("tools");
-      }
-
-      return capabilities;
-    } catch (e) {
-      console.warn(`Failed to fetch capabilities for ${modelName}`, e);
-      return [];
     }
+
+    // Other providers don't support capability introspection
+    return [];
   }
 
-  async getModels(baseUrl?: string, providerOverride?: string): Promise<AIModel[]> {
-    const models: AIModel[] = [];
+  async getModels(baseUrl?: string, providerOverride?: string, apiKey?: string): Promise<AIModel[]> {
     const provider = providerOverride || this.config.provider;
+    const effectiveApiKey = apiKey ?? this.config.apiKey;
 
-    // 1. Ollama — only if reachable
+    // Ollama
     if (provider === "ollama" || !provider) {
       try {
         const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
-        const response = await fetch(`${url}/api/tags`);
+        const headers: Record<string, string> = {};
+        if (effectiveApiKey) headers.Authorization = `Bearer ${effectiveApiKey}`;
+        const response = await fetch(`${url}/api/tags`, { headers });
         if (response.ok) {
           const data = await response.json();
-          const ollamaModels: AIModel[] = (data.models || []).map((m: any) => ({
+          return (data.models || []).map((m: any) => ({
             name: m.name,
             provider: "ollama" as const,
           }));
-
-          models.push(...ollamaModels);
         }
       } catch (e) {
         console.warn("Failed to fetch Ollama models", e);
       }
+      return [];
     }
 
-    // 2. LM Studio — native /api/v1/models (lists all downloaded models)
-    //    Response: { models: [{ key, display_name, type, capabilities, loaded_instances, ... }] }
+    // LM Studio
     if (provider === "lmstudio") {
       try {
         const url = (baseUrl || this.config.baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
         const lmsHeaders: Record<string, string> = {};
-        if (this.config.apiKey) lmsHeaders.Authorization = `Bearer ${this.config.apiKey}`;
+        if (effectiveApiKey) lmsHeaders.Authorization = `Bearer ${effectiveApiKey}`;
         const response = await fetch(`${url}/api/v1/models`, { headers: lmsHeaders });
         if (response.ok) {
           const data = await response.json();
           const allLmModels: any[] = data.models || data.data || [];
-          // Filter to LLM type only (exclude embeddings)
-          const lmModels: AIModel[] = allLmModels
+          return allLmModels
             .filter((m: any) => !m.type || m.type === "llm")
             .map((m: any) => {
               const caps: string[] = [];
@@ -355,75 +362,73 @@ class AIService {
                 capabilities: caps.length > 0 ? caps : undefined,
               };
             });
-          models.push(...lmModels);
         }
       } catch (e) {
         console.warn("Failed to fetch LM Studio models", e);
       }
+      return [];
     }
 
-    // 3. OpenAI Compatible — /v1/models
-    //    Response: { data: [{ id, object, ... }] }
-    if (provider === "openai-compat" && baseUrl) {
+    // OpenAI Compatible
+    if (provider === "openai-compat") {
+      if (!baseUrl) return [];
       try {
         const url = baseUrl.replace(/\/+$/, "");
         const headers: Record<string, string> = {};
-        if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
+        if (effectiveApiKey) headers.Authorization = `Bearer ${effectiveApiKey}`;
         const response = await fetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
-          const compatModels: AIModel[] = (data.data || []).map((m: any) => ({
+          return (data.data || []).map((m: any) => ({
             name: m.id || m.name,
             provider: "openai-compat" as const,
           }));
-          models.push(...compatModels);
         }
       } catch (e) {
         console.warn("Failed to fetch OpenAI-compatible models", e);
       }
+      return [];
     }
 
-    // 4. Anthropic Compatible — /v1/models
-    //    Response: { data: [{ id, display_name, ... }] }
-    if (provider === "anthropic-compat" && baseUrl) {
+    // Anthropic Compatible
+    if (provider === "anthropic-compat") {
+      if (!baseUrl) return [];
       try {
         const url = baseUrl.replace(/\/+$/, "");
-        const headers = this.anthropicHeaders(this.config.apiKey);
+        const headers = this.anthropicHeaders(effectiveApiKey);
         const response = await fetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
-          const compatModels: AIModel[] = (data.data || []).map((m: any) => ({
+          return (data.data || []).map((m: any) => ({
             name: m.id || m.name,
             provider: "anthropic-compat" as const,
           }));
-          models.push(...compatModels);
         }
       } catch (e) {
         console.warn("Failed to fetch Anthropic-compatible models", e);
       }
+      return [];
     }
 
-    // 5. Cloud models — show defaults for current provider if API key is set
-    if (provider !== "ollama" && provider !== "lmstudio" && !providerUsesBaseUrl(provider)) {
-      if (this.config.apiKey) {
-        const info = CLOUD_PROVIDERS[provider];
-        if (info) {
-          for (const name of info.defaultModels) {
-            models.push({ name, provider: provider as AIProvider });
-          }
-        }
+    // Cloud providers — show defaults if API key is set
+    if (effectiveApiKey) {
+      const info = CLOUD_PROVIDERS[provider];
+      if (info) {
+        return info.defaultModels.map((name) => ({
+          name,
+          provider: provider as AIProvider,
+        }));
       }
     }
 
-    return models;
+    return [];
   }
 
   /**
    * Fetch models from ALL configured providers (for ContextBar popover).
-   * Reads providerConfigs from localStorage to know which providers are set up.
+   * Delegates to getModels() per provider to avoid duplicating fetch logic.
    */
   async getAllConfiguredModels(): Promise<AIModel[]> {
-    const models: AIModel[] = [];
     let providerConfigs: Record<string, { model?: string; apiKey?: string; baseUrl?: string }> = {};
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
@@ -443,109 +448,29 @@ class AIService {
       }
     }
 
-    // Gather models from each configured provider
+    // Gather models from each configured provider via getModels()
     const fetches = Array.from(providersToCheck).map(async (provider) => {
       const cached = providerConfigs[provider];
       const baseUrl = cached?.baseUrl || (provider === activeProvider ? this.config.baseUrl : undefined);
       const apiKey = cached?.apiKey || (provider === activeProvider ? this.config.apiKey : undefined);
 
-      // Local providers: fetch live model list
+      const models = await this.getModels(baseUrl, provider, apiKey);
+
+      // Enrich Ollama models with capabilities (sequential to avoid spam)
       if (provider === "ollama") {
-        try {
-          const url = baseUrl || "http://localhost:11434";
-          const response = await fetch(`${url}/api/tags`);
-          if (response.ok) {
-            const data = await response.json();
-            const ollamaModels: AIModel[] = (data.models || []).map((m: any) => ({
-              name: m.name,
-              provider: "ollama" as AIProvider,
-            }));
-            // Enrich with capabilities (sequential to avoid spam)
-            for (const m of ollamaModels) {
-              try {
-                m.capabilities = await this.getModelCapabilities(m.name, url, "ollama");
-              } catch { }
-            }
-            return ollamaModels;
-          }
-        } catch { }
-        return [];
-      }
-
-      if (provider === "lmstudio") {
-        try {
-          const url = (baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
-          const lmsHeaders: Record<string, string> = {};
-          if (apiKey) lmsHeaders.Authorization = `Bearer ${apiKey}`;
-          const response = await fetch(`${url}/api/v1/models`, { headers: lmsHeaders });
-          if (response.ok) {
-            const data = await response.json();
-            return (data.models || data.data || [])
-              .filter((m: any) => !m.type || m.type === "llm")
-              .map((m: any) => {
-                const caps: string[] = [];
-                if (m.capabilities?.vision) caps.push("vision");
-                if (m.capabilities?.trained_for_tool_use) caps.push("tools");
-                return {
-                  name: m.key || m.id || m.name,
-                  provider: "lmstudio" as AIProvider,
-                  capabilities: caps.length > 0 ? caps : undefined,
-                };
-              });
-          }
-        } catch { }
-        return [];
-      }
-
-      // Cloud providers: return default models if apiKey is set
-      if (!providerUsesBaseUrl(provider) && apiKey) {
-        const info = CLOUD_PROVIDERS[provider];
-        if (info) {
-          return info.defaultModels.map((name) => ({
-            name,
-            provider: provider as AIProvider,
-          }));
+        const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
+        for (const m of models) {
+          try {
+            m.capabilities = await this.getModelCapabilities(m.name, url, "ollama", apiKey);
+          } catch { }
         }
       }
 
-      // Compat providers: fetch if baseUrl is set
-      if (provider === "openai-compat" && baseUrl) {
-        try {
-          const url = baseUrl.replace(/\/+$/, "");
-          const headers: Record<string, string> = {};
-          if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-          const response = await fetch(`${url}/v1/models`, { headers });
-          if (response.ok) {
-            const data = await response.json();
-            return (data.data || []).map((m: any) => ({
-              name: m.id || m.name,
-              provider: "openai-compat" as AIProvider,
-            }));
-          }
-        } catch { }
-        return [];
-      }
-
-      if (provider === "anthropic-compat" && baseUrl) {
-        try {
-          const url = baseUrl.replace(/\/+$/, "");
-          const headers = this.anthropicHeaders(apiKey);
-          const response = await fetch(`${url}/v1/models`, { headers });
-          if (response.ok) {
-            const data = await response.json();
-            return (data.data || []).map((m: any) => ({
-              name: m.id || m.name,
-              provider: "anthropic-compat" as AIProvider,
-            }));
-          }
-        } catch { }
-        return [];
-      }
-
-      return [];
+      return models;
     });
 
     const results = await Promise.allSettled(fetches);
+    const models: AIModel[] = [];
     for (const result of results) {
       if (result.status === "fulfilled") {
         models.push(...result.value);
@@ -781,7 +706,9 @@ class AIService {
   ): Promise<{ content: string; thinking: string }> {
     const url = this.getOpenAIChatUrl(provider, baseUrl);
     const body: any = { model, messages, stream: true };
-    if (responseFormat === "json") {
+    // Only send response_format for cloud providers that support json_object.
+    // Local/compat providers (lmstudio, openai-compat, ollama) often reject it.
+    if (responseFormat === "json" && !providerUsesBaseUrl(provider)) {
       body.response_format = { type: "json_object" };
     }
 
@@ -792,7 +719,7 @@ class AIService {
       signal,
     });
 
-    // Retry without response_format if server rejects it (some models only support json_schema or text)
+    // Retry without response_format if server rejects it
     if (!response.ok && body.response_format) {
       delete body.response_format;
       const retry = await fetch(url, {
@@ -930,7 +857,13 @@ class AIService {
     }
   }
 
-  async generatePlaceholder(context: string, _partialInput?: string, sessionConfig?: AIConfig, signal?: AbortSignal): Promise<string> {
+  async generatePlaceholder(
+    context: string,
+    _partialInput?: string,
+    sessionConfig?: AIConfig,
+    signal?: AbortSignal,
+    onToken?: (text: string) => void,
+  ): Promise<string> {
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -975,14 +908,8 @@ class AIService {
           body: JSON.stringify({
             model,
             max_tokens: 100,
-            temperature: 0.7,
             system: systemPrompt,
-            messages: [
-              {
-                role: "user",
-                content: userContent,
-              },
-            ],
+            messages: [{ role: "user", content: userContent }],
           }),
           signal: combinedSignal,
         });
@@ -990,31 +917,22 @@ class AIService {
         const result = (data.content?.[0]?.text || "")
           .trim()
           .replace(/^`+|`+$/g, "")
-          .split("\n")[0]; // Take first line only
+          .split("\n")[0];
         return result.length <= 80 ? result : "";
       }
 
-      // OpenAI-compatible providers
+      // OpenAI-compatible providers — stream so placeholder appears progressively
       if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
-        const url = this.getOpenAIChatUrl(provider, baseUrl);
-        const response = await fetch(url, {
-          method: "POST",
-          headers: this.jsonHeaders(apiKey || undefined),
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userContent },
-            ],
-            stream: false,
-            max_tokens: 100,
-            temperature: 0.7,
-          }),
-          signal: combinedSignal,
-        });
-        if (!response.ok) return "";
-        const data = await response.json();
-        const raw = data.choices?.[0]?.message?.content?.trim() || "";
+        const messages = [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ];
+        const result = await this.streamOpenAIChat(
+          provider, model, apiKey || "", messages,
+          onToken ? (token) => { if (token) onToken(token); } : undefined,
+          combinedSignal, undefined, baseUrl,
+        );
+        const raw = result.content.trim();
         const clean = raw.replace(/^`+|`+$/g, "").split("\n")[0].trim();
         return clean.length <= 80 ? clean : "";
       }
@@ -1081,7 +999,7 @@ class AIService {
         return result.length > 0 && result.length <= 30 ? result : "";
       }
 
-      // OpenAI-compatible providers
+      // OpenAI-compatible providers — no max_tokens (crashes some local models)
       if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
         const result = await this.openAIChatSimple(
           provider, model, apiKey || "",
@@ -1089,7 +1007,7 @@ class AIService {
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt.slice(0, 200) },
           ],
-          15, baseUrl,
+          undefined, baseUrl,
         );
         const clean = result.replace(/^["'`]+|["'`]+$/g, "");
         return clean.length > 0 && clean.length <= 30 ? clean : "";
@@ -1624,13 +1542,12 @@ ${agentPrompt}
       if (actionKey) recentActions.push(actionKey);
       if (recentActions.length > 8) recentActions.shift();
 
-      // Consecutive loop: same action 3 times in a row
+      // Consecutive loop: same action 2 times in a row (catch on 2nd attempt)
       const isConsecutiveLoop =
         actionKey != null &&
-        recentActions.length >= 3 &&
+        recentActions.length >= 2 &&
         recentActions[recentActions.length - 1] === actionKey &&
-        recentActions[recentActions.length - 2] === actionKey &&
-        recentActions[recentActions.length - 3] === actionKey;
+        recentActions[recentActions.length - 2] === actionKey;
 
       // Alternating loop: A→B→A→B→A→B pattern
       const isAlternatingLoop =

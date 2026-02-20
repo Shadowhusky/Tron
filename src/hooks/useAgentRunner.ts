@@ -229,6 +229,9 @@ export function useAgentRunner(
     }
   };
 
+  // Cooldown ref to prevent rapid-fire agent runs (e.g. on error loops)
+  const lastAgentRunRef = useRef(0);
+
   const handleAgentRun = async (
     prompt: string,
     queueCallback?: (item: { type: "agent"; content: string }) => void,
@@ -238,6 +241,21 @@ export function useAgentRunner(
       queueCallback({ type: "agent", content: prompt });
       return;
     }
+
+    // Guard: reject empty prompts (unless images are attached)
+    const hasImages = images && images.length > 0;
+    if (!prompt.trim() && !hasImages) {
+      console.warn("handleAgentRun: ignoring empty prompt");
+      return;
+    }
+
+    // Cooldown: prevent rapid-fire runs (min 500ms between starts)
+    const now = Date.now();
+    if (now - lastAgentRunRef.current < 500) {
+      console.warn("handleAgentRun: throttled (too fast)");
+      return;
+    }
+    lastAgentRunRef.current = now;
 
     // Create and register controller
     const controller = new AbortController();
@@ -333,7 +351,7 @@ export function useAgentRunner(
 
     try {
       // 0. Persist User Prompt to Session State (Invisible Context)
-      if (sessionId) {
+      if (sessionId && prompt.trim()) {
         const currentInteractions = session?.interactions || [];
         updateSession(sessionId, {
           interactions: [
@@ -406,23 +424,19 @@ System Paths:
         sessionHistory = `[CONTEXT SUMMARIZED]\n${summary}`;
       }
 
-      // 3. Construct Augmented Prompt with Invisible Interactions
-      // Filter for recent interactions to avoid token overflow?
-      // For now, take last 10 interactions or so.
-      const recentInteractions = (session?.interactions || [])
+      // 3. Construct Augmented Prompt with Prior Agent Interactions
+      // session?.interactions may be stale (from render closure), so read from
+      // the interactions we know exist at this point — the current prompt was
+      // just added but may not be reflected in `session` yet.
+      const priorInteractions = (session?.interactions || [])
         .slice(-10)
         .map((i) => `${i.role === "user" ? "User" : "Agent"}: ${i.content}`)
         .join("\n\n");
 
-      // Add CURRENT prompt to the list (it was just added to state, but might not be in session var yet due to closure)
-      // Actually, we added it to state but `session` variable is from render scope.
-      // Safe to append it manually here if needed, but let's assume we want to be explicit.
-      const interactionContext = recentInteractions
-        ? `\n[RECENT INTERACTION HISTORY]\n${recentInteractions}\nUser: ${prompt}` // Prompt is already in valid history? No, `interactions` update might be async.
-        : // Actually, let's just use the `prompt` argument as the latest user message.
-        // And `recentInteractions` should exclude the one we just added?
-        // Let's just build it fresh.
-        "";
+      // Always include history section so the agent sees prior prompts + responses
+      const interactionContext = priorInteractions
+        ? `\n[PRIOR CONVERSATION]\n${priorInteractions}\n`
+        : "";
 
       if (images && images.length > 0) {
         // Image analysis mode: strip noisy terminal context to avoid the model
@@ -443,8 +457,8 @@ Current Working Directory: ${cwd || "Unknown"}${systemPathsStr}
 ${projectFiles ? `\n[PROJECT FILES]\n${projectFiles}\n` : ""}
 [TERMINAL OUTPUT]
 ${sessionHistory}
-
-${interactionContext ? interactionContext : `User: ${prompt}`}
+${interactionContext}
+User: ${prompt}
 
 Task: ${prompt}
 `;
@@ -521,6 +535,13 @@ Task: ${prompt}
               }
             }
             if (!window.electron) return;
+            // For run_in_terminal: clear any user-typed text before injecting command
+            if (checkPerm) {
+              window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+                id: sessionId,
+                data: "\x15", // Ctrl+U: clear current line
+              });
+            }
             window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
               id: sessionId,
               data: cmd,

@@ -118,6 +118,7 @@ const createMenu = (win) => {
 const createWindow = () => {
     const preloadPath = path_1.default.join(__dirname, "preload.js");
     console.log("Preload Path:", preloadPath);
+    const isMacOS = process.platform === "darwin";
     mainWindow = new electron_1.BrowserWindow({
         width: 1200,
         height: 800,
@@ -126,10 +127,18 @@ const createWindow = () => {
             nodeIntegration: false,
             contextIsolation: true,
         },
-        titleBarStyle: "hiddenInset",
-        vibrancy: "under-window",
-        visualEffectState: "active",
-        backgroundColor: "#00000000",
+        ...(isMacOS
+            ? {
+                titleBarStyle: "hiddenInset",
+                vibrancy: "under-window",
+                visualEffectState: "active",
+                backgroundColor: "#00000000",
+            }
+            : {
+                // Windows/Linux: use Mica material on Windows 11, opaque background otherwise
+                ...(process.platform === "win32" ? { backgroundMaterial: "mica" } : {}),
+                backgroundColor: "#0a0a0a",
+            }),
     });
     createMenu(mainWindow);
     // Intercept close to show confirmation in renderer

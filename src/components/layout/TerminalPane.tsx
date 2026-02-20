@@ -69,6 +69,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const stableOnRunAgent = useCallback(async (prompt: string, images?: AttachedImage[]) => wrappedHandleAgentRunRef.current(prompt, undefined, images), []);
   const stableSlashCommand = useCallback((cmd: string) => handleSlashCommandRef.current(cmd), []);
 
+  // Stable callback for Terminal memo
+  const markSessionDirtyRef = useRef(markSessionDirty);
+  markSessionDirtyRef.current = markSessionDirty;
+  const stableOnActivity = useCallback(() => markSessionDirtyRef.current(sessionId), [sessionId]);
+
   // Input Queue
   const [inputQueue, setInputQueue] = useState<
     Array<{ type: "command" | "agent"; content: string }>
@@ -365,7 +370,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 <Terminal
                   className="w-full h-full"
                   sessionId={sessionId}
-                  onActivity={() => markSessionDirty(sessionId)}
+                  onActivity={stableOnActivity}
                   isActive={isActive}
                 />
               </motion.div>
@@ -379,7 +384,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             <Terminal
               className="w-full h-full"
               sessionId={sessionId}
-              onActivity={() => markSessionDirty(sessionId)}
+              onActivity={stableOnActivity}
               isActive={isActive}
             />
           </div>
