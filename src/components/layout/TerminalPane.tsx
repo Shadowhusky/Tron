@@ -462,7 +462,19 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   ) : (
                     <ChevronRight className="w-3 h-3 shrink-0 opacity-60" />
                   )}
-                  <span className="truncate">{item.content}</span>
+                  <span
+                    className="truncate cursor-pointer hover:underline"
+                    onClick={() => {
+                      // Pop item from queue into SmartInput for editing
+                      setInputQueue((prev) => prev.filter((_, idx) => idx !== i));
+                      window.dispatchEvent(new CustomEvent("tron:editQueueItem", {
+                        detail: { sessionId, text: item.content, type: item.type },
+                      }));
+                    }}
+                    title="Click to edit"
+                  >
+                    {item.content}
+                  </span>
                   <button
                     onClick={() =>
                       setInputQueue((prev) =>
