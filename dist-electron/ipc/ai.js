@@ -10,6 +10,7 @@ const PROVIDER_URLS = {
     gemini: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     glm: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    minimax: "https://api.minimax.io/v1/text/chatcompletion_v2",
 };
 function registerAIHandlers() {
     electron_1.ipcMain.handle("ai.testConnection", async (_event, { provider, model, apiKey, baseUrl }) => {

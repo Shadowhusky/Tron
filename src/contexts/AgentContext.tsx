@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useEffect,
   useRef,
+  useMemo,
 } from "react";
 import type { AgentStep } from "../types";
 import { IPC } from "../constants/ipc";
@@ -187,11 +188,15 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, [agentStates]);
 
+  // Use ref so getAgentState identity stays stable (doesn't change on every state update)
+  const agentStatesRef = useRef(agentStates);
+  agentStatesRef.current = agentStates;
+
   const getAgentState = useCallback(
     (sessionId: string) => {
-      return agentStates.get(sessionId) || defaultState;
+      return agentStatesRef.current.get(sessionId) || defaultState;
     },
-    [agentStates],
+    [],
   );
 
   const updateAgentState = useCallback(
@@ -435,27 +440,35 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
     activeSessionIdRef.current = sessionId;
   }, []);
 
+  // Memoize provider value — callbacks are all useCallback (stable), only agentStates
+  // and crossTabNotifications change. This prevents unnecessary re-renders of consumers
+  // that only use stable callbacks.
+  const contextValue = useMemo(
+    () => ({
+      getAgentState,
+      updateAgentState,
+      setAgentThread,
+      setIsAgentRunning,
+      setIsThinking,
+      setPendingCommand,
+      setPermissionResolve,
+      setAlwaysAllowSession,
+      setIsOverlayVisible,
+      setThinkingEnabled,
+      registerAbortController,
+      stopAgent,
+      resetSession,
+      crossTabNotifications,
+      dismissNotification,
+      setActiveSessionForNotifications,
+    }),
+    // getAgentState is now stable (uses ref). Only agentStates + crossTabNotifications trigger re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [agentStates, crossTabNotifications],
+  );
+
   return (
-    <AgentContext.Provider
-      value={{
-        getAgentState,
-        updateAgentState,
-        setAgentThread,
-        setIsAgentRunning,
-        setIsThinking,
-        setPendingCommand,
-        setPermissionResolve,
-        setAlwaysAllowSession,
-        setIsOverlayVisible,
-        setThinkingEnabled,
-        registerAbortController,
-        stopAgent,
-        resetSession,
-        crossTabNotifications,
-        dismissNotification,
-        setActiveSessionForNotifications,
-      }}
-    >
+    <AgentContext.Provider value={contextValue}>
       {children}
     </AgentContext.Provider>
   );

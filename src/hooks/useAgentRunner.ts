@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, startTransition } from "react";
 import type { TerminalSession, AttachedImage } from "../types";
 import { aiService, type AgentContinuation } from "../services/ai";
 import { useHistory } from "../contexts/HistoryContext";
@@ -68,27 +68,29 @@ export function useAgentRunner(
     buf.step = null;
     buf.lastFlush = Date.now();
 
-    if (stepType === "streaming_thinking") {
-      setAgentThread((prev) => {
-        const lastIdx = prev.length - 1;
-        if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
-          const updated = [...prev];
-          updated[lastIdx] = { step: "thinking", output };
-          return updated;
-        }
-        return [...prev, { step: "thinking", output }];
-      });
-    } else {
-      setAgentThread((prev) => {
-        const lastIdx = prev.length - 1;
-        if (lastIdx >= 0 && prev[lastIdx].step === "streaming") {
-          const updated = [...prev];
-          updated[lastIdx] = { step: "streaming", output };
-          return updated;
-        }
-        return [...prev, { step: "streaming", output }];
-      });
-    }
+    startTransition(() => {
+      if (stepType === "streaming_thinking") {
+        setAgentThread((prev) => {
+          const lastIdx = prev.length - 1;
+          if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
+            const updated = [...prev];
+            updated[lastIdx] = { step: "thinking", output };
+            return updated;
+          }
+          return [...prev, { step: "thinking", output }];
+        });
+      } else {
+        setAgentThread((prev) => {
+          const lastIdx = prev.length - 1;
+          if (lastIdx >= 0 && prev[lastIdx].step === "streaming") {
+            const updated = [...prev];
+            updated[lastIdx] = { step: "streaming", output };
+            return updated;
+          }
+          return [...prev, { step: "streaming", output }];
+        });
+      }
+    });
   };
 
   const clearStreamBuffer = () => {

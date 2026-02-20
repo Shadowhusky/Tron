@@ -3,7 +3,6 @@ import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTheme } from "../../../contexts/ThemeContext";
-import { useAgent } from "../../../contexts/AgentContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import "@xterm/xterm/css/xterm.css";
@@ -13,6 +12,8 @@ interface TerminalProps {
   sessionId: string;
   onActivity?: () => void;
   isActive?: boolean;
+  isAgentRunning?: boolean;
+  stopAgent?: () => void;
 }
 
 const THEMES: Record<string, Xterm["options"]["theme"]> = {
@@ -36,12 +37,11 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive, isAgentRunning = false, stopAgent }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
-  const { isAgentRunning, stopAgent } = useAgent(sessionId);
   const { hotkeys } = useConfig();
 
   // Refs for values accessed inside stable closures
@@ -203,7 +203,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     let activityFired = false;
     const disposableOnData = term.onData((data) => {
       if (data === "\u0003" && isAgentRunningRef.current) {
-        stopAgentRef.current();
+        stopAgentRef.current?.();
       }
 
       if (!activityFired && data === "\r" && onActivity) {

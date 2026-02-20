@@ -64,8 +64,8 @@ export function classifyTerminalOutput(output: string): TerminalState {
   if (/^PS\s+[A-Z]:\\[^>]*>\s*$/m.test(lastLines)) return "idle";
   // Windows cmd.exe prompt: C:\Users\foo>
   if (/^[A-Z]:\\[^>]*>\s*$/m.test(lastLines)) return "idle";
-  // Dev server / listener patterns → safe to Ctrl+C
-  if (/localhost:\d+|127\.0\.0\.1:\d+|ready in|listening on|VITE.*ready|press h.*enter/i.test(lastLines)) return "server";
+  // Dev server / listener / daemon patterns → safe to Ctrl+C
+  if (/localhost:\d+|127\.0\.0\.1:\d+|ready in|listening on|VITE.*ready|press h.*enter|Registered tunnel connection|tunnel.*running|Starting.*server/i.test(lastLines)) return "server";
   // Input prompt detection — process waiting for user to type something
   if (INPUT_PROMPT_PATTERNS.some((p) => p.test(lastLine))) return "input_needed";
   // TUI menu detection — interactive selection menus (npm create, inquirer, clack, etc.)

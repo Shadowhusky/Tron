@@ -6,7 +6,13 @@ import type {
   AttachedImage,
 } from "../../types";
 import { STORAGE_KEYS } from "../../constants/storage";
-import { classifyTerminalOutput, describeKeys as describeKeysUtil, autoCdCommand, isDuplicateScaffold, type TerminalState } from "../../utils/terminalState";
+import {
+  classifyTerminalOutput,
+  describeKeys as describeKeysUtil,
+  autoCdCommand,
+  isDuplicateScaffold,
+  type TerminalState,
+} from "../../utils/terminalState";
 import agentPrompt from "./agent.md?raw";
 
 export interface AgentContinuation {
@@ -41,19 +47,36 @@ interface ProviderInfo {
 const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
   openai: {
     chatUrl: "https://api.openai.com/v1/chat/completions",
-    defaultModels: ["gpt-5.2", "gpt-5.2-codex", "o3", "o4-mini", "gpt-4.1", "gpt-4o"],
+    defaultModels: [
+      "gpt-5.2",
+      "gpt-5.2-codex",
+      "o3",
+      "o4-mini",
+      "gpt-4.1",
+      "gpt-4o",
+    ],
     placeholder: "gpt-5.2",
     label: "OpenAI",
   },
   anthropic: {
     chatUrl: "https://api.anthropic.com/v1/messages",
-    defaultModels: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+    defaultModels: [
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5-20251001",
+    ],
     placeholder: "claude-sonnet-4-6",
     label: "Anthropic",
   },
   gemini: {
-    chatUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    defaultModels: ["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+    chatUrl:
+      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    defaultModels: [
+      "gemini-3-pro-preview",
+      "gemini-3-flash-preview",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+    ],
     placeholder: "gemini-2.5-flash",
     label: "Gemini (Google)",
   },
@@ -70,7 +93,8 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
     label: "Kimi (Moonshot)",
   },
   qwen: {
-    chatUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    chatUrl:
+      "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     defaultModels: ["qwen3.5-plus", "qwen3-max", "qwen-plus-latest"],
     placeholder: "qwen3.5-plus",
     label: "Qwen (Alibaba)",
@@ -80,6 +104,12 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
     defaultModels: ["glm-5", "glm-4.5", "glm-4-plus"],
     placeholder: "glm-5",
     label: "GLM (Zhipu)",
+  },
+  minimax: {
+    chatUrl: "https://api.minimax.io/v1/text/chatcompletion_v2",
+    defaultModels: ["MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2", "M2-her"],
+    placeholder: "MiniMax-M2.5",
+    label: "MiniMax",
   },
   lmstudio: {
     chatUrl: "http://127.0.0.1:1234/v1/chat/completions",
@@ -113,7 +143,12 @@ export function getCloudProviderList(): { id: string; info: ProviderInfo }[] {
 
 /** True for providers that use a user-supplied baseUrl (local or custom). */
 export function providerUsesBaseUrl(provider: string): boolean {
-  return provider === "ollama" || provider === "lmstudio" || provider === "openai-compat" || provider === "anthropic-compat";
+  return (
+    provider === "ollama" ||
+    provider === "lmstudio" ||
+    provider === "openai-compat" ||
+    provider === "anthropic-compat"
+  );
 }
 
 /** True for providers that speak the Anthropic Messages API protocol. */
@@ -122,14 +157,22 @@ export function isAnthropicProtocol(provider: string): boolean {
 }
 
 /** Check if a provider has enough configuration to be usable. */
-export function isProviderUsable(provider: string, cfg: { apiKey?: string; baseUrl?: string }): boolean {
+export function isProviderUsable(
+  provider: string,
+  cfg: { apiKey?: string; baseUrl?: string },
+): boolean {
   if (provider === "ollama" || provider === "lmstudio") return true;
-  if (provider === "openai-compat" || provider === "anthropic-compat") return !!cfg.baseUrl;
+  if (provider === "openai-compat" || provider === "anthropic-compat")
+    return !!cfg.baseUrl;
   return !!cfg.apiKey; // Cloud providers need apiKey
 }
 
 function isOpenAICompatible(provider: string): boolean {
-  return !isAnthropicProtocol(provider) && provider !== "ollama" && provider in CLOUD_PROVIDERS;
+  return (
+    !isAnthropicProtocol(provider) &&
+    provider !== "ollama" &&
+    provider in CLOUD_PROVIDERS
+  );
 }
 
 /** Resolve the Anthropic Messages API URL for anthropic or anthropic-compat. */
@@ -166,11 +209,14 @@ class AIService {
 
     // If current provider isn't properly configured, auto-switch to first usable one
     if (!isProviderUsable(this.config.provider, this.config)) {
-      let providerConfigs: Record<string, { model?: string; apiKey?: string; baseUrl?: string }> = {};
+      let providerConfigs: Record<
+        string,
+        { model?: string; apiKey?: string; baseUrl?: string }
+      > = {};
       try {
         const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
         if (raw) providerConfigs = JSON.parse(raw);
-      } catch { }
+      } catch {}
 
       let found = false;
       for (const [id, cfg] of Object.entries(providerConfigs)) {
@@ -178,7 +224,9 @@ class AIService {
           this.config.provider = id as AIProvider;
           this.config.model = cfg.model;
           this.config.apiKey = cfg.apiKey;
-          this.config.baseUrl = providerUsesBaseUrl(id) ? cfg.baseUrl : undefined;
+          this.config.baseUrl = providerUsesBaseUrl(id)
+            ? cfg.baseUrl
+            : undefined;
           found = true;
           break;
         }
@@ -232,17 +280,21 @@ class AIService {
       try {
         const url = (baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
         const headers: Record<string, string> = {};
-        if (effectiveApiKey) headers.Authorization = `Bearer ${effectiveApiKey}`;
+        if (effectiveApiKey)
+          headers.Authorization = `Bearer ${effectiveApiKey}`;
         const response = await fetch(`${url}/api/v1/models`, { headers });
         if (!response.ok) return [];
         const data = await response.json();
         const allModels: any[] = data.models || data.data || [];
-        const model = allModels.find((m: any) => (m.key || m.id || m.name) === modelName);
+        const model = allModels.find(
+          (m: any) => (m.key || m.id || m.name) === modelName,
+        );
         if (model?.capabilities) {
           const caps: string[] = [];
           if (model.capabilities.vision) caps.push("vision");
           if (model.capabilities.trained_for_tool_use) caps.push("tools");
-          if (model.capabilities.reasoning || model.capabilities.thinking) caps.push("thinking");
+          if (model.capabilities.reasoning || model.capabilities.thinking)
+            caps.push("thinking");
           return caps;
         }
         // Fallback: check model name/key for thinking indicators
@@ -316,7 +368,11 @@ class AIService {
     return [];
   }
 
-  async getModels(baseUrl?: string, providerOverride?: string, apiKey?: string): Promise<AIModel[]> {
+  async getModels(
+    baseUrl?: string,
+    providerOverride?: string,
+    apiKey?: string,
+  ): Promise<AIModel[]> {
     const provider = providerOverride || this.config.provider;
     const effectiveApiKey = apiKey ?? this.config.apiKey;
 
@@ -325,7 +381,8 @@ class AIService {
       try {
         const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
         const headers: Record<string, string> = {};
-        if (effectiveApiKey) headers.Authorization = `Bearer ${effectiveApiKey}`;
+        if (effectiveApiKey)
+          headers.Authorization = `Bearer ${effectiveApiKey}`;
         const response = await fetch(`${url}/api/tags`, { headers });
         if (response.ok) {
           const data = await response.json();
@@ -343,10 +400,17 @@ class AIService {
     // LM Studio
     if (provider === "lmstudio") {
       try {
-        const url = (baseUrl || this.config.baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
+        const url = (
+          baseUrl ||
+          this.config.baseUrl ||
+          "http://127.0.0.1:1234"
+        ).replace(/\/+$/, "");
         const lmsHeaders: Record<string, string> = {};
-        if (effectiveApiKey) lmsHeaders.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/api/v1/models`, { headers: lmsHeaders });
+        if (effectiveApiKey)
+          lmsHeaders.Authorization = `Bearer ${effectiveApiKey}`;
+        const response = await fetch(`${url}/api/v1/models`, {
+          headers: lmsHeaders,
+        });
         if (response.ok) {
           const data = await response.json();
           const allLmModels: any[] = data.models || data.data || [];
@@ -375,7 +439,8 @@ class AIService {
       try {
         const url = baseUrl.replace(/\/+$/, "");
         const headers: Record<string, string> = {};
-        if (effectiveApiKey) headers.Authorization = `Bearer ${effectiveApiKey}`;
+        if (effectiveApiKey)
+          headers.Authorization = `Bearer ${effectiveApiKey}`;
         const response = await fetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
@@ -429,11 +494,14 @@ class AIService {
    * Delegates to getModels() per provider to avoid duplicating fetch logic.
    */
   async getAllConfiguredModels(): Promise<AIModel[]> {
-    let providerConfigs: Record<string, { model?: string; apiKey?: string; baseUrl?: string }> = {};
+    let providerConfigs: Record<
+      string,
+      { model?: string; apiKey?: string; baseUrl?: string }
+    > = {};
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
       if (raw) providerConfigs = JSON.parse(raw);
-    } catch { }
+    } catch {}
 
     // Only include providers that are properly configured
     const activeProvider = this.config.provider;
@@ -451,8 +519,12 @@ class AIService {
     // Gather models from each configured provider via getModels()
     const fetches = Array.from(providersToCheck).map(async (provider) => {
       const cached = providerConfigs[provider];
-      const baseUrl = cached?.baseUrl || (provider === activeProvider ? this.config.baseUrl : undefined);
-      const apiKey = cached?.apiKey || (provider === activeProvider ? this.config.apiKey : undefined);
+      const baseUrl =
+        cached?.baseUrl ||
+        (provider === activeProvider ? this.config.baseUrl : undefined);
+      const apiKey =
+        cached?.apiKey ||
+        (provider === activeProvider ? this.config.apiKey : undefined);
 
       const models = await this.getModels(baseUrl, provider, apiKey);
 
@@ -461,8 +533,13 @@ class AIService {
         const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
         for (const m of models) {
           try {
-            m.capabilities = await this.getModelCapabilities(m.name, url, "ollama", apiKey);
-          } catch { }
+            m.capabilities = await this.getModelCapabilities(
+              m.name,
+              url,
+              "ollama",
+              apiKey,
+            );
+          } catch {}
         }
       }
 
@@ -498,7 +575,10 @@ class AIService {
         return data.response?.trim() || history;
       }
 
-      if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
+      if (
+        isAnthropicProtocol(provider) &&
+        (apiKey || provider === "anthropic-compat")
+      ) {
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
@@ -513,11 +593,17 @@ class AIService {
       }
 
       // OpenAI-compatible providers (openai, deepseek, kimi, gemini, glm, lmstudio, openai-compat)
-      if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
+      if (
+        isOpenAICompatible(provider) &&
+        (apiKey || providerUsesBaseUrl(provider))
+      ) {
         const result = await this.openAIChatSimple(
-          provider, model, apiKey || "",
+          provider,
+          model,
+          apiKey || "",
           [{ role: "user", content: prompt }],
-          500, providerUsesBaseUrl(provider) ? baseUrl : undefined,
+          500,
+          providerUsesBaseUrl(provider) ? baseUrl : undefined,
         );
         return result || history;
       }
@@ -687,7 +773,9 @@ class AIService {
     });
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
-      throw new Error(`${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${errText.slice(0, 200)}`);
+      throw new Error(
+        `${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${errText.slice(0, 200)}`,
+      );
     }
     const data = await response.json();
     return data.choices?.[0]?.message?.content?.trim() || "";
@@ -719,23 +807,30 @@ class AIService {
       signal,
     });
 
-    // Retry without response_format if server rejects it
-    if (!response.ok && body.response_format) {
-      delete body.response_format;
-      const retry = await fetch(url, {
-        method: "POST",
-        headers: this.jsonHeaders(apiKey || undefined),
-        body: JSON.stringify(body),
-        signal,
-      });
-      if (!retry.ok) throw new Error(`${CLOUD_PROVIDERS[provider]?.label || provider} server error (${retry.status})`);
-      return this.parseOpenAIStream(retry, onToken);
+    // Fallback: If the server returned a 200 but it's a flat JSON error instead of a stream
+    // (e.g. Minimax returning balance errors disguised as 200 OK Json)
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const errJson = await response.json();
+      if (errJson.error) {
+        throw new Error(`API Error: ${errJson.error.message || errJson.error}`);
+      }
+      if (errJson.base_resp && errJson.base_resp.status_code !== 0) {
+        throw new Error(
+          `API Error: ${errJson.base_resp.status_msg || errJson.base_resp.status_code}`,
+        );
+      }
+      if (errJson.choices && errJson.choices.length > 0) {
+        return {
+          content: errJson.choices[0].message?.content || "",
+          thinking: "",
+        };
+      }
+      throw new Error(
+        `Unexpected JSON response: ${JSON.stringify(errJson).slice(0, 200)}`,
+      );
     }
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "");
-      throw new Error(`${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${errText.slice(0, 200)}`);
-    }
     return this.parseOpenAIStream(response, onToken);
   }
 
@@ -793,7 +888,12 @@ class AIService {
   ): Promise<string> {
     const { provider, model, apiKey, baseUrl } = this.config;
 
-    const systemPrompt = `You are a terminal assistant. The user wants to perform a task. Output ONLY the exact command to run. No markdown, no explanation. If the task is simple, output a single command. If it requires multiple steps, output only the FIRST step. User OS: ${navigator.platform}.`;
+    const systemPrompt = `Terminal assistant. OS: ${navigator.platform}.
+Reply ONLY in this format, nothing else:
+COMMAND: <raw command, no backticks>
+TEXT: <one short sentence>
+Omit COMMAND line if no command applies (greetings, conceptual questions).
+NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 15 words.`;
 
     try {
       if (provider === "ollama") {
@@ -820,13 +920,14 @@ class AIService {
       }
 
       if (isAnthropicProtocol(provider)) {
-        if (!apiKey && provider === "anthropic") throw new Error("Anthropic API Key required");
+        if (!apiKey && provider === "anthropic")
+          throw new Error("Anthropic API Key required");
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model: model,
-            max_tokens: 100,
+            max_tokens: 300,
             system: systemPrompt,
             messages: [{ role: "user", content: prompt }],
           }),
@@ -837,14 +938,20 @@ class AIService {
 
       // OpenAI-compatible providers (openai, deepseek, kimi, gemini, glm, lmstudio, openai-compat)
       if (isOpenAICompatible(provider)) {
-        if (!apiKey && !providerUsesBaseUrl(provider)) throw new Error(`${CLOUD_PROVIDERS[provider]?.label || provider} API Key required`);
+        if (!apiKey && !providerUsesBaseUrl(provider))
+          throw new Error(
+            `${CLOUD_PROVIDERS[provider]?.label || provider} API Key required`,
+          );
         return await this.openAIChatSimple(
-          provider, model, apiKey || "",
+          provider,
+          model,
+          apiKey || "",
           [
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt },
           ],
-          100, providerUsesBaseUrl(provider) ? baseUrl : undefined,
+          300,
+          providerUsesBaseUrl(provider) ? baseUrl : undefined,
         );
       }
 
@@ -901,7 +1008,10 @@ class AIService {
         return result.length <= 80 ? result : "";
       }
 
-      if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
+      if (
+        isAnthropicProtocol(provider) &&
+        (apiKey || provider === "anthropic-compat")
+      ) {
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
@@ -922,18 +1032,33 @@ class AIService {
       }
 
       // OpenAI-compatible providers — stream so placeholder appears progressively
-      if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
+      if (
+        isOpenAICompatible(provider) &&
+        (apiKey || providerUsesBaseUrl(provider))
+      ) {
         const messages = [
           { role: "system", content: systemPrompt },
           { role: "user", content: userContent },
         ];
         const result = await this.streamOpenAIChat(
-          provider, model, apiKey || "", messages,
-          onToken ? (token) => { if (token) onToken(token); } : undefined,
-          combinedSignal, undefined, baseUrl,
+          provider,
+          model,
+          apiKey || "",
+          messages,
+          onToken
+            ? (token) => {
+                if (token) onToken(token);
+              }
+            : undefined,
+          combinedSignal,
+          undefined,
+          baseUrl,
         );
         const raw = result.content.trim();
-        const clean = raw.replace(/^`+|`+$/g, "").split("\n")[0].trim();
+        const clean = raw
+          .replace(/^`+|`+$/g, "")
+          .split("\n")[0]
+          .trim();
         return clean.length <= 80 ? clean : "";
       }
     } catch {
@@ -975,7 +1100,9 @@ class AIService {
           clearTimeout(timeout);
           if (!response.ok) return "";
           const data = await response.json();
-          const result = (data.response || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+          const result = (data.response || "")
+            .trim()
+            .replace(/^["'`]+|["'`]+$/g, "");
           return result.length > 0 && result.length <= 30 ? result : "";
         } catch {
           clearTimeout(timeout);
@@ -983,7 +1110,10 @@ class AIService {
         }
       }
 
-      if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
+      if (
+        isAnthropicProtocol(provider) &&
+        (apiKey || provider === "anthropic-compat")
+      ) {
         const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
@@ -995,19 +1125,27 @@ class AIService {
           }),
         });
         const data = await response.json();
-        const result = (data.content?.[0]?.text || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+        const result = (data.content?.[0]?.text || "")
+          .trim()
+          .replace(/^["'`]+|["'`]+$/g, "");
         return result.length > 0 && result.length <= 30 ? result : "";
       }
 
       // OpenAI-compatible providers — no max_tokens (crashes some local models)
-      if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
+      if (
+        isOpenAICompatible(provider) &&
+        (apiKey || providerUsesBaseUrl(provider))
+      ) {
         const result = await this.openAIChatSimple(
-          provider, model, apiKey || "",
+          provider,
+          model,
+          apiKey || "",
           [
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt.slice(0, 200) },
           ],
-          undefined, baseUrl,
+          undefined,
+          baseUrl,
         );
         const clean = result.replace(/^["'`]+|["'`]+$/g, "");
         return clean.length > 0 && clean.length <= 30 ? clean : "";
@@ -1036,38 +1174,52 @@ class AIService {
     const apiKey = cfg.apiKey || this.config.apiKey;
     const baseUrl = providerUsesBaseUrl(provider) ? cfg.baseUrl : undefined;
 
-    const systemPrompt = "You are a helpful vision assistant. Describe what you see in the user's image(s) and answer their question. Be detailed and specific.";
+    const systemPrompt =
+      "You are a helpful vision assistant. Describe what you see in the user's image(s) and answer their question. Be detailed and specific.";
 
     // Build prior conversation messages (text only — previous images not re-sent)
-    const priorMessages = (conversationHistory || []).map(msg => ({
+    const priorMessages = (conversationHistory || []).map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
     if (provider === "ollama") {
-      const userMsg: any = { role: "user", content: prompt, images: images.map(img => img.base64) };
+      const userMsg: any = {
+        role: "user",
+        content: prompt,
+        images: images.map((img) => img.base64),
+      };
       const result = await this.streamOllamaChat(
         baseUrl || "http://localhost:11434",
         model,
         [{ role: "system", content: systemPrompt }, ...priorMessages, userMsg],
-        (token) => { if (token) onToken(token); },
+        (token) => {
+          if (token) onToken(token);
+        },
         signal,
         undefined, // no JSON format
-        false,     // no thinking
+        false, // no thinking
         apiKey,
       );
       return result.content;
     }
 
-    if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
+    if (
+      isAnthropicProtocol(provider) &&
+      (apiKey || provider === "anthropic-compat")
+    ) {
       const userContent = [
-        ...images.map(img => ({
+        ...images.map((img) => ({
           type: "image" as const,
-          source: { type: "base64" as const, media_type: img.mediaType, data: img.base64 },
+          source: {
+            type: "base64" as const,
+            media_type: img.mediaType,
+            data: img.base64,
+          },
         })),
         { type: "text" as const, text: prompt },
       ];
-      const anthropicHistory = priorMessages.map(msg => ({
+      const anthropicHistory = priorMessages.map((msg) => ({
         role: msg.role as "user" | "assistant",
         content: msg.content,
       }));
@@ -1078,7 +1230,10 @@ class AIService {
           model,
           max_tokens: 4096,
           system: systemPrompt,
-          messages: [...anthropicHistory, { role: "user", content: userContent }],
+          messages: [
+            ...anthropicHistory,
+            { role: "user", content: userContent },
+          ],
           stream: true,
         }),
         signal,
@@ -1105,29 +1260,36 @@ class AIService {
               fullText += evt.delta.text;
               onToken(evt.delta.text);
             }
-          } catch { }
+          } catch {}
         }
       }
       return fullText;
     }
 
     // OpenAI-compatible providers
-    if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
+    if (
+      isOpenAICompatible(provider) &&
+      (apiKey || providerUsesBaseUrl(provider))
+    ) {
       const userContent = [
         { type: "text" as const, text: prompt },
-        ...images.map(img => ({
+        ...images.map((img) => ({
           type: "image_url" as const,
           image_url: { url: `data:${img.mediaType};base64,${img.base64}` },
         })),
       ];
       const result = await this.streamOpenAIChat(
-        provider, model, apiKey || "",
+        provider,
+        model,
+        apiKey || "",
         [
           { role: "system", content: systemPrompt },
           ...priorMessages,
           { role: "user", content: userContent },
         ],
-        (token) => { if (token) onToken(token); },
+        (token) => {
+          if (token) onToken(token);
+        },
         signal,
         undefined, // no JSON format
         baseUrl,
@@ -1141,7 +1303,11 @@ class AIService {
   async runAgent(
     prompt: string,
     executeCommand: (cmd: string) => Promise<string>,
-    writeToTerminal: (cmd: string, isRawInput?: boolean, checkPermission?: boolean) => Promise<void> | void,
+    writeToTerminal: (
+      cmd: string,
+      isRawInput?: boolean,
+      checkPermission?: boolean,
+    ) => Promise<void> | void,
     readTerminal: (lines: number) => Promise<string>,
     onUpdate: (step: string, output: string) => void,
     sessionConfig?: AIConfig,
@@ -1217,15 +1383,19 @@ ${agentPrompt}
           history.push({
             role: "user",
             content: prompt,
-            images: images.map(img => img.base64),
+            images: images.map((img) => img.base64),
           });
         } else if (isAnthropicProtocol(provider)) {
           history.push({
             role: "user",
             content: [
-              ...images.map(img => ({
+              ...images.map((img) => ({
                 type: "image",
-                source: { type: "base64", media_type: img.mediaType, data: img.base64 },
+                source: {
+                  type: "base64",
+                  media_type: img.mediaType,
+                  data: img.base64,
+                },
               })),
               { type: "text", text: prompt },
             ],
@@ -1236,9 +1406,11 @@ ${agentPrompt}
             role: "user",
             content: [
               { type: "text", text: prompt },
-              ...images.map(img => ({
+              ...images.map((img) => ({
                 type: "image_url",
-                image_url: { url: `data:${img.mediaType};base64,${img.base64}` },
+                image_url: {
+                  url: `data:${img.mediaType};base64,${img.base64}`,
+                },
               })),
             ],
           });
@@ -1270,17 +1442,31 @@ ${agentPrompt}
     let commandsFailed = 0;
     let consecutiveBusy = 0; // Count consecutive busy-state skips to avoid infinite loops
     let consecutiveGuardBlocks = 0; // Global counter for ANY guard rejection — force-stops when too high
+    let lastReadTerminalOutput = ""; // Track consecutive identical read_terminal results
+    let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
+
+    // "User ready / continue" signal from UI (e.g. Continue button in overlay)
+    // Uses a global flag checked each read_terminal iteration
+    (globalThis as any).__tronAgentContinue = false;
+
     for (let i = 0; i < maxSteps; i++) {
       if (signal?.aborted) {
         throw new Error("Agent aborted by user.");
       }
       // Circuit breaker: if too many consecutive guard rejections, reset scaffold state and unblock
       if (consecutiveGuardBlocks >= 3) {
-        onUpdate("failed", `Circuit breaker: ${consecutiveGuardBlocks} consecutive blocks — resetting guards`);
+        onUpdate(
+          "failed",
+          `Circuit breaker: ${consecutiveGuardBlocks} consecutive blocks — resetting guards`,
+        );
         // Reset scaffold flag — the scaffold likely failed if agent keeps getting blocked
         usedScaffold = false;
         executedCommands.clear();
-        history.push({ role: "user", content: "Previous guards have been reset. You can now run commands freely. Re-assess the current state: use read_terminal to check what happened, then decide the best approach." });
+        history.push({
+          role: "user",
+          content:
+            "Previous guards have been reset. You can now run commands freely. Re-assess the current state: use read_terminal to check what happened, then decide the best approach.",
+        });
         consecutiveGuardBlocks = 0;
       }
       if (thinkingEnabled) {
@@ -1322,7 +1508,10 @@ ${agentPrompt}
             // For non-thinking models: ensure thinking state is cleared
             onUpdate("thinking_done", "");
           }
-        } else if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
+        } else if (
+          isAnthropicProtocol(provider) &&
+          (apiKey || provider === "anthropic-compat")
+        ) {
           // Anthropic Messages API with streaming
           let contentAccumulated = "";
           const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
@@ -1337,7 +1526,10 @@ ${agentPrompt}
             }),
             signal,
           });
-          if (!response.ok) throw new Error(`${CLOUD_PROVIDERS[provider]?.label || provider} server error(${response.status})`);
+          if (!response.ok)
+            throw new Error(
+              `${CLOUD_PROVIDERS[provider]?.label || provider} server error(${response.status})`,
+            );
           if (!response.body) throw new Error("No response body from server");
 
           const reader = response.body.getReader();
@@ -1358,17 +1550,23 @@ ${agentPrompt}
                   contentAccumulated += evt.delta.text;
                   onUpdate("streaming_response", contentAccumulated);
                 }
-              } catch { }
+              } catch {}
             }
           }
           responseText = contentAccumulated;
           onUpdate("thinking_done", "");
-        } else if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
+        } else if (
+          isOpenAICompatible(provider) &&
+          (apiKey || providerUsesBaseUrl(provider))
+        ) {
           // OpenAI-compatible cloud providers with streaming
           let thinkingAccumulated = "";
           let contentAccumulated = "";
           const result = await this.streamOpenAIChat(
-            provider, model, apiKey || "", history,
+            provider,
+            model,
+            apiKey || "",
+            history,
             (token, thinking) => {
               if (thinking && thinkingEnabled) {
                 thinkingAccumulated += thinking;
@@ -1379,7 +1577,9 @@ ${agentPrompt}
                 onUpdate("streaming_response", contentAccumulated);
               }
             },
-            signal, "json", baseUrl,
+            signal,
+            "json",
+            baseUrl,
           );
           responseText = result.content;
           thinkingText = result.thinking;
@@ -1417,14 +1617,14 @@ ${agentPrompt}
         // 1. Try direct parse first (with \x escape fix)
         try {
           return JSON.parse(fixJsonEscapes(text));
-        } catch { }
+        } catch {}
 
-        // 2. Markdown code block extraction
-        const mdMatch = text.match(/```(?: json) ?\s * ([\s\S] *?)```/);
+        // 2. Markdown code block extraction (handles ```json, ```JSON, ```, etc.)
+        const mdMatch = text.match(/```\w*\s*([\s\S]*?)```/);
         if (mdMatch) {
           try {
-            return JSON.parse(fixJsonEscapes(mdMatch[1]));
-          } catch { }
+            return JSON.parse(fixJsonEscapes(mdMatch[1].trim()));
+          } catch {}
         }
 
         // 3. Robust extraction: find first '{' and count braces
@@ -1462,14 +1662,16 @@ ${agentPrompt}
                 const candidate = fixJsonEscapes(text.slice(firstOpen, i + 1));
                 try {
                   const obj = JSON.parse(candidate);
-                  if (obj.tool) return obj;
+                  if (obj.tool || obj.content) return obj;
                 } catch {
                   // Try fixing trailing commas: ,} → }
-                  const fixed = candidate.replace(/,\s*}/g, "}").replace(/,\s*]/g, "]");
+                  const fixed = candidate
+                    .replace(/,\s*}/g, "}")
+                    .replace(/,\s*]/g, "]");
                   try {
                     const obj = JSON.parse(fixed);
-                    if (obj.tool) return obj;
-                  } catch { }
+                    if (obj.tool || obj.content) return obj;
+                  } catch {}
                 }
                 break;
               }
@@ -1499,17 +1701,25 @@ ${agentPrompt}
           // Reject if the text looks like a confused tool call attempt (JSON with "tool" key)
           const hasToolCallJSON = /{"tool"\s*:/.test(fallbackText);
           if (fallbackText.length > 0 && !hasToolCallJSON) {
-            return { success: true, message: fallbackText.slice(0, 2000), type: "success" };
+            return {
+              success: true,
+              message: fallbackText.slice(0, 2000),
+              type: "success",
+            };
           }
           return {
             success: false,
-            message: "This model failed to follow the agent protocol (could not produce valid JSON tool calls). Try a more capable model.",
+            message:
+              "This model failed to follow the agent protocol (could not produce valid JSON tool calls). Try a more capable model.",
           };
         }
 
         // Log parse failures so they appear in the session log
         const preview = (responseText || "").slice(0, 120).replace(/\n/g, " ");
-        onUpdate("failed", `Parse error (${parseFailures}/3): ${preview || "(empty response)"}...`);
+        onUpdate(
+          "failed",
+          `Parse error (${parseFailures}/3): ${preview || "(empty response)"}...`,
+        );
         // Truncate raw text in history to avoid wasting context on bad model output
         const truncatedResponse = (responseText || "(empty)").slice(0, 500);
         history.push({ role: "assistant", content: truncatedResponse });
@@ -1526,9 +1736,15 @@ ${agentPrompt}
 
       // Loop detection: track recent actions and break repetitive patterns
       // read_terminal is excluded — its output changes over time (monitoring processes)
-      const actionKey = action.tool === "read_terminal"
-        ? null
-        : JSON.stringify({ tool: action.tool, path: action.path, command: action.command, text: action.text });
+      const actionKey =
+        action.tool === "read_terminal"
+          ? null
+          : JSON.stringify({
+              tool: action.tool,
+              path: action.path,
+              command: action.command,
+              text: action.text,
+            });
 
       // Block actions that previously triggered loop detection
       if (actionKey && blockedActions.has(actionKey)) {
@@ -1552,10 +1768,14 @@ ${agentPrompt}
       // Alternating loop: A→B→A→B→A→B pattern
       const isAlternatingLoop =
         recentActions.length >= 6 &&
-        recentActions[recentActions.length - 1] === recentActions[recentActions.length - 3] &&
-        recentActions[recentActions.length - 3] === recentActions[recentActions.length - 5] &&
-        recentActions[recentActions.length - 2] === recentActions[recentActions.length - 4] &&
-        recentActions[recentActions.length - 4] === recentActions[recentActions.length - 6];
+        recentActions[recentActions.length - 1] ===
+          recentActions[recentActions.length - 3] &&
+        recentActions[recentActions.length - 3] ===
+          recentActions[recentActions.length - 5] &&
+        recentActions[recentActions.length - 2] ===
+          recentActions[recentActions.length - 4] &&
+        recentActions[recentActions.length - 4] ===
+          recentActions[recentActions.length - 6];
 
       if (isConsecutiveLoop || isAlternatingLoop) {
         loopBreaks++;
@@ -1568,7 +1788,8 @@ ${agentPrompt}
           // After 3 loop breaks, force termination
           return {
             success: false,
-            message: "Agent terminated: stuck in repeated loops despite multiple interventions.",
+            message:
+              "Agent terminated: stuck in repeated loops despite multiple interventions.",
             type: "failure",
           };
         }
@@ -1576,9 +1797,10 @@ ${agentPrompt}
         onUpdate("failed", `Loop detected (${loopBreaks}/3): ${action.tool}`);
         history.push({
           role: "user",
-          content: loopBreaks === 1
-            ? `LOOP DETECTED: You repeated "${action.tool}" with the same parameters 3+ times. This action is now BLOCKED. Try a completely different approach — different tool, different command, or different parameters.`
-            : `LOOP DETECTED AGAIN (${loopBreaks}/3). You are still stuck. If you cannot find an alternative approach, use final_answer NOW to explain what went wrong. One more loop will terminate the agent.`,
+          content:
+            loopBreaks === 1
+              ? `LOOP DETECTED: You repeated "${action.tool}" with the same parameters 3+ times. This action is now BLOCKED. Try a completely different approach — different tool, different command, or different parameters.`
+              : `LOOP DETECTED AGAIN (${loopBreaks}/3). You are still stuck. If you cannot find an alternative approach, use final_answer NOW to explain what went wrong. One more loop will terminate the agent.`,
         });
         continue;
       }
@@ -1609,17 +1831,55 @@ ${agentPrompt}
           }
         }
 
+        // Extract user's actual task from the augmented prompt (which includes terminal output, prior conversation, etc.)
+        const rawPrompt = history[1]?.content || "";
+        const taskLineMatch = rawPrompt.match(/\nTask:\s*(.+)\s*$/);
+        const userTask = (taskLineMatch ? taskLineMatch[1] : rawPrompt)
+          .toLowerCase()
+          .trim();
+        const isShortAck =
+          userTask.length <= 12 &&
+          /^(ok|okay|yes|no|sure|thanks|thank you|got it|alright|go|do it|good|great|cool|nice|fine|yep|nope|done|next)$/i.test(
+            userTask,
+          );
+
         // Reject final_answer that asks user permission to continue or lists remaining work
         const answerText = (action.content || "").toLowerCase();
-        const isAskingToContinue = /\b(would you like|shall i|do you want me to|want me to|should i)\b.+\b(continue|proceed|go ahead|fix|create|implement|install|build)\b/.test(answerText);
-        const hasUnfinishedSteps = /\b(i('ll| will) need to|next steps?|to proceed|remaining|still need)\b/.test(answerText);
+        const isAskingToContinue =
+          /\b(would you like|shall i|do you want me to|want me to|should i)\b.+\b(continue|proceed|go ahead|fix|create|implement|install|build)\b/.test(
+            answerText,
+          );
+        const hasUnfinishedSteps =
+          /\b(i('ll| will) need to|next steps?|to proceed|remaining|still need)\b/.test(
+            answerText,
+          );
         // Detect future-tense plans: "I'll create...", "Let me check...", "I will implement..."
-        const isFuturePlan = /\b(i'll|i will|let me|i'm going to|i need to)\b.+\b(create|build|implement|check|modify|fix|write|set up|configure|update|install|make|add|start)\b/.test(answerText);
-        const mentionsError = /\b(error|issue|problem|bug|fail|broken|cannot read|undefined)\b/.test(answerText) && !/\b(fixed|resolved|solved|because|caused by|due to|requires?|you need|configured|working|running|active|set up|ready)\b/.test(answerText);
+        const isFuturePlan =
+          /\b(i'll|i will|let me|i'm going to|i need to)\b.+\b(create|build|implement|check|modify|fix|write|set up|configure|update|install|make|add|start)\b/.test(
+            answerText,
+          );
+        const mentionsError =
+          /\b(error|issue|problem|bug|fail|broken|cannot read|undefined)\b/.test(
+            answerText,
+          ) &&
+          !/\b(fixed|resolved|solved|because|caused by|due to|requires?|you need|configured|working|running|active|set up|ready)\b/.test(
+            answerText,
+          );
         // Don't reject for mentioning errors if the user's own prompt mentioned errors (agent is responding to a known issue)
-        const userMentionedError = /\b(error|issue|problem|bug|fail|broken)\b/i.test(history[history.length - 2]?.content || "") || /\b(error|issue|problem|bug|fail|broken)\b/i.test(history[1]?.content || "");
-        if (isAskingToContinue || isFuturePlan || (hasUnfinishedSteps && !loopBreaks)) {
-          onUpdate("failed", "Rejected: final_answer describes unfinished work");
+        const userMentionedError =
+          /\b(error|issue|problem|bug|fail|broken)\b/i.test(
+            history[history.length - 2]?.content || "",
+          ) || /\b(error|issue|problem|bug|fail|broken)\b/i.test(userTask);
+        if (
+          !isShortAck &&
+          (isAskingToContinue ||
+            isFuturePlan ||
+            (hasUnfinishedSteps && !loopBreaks))
+        ) {
+          onUpdate(
+            "failed",
+            "Rejected: final_answer describes unfinished work",
+          );
           history.push({
             role: "user",
             content: `REJECTED: Your final_answer describes unfinished work. You are an ACTION agent — do NOT ask permission to continue. Just DO the remaining steps yourself (fix errors, install dependencies, write code, etc.) and THEN give final_answer when everything is actually done and working.`,
@@ -1637,11 +1897,17 @@ ${agentPrompt}
         }
 
         // Reject final_answer that tells user to run commands — agent should do it itself
-        const delegationPatterns = /\b(run|execute|type|enter|use the command|to (start|run|launch|install|configure))\b.*[`"']/;
+        const delegationPatterns =
+          /\b(run|execute|type|enter|use the command|to (start|run|launch|install|configure))\b.*[`"']/;
         if (delegationPatterns.test(answerText) && !terminalBusy) {
-          const cmdMatch = (action.content || "").match(/[`"']([^`"']{5,})[`"']/);
+          const cmdMatch = (action.content || "").match(
+            /[`"']([^`"']{5,})[`"']/,
+          );
           if (cmdMatch) {
-            onUpdate("failed", `Rejected: delegation — agent should run "${cmdMatch[1].slice(0, 40)}" itself`);
+            onUpdate(
+              "failed",
+              `Rejected: delegation — agent should run "${cmdMatch[1].slice(0, 40)}" itself`,
+            );
             history.push({
               role: "user",
               content: `REJECTED: Do NOT tell the user to run commands. You are an ACTION agent — execute "${cmdMatch[1]}" yourself using run_in_terminal or execute_command. Then give final_answer when done.`,
@@ -1651,17 +1917,32 @@ ${agentPrompt}
         }
 
         // Check for "Lazy Completion": User asked for action, but agent did almost nothing.
-        // history[1] is the first user message (history[0] is system prompt)
-        const userPrompt = (history[1]?.content || "").toLowerCase();
-        const actionKeywords = ["start ", "create ", "install ", "configure ", "make ", "build ", "setup "];
-        const hasActionRequest = actionKeywords.some((kw) => userPrompt.includes(kw));
+        const actionKeywords = [
+          "start ",
+          "create ",
+          "install ",
+          "configure ",
+          "make ",
+          "build ",
+          "setup ",
+        ];
+        const hasActionRequest =
+          !isShortAck && actionKeywords.some((kw) => userTask.includes(kw));
 
         // If we executed no commands and wrote no files, almost certainly incomplete.
-        if (hasActionRequest && executedCommands.size === 0 && !wroteFiles && !terminalBusy) {
-          onUpdate("failed", "Rejected: lazy completion — no commands executed, no files written");
+        if (
+          hasActionRequest &&
+          executedCommands.size === 0 &&
+          !wroteFiles &&
+          !terminalBusy
+        ) {
+          onUpdate(
+            "failed",
+            "Rejected: lazy completion — no commands executed, no files written",
+          );
           history.push({
             role: "user",
-            content: `REJECTED: The user asked you to "${userPrompt.slice(0, 60)}" but you have executed 0 commands and written 0 files. Reading files is NOT completing the task. You MUST take action — use execute_command, run_in_terminal, or write_file to actually DO the work.`,
+            content: `REJECTED: The user asked you to "${userTask.slice(0, 60)}" but you have executed 0 commands and written 0 files. Reading files is NOT completing the task. You MUST take action — use execute_command, run_in_terminal, or write_file to actually DO the work.`,
           });
           continue;
         }
@@ -1671,8 +1952,12 @@ ${agentPrompt}
       if (action.tool === "ask_question") {
         // Allow questions about credentials, secrets, preferences — things the agent can't check
         const q = (action.question || "").toLowerCase();
-        const isCredentialQuestion = /\b(password|username|account|credential|api.?key|token|login|auth|secret|license|email|ssh)\b/.test(q);
-        const isPreferenceQuestion = /\b(prefer|want|choose|which|style|color|name|title)\b/.test(q);
+        const isCredentialQuestion =
+          /\b(password|username|account|credential|api.?key|token|login|auth|secret|license|email|ssh)\b/.test(
+            q,
+          );
+        const isPreferenceQuestion =
+          /\b(prefer|want|choose|which|style|color|name|title)\b/.test(q);
 
         // Reject questions about system state that the agent can check itself
         if (!isCredentialQuestion && !isPreferenceQuestion) {
@@ -1742,7 +2027,10 @@ ${agentPrompt}
                 // Don't continue — let the original command execute
               } else if (consecutiveBusy >= 5) {
                 // Stuck for too long — stop polling and tell agent to change approach
-                onUpdate("executed", `(Terminal busy for ${consecutiveBusy} checks — skipping command)`);
+                onUpdate(
+                  "executed",
+                  `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
+                );
                 history.push({
                   role: "user",
                   content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input not detected as a prompt. You MUST either:\n1. Use send_text("\\x03") to Ctrl+C the process\n2. Use send_text to provide input\n3. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
@@ -1751,7 +2039,11 @@ ${agentPrompt}
                 continue;
               } else {
                 const output = await readTerminal(15);
-                onUpdate("executed", "(Terminal busy — auto-read)\n---\n" + (output || "(no output)"));
+                onUpdate(
+                  "executed",
+                  "(Terminal busy — auto-read)\n---\n" +
+                    (output || "(no output)"),
+                );
                 history.push({
                   role: "user",
                   content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
@@ -1763,7 +2055,10 @@ ${agentPrompt}
               consecutiveBusy++;
               if (consecutiveBusy >= 3 || (usedScaffold && wroteFiles)) {
                 // Task is likely done — dev server is running with code written
-                onUpdate("warning", "Dev server is already running — task may be complete");
+                onUpdate(
+                  "warning",
+                  "Dev server is already running — task may be complete",
+                );
                 history.push({
                   role: "user",
                   content: `STOP: The dev server is running and you have ${wroteFiles ? "already written code" : "not written code yet"}. You have tried to run commands ${consecutiveBusy} times while the server is active.\n${wroteFiles ? "The task appears COMPLETE. Use final_answer NOW to confirm the project is running." : "Do NOT stop the server. Use write_file NOW to implement the user's requested features — the dev server will hot-reload your code automatically."}\nDo NOT attempt more run_in_terminal or execute_command calls — only write_file and final_answer.`,
@@ -1783,9 +2078,10 @@ ${agentPrompt}
               consecutiveBusy = 0;
               terminalBusy = false;
               const finishedOutput = await readTerminal(15);
-              const nudge = usedScaffold && !wroteFiles
-                ? `\nThe scaffold/install is complete. Now use write_file to implement the user's requested features. Do NOT run ls, mkdir, or any scaffold commands.`
-                : "";
+              const nudge =
+                usedScaffold && !wroteFiles
+                  ? `\nThe scaffold/install is complete. Now use write_file to implement the user's requested features. Do NOT run ls, mkdir, or any scaffold commands.`
+                  : "";
               history.push({
                 role: "user",
                 content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)${nudge}`,
@@ -1795,8 +2091,14 @@ ${agentPrompt}
 
           // Prevent duplicate run_in_terminal commands (e.g. re-scaffolding)
           let runCmd = action.command;
-          if (executedCommands.has(runCmd) || isDuplicateScaffold(runCmd, executedCommands)) {
-            onUpdate("failed", `Blocked: duplicate command "${runCmd.slice(0, 80)}"`);
+          if (
+            executedCommands.has(runCmd) ||
+            isDuplicateScaffold(runCmd, executedCommands)
+          ) {
+            onUpdate(
+              "failed",
+              `Blocked: duplicate command "${runCmd.slice(0, 80)}"`,
+            );
             history.push({
               role: "user",
               content: `Error: You already ran a similar command ("${runCmd}"). If the project directory doesn't exist at the expected location, create it manually with mkdir via execute_command, then use write_file to create files. Do NOT re-scaffold.`,
@@ -1808,8 +2110,15 @@ ${agentPrompt}
           const isScaffoldCmd = /\b(create|init)\b/i.test(runCmd);
 
           // After scaffolding, nudge agent toward write_file but don't block reads
-          if ((usedScaffold || isScaffoldCmd) && !wroteFiles && /^\s*(mkdir)\b/.test(runCmd)) {
-            onUpdate("failed", `Blocked: "${runCmd}" — use write_file instead (it creates directories automatically)`);
+          if (
+            (usedScaffold || isScaffoldCmd) &&
+            !wroteFiles &&
+            /^\s*(mkdir)\b/.test(runCmd)
+          ) {
+            onUpdate(
+              "failed",
+              `Blocked: "${runCmd}" — use write_file instead (it creates directories automatically)`,
+            );
             history.push({
               role: "user",
               content: `Error: Do not manually create directories. Use write_file with the full path — it creates parent directories automatically.`,
@@ -1819,7 +2128,11 @@ ${agentPrompt}
           }
 
           // Block dev server launch if code hasn't been written yet
-          if (usedScaffold && !wroteFiles && /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(dev|start)\b/.test(runCmd)) {
+          if (
+            usedScaffold &&
+            !wroteFiles &&
+            /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(dev|start)\b/.test(runCmd)
+          ) {
             onUpdate("failed", "Blocked: dev server before code written");
             history.push({
               role: "user",
@@ -1841,10 +2154,18 @@ ${agentPrompt}
           await new Promise((r) => setTimeout(r, 1500));
           const snapshot = await readTerminal(15);
           // Only mark as scaffolded if the command didn't fail or get cancelled
-          if (isScaffoldCmd && !/command not found|not recognized|No such file|Operation cancelled|cancelled|aborted|SIGINT/i.test(snapshot || "")) {
+          if (
+            isScaffoldCmd &&
+            !/command not found|not recognized|No such file|Operation cancelled|cancelled|aborted|SIGINT/i.test(
+              snapshot || "",
+            )
+          ) {
             usedScaffold = true;
           }
-          onUpdate("executed", runCmd + "\n---\n" + (snapshot || "(awaiting output)"));
+          onUpdate(
+            "executed",
+            runCmd + "\n---\n" + (snapshot || "(awaiting output)"),
+          );
           history.push({
             role: "user",
             content: `(Command started in terminal. You MUST use read_terminal to monitor progress. Do NOT run another command until this one finishes or you explicitly stop it with send_text("\\x03").)`,
@@ -1877,12 +2198,21 @@ ${agentPrompt}
           processedText = processedText.replace(/\\n/g, "\r");
           processedText = processedText.replace(/\\r/g, "\r");
           processedText = processedText.replace(/\\t/g, "\t");
-          processedText = processedText.replace(/\\x([0-9a-fA-F]{2})/g, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-          processedText = processedText.replace(/\\u([0-9a-fA-F]{4})/g, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+          processedText = processedText.replace(
+            /\\x([0-9a-fA-F]{2})/g,
+            (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)),
+          );
+          processedText = processedText.replace(
+            /\\u([0-9a-fA-F]{4})/g,
+            (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)),
+          );
 
           // Guard: reject if no characters at all (but allow control chars like \r, \x1B[B etc.)
           if (!processedText || processedText.length === 0) {
-            onUpdate("failed", "send_text: empty text rejected. Specify actual keystrokes.");
+            onUpdate(
+              "failed",
+              "send_text: empty text rejected. Specify actual keystrokes.",
+            );
             history.push({
               role: "user",
               content: `(send_text rejected: text was empty. Use specific keystrokes like \\r for Enter, \\x1B[B for Down Arrow.)`,
@@ -1893,7 +2223,9 @@ ${agentPrompt}
           // Send processed text/keys — use raw mode to avoid Ctrl+C killing the process
           await writeToTerminal(processedText, true);
           // If Ctrl+C or Ctrl+D was sent, terminal is no longer busy
-          const stoppedProcess = (processedText === "\x03" || processedText === "\x04") && terminalBusy;
+          const stoppedProcess =
+            (processedText === "\x03" || processedText === "\x04") &&
+            terminalBusy;
           if (processedText === "\x03" || processedText === "\x04") {
             terminalBusy = false;
           }
@@ -1929,20 +2261,86 @@ ${agentPrompt}
         try {
           const lines = typeof action.lines === "number" ? action.lines : 50;
           const output = await readTerminal(lines);
+
+          // Check if user clicked "Continue" — inject signal into history
+          if ((globalThis as any).__tronAgentContinue) {
+            (globalThis as any).__tronAgentContinue = false;
+            identicalReadCount = 0;
+            lastReadTerminalOutput = "";
+            onUpdate("executed", `User confirmed ready — continuing`);
+            history.push({
+              role: "user",
+              content: `${output}\n\n✅ The user has confirmed they completed the required action (e.g. finished browser login, entered input). The terminal output above shows the current state. Proceed with the task.`,
+            });
+            continue;
+          }
+
+          // Track consecutive identical outputs for smart backoff
+          const outputTrimmed = (output || "").trim();
+          if (
+            outputTrimmed === lastReadTerminalOutput &&
+            outputTrimmed.length > 0
+          ) {
+            identicalReadCount++;
+          } else {
+            lastReadTerminalOutput = outputTrimmed;
+            identicalReadCount = 0;
+          }
+
+          // Smart backoff: if terminal output hasn't changed, wait longer each time
+          if (identicalReadCount >= 2) {
+            const backoffMs = Math.min(1000 * identicalReadCount, 10000);
+            await new Promise((r) => setTimeout(r, backoffMs));
+          }
+
           // Show a useful preview of what was read — first line as collapsed summary
+          // Suppress duplicate UI entries: only show update on first or every 5th identical read
           const previewLines = output
-            ? output.split("\n").filter(l => l.trim()).slice(-3)
+            ? output
+                .split("\n")
+                .filter((l) => l.trim())
+                .slice(-3)
             : [];
           const firstLine = previewLines[0]?.slice(0, 100) || "(No output)";
-          const fullPreview = previewLines.join("\n").slice(0, 300) || "(No output)";
-          onUpdate("executed", `Checked terminal: ${firstLine}\n---\n${fullPreview}`);
+          const fullPreview =
+            previewLines.join("\n").slice(0, 300) || "(No output)";
+          if (identicalReadCount <= 1 || identicalReadCount % 5 === 0) {
+            const suffix =
+              identicalReadCount > 1
+                ? ` (${identicalReadCount}x unchanged)`
+                : "";
+            onUpdate(
+              "executed",
+              `Checked terminal${suffix}: ${firstLine}\n---\n${fullPreview}`,
+            );
+          }
 
           // Detect if terminal is waiting for user input
           const termState = classifyTerminalOutput(output || "");
           if (termState === "input_needed") {
+            // After 3+ identical reads with input_needed, force agent to use ask_question
+            if (identicalReadCount >= 3) {
+              history.push({
+                role: "user",
+                content: `${output}\n\n⚠️ IMPORTANT: Terminal has been waiting for user input for ${identicalReadCount} consecutive checks with NO CHANGE. The user needs to take action (e.g. complete a login flow in the browser, enter a password, etc.). You MUST use ask_question NOW to tell the user what you're waiting for and ask them to confirm when they're done. Do NOT call read_terminal again until the user responds.`,
+              });
+            } else {
+              history.push({
+                role: "user",
+                content: `${output}\n\n⚠️ The terminal is waiting for user input (password, confirmation, etc.). Use ask_question to ask the user what to enter, then use send_text to type their response. The user may also type directly in the terminal — if so, read_terminal again to see the result.`,
+              });
+            }
+          } else if (termState === "server" && identicalReadCount >= 2) {
+            // Running server/daemon with stable output — task is likely done
             history.push({
               role: "user",
-              content: `${output}\n\n⚠️ The terminal is waiting for user input (password, confirmation, etc.). Use ask_question to ask the user what to enter, then use send_text to type their response. The user may also type directly in the terminal — if so, read_terminal again to see the result.`,
+              content: `${output}\n\n✅ A server/daemon process is running with stable output (${identicalReadCount} identical reads). The process has started successfully. You MUST use final_answer NOW to report the result to the user. Do NOT call read_terminal again — the process will keep running in the background.`,
+            });
+          } else if (identicalReadCount >= 3) {
+            // Terminal busy with unchanged output — likely a running process
+            history.push({
+              role: "user",
+              content: `${output}\n\n⚠️ Terminal output has been identical for ${identicalReadCount} consecutive reads. The process is running with stable output — the task is likely complete. You MUST use final_answer to report the current state to the user. Do NOT keep calling read_terminal with unchanged output.`,
             });
           } else {
             history.push({
@@ -1960,6 +2358,10 @@ ${agentPrompt}
         continue;
       }
 
+      // Reset identical-read counter when agent takes any other action
+      identicalReadCount = 0;
+      lastReadTerminalOutput = "";
+
       if (action.tool === "write_file") {
         const filePath = action.path;
         const content = action.content;
@@ -1973,15 +2375,20 @@ ${agentPrompt}
         }
         try {
           onUpdate("executing", `Writing file: ${filePath}`);
-          const result = await (window as any).electron.ipcRenderer.invoke("file.writeFile", {
-            filePath,
-            content,
-          });
+          const result = await (window as any).electron.ipcRenderer.invoke(
+            "file.writeFile",
+            {
+              filePath,
+              content,
+            },
+          );
           if (result.success) {
             const MAX_PREVIEW = 5000;
-            const preview = content.length > MAX_PREVIEW
-              ? content.slice(0, MAX_PREVIEW) + `\n... (${content.length - MAX_PREVIEW} more characters)`
-              : content;
+            const preview =
+              content.length > MAX_PREVIEW
+                ? content.slice(0, MAX_PREVIEW) +
+                  `\n... (${content.length - MAX_PREVIEW} more characters)`
+                : content;
             onUpdate("executed", `Wrote file: ${filePath}\n---\n${preview}`);
             wroteFiles = true;
             consecutiveGuardBlocks = 0;
@@ -2014,16 +2421,25 @@ ${agentPrompt}
             throw new Error("read_file requires 'path' (string)");
           }
           onUpdate("executing", `Reading file: ${filePath}`);
-          const result = await (window as any).electron.ipcRenderer.invoke("file.readFile", {
-            filePath,
-          });
+          const result = await (window as any).electron.ipcRenderer.invoke(
+            "file.readFile",
+            {
+              filePath,
+            },
+          );
           if (result.success) {
             const content = result.content || "(empty file)";
             // Truncate very large files
-            const truncated = content.length > 10000
-              ? content.slice(0, 5000) + "\n...(truncated)...\n" + content.slice(-5000)
-              : content;
-            onUpdate("executed", `Read file: ${filePath} (${content.length} chars)`);
+            const truncated =
+              content.length > 10000
+                ? content.slice(0, 5000) +
+                  "\n...(truncated)...\n" +
+                  content.slice(-5000)
+                : content;
+            onUpdate(
+              "executed",
+              `Read file: ${filePath} (${content.length} chars)`,
+            );
             history.push({
               role: "user",
               content: truncated,
@@ -2050,20 +2466,35 @@ ${agentPrompt}
           const filePath = action.path;
           const search = action.search;
           const replace = action.replace;
-          if (!filePath || typeof search !== "string" || typeof replace !== "string") {
-            throw new Error("edit_file requires 'path', 'search', and 'replace' (all strings)");
+          if (
+            !filePath ||
+            typeof search !== "string" ||
+            typeof replace !== "string"
+          ) {
+            throw new Error(
+              "edit_file requires 'path', 'search', and 'replace' (all strings)",
+            );
           }
           onUpdate("executing", `Editing file: ${filePath}`);
-          const result = await (window as any).electron.ipcRenderer.invoke("file.editFile", {
-            filePath,
-            search,
-            replace,
-          });
+          const result = await (window as any).electron.ipcRenderer.invoke(
+            "file.editFile",
+            {
+              filePath,
+              search,
+              replace,
+            },
+          );
           if (result.success) {
             // Build a compact diff preview for the overlay
             const diffPreview = `--- search\n${search}\n+++ replace\n${replace}`;
-            const truncatedDiff = diffPreview.length > 3000 ? diffPreview.slice(0, 3000) + "\n... (truncated)" : diffPreview;
-            onUpdate("executed", `Edited file: ${filePath} (${result.replacements} replacements)\n---\n${truncatedDiff}`);
+            const truncatedDiff =
+              diffPreview.length > 3000
+                ? diffPreview.slice(0, 3000) + "\n... (truncated)"
+                : diffPreview;
+            onUpdate(
+              "executed",
+              `Edited file: ${filePath} (${result.replacements} replacements)\n---\n${truncatedDiff}`,
+            );
             history.push({
               role: "user",
               content: `(File edited successfully: ${filePath}. Made ${result.replacements} replacements.)`,
@@ -2083,17 +2514,24 @@ ${agentPrompt}
 
       if (action.tool === "execute_command") {
         // Interactive commands MUST use run_in_terminal — sentinel exec can't handle TUI prompts
-        const INTERACTIVE_CMD_RE = /\b(npm\s+create|npx\s+create|npm\s+init|yarn\s+create|pnpm\s+create|bun\s+create|npx\s+degit|npx\s+giget)\b/i;
+        const INTERACTIVE_CMD_RE =
+          /\b(npm\s+create|npx\s+create|npm\s+init|yarn\s+create|pnpm\s+create|bun\s+create|npx\s+degit|npx\s+giget)\b/i;
         if (INTERACTIVE_CMD_RE.test(action.command)) {
           if (usedScaffold) {
             // Project already scaffolded — redirect to write_file, NOT run_in_terminal (which would also block)
-            onUpdate("failed", `Blocked: project already scaffolded — use write_file to implement features`);
+            onUpdate(
+              "failed",
+              `Blocked: project already scaffolded — use write_file to implement features`,
+            );
             history.push({
               role: "user",
               content: `Error: A scaffold command was already run. Do NOT re-run scaffold commands (npm create, npx create, etc.). If the project directory doesn't exist at the expected location (scaffold may have placed it elsewhere), create it manually with mkdir via execute_command, then use write_file to create files.${terminalBusy ? " The dev server is running and will hot-reload your changes automatically." : ""}`,
             });
           } else {
-            onUpdate("failed", `Blocked: interactive command "${action.command.slice(0, 60)}" — use run_in_terminal`);
+            onUpdate(
+              "failed",
+              `Blocked: interactive command "${action.command.slice(0, 60)}" — use run_in_terminal`,
+            );
             history.push({
               role: "user",
               content: `Error: "${action.command}" is an interactive command with prompts/menus. You MUST use run_in_terminal instead of execute_command for scaffold/create commands. Then monitor with read_terminal.`,
@@ -2132,7 +2570,10 @@ ${agentPrompt}
               });
               // Don't continue — let the original command execute
             } else if (consecutiveBusy >= 5) {
-              onUpdate("executed", `(Terminal busy for ${consecutiveBusy} checks — skipping command)`);
+              onUpdate(
+                "executed",
+                `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
+              );
               history.push({
                 role: "user",
                 content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input not detected as a prompt. You MUST either:\n1. Use send_text("\\x03") to Ctrl+C the process\n2. Use send_text to provide input\n3. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
@@ -2140,7 +2581,11 @@ ${agentPrompt}
               continue;
             } else {
               const output = await readTerminal(15);
-              onUpdate("executed", "(Terminal busy — auto-read)\n---\n" + (output || "(no output)"));
+              onUpdate(
+                "executed",
+                "(Terminal busy — auto-read)\n---\n" +
+                  (output || "(no output)"),
+              );
               history.push({
                 role: "user",
                 content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
@@ -2151,7 +2596,10 @@ ${agentPrompt}
             // Dev server is running — warn agent, cap consecutive attempts
             consecutiveBusy++;
             if (consecutiveBusy >= 3 || (usedScaffold && wroteFiles)) {
-              onUpdate("warning", "Dev server is already running — task may be complete");
+              onUpdate(
+                "warning",
+                "Dev server is already running — task may be complete",
+              );
               history.push({
                 role: "user",
                 content: `STOP: The dev server is running and you have ${wroteFiles ? "already written code" : "not written code yet"}. You have tried to run commands ${consecutiveBusy} times while the server is active.\n${wroteFiles ? "The task appears COMPLETE. Use final_answer NOW." : "Do NOT stop the server. Use write_file NOW to implement the user's requested features — the dev server will hot-reload your code automatically."}\nDo NOT attempt more run_in_terminal or execute_command calls — only write_file and final_answer.`,
@@ -2171,9 +2619,10 @@ ${agentPrompt}
             consecutiveBusy = 0;
             terminalBusy = false;
             const finishedOutput = await readTerminal(15);
-            const nudge = usedScaffold && !wroteFiles
-              ? `\nThe scaffold/install is complete. Now use write_file to implement the user's requested features. Do NOT run ls, mkdir, or any scaffold commands.`
-              : "";
+            const nudge =
+              usedScaffold && !wroteFiles
+                ? `\nThe scaffold/install is complete. Now use write_file to implement the user's requested features. Do NOT run ls, mkdir, or any scaffold commands.`
+                : "";
             history.push({
               role: "user",
               content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)${nudge}`,
@@ -2186,15 +2635,28 @@ ${agentPrompt}
 
         // Only block duplicate scaffold commands in execute_command — read-only commands (ls, cat, find) are safe to re-run
         if (isDuplicateScaffold(cmd, executedCommands)) {
-          onUpdate("failed", `Blocked: duplicate scaffold command "${cmd.slice(0, 80)}"`);
-          history.push({ role: "user", content: `Error: You already ran a similar scaffold command. The project may already exist. Check with ls or use write_file to create files manually if the scaffold put files in an unexpected location.` });
+          onUpdate(
+            "failed",
+            `Blocked: duplicate scaffold command "${cmd.slice(0, 80)}"`,
+          );
+          history.push({
+            role: "user",
+            content: `Error: You already ran a similar scaffold command. The project may already exist. Check with ls or use write_file to create files manually if the scaffold put files in an unexpected location.`,
+          });
           consecutiveGuardBlocks++;
           continue;
         }
 
         // After scaffolding, only block mkdir (write_file handles directories)
-        if (usedScaffold && !wroteFiles && /^\s*(mkdir)\b/.test(cmd.replace(/^cd\s+[^\s&;|]+\s*&&\s*/, ""))) {
-          onUpdate("failed", `Blocked: "${cmd.slice(0, 60)}" — use write_file instead`);
+        if (
+          usedScaffold &&
+          !wroteFiles &&
+          /^\s*(mkdir)\b/.test(cmd.replace(/^cd\s+[^\s&;|]+\s*&&\s*/, ""))
+        ) {
+          onUpdate(
+            "failed",
+            `Blocked: "${cmd.slice(0, 60)}" — use write_file instead`,
+          );
           history.push({
             role: "user",
             content: `Error: Do not manually create directories. Use write_file with the full path — it creates parent directories automatically.`,
@@ -2206,9 +2668,19 @@ ${agentPrompt}
         // Block rm -rf on the project directory after code has been written
         if (wroteFiles && lastWriteDir && /\brm\s+(-\w+\s+)*/.test(cmd)) {
           const rmTargetMatch = cmd.match(/\brm\s+(?:-\w+\s+)*([^\s&;|]+)/);
-          if (rmTargetMatch && (rmTargetMatch[1].startsWith(lastWriteDir) || lastWriteDir.startsWith(rmTargetMatch[1]))) {
-            onUpdate("failed", `Blocked: destructive rm on project directory after code written`);
-            history.push({ role: "user", content: `Error: You CANNOT delete the project directory "${lastWriteDir}" — you already wrote code there. Use write_file to modify files instead.` });
+          if (
+            rmTargetMatch &&
+            (rmTargetMatch[1].startsWith(lastWriteDir) ||
+              lastWriteDir.startsWith(rmTargetMatch[1]))
+          ) {
+            onUpdate(
+              "failed",
+              `Blocked: destructive rm on project directory after code written`,
+            );
+            history.push({
+              role: "user",
+              content: `Error: You CANNOT delete the project directory "${lastWriteDir}" — you already wrote code there. Use write_file to modify files instead.`,
+            });
             consecutiveGuardBlocks++;
             continue;
           }
@@ -2229,7 +2701,10 @@ ${agentPrompt}
           const mkdirMatch = cmd.match(/\bmkdir\s+(?:-p\s+)?([^\s&;|]+)/);
           if (mkdirMatch) lastWriteDir = mkdirMatch[1];
           onUpdate("executed", cmd + "\n---\n" + output);
-          history.push({ role: "user", content: `Command Output: \n${output} ` });
+          history.push({
+            role: "user",
+            content: `Command Output: \n${output} `,
+          });
         } catch (err: any) {
           const isDeny = err.message === "User denied command execution.";
           onUpdate("failed", cmd + "\n---\n" + err.message);
@@ -2258,7 +2733,11 @@ ${agentPrompt}
       if (madeProgress) {
         commandsSucceeded++;
         lastProgressStep = i;
-      } else if (lastStep.startsWith("Command Failed") || lastStep.startsWith("Edit File Failed") || lastStep.startsWith("Write File Failed")) {
+      } else if (
+        lastStep.startsWith("Command Failed") ||
+        lastStep.startsWith("Edit File Failed") ||
+        lastStep.startsWith("Write File Failed")
+      ) {
         commandsFailed++;
       }
 
@@ -2286,8 +2765,17 @@ ${agentPrompt}
             msg.content = `Command Output (compressed): ${lines.slice(0, 3).join("\n")}\n...(${lines.length - 4} lines omitted)...\n${lines.slice(-2).join("\n")}`;
           }
           // Compress large file reads
-          if (c.length > 2000 && !c.startsWith("CRITICAL") && !c.startsWith("LOOP") && !c.startsWith("REFLECTION") && !c.startsWith("BLOCKED")) {
-            msg.content = c.slice(0, 800) + `\n...(${c.length - 1000} chars compressed)...\n` + c.slice(-200);
+          if (
+            c.length > 2000 &&
+            !c.startsWith("CRITICAL") &&
+            !c.startsWith("LOOP") &&
+            !c.startsWith("REFLECTION") &&
+            !c.startsWith("BLOCKED")
+          ) {
+            msg.content =
+              c.slice(0, 800) +
+              `\n...(${c.length - 1000} chars compressed)...\n` +
+              c.slice(-200);
           }
         }
       }

@@ -83,6 +83,16 @@ button:disabled {
   }
 }
 
+/* GPU-accelerated dropdown/suggestion animations (avoids framer-motion main-thread cost) */
+@keyframes dropdown-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-dropdown-in {
+  animation: dropdown-in 0.12s ease-out both;
+  will-change: transform, opacity;
+}
+
 /* Markdown content styles for agent thinking panel */
 .markdown-content p {
   margin: 0.25em 0;
