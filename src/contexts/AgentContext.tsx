@@ -197,8 +197,11 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
   const updateAgentState = useCallback(
     (sessionId: string, updates: Partial<AgentState>) => {
       setAgentStates((prev) => {
+        const current = prev.get(sessionId) || defaultState;
+        // Bail early if no values actually changed — React skips re-render
+        const keys = Object.keys(updates) as (keyof AgentState)[];
+        if (keys.every((k) => current[k] === updates[k])) return prev;
         const next = new Map(prev);
-        const current = next.get(sessionId) || defaultState;
         next.set(sessionId, { ...current, ...updates });
         return next;
       });
@@ -213,12 +216,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
       threadOrUpdater: AgentStep[] | ((prev: AgentStep[]) => AgentStep[]),
     ) => {
       setAgentStates((prev) => {
-        const next = new Map(prev);
-        const current = next.get(sessionId) || defaultState;
+        const current = prev.get(sessionId) || defaultState;
         const newThread =
           typeof threadOrUpdater === "function"
             ? threadOrUpdater(current.agentThread)
             : threadOrUpdater;
+        // Bail early if updater returned same reference — React skips re-render
+        if (newThread === current.agentThread) return prev;
+        const next = new Map(prev);
         next.set(sessionId, { ...current, agentThread: newThread });
         return next;
       });

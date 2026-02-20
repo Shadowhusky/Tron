@@ -101,6 +101,22 @@ const SmartInput: React.FC<SmartInputProps> = ({
     };
   }, [activeSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Listen for queue item edit requests (click-to-edit from TerminalPane queue)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId) {
+        setValue(detail.text || "");
+        if (detail.type === "agent") setMode("agent");
+        else setMode("command");
+        setIsAuto(false);
+        setTimeout(() => inputRef.current?.focus(), 50);
+      }
+    };
+    window.addEventListener("tron:editQueueItem", handler);
+    return () => window.removeEventListener("tron:editQueueItem", handler);
+  }, [sessionId]);
+
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedCommand, setSuggestedCommand] = useState<string | null>(null);
   const [ghostText, setGhostText] = useState("");

@@ -514,6 +514,9 @@ function registerTerminalHandlers(getMainWindow) {
             let output = "";
             let resolved = false;
             let stallTimer = null;
+            // Clear any text the user may have typed in the terminal before injecting the command.
+            // Ctrl+U clears the current line in bash/zsh without killing a running process.
+            session.write("\x15");
             // Stall detection: if no new PTY output for 3s, assume process is
             // waiting for input. Return early so agent can interact via send_text.
             // Do NOT kill the process — mark session as occupied instead.

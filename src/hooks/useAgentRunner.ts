@@ -50,6 +50,54 @@ export function useAgentRunner(
   // Track whether tab title has been generated (only once per session)
   const titleGeneratedRef = useRef(false);
 
+  // Streaming throttle — buffers token-level setAgentThread calls (max ~10/sec)
+  const streamBufferRef = useRef<{
+    output: string | null;
+    step: string | null;
+    timer: ReturnType<typeof setTimeout> | null;
+    lastFlush: number;
+  }>({ output: null, step: null, timer: null, lastFlush: 0 });
+
+  const flushStreamBuffer = () => {
+    const buf = streamBufferRef.current;
+    if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
+    if (buf.output == null) return;
+    const output = buf.output;
+    const stepType = buf.step;
+    buf.output = null;
+    buf.step = null;
+    buf.lastFlush = Date.now();
+
+    if (stepType === "streaming_thinking") {
+      setAgentThread((prev) => {
+        const lastIdx = prev.length - 1;
+        if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
+          const updated = [...prev];
+          updated[lastIdx] = { step: "thinking", output };
+          return updated;
+        }
+        return [...prev, { step: "thinking", output }];
+      });
+    } else {
+      setAgentThread((prev) => {
+        const lastIdx = prev.length - 1;
+        if (lastIdx >= 0 && prev[lastIdx].step === "streaming") {
+          const updated = [...prev];
+          updated[lastIdx] = { step: "streaming", output };
+          return updated;
+        }
+        return [...prev, { step: "streaming", output }];
+      });
+    }
+  };
+
+  const clearStreamBuffer = () => {
+    const buf = streamBufferRef.current;
+    if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
+    buf.output = null;
+    buf.step = null;
+  };
+
   // Fetch capabilities when session config model changes
   useEffect(() => {
     const model = session?.aiConfig?.model || aiService.getConfig().model;
@@ -299,20 +347,23 @@ export function useAgentRunner(
           images,
           (token) => {
             accumulated += token;
-            setAgentThread((prev) => {
-              const lastIdx = prev.length - 1;
-              if (lastIdx >= 0 && prev[lastIdx].step === "streaming") {
-                const updated = [...prev];
-                updated[lastIdx] = { step: "streaming", output: accumulated };
-                return updated;
-              }
-              return [...prev, { step: "streaming", output: accumulated }];
-            });
+            // Throttle: buffer streaming updates instead of calling setAgentThread per token
+            const buf = streamBufferRef.current;
+            buf.output = accumulated;
+            buf.step = "streaming_response";
+            const now = Date.now();
+            const elapsed = now - buf.lastFlush;
+            if (elapsed >= 100) {
+              flushStreamBuffer();
+            } else if (!buf.timer) {
+              buf.timer = setTimeout(flushStreamBuffer, 100 - elapsed);
+            }
           },
           session?.aiConfig,
           controller.signal,
           conversationHistory,
         );
+        flushStreamBuffer(); // Flush remaining buffer before finalizing
         const finalText = result || accumulated || "Could not analyze the image.";
         setAgentThread((prev) => {
           const updated = [...prev];
@@ -586,19 +637,35 @@ Task: ${prompt}
           }
         },
         (step, output) => {
-          if (step === "streaming_thinking") {
-            // Update or append an in-progress thinking entry
-            setAgentThread((prev) => {
-              const lastIdx = prev.length - 1;
-              if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
-                const updated = [...prev];
-                updated[lastIdx] = { step: "thinking", output };
-                return updated;
-              }
-              return [...prev, { step: "thinking", output }];
-            });
-            setIsThinking(true);
-          } else if (step === "thinking_complete") {
+          const THROTTLE_MS = 100; // Max ~10 updates/sec for streaming
+
+          // Streaming steps: buffer and throttle to reduce re-renders
+          if (step === "streaming_thinking" || step === "streaming_response") {
+            const buf = streamBufferRef.current;
+            buf.output = output;
+            buf.step = step;
+
+            const now = Date.now();
+            const elapsed = now - buf.lastFlush;
+            if (elapsed >= THROTTLE_MS) {
+              flushStreamBuffer();
+            } else if (!buf.timer) {
+              buf.timer = setTimeout(flushStreamBuffer, THROTTLE_MS - elapsed);
+            }
+
+            // isThinking transitions (bail-early in AgentContext deduplicates)
+            if (step === "streaming_thinking") {
+              setIsThinking(true);
+            } else {
+              setIsThinking(false);
+            }
+            return;
+          }
+
+          // Non-streaming step: flush any pending buffer first
+          flushStreamBuffer();
+
+          if (step === "thinking_complete") {
             // Replace the last thinking entry with finalized thought (search backwards)
             setAgentThread((prev) => {
               const updated = [...prev];
@@ -613,18 +680,6 @@ Task: ${prompt}
             setIsThinking(false);
           } else if (step === "thinking_done") {
             // No thinking content produced — just clear thinking state
-            setIsThinking(false);
-          } else if (step === "streaming_response") {
-            // Update or append an in-progress response entry
-            setAgentThread((prev) => {
-              const lastIdx = prev.length - 1;
-              if (lastIdx >= 0 && prev[lastIdx].step === "streaming") {
-                const updated = [...prev];
-                updated[lastIdx] = { step: "streaming", output };
-                return updated;
-              }
-              return [...prev, { step: "streaming", output }];
-            });
             setIsThinking(false);
           } else if (step === "thinking") {
             // Always show thinking indicator — even for non-thinking models
@@ -674,6 +729,9 @@ Task: ${prompt}
         images,
       );
 
+      // Flush any remaining streaming buffer before processing final answer
+      flushStreamBuffer();
+
       // Save continuation for question follow-ups
       if (finalAnswer.continuation) {
         continuationRef.current = finalAnswer.continuation;
@@ -722,6 +780,8 @@ Task: ${prompt}
 
       // Tab title already generated at start of first run (titleGeneratedRef)
     } catch (error: any) {
+      // Clear streaming buffer (don't flush stale data on error/abort)
+      clearStreamBuffer();
       const isAbort =
         error.name === "AbortError" ||
         error.message?.toLowerCase().includes("abort");
