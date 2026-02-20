@@ -3,6 +3,7 @@ import { Reorder, AnimatePresence, motion } from "framer-motion";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
+import { isWindows } from "../../utils/platform";
 
 interface TabBarProps {
   tabs: Tab[];
@@ -65,8 +66,8 @@ const TabBar: React.FC<TabBarProps> = ({
       )}`}
       style={{ WebkitAppRegion: "drag" } as any}
     >
-      {/* Traffic Lights Spacer (Mac) */}
-      <div className="w-16" />
+      {/* Traffic Lights Spacer (Mac only) */}
+      {!isWindows() && <div className="w-16" />}
 
       {/* Tabs */}
       <Reorder.Group
@@ -224,6 +225,9 @@ const TabBar: React.FC<TabBarProps> = ({
           />
         </svg>
       </button>
+
+      {/* Windows title bar overlay spacer (min/max/close buttons are on the right) */}
+      {isWindows() && <div className="w-36 shrink-0" />}
     </div>
   );
 };

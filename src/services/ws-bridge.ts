@@ -157,6 +157,8 @@ export function initWebSocketBridge() {
         invoke("terminal.exec", { sessionId, command }),
       testAIConnection: (config: { provider: string; model: string; apiKey?: string; baseUrl?: string }) =>
         invoke("ai.testConnection", config),
+      getSystemInfo: () =>
+        invoke("terminal.getSystemInfo") as Promise<{ platform: string; arch: string; shell: string; release: string }>,
     },
   };
 }

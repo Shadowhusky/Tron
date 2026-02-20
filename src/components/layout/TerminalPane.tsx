@@ -44,6 +44,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     handleCommandInOverlay,
     handleAgentRun,
     handlePermission,
+    awaitingAnswer,
   } = useAgentRunner(sessionId, session);
 
   const { stopAgent: stopAgentRaw, resetSession, overlayHeight, setOverlayHeight, draftInput, setDraftInput, setAgentThread } = useAgent(sessionId);
@@ -517,6 +518,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           thinkingEnabled={thinkingEnabled}
           setThinkingEnabled={stableSetThinkingEnabled}
           activeSessionId={activeSessionId}
+          awaitingAnswer={awaitingAnswer}
         />
       </div>
       <div className="relative z-30">

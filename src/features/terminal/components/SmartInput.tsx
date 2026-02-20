@@ -28,8 +28,17 @@ interface SmartInputProps {
   isAgentRunning: boolean;
   pendingCommand: string | null;
   sessionId?: string;
-  modelCapabilities?: string[];
+  modelCapabilities?: string[] | null;
   defaultAgentMode?: boolean;
+  onSlashCommand?: (command: string) => void | Promise<void>;
+  draftInput?: string;
+  onDraftChange?: (draft: string | undefined) => void;
+  sessionAIConfig?: any;
+  stopAgent?: () => void;
+  thinkingEnabled?: boolean;
+  setThinkingEnabled?: (v: boolean) => void;
+  activeSessionId?: string | null;
+  awaitingAnswer?: boolean;
 }
 
 const SmartInput: React.FC<SmartInputProps> = ({
@@ -40,18 +49,42 @@ const SmartInput: React.FC<SmartInputProps> = ({
   sessionId,
   modelCapabilities = [],
   defaultAgentMode = false,
+  onSlashCommand,
+  draftInput,
+  onDraftChange,
+  stopAgent: stopAgentProp,
+  thinkingEnabled: thinkingEnabledProp,
+  setThinkingEnabled: setThinkingEnabledProp,
+  activeSessionId: activeSessionIdProp,
+  awaitingAnswer = false,
 }) => {
   const { resolvedTheme: theme } = useTheme();
-  const { activeSessionId } = useLayout();
-  const { stopAgent, thinkingEnabled, setThinkingEnabled } = useAgent(
-    activeSessionId || "",
-  );
+  const { activeSessionId: layoutActiveSessionId } = useLayout();
+  const activeSessionId = activeSessionIdProp ?? layoutActiveSessionId;
+  const {
+    stopAgent: stopAgentCtx,
+    thinkingEnabled: thinkingEnabledCtx,
+    setThinkingEnabled: setThinkingEnabledCtx,
+  } = useAgent(activeSessionId || "");
+  const stopAgent = stopAgentProp ?? stopAgentCtx;
+  const thinkingEnabled = thinkingEnabledProp ?? thinkingEnabledCtx;
+  const setThinkingEnabled = setThinkingEnabledProp ?? setThinkingEnabledCtx;
   const { hotkeys } = useConfig();
 
   const { history, addToHistory } = useHistory();
   const [reactValue, setReactValue] = useState("");
   const [, startTransition] = useTransition();
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Initialize from draft input (persisted across tab switches)
+  const draftApplied = useRef(false);
+  useEffect(() => {
+    if (draftInput && !draftApplied.current) {
+      draftApplied.current = true;
+      setReactValue(draftInput);
+      if (inputRef.current) inputRef.current.value = draftInput;
+    }
+  }, [draftInput]);
 
   const value = reactValue;
   const setValue = useCallback(
@@ -727,6 +760,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
       const finalVal = value.trim();
       if (finalVal === "") return;
 
+      // Intercept slash commands (e.g. /log) before mode routing
+      if (finalVal.startsWith("/") && onSlashCommand) {
+        onSlashCommand(finalVal);
+        setValue("");
+        setGhostText("");
+        setCompletions([]);
+        setShowCompletions(false);
+        setHistoryIndex(-1);
+        return;
+      }
+
       if (suggestedCommand) {
         const cmd = suggestedCommand;
         setSuggestedCommand(null);
@@ -740,13 +784,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
       }
 
       // Execute based on active mode
-      if (mode === "command") {
+      // When awaiting an agent answer (continuation), force agent mode regardless of classifier
+      if (awaitingAnswer || mode === "agent") {
+        setFeedbackMsg("Agent Started");
+        onRunAgent(finalVal);
+      } else if (mode === "command") {
         setFeedbackMsg("");
         trackCommand(finalVal);
         onSend(finalVal);
-      } else if (mode === "agent") {
-        setFeedbackMsg("Agent Started");
-        onRunAgent(finalVal);
       } else if (mode === "advice") {
         setIsLoading(true);
         setFeedbackMsg("Asking AI...");
@@ -969,6 +1014,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   setSuggestedCommand(null);
                   navigatedCompletionsRef.current = false;
                   if (val.trim() !== "") setAiPlaceholder("");
+                  onDraftChange?.(val || undefined);
                 });
               }}
               onKeyDown={handleKeyDown}
@@ -1038,7 +1084,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
             <span className="animate-in fade-in opacity-70">{feedbackMsg}</span>
           )}
           {mode === "agent" &&
-            (modelCapabilities.length === 0 ||
+            (!modelCapabilities || modelCapabilities.length === 0 ||
               modelCapabilities.includes("thinking")) && (
               <button
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}

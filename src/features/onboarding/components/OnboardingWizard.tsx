@@ -88,8 +88,8 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const handleTestConnection = async () => {
     setConnectionStatus("testing");
     try {
-      const success =
-        await window.electron.ipcRenderer.testAIConnection(aiConfig);
+      const result = await window.electron.ipcRenderer.testAIConnection(aiConfig);
+      const success = typeof result === "boolean" ? result : result?.success;
       setConnectionStatus(success ? "success" : "error");
     } catch (e) {
       setConnectionStatus("error");

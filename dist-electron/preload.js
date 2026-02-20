@@ -14,6 +14,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "terminal.getHistory",
     "terminal.readHistory",
     "terminal.scanCommands",
+    "terminal.getSystemInfo",
     "ai.testConnection",
     "system.selectFolder",
     "config.read",
@@ -94,6 +95,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         readSessions: () => electron_1.ipcRenderer.invoke("sessions.read"),
         writeSessions: (data) => electron_1.ipcRenderer.invoke("sessions.write", data),
         getSystemPaths: () => electron_1.ipcRenderer.invoke("config.getSystemPaths"),
+        getSystemInfo: () => electron_1.ipcRenderer.invoke("terminal.getSystemInfo"),
         // System
         testAIConnection: (config) => electron_1.ipcRenderer.invoke("ai.testConnection", config),
         selectFolder: (defaultPath) => electron_1.ipcRenderer.invoke("system.selectFolder", defaultPath),

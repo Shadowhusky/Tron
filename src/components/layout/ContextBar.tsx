@@ -286,10 +286,10 @@ const ContextBar: React.FC<ContextBarProps> = ({
             const selected =
               await window.electron.ipcRenderer.selectFolder(cwd);
             if (selected && sessionId) {
-              // cd into the selected directory via the PTY
+              // Clear current input line (Ctrl+U) then cd into the selected directory
               window.electron.ipcRenderer.send("terminal.write", {
                 id: sessionId,
-                data: `cd ${JSON.stringify(selected)}\r`,
+                data: `\x15cd ${JSON.stringify(selected)}\r`,
               });
             }
           }}

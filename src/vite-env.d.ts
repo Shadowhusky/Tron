@@ -26,7 +26,13 @@ interface Window {
         model: string;
         apiKey?: string;
         baseUrl?: string;
-      }) => Promise<boolean>;
+      }) => Promise<{ success: boolean; error?: string } | boolean>;
+      getSystemInfo: () => Promise<{
+        platform: string;
+        arch: string;
+        shell: string;
+        release: string;
+      }>;
       selectFolder: (defaultPath?: string) => Promise<string | null>;
       readConfig: () => Promise<Record<string, unknown> | null>;
       writeConfig: (data: Record<string, unknown>) => Promise<boolean>;

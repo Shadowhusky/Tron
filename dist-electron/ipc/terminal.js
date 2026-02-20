@@ -363,6 +363,17 @@ function registerTerminalHandlers(getMainWindow) {
             return null;
         return getCwdForPid(session.pid);
     });
+    // Get system info (OS, shell, arch) for agent environment context
+    electron_1.ipcMain.handle("terminal.getSystemInfo", async () => {
+        const { shell } = detectShell();
+        const shellName = path_1.default.basename(shell).replace(/\.exe$/i, "");
+        return {
+            platform: os_1.default.platform(),
+            arch: os_1.default.arch(),
+            shell: shellName,
+            release: os_1.default.release(),
+        };
+    });
     electron_1.ipcMain.handle("terminal.getCompletions", async (_event, { prefix, cwd, sessionId, }) => {
         // Resolve CWD from session if available
         let workDir = cwd || os_1.default.homedir() || "/";
@@ -618,27 +629,33 @@ function registerTerminalHandlers(getMainWindow) {
     // Save a session log to disk for debugging / sharing
     electron_1.ipcMain.handle("log.saveSessionLog", async (_event, { sessionId, session: sessionMeta, interactions, agentThread, contextSummary, }) => {
         try {
-            // Read and clean terminal history
-            const rawHistory = sessionHistory.get(sessionId) || "";
-            // eslint-disable-next-line no-control-regex
-            let terminalOutput = rawHistory.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
-            terminalOutput = terminalOutput.replace(/[^\n]*\r(?!\n)/g, "");
-            terminalOutput = terminalOutput.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-            terminalOutput = terminalOutput.replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "");
-            terminalOutput = terminalOutput.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-            terminalOutput = terminalOutput.replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-            terminalOutput = terminalOutput.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
-            // eslint-disable-next-line no-control-regex
-            terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
             // Filter transient steps from agentThread
             const transientSteps = new Set(["streaming", "thinking", "executing"]);
             const cleanedThread = agentThread.filter((s) => !transientSteps.has(s.step));
-            // Strip base64 image data from separator outputs
-            const sanitizedThread = cleanedThread.map((s) => {
+            // Restructure each step into a structured log entry
+            const structuredThread = cleanedThread.map((s) => {
+                // Strip base64 image data from separator outputs
                 if (s.step === "separator" && s.output.includes("\n---images---\n")) {
-                    return { ...s, output: s.output.slice(0, s.output.indexOf("\n---images---\n")) + "\n(images attached)" };
+                    return { step: s.step, prompt: s.output.slice(0, s.output.indexOf("\n---images---\n")), note: "(images attached)" };
                 }
-                return s;
+                if (s.step === "separator") {
+                    return { step: s.step, prompt: s.output };
+                }
+                // Split executed/failed steps on "\n---\n" into command + terminal output
+                if ((s.step === "executed" || s.step === "failed") && s.output.includes("\n---\n")) {
+                    const idx = s.output.indexOf("\n---\n");
+                    const command = s.output.slice(0, idx);
+                    let terminalOutput = s.output.slice(idx + 5);
+                    // Clean ANSI codes and sentinels from terminal output
+                    // eslint-disable-next-line no-control-regex
+                    terminalOutput = terminalOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+                    terminalOutput = terminalOutput.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+                    // eslint-disable-next-line no-control-regex
+                    terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+                    return { step: s.step, command, terminalOutput };
+                }
+                // For done/question/thought/system/error/warning — keep as-is with a content field
+                return { step: s.step, content: s.output };
             });
             // Generate log ID and paths
             const logId = (0, crypto_1.randomBytes)(5).toString("hex");
@@ -649,12 +666,11 @@ function registerTerminalHandlers(getMainWindow) {
             const filePath = path_1.default.join(logsDir, `${logId}.json`);
             const logData = {
                 logId,
-                version: 1,
+                version: 2,
                 generatedAt: new Date().toISOString(),
                 session: sessionMeta,
                 interactions,
-                agentThread: sanitizedThread,
-                terminalOutput,
+                agentThread: structuredThread,
                 contextSummary: contextSummary || undefined,
             };
             fs_1.default.writeFileSync(filePath, JSON.stringify(logData, null, 2), "utf-8");

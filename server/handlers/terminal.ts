@@ -1,6 +1,7 @@
 import * as pty from "node-pty";
 import os from "os";
 import fs from "fs";
+import path from "path";
 import { randomUUID } from "crypto";
 import { exec, ChildProcess } from "child_process";
 
@@ -31,7 +32,7 @@ function detectShell(): { shell: string; args: string[] } {
         const isZsh = candidate.endsWith("/zsh");
         return { shell: candidate, args: isZsh ? ["+o", "PROMPT_SP"] : [] };
       }
-    } catch {}
+    } catch { }
   }
   return { shell: "/bin/sh", args: [] };
 }
@@ -112,12 +113,12 @@ export function cleanupClientSessions(clientId: string) {
 /** Kill all tracked child processes and PTY sessions. */
 export function cleanupAllServerSessions() {
   for (const child of activeChildProcesses) {
-    try { child.kill(); } catch {}
+    try { child.kill(); } catch { }
   }
   activeChildProcesses.clear();
 
   for (const [, session] of sessions) {
-    try { session.kill(); } catch {}
+    try { session.kill(); } catch { }
   }
   sessions.clear();
   sessionHistory.clear();
@@ -135,7 +136,7 @@ export function createSession(
 ): string {
   if (reconnectId && sessions.has(reconnectId)) {
     const existing = sessions.get(reconnectId)!;
-    try { existing.resize(cols || 80, rows || 30); } catch {}
+    try { existing.resize(cols || 80, rows || 30); } catch { }
     sessionOwners.set(reconnectId, clientId);
     return reconnectId;
   }
@@ -274,18 +275,22 @@ export async function getCompletions({ prefix, cwd, sessionId }: { prefix: strin
 
     if (parts.length <= 1) {
       const word = parts[0] || "";
+      const safeWinWord = word.replace(/'/g, "''");
+      const safeUnixWord = word.replace(/"/g, '\\"');
       const cmd = isWin
-        ? `powershell -NoProfile -Command "Get-Command '${word}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
-        : `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`;
+        ? `powershell -NoProfile -Command "Get-Command '${safeWinWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+        : `bash -c 'compgen -abck "${safeUnixWord}" 2>/dev/null | sort -u | head -30'`;
       const { stdout } = await trackedExec(cmd, { cwd: workDir });
       const results = stdout.trim().split("\n").filter(Boolean);
       return [...new Set(results)].sort((a, b) => a.length - b.length).slice(0, 15);
     }
 
     const lastWord = parts[parts.length - 1];
+    const safeWinLastWord = lastWord.replace(/'/g, "''");
+    const safeUnixLastWord = lastWord.replace(/"/g, '\\"');
     const cmd = isWin
-      ? `powershell -NoProfile -Command "Get-ChildItem '${lastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
-      : `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`;
+      ? `powershell -NoProfile -Command "Get-ChildItem '${safeWinLastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+      : `bash -c 'compgen -df "${safeUnixLastWord}" 2>/dev/null | head -30'`;
     const { stdout } = await trackedExec(cmd, { cwd: workDir });
     const results = stdout.trim().split("\n").filter(Boolean);
     return [...new Set(results)].sort((a, b) => a.length - b.length).slice(0, 15);
@@ -296,4 +301,15 @@ export async function getCompletions({ prefix, cwd, sessionId }: { prefix: strin
 
 export function getHistory(sessionId: string): string {
   return sessionHistory.get(sessionId) || "";
+}
+
+export function getSystemInfo(): { platform: string; arch: string; shell: string; release: string } {
+  const { shell } = detectShell();
+  const shellName = path.basename(shell).replace(/\.exe$/i, "");
+  return {
+    platform: os.platform(),
+    arch: os.arch(),
+    shell: shellName,
+    release: os.release(),
+  };
 }

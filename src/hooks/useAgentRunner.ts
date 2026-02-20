@@ -428,16 +428,23 @@ export function useAgentRunner(
       let projectFiles = "";
 
       if (window.electron) {
+        // Detect platform for cross-platform file listing command
+        const isWin = navigator.platform?.startsWith("Win") ?? false;
+        const listCommand = isWin
+          ? 'Get-ChildItem -Recurse -Depth 2 -Name -Exclude node_modules,.git,dist,.next,__pycache__,venv,.venv,build | Select-Object -First 100'
+          : "find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/build/*' 2>/dev/null | head -100";
+
         // Run fetches in parallel for speed
-        const [rawHistory, fetchedCwd, paths, dirListing] = await Promise.all([
+        const [rawHistory, fetchedCwd, paths, dirListing, sysInfo] = await Promise.all([
           window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_HISTORY, sessionId),
           window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_CWD, sessionId),
           window.electron.ipcRenderer.invoke(IPC.CONFIG_GET_SYSTEM_PATHS).catch(() => null),
           // Get project file listing so the agent knows what already exists
           window.electron.ipcRenderer.invoke(IPC.TERMINAL_EXEC, {
             sessionId,
-            command: "find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/build/*' 2>/dev/null | head -100",
+            command: listCommand,
           }).catch(() => null),
+          window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_SYSTEM_INFO).catch(() => null),
         ]);
 
         sessionHistory = cleanContextForAI(rawHistory);
@@ -456,6 +463,13 @@ System Paths:
 - Downloads: ${paths.downloads}
 - Temp: ${paths.temp}
 `;
+        }
+
+        if (sysInfo) {
+          const platformNames: Record<string, string> = {
+            darwin: "macOS", win32: "Windows", linux: "Linux",
+          };
+          systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}\n`;
         }
       }
 
@@ -828,6 +842,8 @@ Task: ${prompt}
     setAlwaysAllowSession,
     thinkingEnabled,
     setThinkingEnabled,
+    // True when agent returned ask_question and is waiting for user's answer
+    awaitingAnswer: !!continuationRef.current,
     // Model info
     modelCapabilities,
     // Actions
