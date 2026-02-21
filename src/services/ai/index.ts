@@ -364,8 +364,34 @@ class AIService {
       }
     }
 
-    // Other providers don't support capability introspection
-    return [];
+    // Cloud providers: infer capabilities from known model names
+    const modelLower = (modelName || "").toLowerCase();
+
+    // Models that support reasoning/thinking via reasoning_content or extended_thinking
+    const thinkingModels = [
+      /\bdeepseek-reasoner\b/,   // DeepSeek R1
+      /\bkimi-k2/,               // Kimi K2 series
+      /\bqwq\b/,                 // Qwen QwQ reasoning
+      /\bqwen.*think/,           // Qwen thinking variants
+      /\bglm.*reason/,           // GLM reasoning
+    ];
+    const caps: string[] = [];
+    if (thinkingModels.some((p) => p.test(modelLower))) {
+      caps.push("thinking");
+    }
+
+    // Vision-capable cloud models
+    const visionModels = [
+      /\bgpt-4o\b/, /\bgpt-5/, /\bgpt-4\.1/,  // OpenAI vision models
+      /\bclaude-(opus|sonnet|haiku)-4/, /\bclaude-sonnet-4/, /\bclaude-opus-4/,  // Anthropic vision
+      /\bgemini/,                               // Gemini all support vision
+      /\bkimi-k2/,                              // Kimi K2 vision
+    ];
+    if (visionModels.some((p) => p.test(modelLower))) {
+      caps.push("vision");
+    }
+
+    return caps;
   }
 
   async getModels(
@@ -901,10 +927,16 @@ class AIService {
   async generateCommand(
     prompt: string,
     onToken?: (token: string) => void,
+    context?: { cwd?: string; terminalHistory?: string },
   ): Promise<string> {
     const { provider, model, apiKey, baseUrl } = this.config;
 
-    const systemPrompt = `Terminal assistant. OS: ${navigator.platform}.
+    const contextLines = [
+      context?.cwd ? `CWD: ${context.cwd}` : "",
+      context?.terminalHistory ? `Recent terminal output:\n${context.terminalHistory}` : "",
+    ].filter(Boolean).join("\n");
+
+    const systemPrompt = `Terminal assistant. OS: ${navigator.platform}.${contextLines ? `\n${contextLines}` : ""}
 Reply ONLY in this format, nothing else:
 COMMAND: <raw command, no backticks>
 TEXT: <one short sentence>
@@ -1244,7 +1276,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         headers: this.anthropicHeaders(apiKey),
         body: JSON.stringify({
           model,
-          max_tokens: 4096,
+          max_tokens: 16384,
           system: systemPrompt,
           messages: [
             ...anthropicHistory,
@@ -1375,13 +1407,15 @@ TOOLS:
 6. {"tool":"final_answer","content":"..."} — Task complete. 1-3 lines.
 7. {"tool":"write_file","path":"/absolute/path","content":"..."} — Create a NEW file or fully replace a small file. Do NOT use for modifying existing files — use edit_file instead.
 8. {"tool":"read_file","path":"/absolute/path"} — Read a file's content directly. Use INSTEAD of cat through execute_command for reading files.
-9. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — PREFERRED for modifying existing files. Exact string search-and-replace. Use this for any change to an existing file — even multiple edits are better than rewriting the whole file.
+9. {"tool":"list_dir","path":"/absolute/path"} — List contents of a directory safely. Use INSTEAD of ls or dir.
+10. {"tool":"search_dir","path":"/absolute/path","query":"..."} — Search for text inside a directory recursively. High performance, preferred over grep.
+11. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — PREFERRED for modifying existing files. Exact string search-and-replace. Use this for any change to an existing file — even multiple edits are better than rewriting the whole file.
 
 RULES:
 1. Execute commands directly. Do not explain what you would do.
 2. On failure, read error, fix root cause.
 3. If user denies permission, STOP.
-4. FILE OPERATIONS: Use read_file to read, edit_file to modify existing files, write_file ONLY for new files. NEVER rewrite an entire existing file with write_file when you only need to change part of it — use edit_file instead (multiple edit_file calls if needed). Do NOT use cat, heredoc, or printf through the terminal.
+4. FILE OPERATIONS: Use read_file to read, list_dir to explore, search_dir to find text, edit_file to modify existing files, write_file ONLY for new files. NEVER rewrite an entire existing file with write_file when you only need to change part of it — use edit_file instead (multiple edit_file calls if needed). Do NOT use cat, heredoc, grep, ls, or printf through the terminal.
 5. After interactive command: read_terminal → if menu, send_text → read_terminal again. Loop until done.
 6. START DEV SERVER ONLY AS THE VERY LAST STEP. Do not start it until all files are written, dependencies installed, and configuration is complete. Once started, the terminal is blocked.
 7. SCAFFOLDING: If the target directory might exist, run "rm -rf <dir>" FIRST. Do NOT run "mkdir" before scaffolding tools (npm create, git clone) — let them create the directory. This avoids "Directory not empty" prompts. Use non-interactive flags (e.g. --yes) where possible.
@@ -1389,6 +1423,7 @@ RULES:
 9. PROBLEM SOLVING: If a command fails or results are unexpected, do NOT just give up or retry blindly. ANALYZE the error message to find the root cause (missing file, permission denied, wrong path, dependency needed). PROACTIVELY FIX the issue (create the missing file, chmod, npm install, correct the path) and then retry. You have permission to fix environment issues to achieve the goal.
 10. CONTEXT AWARENESS: The [PROJECT FILES] section shows existing files. Do NOT recreate files that already exist — use read_file or edit_file to modify them. Do NOT scaffold a new project if one already exists. Always check the project structure before creating files.
 11. IMAGES: If the user mentions images or screenshots, they were already analyzed in a prior step. Use the description provided — do NOT try to access image files with read_file, execute_command, or ls.
+12. TAB TITLE: If this is your FIRST response to a new task, you MUST include a "_tab_title": "short 2-5 word title" property at the root of your JSON response. This will automatically set the terminal tab name. If the user's task is unclear or you are asking for clarification, do NOT include this property.
 ${agentPrompt}
 `,
         },
@@ -1535,7 +1570,7 @@ ${agentPrompt}
             headers: this.anthropicHeaders(apiKey),
             body: JSON.stringify({
               model,
-              max_tokens: 4096,
+              max_tokens: 16384,
               system: history[0].content,
               messages: history.slice(1),
               stream: true,
@@ -1614,10 +1649,15 @@ ${agentPrompt}
           throw new Error("Agent aborted by user.");
         }
         const label = CLOUD_PROVIDERS[provider]?.label || provider;
-        onUpdate("error", `${label} server error: ${e.message} `);
+        // "Failed to fetch" = CORS/network failure; give a more helpful message
+        const isFetchError = e.message === "Failed to fetch" || e instanceof TypeError;
+        const detail = isFetchError
+          ? "Network error — could not reach the API. Check your internet connection and API key."
+          : e.message;
+        onUpdate("error", `${label} error: ${detail} `);
         return {
           success: false,
-          message: `${label} server returned an error: ${e.message}. Check that the server is running and your configuration is correct.`,
+          message: `${label}: ${detail}`,
         };
       }
 
@@ -1627,27 +1667,53 @@ ${agentPrompt}
       const fixJsonEscapes = (raw: string): string =>
         raw.replace(/\\x([0-9a-fA-F]{2})/g, "\\u00$1");
 
+      /** Escape bare newlines/tabs inside JSON string values (not structural whitespace). */
+      const escapeNewlinesInStrings = (text: string): string => {
+        let result = "";
+        let inStr = false;
+        let esc = false;
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i];
+          if (esc) { result += ch; esc = false; continue; }
+          if (ch === "\\") { result += ch; esc = true; continue; }
+          if (ch === '"') { inStr = !inStr; result += ch; continue; }
+          if (inStr) {
+            if (ch === "\n") { result += "\\n"; continue; }
+            if (ch === "\r") { result += "\\r"; continue; }
+            if (ch === "\t") { result += "\\t"; continue; }
+          }
+          result += ch;
+        }
+        return result;
+      };
+
       // Known tool names — used to normalize {"tool_name": {...}} into {"tool": "tool_name", ...}
       const TOOL_NAMES = new Set([
         "execute_command", "run_in_terminal", "send_text", "read_terminal",
-        "write_file", "read_file", "edit_file", "ask_question", "final_answer",
+        "write_file", "read_file", "edit_file", "list_dir", "search_dir", "ask_question", "final_answer",
       ]);
 
       // If the model used a tool name as a top-level key (e.g. {"final_answer": {"content":"..."}})
       // restructure it into {"tool": "final_answer", "content": "..."}
       const normalizeToolKey = (obj: any): any => {
+        // Some models wrap tool calls in an array, e.g. [{"tool":"execute_command","command":"..."}]
+        if (Array.isArray(obj)) {
+          if (obj.length > 0 && typeof obj[0] === "object") return normalizeToolKey(obj[0]);
+          return obj;
+        }
         if (!obj || typeof obj !== "object" || obj.tool) return obj;
         const keys = Object.keys(obj);
         const toolKey = keys.find((k) => TOOL_NAMES.has(k));
         if (toolKey) {
           const val = obj[toolKey];
+          const { [toolKey]: _, ...rest } = obj;
           if (typeof val === "string") {
             // e.g. {"final_answer": "Done."} → {"tool":"final_answer","content":"Done."}
-            return { tool: toolKey, content: val };
+            return { tool: toolKey, content: val, ...rest };
           }
           if (typeof val === "object" && val !== null) {
             // e.g. {"final_answer": {"content":"Done."}} → {"tool":"final_answer","content":"Done."}
-            return { tool: toolKey, ...val };
+            return { tool: toolKey, ...val, ...rest };
           }
           return obj;
         }
@@ -1671,6 +1737,11 @@ ${agentPrompt}
         // 1. Try direct parse first (with \x escape fix)
         try {
           return normalizeToolKey(JSON.parse(fixJsonEscapes(text)));
+        } catch { }
+
+        // 1b. Repair bare newlines inside JSON strings (common in write_file content)
+        try {
+          return normalizeToolKey(JSON.parse(escapeNewlinesInStrings(fixJsonEscapes(text))));
         } catch { }
 
         // 2. Markdown code block extraction (handles ```json, ```JSON, ```, etc.)
@@ -1742,6 +1813,11 @@ ${agentPrompt}
             const obj = normalizeToolKey(JSON.parse(candidate));
             if (obj.tool || obj.content) return obj;
           } catch {
+            // Try repairing bare newlines inside strings
+            try {
+              const obj = normalizeToolKey(JSON.parse(escapeNewlinesInStrings(candidate)));
+              if (obj.tool || obj.content) return obj;
+            } catch { }
             // Try fixing trailing commas: ,} → }
             const fixed = candidate
               .replace(/,\s*}/g, "}")
@@ -1763,6 +1839,12 @@ ${agentPrompt}
       // Fallback: model may put JSON in thinking instead of content
       if (!action?.tool && thinkingText) {
         action = tryParseJson(thinkingText);
+      }
+
+      // Handle auto tab naming requested in the prompt
+      if (action && action._tab_title) {
+        onUpdate("set_tab_title", action._tab_title);
+        delete action._tab_title;
       }
 
       // Coerce tool-less objects or plain conversational text into proper tool calls
@@ -1870,12 +1952,19 @@ ${agentPrompt}
       if (actionKey) recentActions.push(actionKey);
       if (recentActions.length > 8) recentActions.shift();
 
-      // Consecutive loop: same action 2 times in a row (catch on 2nd attempt)
-      const isConsecutiveLoop =
-        actionKey != null &&
-        recentActions.length >= 2 &&
-        recentActions[recentActions.length - 1] === actionKey &&
-        recentActions[recentActions.length - 2] === actionKey;
+      // Consecutive loop: same action 2 times in a row (catch on 2nd attempt). 
+      // For send_text, allow up to 5 repetitions to support menu navigation (e.g., arrow keys)
+      const maxConsecutive = action.tool === "send_text" ? 5 : 2;
+      let isConsecutiveLoop = false;
+      if (actionKey != null && recentActions.length >= maxConsecutive) {
+        isConsecutiveLoop = true;
+        for (let i = 1; i <= maxConsecutive; i++) {
+          if (recentActions[recentActions.length - i] !== actionKey) {
+            isConsecutiveLoop = false;
+            break;
+          }
+        }
+      }
 
       // Alternating loop: A→B→A→B→A→B pattern
       const isAlternatingLoop =
@@ -2280,7 +2369,7 @@ ${agentPrompt}
           );
           history.push({
             role: "user",
-            content: `(Command started in terminal. You MUST use read_terminal to monitor progress. Do NOT run another command until this one finishes or you explicitly stop it with send_text("\\x03").)`,
+            content: `(Command started in terminal. Initial output:\n${snapshot || "(no output yet)"}\n\nYou MUST use read_terminal to monitor progress. Do NOT run another command until this one finishes or you explicitly stop it with send_text("\\x03").)`,
           });
         } catch (err: any) {
           terminalBusy = false; // Reset — command never actually ran
@@ -2628,6 +2717,78 @@ ${agentPrompt}
           history.push({
             role: "user",
             content: `Edit File Failed: ${err.message}`,
+          });
+        }
+        continue;
+      }
+
+      if (action.tool === "list_dir") {
+        try {
+          const dirPath = action.path || action.dirPath;
+          if (!dirPath) throw new Error("list_dir requires 'path' (string)");
+          onUpdate("executing", `Listing directory: ${dirPath}`);
+          const result = await (window as any).electron.ipcRenderer.invoke(
+            "file.listDir",
+            { dirPath },
+          );
+          if (result.success) {
+            const contents = result.contents
+              .map((c: any) => `${c.isDirectory ? "[DIR] " : "[FILE]"}\t${c.name}`)
+              .join("\n");
+            onUpdate(
+              "executed",
+              `Listed directory: ${dirPath}\n---\n${contents.slice(0, 500)}${contents.length > 500 ? "..." : ""}`,
+            );
+            history.push({
+              role: "user",
+              content: `Directory contents for ${dirPath}:\n${contents}`,
+            });
+          } else {
+            throw new Error(result.error || "Unknown list error");
+          }
+        } catch (err: any) {
+          onUpdate("failed", "List dir failed: " + err.message);
+          history.push({
+            role: "user",
+            content: `List Dir Failed: ${err.message}`,
+          });
+        }
+        continue;
+      }
+
+      if (action.tool === "search_dir") {
+        try {
+          const dirPath = action.path || action.dirPath;
+          const query = action.query;
+          if (!dirPath || typeof query !== "string") {
+            throw new Error("search_dir requires 'path' and 'query' (strings)");
+          }
+          onUpdate("executing", `Searching '${query}' in: ${dirPath}`);
+          const result = await (window as any).electron.ipcRenderer.invoke(
+            "file.searchDir",
+            { dirPath, query },
+          );
+          if (result.success) {
+            const lines = result.results
+              .map((r: any) => `${r.file}:${r.line}: ${r.content}`)
+              .join("\n");
+            const summary = `Found ${result.results.length} matches.`;
+            onUpdate(
+              "executed",
+              `Searched directory: ${dirPath}\n---\n${summary}`,
+            );
+            history.push({
+              role: "user",
+              content: `${summary}\n${lines}`,
+            });
+          } else {
+            throw new Error(result.error || "Unknown search error");
+          }
+        } catch (err: any) {
+          onUpdate("failed", "Search dir failed: " + err.message);
+          history.push({
+            role: "user",
+            content: `Search Dir Failed: ${err.message}`,
           });
         }
         continue;

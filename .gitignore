@@ -12,6 +12,16 @@ dist
 dist-ssr
 *.local
 
+# Environment files (may contain API keys)
+.env
+.env.test
+e2e/.env.test
+
+# Playwright test artifacts
+e2e/.test-profile-*
+test-results/
+playwright-report/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

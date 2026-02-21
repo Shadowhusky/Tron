@@ -33,9 +33,12 @@ const AppContent = () => {
     updateSessionConfig,
     discardPersistedLayout,
     isHydrated,
+    renameTab,
+    updateTabColor,
+    duplicateTab,
   } = useLayout();
   const { resolvedTheme } = useTheme();
-  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications } = useAgentContext();
+  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession } = useAgentContext();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
@@ -130,7 +133,12 @@ const AppContent = () => {
   // Using a ref sync via effect would be cleaner, but for simplicity:
   setActiveSessionForNotifications(activeSessionId);
 
-
+  const handleDuplicateTab = useCallback(
+    async (tabId: string) => {
+      await duplicateTab(tabId, duplicateAgentSession);
+    },
+    [duplicateTab, duplicateAgentSession]
+  );
 
   return (
     <motion.div
@@ -149,6 +157,9 @@ const AppContent = () => {
         onReorder={reorderTabs}
         onOpenSettings={openSettingsTab}
         isTabDirty={isTabDirty}
+        onRenameTab={renameTab}
+        onUpdateTabColor={updateTabColor}
+        onDuplicateTab={handleDuplicateTab}
       />
 
       {/* Main Workspace — all tabs stay mounted to preserve terminal state */}

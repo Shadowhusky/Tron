@@ -8,20 +8,21 @@ Electron + React + TypeScript terminal application with AI-powered features.
 src/
   constants/          # String constants (IPC channels, localStorage keys)
   types/index.ts      # Single source of truth for all shared types
-  services/ai/        # AIService class — multi-provider (Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, OpenAI/Anthropic Compatible)
+  services/ai/        # AIService class — multi-provider (Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI/Anthropic Compatible)
     index.ts          # Provider handling, streaming, agent loop (runAgent)
     agent.md          # Compact system prompt appended to agent instructions (keep concise — sent every call)
-  hooks/              # Custom React hooks (useAgentRunner)
+  hooks/              # Custom React hooks (useAgentRunner, useModels)
   utils/
     platform.ts           # Cross-platform path utilities (isWindows, extractFilename, abbreviateHome, etc.)
     commandClassifier.ts  # Command classification, smartQuotePaths(), isInteractiveCommand()
     terminalState.ts      # Terminal state classifier (idle/busy/server/input_needed), scaffold duplicate check, autoCd
     contextCleaner.ts     # ANSI stripping, output collapsing, truncation
+    dangerousCommand.ts   # Dangerous command detection (rm -rf, sudo, git force-push, etc.)
     theme.ts              # Theme token registry, themeClass() helper
     motion.ts             # Shared framer-motion variants
   contexts/           # React contexts (Layout, Theme, History, Agent)
   components/
-    layout/           # TabBar, SplitPane (recursive), TerminalPane, ContextBar
+    layout/           # TabBar, SplitPane (recursive), TerminalPane, ContextBar, CloseConfirmModal
     ui/               # FeatureIcon
   features/
     terminal/         # Terminal.tsx (xterm.js), SmartInput.tsx
@@ -38,12 +39,21 @@ electron/
     terminal.ts       # PTY session management, exec, execInTerminal (sentinel-based), completions, history, /log handler, session file persistence
     config.ts         # Config/session IPC handlers (readSessions, writeSessions)
     system.ts         # Folder picker, shell:openPath, shell:openExternal
-    ai.ts             # AI connection test for all providers (Ollama, LM Studio, Anthropic-compat, OpenAI-compat, cloud)
+    ai.ts             # AI connection test — cloud providers validate config only (no API call), local providers ping endpoint
   preload.ts          # Context bridge with channel allowlist
 
 server/               # Web mode (Express + WebSocket, no Electron)
   index.ts            # HTTP server + WS bridge
   handlers/           # Terminal, AI, system handlers (mirrors electron/ipc/)
+
+e2e/                  # Playwright E2E test suite
+  playwright.config.ts  # workers:1, 60s timeout, html+list reporters
+  .env.test.example     # Template for test env vars
+  fixtures/app.ts       # Electron launch fixture, page access, cleanup
+  helpers/
+    selectors.ts        # Centralized data-testid selectors
+    wait.ts             # Terminal output wait, agent completion wait, localStorage helpers
+  tests/                # 10 spec files (app-launch, tabs, terminal, smart-input, settings, onboarding, context-bar, agent, theme, keyboard)
 ```
 
 ## Key Patterns
@@ -58,8 +68,9 @@ server/               # Web mode (Express + WebSocket, no Electron)
 - **Provider config caching**: Settings stores per-provider configs (model, apiKey) in localStorage. Switching providers preserves previously entered credentials and auto-saves provider switch. Settings save propagates to all active sessions.
 - **Provider helpers**: `providerUsesBaseUrl()` (ollama, lmstudio, openai-compat, anthropic-compat), `isAnthropicProtocol()`, `isProviderUsable()` in `ai/index.ts`.
 - **Window close**: Electron intercepts close, sends `window.confirmClose` to renderer. Renderer shows themed modal. "Exit Without Saving" uses `discardPersistedLayout()` with file-based flag. `before-quit` (Cmd+Q) bypasses.
-- **Session persistence**: Agent state (thread, overlay height, draft input) persisted to file via IPC (`readSessions`/`writeSessions`), not localStorage. Survives across sessions.
+- **Session persistence**: Agent state (thread, overlay height, draft input, scroll position, thinking toggle) persisted to file via IPC (`readSessions`/`writeSessions`), not localStorage. `AgentStore.subscribeToSession("")` uses wildcard matching for the debounced save subscription. `flushSave()` called on both debounce timer and `beforeunload`/`confirmClose` for reliable persistence.
 - **Cross-tab notifications**: Background agent completions show toast notifications in `App.tsx`, click to switch tab.
+- **CORS**: `webSecurity: false` on BrowserWindow disables Chromium CORS enforcement — standard for Electron desktop apps with controlled content.
 - **Image attachments**: SmartInput supports drag-and-drop, paste, and file picker for images. `AttachedImage` type. Vision models analyzed via `aiService.analyzeImages()`, bypassing agent loop.
 - **Interactive commands in agent mode**: `isInteractiveCommand()` detects TUI/REPL/editor commands → routes to embedded terminal in TerminalPane instead of overlay exec.
 - **Multiline input**: Multiline text in SmartInput auto-classifies as agent mode (shell commands are single-line).
@@ -90,6 +101,8 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **Auto-cd**: `autoCdCommand()` prepends `cd <projectRoot> &&` for project commands (npm, yarn, etc.) but skips scaffold commands that create their own directories.
 - **lastWriteDir tracking**: Tracks the shallowest (shortest) directory written to — approximates project root, not the last file's parent dir.
 - **Parse fallback**: After 3 JSON parse failures, raw text becomes final_answer — but rejects text containing tool-call syntax (`<tool_call>`, `<function=`, `{"tool":`).
+- **JSON repair**: `normalizeToolKey` unwraps array-wrapped tool calls (e.g. MiniMax). `escapeNewlinesInStrings` fixes bare newlines inside JSON string values (common in `write_file` with large content). Both applied as fallback parse steps.
+- **Dangerous command detection**: `isDangerousCommand()` in `src/utils/dangerousCommand.ts` — pattern-based + heuristic detection for destructive commands (rm -rf, sudo, force-push, etc.). Used by agent permission system.
 - **Progress reflection**: Every 8 steps, if no progress in 6+ steps, injects reflection prompt.
 - **Context compaction**: Old tool results compressed after history exceeds 30 messages.
 - **mentionsError filter**: Rejects final_answer that mentions errors without resolution words — but bypassed when user's prompt itself mentioned errors (`userMentionedError`).
@@ -112,6 +125,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 ## SmartInput Features
 
 - **Mode detection**: Classifies input as command vs agent prompt. Multiline input auto-classifies as agent mode.
+- **Advice mode**: Sends prompt + session context (CWD, last 30 lines of terminal history) to AI. Response parsed into `COMMAND:` and `TEXT:` parts — command shown in code block with Edit/Run buttons, description shown separately. Tab accepts command into input, Enter runs it directly.
 - **Slash commands**: `/log` intercepted before mode routing via `onSlashCommand` prop from TerminalPane. Any input starting with `/` is routed through this prop.
 - **History**: Agent prompts tracked alongside commands; up/down arrow navigates without triggering completions dropdown
 - **AI ghost text**: Generates inline suggestions when input is empty (idle prediction, 3s delay)
@@ -119,15 +133,18 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **Image attachments**: Drag-and-drop, paste, or file picker. Up to 5 images, 20MB each. Vision-capable models only.
 - **Draft persistence**: Input text preserved across tab switches via AgentContext `draftInput`
 - **Textarea**: Input is a `<textarea>` supporting multiline entry
+- **Thinking toggle**: Shows in footer when model supports thinking; hides when agent overlay is visible (overlay has its own toggle)
 
 ## Build & Dev
 
 ```bash
-npm run dev:react     # Start Vite dev server (renderer)
-npm run dev           # Start full Electron + Vite dev
-npm run build:react   # Build renderer (TypeScript check)
+npm run dev:react      # Start Vite dev server (renderer)
+npm run dev            # Start full Electron + Vite dev
+npm run build:react    # Build renderer (TypeScript check)
 npm run build:electron # Build Electron main process
-npm run lint          # ESLint
+npm run lint           # ESLint
+npm run test:e2e       # Run Playwright E2E tests (requires build first)
+npm run test:e2e:headed # E2E tests with visible browser
 ```
 
 ## Conventions
@@ -137,7 +154,7 @@ npm run lint          # ESLint
 - Three themes: dark, light, modern (+ system auto-detect)
 - `resolvedTheme` (never raw `theme`) for visual decisions — `theme` can be `"system"`
 - Agent supports all configured providers (Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, OpenAI Compatible, Anthropic Compatible)
-- Per-provider API URLs defined in `CLOUD_PROVIDERS` (ai/index.ts) and mirrored in `PROVIDER_URLS` (electron/ipc/ai.ts, server/handlers/ai.ts) — keep in sync
+- Per-provider API URLs defined in `CLOUD_PROVIDERS` (ai/index.ts). Test connection in `electron/ipc/ai.ts` and `server/handlers/ai.ts` — cloud providers validate config only (no API call), local providers ping endpoint
 - Settings provider dropdown organized into Local / Cloud / Custom optgroups
 - `agent.md` is appended to the agent system prompt — keep it compact (< 10 lines) since it's sent on every LLM call
 - `AgentOverlay` uses `summarizeCommand()` for human-readable step titles and `describeStreamingContent()` for live streaming labels (write_file, read_file, edit_file supported)
@@ -157,6 +174,16 @@ npm run lint          # ESLint
 - **Project file listing**: Uses `Get-ChildItem` on Windows, `find` on Unix (in `useAgentRunner.ts`)
 - **AI headers**: `jsonHeaders()` and `anthropicHeaders()` helpers in `ai/index.ts` ensure consistent auth headers across all providers
 - **Test connection**: Returns `{ success, error? }` with detailed error messages (HTTP status, network errors). SettingsPane shows error details below the test button.
+
+## E2E Testing
+
+- **Framework**: Playwright with Electron launch fixture (`e2e/fixtures/app.ts`)
+- **Test isolation**: Each test run creates a unique `TRON_TEST_PROFILE` directory; `electron/main.ts` sets `app.setPath("userData", ...)` when the env var is set
+- **Onboarding bypass**: Tests inject `tron_configured` + `tron_tutorial_completed` into localStorage and reload
+- **Selectors**: All testable elements use `data-testid` attributes, centralized in `e2e/helpers/selectors.ts`
+- **10 spec files**: app-launch, tab-management, terminal, smart-input, settings, onboarding, context-bar, agent (requires `TEST_PROVIDER`), theme, keyboard
+- **Serial execution**: `workers: 1` — Electron tests share one app instance per spec
+- **Model fetching**: `useAllConfiguredModels` uses `staleTime: Infinity` + `refetchOnMount: false` — only refetches on explicit `invalidateModels()` (Settings Save). Prevents redundant API calls on tab creation and page refresh
 
 ## Workflow
 

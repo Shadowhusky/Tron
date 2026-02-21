@@ -22,6 +22,7 @@ const CloseConfirmModal: React.FC<CloseConfirmModalProps> = ({ show, resolvedThe
                     onClick={() => onAction("cancel")}
                 >
                     <motion.div
+                        data-testid="close-confirm-modal"
                         variants={fadeScale}
                         initial="hidden"
                         animate="visible"
@@ -43,6 +44,7 @@ const CloseConfirmModal: React.FC<CloseConfirmModalProps> = ({ show, resolvedThe
                         </div>
                         <div className={`px-6 pb-6 flex flex-row gap-3`}>
                             <motion.button
+                                data-testid="close-confirm-save"
                                 whileHover={{ scale: 1.01 }}
                                 whileTap={{ scale: 0.98 }}
                                 onClick={() => onAction("save")}
@@ -51,6 +53,7 @@ const CloseConfirmModal: React.FC<CloseConfirmModalProps> = ({ show, resolvedThe
                                 Exit & Save Session
                             </motion.button>
                             <motion.button
+                                data-testid="close-confirm-discard"
                                 whileHover={{ scale: 1.01 }}
                                 whileTap={{ scale: 0.98 }}
                                 onClick={() => onAction("discard")}
@@ -62,6 +65,7 @@ const CloseConfirmModal: React.FC<CloseConfirmModalProps> = ({ show, resolvedThe
                                 Exit Without Saving
                             </motion.button>
                             <motion.button
+                                data-testid="close-confirm-cancel"
                                 whileHover={{ scale: 1.01 }}
                                 whileTap={{ scale: 0.98 }}
                                 onClick={() => onAction("cancel")}

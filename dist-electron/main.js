@@ -46,6 +46,14 @@ const config_1 = require("./ipc/config");
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
 }
+// Ensure Playwright E2E tests do not mutate the user's real application state
+if (process.env.TRON_TEST_PROFILE) {
+    const fs = require("fs");
+    if (!fs.existsSync(process.env.TRON_TEST_PROFILE)) {
+        fs.mkdirSync(process.env.TRON_TEST_PROFILE, { recursive: true });
+    }
+    electron_1.app.setPath("userData", process.env.TRON_TEST_PROFILE);
+}
 // Suppress Chromium GPU SharedImageManager / mailbox errors on macOS.
 electron_1.app.commandLine.appendSwitch("disable-gpu");
 electron_1.app.commandLine.appendSwitch("disable-software-rasterizer");
@@ -126,6 +134,10 @@ const createWindow = () => {
             preload: preloadPath,
             nodeIntegration: false,
             contextIsolation: true,
+            // Disable CORS enforcement so renderer can call external APIs directly
+            // (Anthropic, LM Studio, Ollama, etc.). Safe for desktop apps with
+            // controlled content — contextIsolation + preload allowlist remain active.
+            webSecurity: false,
         },
         ...(isMacOS
             ? {
@@ -162,7 +174,7 @@ const createWindow = () => {
         (0, terminal_1.cleanupAllSessions)();
         mainWindow = null;
     });
-    const isDev = !electron_1.app.isPackaged;
+    const isDev = !electron_1.app.isPackaged && process.env.NODE_ENV !== "test" && process.env.NODE_ENV !== "production";
     const devPort = process.env.PORT || 5173;
     if (isDev) {
         mainWindow.loadURL(`http://localhost:${devPort}`);

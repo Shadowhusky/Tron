@@ -21,7 +21,7 @@ interface TerminalPaneProps {
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions, markSessionDirty, focusSession } =
+  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions } =
     useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
@@ -47,7 +47,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     awaitingAnswer,
   } = useAgentRunner(sessionId, session);
 
-  const { stopAgent: stopAgentRaw, resetSession, overlayHeight, setOverlayHeight, draftInput, setDraftInput, setAgentThread } = useAgent(sessionId);
+  const { stopAgent: stopAgentRaw, resetSession, overlayHeight, setOverlayHeight, draftInput, setDraftInput, setAgentThread, focusTarget, setFocusTarget, scrollPosition, setScrollPosition } = useAgent(sessionId);
 
   // Stable refs for SmartInput memo
   const stopAgentRef = useRef(stopAgentRaw);
@@ -63,9 +63,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const stableSetDraftInput = useCallback((v: string | undefined) => setDraftInputRef.current(v), []);
 
   // Stable callback refs for SmartInput memo (assigned after functions are defined below)
-  const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => {});
-  const wrappedHandleAgentRunRef = useRef<(prompt: string, queueCallback?: any, images?: AttachedImage[]) => void>(() => {});
-  const handleSlashCommandRef = useRef<(cmd: string) => void>(() => {});
+  const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => { });
+  const wrappedHandleAgentRunRef = useRef<(prompt: string, queueCallback?: any, images?: AttachedImage[]) => void>(() => { });
+  const handleSlashCommandRef = useRef<(cmd: string) => void>(() => { });
   const stableOnSend = useCallback((cmd: string) => wrappedHandleCommandRef.current(cmd), []);
   const stableOnRunAgent = useCallback(async (prompt: string, images?: AttachedImage[]) => wrappedHandleAgentRunRef.current(prompt, (item: any) => queueItemRef.current(item), images), []);
   const stableSlashCommand = useCallback((cmd: string) => handleSlashCommandRef.current(cmd), []);
@@ -81,7 +81,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   >([]);
 
   // Stable ref for queueItem so stableOnRunAgent can use it
-  const queueItemRef = useRef<(item: { type: "command" | "agent"; content: string }) => void>(() => {});
+  const queueItemRef = useRef<(item: { type: "command" | "agent"; content: string }) => void>(() => { });
 
   // In agent view: show embedded terminal when user runs a command
   const [showEmbeddedTerminal, setShowEmbeddedTerminal] = useState(false);
@@ -131,8 +131,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     () => {
       if (!isActive) return;
       resetSession();
+      clearInteractions(sessionId);
     },
-    [isActive, resetSession],
+    [isActive, resetSession, clearInteractions, sessionId],
   );
 
   // Listen for tutorial test-run event
@@ -221,6 +222,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   }, [markSessionDirty, sessionId, handleAgentRun]);
 
   const handleSlashCommand = useCallback(async (command: string) => {
+    if (command === "/clear") {
+      resetSession();
+      clearInteractions(sessionId);
+      window.dispatchEvent(
+        new CustomEvent("tron:clearTerminal", { detail: { sessionId } }),
+      );
+      if (!isOverlayVisible) setIsOverlayVisible(true);
+      return;
+    }
+
     if (command === "/log") {
       try {
         // Assemble session metadata (strip secrets)
@@ -324,16 +335,18 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             }
             thinkingEnabled={thinkingEnabled}
             onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
-            onClose={() => {}}
+            onClose={() => { }}
             onClear={() => resetSession()}
             onPermission={handlePermission}
             isExpanded={true}
-            onExpand={() => {}}
+            onExpand={() => { }}
             onRunAgent={(prompt, images) =>
               wrappedHandleAgentRun(prompt, queueItem as any, images)
             }
             modelCapabilities={modelCapabilities}
             fullHeight
+            scrollPosition={scrollPosition}
+            onScrollPositionChange={setScrollPosition}
           />
 
           {/* Embedded terminal — shown when user runs a command in agent mode */}
@@ -373,15 +386,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   isActive={isActive}
                   isAgentRunning={isAgentRunning}
                   stopAgent={stableStopAgent}
+                  focusTarget={focusTarget}
                 />
               </motion.div>
             )}
           </AnimatePresence>
         </>
       ) : (
-        <>
-          {/* Terminal View Mode: xterm + overlay */}
-          <div className="flex-1 min-h-0">
+        /* Terminal View Mode: terminal + overlay share remaining space above input */
+        <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 min-h-0" onMouseDown={() => setFocusTarget("terminal")}>
             <Terminal
               className="w-full h-full"
               sessionId={sessionId}
@@ -389,6 +403,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               isActive={isActive}
               isAgentRunning={isAgentRunning}
               stopAgent={stableStopAgent}
+              focusTarget={focusTarget}
             />
           </div>
 
@@ -417,10 +432,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 modelCapabilities={modelCapabilities}
                 overlayHeight={overlayHeight}
                 onResizeHeight={setOverlayHeight}
+                scrollPosition={scrollPosition}
+                onScrollPositionChange={setScrollPosition}
               />
             )}
           </AnimatePresence>
-        </>
+        </div>
       )}
 
       {/* Queue display */}
@@ -439,26 +456,24 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           >
             <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap">
               <span
-                className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${
-                  resolvedTheme === "light"
+                className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${resolvedTheme === "light"
                     ? "text-amber-600"
                     : "text-amber-400/70"
-                }`}
+                  }`}
               >
                 Queue ({inputQueue.length})
               </span>
               {inputQueue.map((item, i) => (
                 <div
                   key={i}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono max-w-[200px] ${
-                    resolvedTheme === "light"
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono max-w-[200px] ${resolvedTheme === "light"
                       ? item.type === "agent"
                         ? "bg-purple-100 text-purple-700 border border-purple-200"
                         : "bg-gray-100 text-gray-700 border border-gray-200"
                       : item.type === "agent"
                         ? "bg-purple-500/10 text-purple-300 border border-purple-500/20"
                         : "bg-white/5 text-gray-400 border border-white/10"
-                  }`}
+                    }`}
                 >
                   {item.type === "agent" ? (
                     <Bot className="w-3 h-3 shrink-0 opacity-60" />
@@ -496,7 +511,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       </AnimatePresence>
 
       <div
-        className={`p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
+        className={`shrink-0 p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
           dark: "bg-[#0a0a0a] border-white/5",
           modern: "bg-[#060618] border-white/6",
           light: "bg-gray-50 border-gray-200",
@@ -519,9 +534,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           setThinkingEnabled={stableSetThinkingEnabled}
           activeSessionId={activeSessionId}
           awaitingAnswer={awaitingAnswer}
+          focusTarget={focusTarget}
+          onFocusInput={() => setFocusTarget("input")}
         />
       </div>
-      <div className="relative z-30">
+      <div className="shrink-0 relative z-30">
         <ContextBar
           sessionId={sessionId}
           hasAgentThread={agentThread.length > 0}

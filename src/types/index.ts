@@ -80,15 +80,16 @@ export type SplitDirection = "horizontal" | "vertical";
 export type LayoutNode =
   | { type: "leaf"; sessionId: string; contentType?: "terminal" | "settings" }
   | {
-      type: "split";
-      direction: SplitDirection;
-      children: LayoutNode[];
-      sizes: number[];
-    };
+    type: "split";
+    direction: SplitDirection;
+    children: LayoutNode[];
+    sizes: number[];
+  };
 
 export interface Tab {
   id: string;
   title: string;
+  color?: string; // Optional color tag for the tab
   root: LayoutNode;
   activeSessionId: string | null; // Which session is active in this tab
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useTransition } from "react";
+import { useState, useEffect, useRef, useCallback, useTransition, useMemo } from "react";
 import type { KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
@@ -14,7 +14,7 @@ import {
 } from "../../../utils/commandClassifier";
 import { aiService } from "../../../services/ai";
 import { useHistory } from "../../../contexts/HistoryContext";
-import { Terminal, Bot, ChevronRight, Lightbulb, Zap, ImagePlus, X } from "lucide-react";
+import { Terminal, Bot, ChevronRight, Lightbulb, Zap, ImagePlus, X, Clock } from "lucide-react";
 import type { AttachedImage } from "../../../types";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
@@ -40,6 +40,8 @@ interface SmartInputProps {
   setThinkingEnabled?: (v: boolean) => void;
   activeSessionId?: string | null;
   awaitingAnswer?: boolean;
+  focusTarget?: "input" | "terminal";
+  onFocusInput?: () => void;
 }
 
 const SmartInput: React.FC<SmartInputProps> = ({
@@ -58,6 +60,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
   setThinkingEnabled: setThinkingEnabledProp,
   activeSessionId: activeSessionIdProp,
   awaitingAnswer = false,
+  focusTarget,
+  onFocusInput,
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId: layoutActiveSessionId } = useLayout();
@@ -66,6 +70,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
     stopAgent: stopAgentCtx,
     thinkingEnabled: thinkingEnabledCtx,
     setThinkingEnabled: setThinkingEnabledCtx,
+    isOverlayVisible,
   } = useAgent(activeSessionId || "");
   const stopAgent = stopAgentProp ?? stopAgentCtx;
   const thinkingEnabled = thinkingEnabledProp ?? thinkingEnabledCtx;
@@ -119,14 +124,33 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const [ghostText, setGhostText] = useState("");
   const [feedbackMsg, setFeedbackMsg] = useState("");
 
+  /** Parse "COMMAND: ... TEXT: ..." format from advice mode response. */
+  const parsedSuggestion = useMemo(() => {
+    if (!suggestedCommand) return null;
+    const cmdMatch = suggestedCommand.match(/^COMMAND:\s*([\s\S]*?)(?:\s*TEXT:\s*([\s\S]*))?$/i);
+    if (cmdMatch) {
+      return { command: cmdMatch[1].trim(), text: cmdMatch[2]?.trim() || "" };
+    }
+    const textMatch = suggestedCommand.match(/^TEXT:\s*([\s\S]*)$/i);
+    if (textMatch) {
+      return { command: "", text: textMatch[1].trim() };
+    }
+    return { command: suggestedCommand.trim(), text: "" };
+  }, [suggestedCommand]);
+
   // Autocomplete & History State
-  const [completions, setCompletions] = useState<string[]>([]);
+  type CompletionItem = { text: string; source: "history" | "suggestion" };
+  const [completions, setCompletions] = useState<CompletionItem[]>([]);
   const [showCompletions, setShowCompletions] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState("");
   // Track whether user explicitly navigated completions with arrow keys
   const navigatedCompletionsRef = useRef(false);
+  // Suppress next fetchCompletions call (after accepting a completion)
+  const suppressNextFetchRef = useRef(false);
+  // Only trigger completions when the user actually typed (not on draft restore/tab switch)
+  const inputTriggeredByUserRef = useRef(false);
 
   // Image attachment state
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
@@ -289,20 +313,20 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
   // Window-level hotkeys for advice suggestion (works even when input is blurred)
   useEffect(() => {
-    if (!suggestedCommand || isLoading) return;
+    if (!parsedSuggestion?.command || isLoading) return;
+    const cmd = parsedSuggestion.command;
     const handler = (e: globalThis.KeyboardEvent) => {
       // Skip if input already focused — its own onKeyDown handles it
       if (document.activeElement === inputRef.current) return;
       if (e.key === "Tab") {
         e.preventDefault();
-        setValue(suggestedCommand);
+        setValue(cmd);
         setSuggestedCommand(null);
         setIsAuto(false);
         setMode("command");
         inputRef.current?.focus();
       } else if (e.key === "Enter") {
         e.preventDefault();
-        const cmd = suggestedCommand;
         setSuggestedCommand(null);
         trackCommand(cmd);
         onSend(cmd);
@@ -317,21 +341,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [suggestedCommand, isLoading]);
+  }, [parsedSuggestion, isLoading]);
 
-  // Auto-focus when session becomes active
+  // Auto-focus when session becomes active (unless user last focused the terminal)
   useEffect(() => {
-    // Check if parent container says we are active
-    // We don't have explicit 'isActive' prop, but we can infer from session context if needed or assume mount.
-    // However, user said "switch to tab". If SmartInput is unmounted/remounted, autoFocus works.
-    // If it stays mounted (hidden), we need a signal.
-    // Let's rely on the fact that `sessionId === activeSessionId` in parent prop if we passed it?
-    // We passed `sessionId`. We can check if it matches `activeSessionId`.
-    if (activeSessionId === sessionId && inputRef.current) {
+    if (activeSessionId === sessionId && inputRef.current && focusTarget !== "terminal") {
       // Small timeout to ensure layout is ready
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [activeSessionId, sessionId]);
+  }, [activeSessionId, sessionId, focusTarget]);
 
   // Auto-detect mode hierarchy
   useEffect(() => {
@@ -400,50 +418,52 @@ const SmartInput: React.FC<SmartInputProps> = ({
     (input: string) => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       latestInputRef.current = input;
-      const shouldComplete =
-        input.trim().length > 0 &&
-        !!window.electron?.ipcRenderer?.getCompletions &&
-        (mode === "command" || isAuto);
-      if (!shouldComplete) {
+
+      // Suppress fetch after accepting a completion (prevents re-triggering)
+      if (suppressNextFetchRef.current) {
+        suppressNextFetchRef.current = false;
+        return;
+      }
+
+      const trimmedInput = input.trim().toLowerCase();
+
+      // When input is empty: clear completions (don't auto-show on tab switch / new tab)
+      if (!trimmedInput) {
         setCompletions([]);
         setShowCompletions(false);
+        setSelectedIndex(0);
         setGhostText("");
         return;
       }
 
-      // Show local matches immediately (no debounce): history + known commands
-      const trimmedInput = input.trim().toLowerCase();
-      const sessionCmds = sessionCommandsRef.current;
-      const instantHistory = sessionCmds
-        .filter(
-          (cmd) =>
-            cmd.toLowerCase().startsWith(trimmedInput) &&
-            cmd.toLowerCase() !== trimmedInput,
-        )
-        .reverse()
-        .slice(0, 5);
-      // Only match known commands when typing the first word (no spaces yet)
-      const isFirstWord = !input.trim().includes(" ");
-      const instantCmds = isFirstWord
-        ? getCommandCompletions(input.trim(), 8)
-        : [];
-      // Dedupe instant results
-      const instantSeen = new Set<string>();
-      const instantMatches: string[] = [];
-      for (const h of instantHistory) {
-        if (!instantSeen.has(h.toLowerCase())) {
-          instantSeen.add(h.toLowerCase());
-          instantMatches.push(h);
+      const shouldComplete =
+        !!window.electron?.ipcRenderer?.getCompletions &&
+        (mode === "command" || isAuto);
+
+      // Global history matches (prefix match, most recent first, deduped)
+      const globalHistoryMatches: CompletionItem[] = [];
+      const histSeen = new Set<string>();
+      for (let i = history.length - 1; i >= 0 && globalHistoryMatches.length < 5; i--) {
+        const cmd = history[i];
+        const lower = cmd.toLowerCase();
+        if (lower.startsWith(trimmedInput) && lower !== trimmedInput && !histSeen.has(lower)) {
+          histSeen.add(lower);
+          globalHistoryMatches.push({ text: cmd, source: "history" });
         }
       }
-      for (const c of instantCmds) {
-        if (!instantSeen.has(c)) {
-          instantSeen.add(c);
-          instantMatches.push(c);
-        }
+
+      if (!shouldComplete) {
+        // No smart completions available — show history matches only
+        setCompletions(globalHistoryMatches);
+        setShowCompletions(globalHistoryMatches.length > 0);
+        setSelectedIndex(0);
+        setGhostText("");
+        return;
       }
-      if (instantMatches.length > 0) {
-        setCompletions(instantMatches.slice(0, 15));
+
+      // Show history matches immediately (no debounce)
+      if (globalHistoryMatches.length > 0) {
+        setCompletions(globalHistoryMatches);
         setShowCompletions(true);
         setSelectedIndex(0);
       }
@@ -459,71 +479,49 @@ const SmartInput: React.FC<SmartInputProps> = ({
           // Stale check: if input changed while IPC was pending, discard results
           if (latestInputRef.current !== input) return;
 
-          // Merge per-session history matches (prefix match, most recent first)
-          const trimmedInput = input.trim().toLowerCase();
-          const sessionCmds = sessionCommandsRef.current;
-          const historyMatches = sessionCmds
-            .filter(
-              (cmd) =>
-                cmd.toLowerCase().startsWith(trimmedInput) &&
-                cmd.toLowerCase() !== trimmedInput,
-            )
-            .reverse() // most recent first
-            .slice(0, 5);
-
           // Local known-command matches (first word only)
           const isFirstWord = !input.trim().includes(" ");
           const localCmdMatches = isFirstWord
             ? getCommandCompletions(input.trim(), 8)
             : [];
 
-          // Dedupe: history first, then local commands, then shell completions
-          const seen = new Set<string>();
-          const merged: string[] = [];
-          for (const h of historyMatches) {
-            if (!seen.has(h)) {
-              seen.add(h);
-              merged.push(h);
-            }
-          }
+          // Build suggestion list (deduped against history)
+          const seen = new Set(globalHistoryMatches.map(h => h.text.toLowerCase()));
+          const suggestions: CompletionItem[] = [];
           for (const c of localCmdMatches) {
-            if (!seen.has(c)) {
-              seen.add(c);
-              merged.push(c);
-            }
+            if (!seen.has(c)) { seen.add(c); suggestions.push({ text: c, source: "suggestion" }); }
           }
           for (const r of results) {
-            if (!seen.has(r)) {
-              seen.add(r);
-              merged.push(r);
-            }
+            if (!seen.has(r.toLowerCase())) { seen.add(r.toLowerCase()); suggestions.push({ text: r, source: "suggestion" }); }
           }
-          const finalResults = merged.slice(0, 15);
+
+          // History at top, suggestions below
+          const finalResults = [
+            ...globalHistoryMatches,
+            ...suggestions,
+          ].slice(0, 15);
 
           setCompletions(finalResults);
           setShowCompletions(finalResults.length > 0);
-          setSelectedIndex(0);
+          // Default selection = first smart suggestion (history items are above, reachable via ArrowUp)
+          setSelectedIndex(suggestions.length > 0 ? globalHistoryMatches.length : 0);
 
-          // Ghost text from best match
-          if (finalResults.length > 0) {
-            const best = finalResults[0];
-            // If best match is a full-line history match (starts with entire input)
+          // Ghost text from best suggestion (prefer suggestions over history for ghost)
+          const bestSuggestion = suggestions[0]?.text || globalHistoryMatches[0]?.text;
+          if (bestSuggestion) {
             if (
-              best &&
-              best.toLowerCase().startsWith(trimmedInput) &&
-              best.length > input.trim().length
+              bestSuggestion.toLowerCase().startsWith(trimmedInput) &&
+              bestSuggestion.length > input.trim().length
             ) {
-              setGhostText(best.slice(input.trim().length));
+              setGhostText(bestSuggestion.slice(input.trim().length));
             } else {
-              // Fallback: partial word completion
               const parts = input.trimEnd().split(/\s+/);
               const lastWord = parts[parts.length - 1];
               if (
-                best &&
-                best.toLowerCase().startsWith(lastWord.toLowerCase()) &&
-                best.length > lastWord.length
+                bestSuggestion.toLowerCase().startsWith(lastWord.toLowerCase()) &&
+                bestSuggestion.length > lastWord.length
               ) {
-                setGhostText(best.slice(lastWord.length));
+                setGhostText(bestSuggestion.slice(lastWord.length));
               } else {
                 setGhostText("");
               }
@@ -538,10 +536,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
         }
       }, 80);
     },
-    [mode, isAuto, activeSessionId],
+    [mode, isAuto, activeSessionId, history],
   );
 
   useEffect(() => {
+    if (!inputTriggeredByUserRef.current) {
+      // Value changed programmatically (draft restore, tab switch, etc.) — don't show completions
+      return;
+    }
+    inputTriggeredByUserRef.current = false;
     fetchCompletions(value);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -557,11 +560,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
     }
   };
 
-  const acceptCompletion = (completion: string) => {
-    // If the completion starts with the entire current input, it's a full-line match (history)
+  const acceptCompletion = (item: CompletionItem) => {
+    const completion = item.text;
+    // Suppress the fetch that setValue will trigger
+    suppressNextFetchRef.current = true;
+    // History items or full-line matches: replace the entire input
     if (
-      completion.toLowerCase().startsWith(value.trim().toLowerCase()) &&
-      completion.includes(" ")
+      item.source === "history" ||
+      (completion.toLowerCase().startsWith(value.trim().toLowerCase()) &&
+        completion.includes(" "))
     ) {
       setValue(completion + " ");
     } else {
@@ -574,6 +581,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
     setShowCompletions(false);
     setGhostText("");
     setSelectedIndex(0);
+    // Refocus input (clicking a dropdown item steals focus)
+    setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   const handleSend = () => {
@@ -630,10 +639,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
     // Tab / Right Arrow: Accept Ghost Text OR Selected Completion OR Placeholder
     // Strict Tab behavior: Only accept, never cycle
     if (e.key === "Tab" || e.key === "ArrowRight") {
-      // Accept advice suggestion into input box for editing
-      if (e.key === "Tab" && suggestedCommand) {
+      // Accept advice suggestion command into input box for editing
+      if (e.key === "Tab" && parsedSuggestion?.command) {
         e.preventDefault();
-        setValue(suggestedCommand);
+        setValue(parsedSuggestion.command);
         setSuggestedCommand(null);
         setIsAuto(false);
         setMode("command");
@@ -692,34 +701,33 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    // Up/Down: Priority to Dropdown, then History
+    // Up/Down: navigate completions dropdown when visible, otherwise navigate history
     if (e.key === "ArrowUp") {
       e.preventDefault();
       if (showCompletions && completions.length > 0) {
         navigatedCompletionsRef.current = true;
-        const newIndex =
-          selectedIndex <= 0 ? completions.length - 1 : selectedIndex - 1;
-        setSelectedIndex(newIndex);
-      } else {
-        if (history.length === 0) return;
-        if (historyIndex === -1) {
-          setSavedInput(value);
-          const newIndex = history.length - 1;
-          setHistoryIndex(newIndex);
-          setValue(history[newIndex]);
-        } else if (historyIndex > 0) {
-          const newIndex = historyIndex - 1;
-          setHistoryIndex(newIndex);
-          setValue(history[newIndex]);
-        }
-        setTimeout(() => {
-          if (inputRef.current)
-            inputRef.current.setSelectionRange(
-              inputRef.current.value.length,
-              inputRef.current.value.length,
-            );
-        }, 0);
+        setSelectedIndex((prev) => Math.max(0, prev - 1));
+        return;
       }
+      // No dropdown — navigate global history
+      if (history.length === 0) return;
+      if (historyIndex === -1) {
+        setSavedInput(value);
+        const newIndex = history.length - 1;
+        setHistoryIndex(newIndex);
+        setValue(history[newIndex]);
+      } else if (historyIndex > 0) {
+        const newIndex = historyIndex - 1;
+        setHistoryIndex(newIndex);
+        setValue(history[newIndex]);
+      }
+      setTimeout(() => {
+        if (inputRef.current)
+          inputRef.current.setSelectionRange(
+            inputRef.current.value.length,
+            inputRef.current.value.length,
+          );
+      }, 0);
       return;
     }
 
@@ -727,19 +735,18 @@ const SmartInput: React.FC<SmartInputProps> = ({
       e.preventDefault();
       if (showCompletions && completions.length > 0) {
         navigatedCompletionsRef.current = true;
-        const newIndex =
-          selectedIndex >= completions.length - 1 ? 0 : selectedIndex + 1;
-        setSelectedIndex(newIndex);
+        setSelectedIndex((prev) => Math.min(completions.length - 1, prev + 1));
+        return;
+      }
+      // No dropdown — navigate global history
+      if (historyIndex === -1) return;
+      if (historyIndex < history.length - 1) {
+        const newIndex = historyIndex + 1;
+        setHistoryIndex(newIndex);
+        setValue(history[newIndex]);
       } else {
-        if (historyIndex === -1) return;
-        if (historyIndex < history.length - 1) {
-          const newIndex = historyIndex + 1;
-          setHistoryIndex(newIndex);
-          setValue(history[newIndex]);
-        } else {
-          setHistoryIndex(-1);
-          setValue(savedInput);
-        }
+        setHistoryIndex(-1);
+        setValue(savedInput);
       }
       return;
     }
@@ -775,6 +782,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         e.preventDefault();
         const hasImgs = attachedImages.length > 0;
         setFeedbackMsg("Agent Started");
+        if (value.trim()) addToHistory(value.trim());
         onRunAgent(value, hasImgs ? attachedImages : undefined);
         if (hasImgs) setAttachedImages([]);
         setValue("");
@@ -798,19 +806,20 @@ const SmartInput: React.FC<SmartInputProps> = ({
         navigatedCompletionsRef.current &&
         completions[selectedIndex]
       ) {
-        const selected = completions[selectedIndex];
+        const item = completions[selectedIndex];
         // Apply completion and EXECUTE immediately
         let finalVal: string;
-        // Full-line history match: use completion as-is
+        // History items or full-line matches: use text as-is
         if (
-          selected.toLowerCase().startsWith(value.trim().toLowerCase()) &&
-          selected.includes(" ")
+          item.source === "history" ||
+          (item.text.toLowerCase().startsWith(value.trim().toLowerCase()) &&
+            item.text.includes(" "))
         ) {
-          finalVal = selected.trim();
+          finalVal = item.text.trim();
         } else {
           const parts = value.trimEnd().split(/\s+/);
           parts.pop();
-          parts.push(selected);
+          parts.push(item.text);
           finalVal = parts.join(" ").trim();
         }
 
@@ -840,8 +849,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return;
       }
 
-      if (suggestedCommand) {
-        const cmd = suggestedCommand;
+      if (parsedSuggestion?.command) {
+        const cmd = parsedSuggestion.command;
         setSuggestedCommand(null);
         trackCommand(cmd);
         onSend(cmd);
@@ -868,6 +877,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       // When awaiting an agent answer (continuation), force agent mode regardless of classifier
       if (awaitingAnswer || mode === "agent") {
         setFeedbackMsg("Agent Started");
+        addToHistory(finalVal);
         onRunAgent(finalVal, hasImages ? attachedImages : undefined);
         if (hasImages) setAttachedImages([]);
       } else if (mode === "command") {
@@ -882,9 +892,23 @@ const SmartInput: React.FC<SmartInputProps> = ({
         setGhostText("");
         setSuggestedCommand("");
         try {
+          // Gather session context for advice
+          let cwd: string | undefined;
+          let terminalHistory: string | undefined;
+          if (sessionId) {
+            try {
+              cwd = (await window.electron?.ipcRenderer?.getCwd(sessionId)) ?? undefined;
+              const hist = await window.electron?.ipcRenderer?.getHistory(sessionId);
+              if (hist) {
+                // Last 30 lines for context
+                const lines = hist.split("\n");
+                terminalHistory = lines.slice(-30).join("\n").trim();
+              }
+            } catch { /* non-critical */ }
+          }
           const cmd = await aiService.generateCommand(value, (token) => {
             setSuggestedCommand((prev) => (prev || "") + token);
-          });
+          }, { cwd, terminalHistory });
           setSuggestedCommand(cmd);
           setFeedbackMsg("");
         } catch (err) {
@@ -908,15 +932,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
   };
 
   const suggestion = suggestedCommand;
+
   const currentCompletion =
     showCompletions && completions.length > 0
-      ? completions[selectedIndex]
+      ? completions[selectedIndex]?.text
       : null;
 
   return (
     <div
       className="w-full flex flex-col relative gap-2 z-100"
       data-tutorial="smart-input"
+      data-testid="smart-input"
     >
       <div
         onDragEnter={(e) => {
@@ -1004,6 +1030,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
             <button
               ref={modeBtnRef}
               data-tutorial="mode-switcher"
+              data-testid="mode-button"
               className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors ${
                 isAuto
                   ? "bg-teal-500/10 text-teal-400"
@@ -1035,6 +1062,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     onClick={() => setShowModeMenu(false)}
                   />
                   <div
+                    data-testid="mode-menu"
                     className={`fixed w-36 rounded-lg shadow-xl overflow-hidden border z-[999] ${
                       theme === "light"
                         ? "bg-white border-gray-200"
@@ -1081,6 +1109,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     ].map((m) => (
                       <button
                         key={m.id}
+                        data-testid={`mode-option-${m.id}`}
                         onClick={() => {
                           if (m.id === "auto") {
                             setIsAuto(true);
@@ -1135,6 +1164,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
             <textarea
               ref={inputRef}
+              data-testid="smart-input-textarea"
               rows={1}
               className={`w-full bg-transparent font-mono text-sm outline-none resize-none overflow-hidden ${
                 theme === "light"
@@ -1157,6 +1187,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
               // while React state catches up in a transition
               onChange={(e) => {
                 const val = e.target.value;
+                inputTriggeredByUserRef.current = true;
+                onFocusInput?.();
                 startTransition(() => {
                   setReactValue(val);
                   setHistoryIndex(-1);
@@ -1170,6 +1202,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 el.style.height = 'auto';
                 el.style.height = el.scrollHeight + 'px';
               }}
+              onFocus={() => onFocusInput?.()}
               onKeyDown={handleKeyDown}
               onKeyUp={handleKeyUp}
               onPaste={(e) => {
@@ -1206,6 +1239,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 }}
               />
               <button
+                data-testid="image-upload-button"
                 onClick={() => fileInputRef.current?.click()}
                 className={`p-1.5 rounded-md transition-colors ${theme === "light"
                   ? "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
@@ -1219,6 +1253,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           )}
 
           <button
+            data-testid={isLoading || isAgentRunning ? "stop-button" : "send-button"}
             onClick={
               isLoading || isAgentRunning
                 ? () => stopAgent && stopAgent()
@@ -1273,9 +1308,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           {feedbackMsg && (
             <span className="animate-in fade-in opacity-70">{feedbackMsg}</span>
           )}
-          {mode === "agent" &&
-            (!modelCapabilities || modelCapabilities.length === 0 ||
-              modelCapabilities.includes("thinking")) && (
+          {modelCapabilities?.includes("thinking") && !isOverlayVisible && (
               <button
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}
                 className={`px-1 py-px rounded border transition-colors ${
@@ -1330,7 +1363,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           >
             {completions.map((comp, i) => (
               <motion.div
-                key={comp}
+                key={`${comp.source}-${comp.text}`}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.12 }}
@@ -1344,8 +1377,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   setTimeout(() => handleSend(), 0);
                 }}
               >
-                <Terminal className="w-3 h-3 opacity-50 shrink-0" />
-                <span className="truncate">{comp}</span>
+                {comp.source === "history" ? (
+                  <Clock className="w-3 h-3 opacity-50 shrink-0" />
+                ) : (
+                  <Terminal className="w-3 h-3 opacity-50 shrink-0" />
+                )}
+                <span className="truncate">{comp.text}</span>
               </motion.div>
             ))}
           </motion.div>
@@ -1377,29 +1414,48 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 >
                   AI Suggestion
                 </div>
-                <div
-                  className={`text-xs leading-relaxed font-mono ${theme === "light" ? "text-gray-700" : "text-gray-300"}`}
-                >
-                  {suggestion ||
-                    (isLoading ? (
-                      <span
-                        className={`italic ${theme === "light" ? "text-gray-400" : "text-gray-500"}`}
+                {!suggestion && isLoading && (
+                  <div className={`text-xs italic ${theme === "light" ? "text-gray-400" : "text-gray-500"}`}>
+                    Generating...
+                  </div>
+                )}
+                {parsedSuggestion && (
+                  <div className="flex flex-col gap-1">
+                    {parsedSuggestion.command && (
+                      <div
+                        className={`text-xs leading-relaxed font-mono px-2 py-1 rounded ${
+                          theme === "light"
+                            ? "bg-gray-100 text-gray-800"
+                            : "bg-white/5 text-gray-200"
+                        }`}
                       >
-                        Generating...
-                      </span>
-                    ) : (
-                      ""
-                    ))}
-                  {isLoading && suggestion && (
-                    <span className="inline-block w-1.5 h-3 bg-purple-400/60 animate-pulse ml-0.5 align-middle" />
-                  )}
-                </div>
+                        {parsedSuggestion.command}
+                        {isLoading && (
+                          <span className="inline-block w-1.5 h-3 bg-purple-400/60 animate-pulse ml-0.5 align-middle" />
+                        )}
+                      </div>
+                    )}
+                    {parsedSuggestion.text && (
+                      <div
+                        className={`text-xs leading-relaxed ${
+                          theme === "light" ? "text-gray-500" : "text-gray-400"
+                        }`}
+                      >
+                        {parsedSuggestion.text}
+                      </div>
+                    )}
+                    {!parsedSuggestion.command && !parsedSuggestion.text && isLoading && (
+                      <span className="inline-block w-1.5 h-3 bg-purple-400/60 animate-pulse" />
+                    )}
+                  </div>
+                )}
                 {/* Accept / Run buttons */}
                 {suggestion && !isLoading && (
                   <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/10">
+                    {parsedSuggestion?.command && (
                     <button
                       onClick={() => {
-                        setValue(suggestion);
+                        setValue(parsedSuggestion.command);
                         setSuggestedCommand(null);
                         setIsAuto(false);
                         setMode("command");
@@ -1418,9 +1474,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
                       </span>
                       Edit
                     </button>
+                    )}
+                    {parsedSuggestion?.command && (
                     <button
                       onClick={() => {
-                        const cmd = suggestion;
+                        const cmd = parsedSuggestion.command;
                         setSuggestedCommand(null);
                         trackCommand(cmd);
                         onSend(cmd);
@@ -1442,6 +1500,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                       </span>
                       Run
                     </button>
+                    )}
                     <button
                       onClick={() => {
                         setSuggestedCommand(null);
