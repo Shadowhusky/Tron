@@ -5,7 +5,8 @@ import { useLayout } from "../../contexts/LayoutContext";
 import { aiService, providerUsesBaseUrl } from "../../services/ai";
 import { STORAGE_KEYS } from "../../constants/storage";
 import { useTheme } from "../../contexts/ThemeContext";
-import { Folder, X, Loader2 } from "lucide-react";
+import { Folder, X, Loader2, Trash2 } from "lucide-react";
+import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
@@ -72,6 +73,8 @@ const ContextBar: React.FC<ContextBarProps> = ({
 }) => {
   const { sessions, updateSessionConfig, updateSession } = useLayout();
   const { resolvedTheme: theme } = useTheme();
+  const { agentThread, setAgentThread } = useAgent(sessionId);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // Derived state
   const session = sessions.get(sessionId);
@@ -127,7 +130,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
             }
           }
         }
-      } catch {}
+      } catch { }
       // 2. Also check the global saved config (may be more recent than cache)
       const globalCfg = aiService.getConfig();
       const globalMatch =
@@ -139,7 +142,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
       try {
         const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
         if (raw) providerCfg = JSON.parse(raw)[target.provider];
-      } catch {}
+      } catch { }
       const apiKey =
         providerCfg?.apiKey ||
         (target.provider === globalCfg.provider ? globalCfg.apiKey : undefined);
@@ -167,23 +170,44 @@ const ContextBar: React.FC<ContextBarProps> = ({
     }
   }, [session?.contextSummary]);
 
+  // Build agent thread text for context display
+  const agentContextText = React.useMemo(() => {
+    if (!agentThread.length) return "";
+    const parts: string[] = [];
+    for (const step of agentThread) {
+      const text = (step.output || "").slice(0, 500);
+      if (step.step === "separator") {
+        parts.push(`\n[User] ${text}`);
+      } else if (step.step === "done" || step.step === "success") {
+        parts.push(`[Agent] ${text}`);
+      } else if (step.step === "executed") {
+        parts.push(`[Executed] ${text}`);
+      } else if (step.step === "failed" || step.step === "error") {
+        parts.push(`[Error] ${text}`);
+      }
+    }
+    return parts.filter(Boolean).join("\n");
+  }, [agentThread]);
+
   useEffect(() => {
     if (!sessionId) return;
     const pollHistory = async () => {
       if (window.electron) {
-        // If we have a summary, we only need to show summary + new content
-        // But here we just show raw history if not summarized, or summary if summarized?
-        // Actually, user wants to see what the agent sees.
-
         const history = await window.electron.ipcRenderer.invoke(
           IPC.TERMINAL_GET_HISTORY,
           sessionId,
         );
 
-        setContextLength(history.length);
+        // Combine terminal history + agent thread
+        const terminalText = stripAnsi(history);
+        const fullContext = agentContextText
+          ? terminalText + "\n\n--- Agent Activity ---\n" + agentContextText
+          : terminalText;
+
+        setContextLength(fullContext.length);
 
         // Calculate usage percent
-        const percent = (history.length / maxContext) * 100;
+        const percent = (fullContext.length / maxContext) * 100;
 
         // Auto-summarize at 90%
         if (percent > 90 && !isSummarizing && !isSummarizedRef.current) {
@@ -192,10 +216,8 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
         // Only update display text if not currently showing a summary
         if (!isSummarizedRef.current) {
-          setContextText(stripAnsi(history));
+          setContextText(fullContext);
         } else if (session?.contextSummary) {
-          // If summarized, show summary + tail?
-          // For now, just show the summary to prove it exists
           setContextText(
             session.contextSummary + "\n\n... (plus recent output)",
           );
@@ -205,7 +227,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
     pollHistory();
     const interval = setInterval(pollHistory, 3000);
     return () => clearInterval(interval);
-  }, [sessionId, maxContext, session?.contextSummary]);
+  }, [sessionId, maxContext, session?.contextSummary, agentContextText]);
 
   const handleOpenContextModal = () => setShowContextModal(true);
 
@@ -256,6 +278,40 @@ const ContextBar: React.FC<ContextBarProps> = ({
         sessionId,
       );
       setContextText(stripAnsi(history));
+    }
+  };
+
+  const handleClearContext = async () => {
+    // Clear terminal history
+    if (window.electron) {
+      await window.electron.ipcRenderer.invoke(
+        IPC.TERMINAL_CLEAR_HISTORY,
+        sessionId,
+      );
+    }
+    // Clear agent thread
+    setAgentThread([]);
+    // Clear any summary
+    updateSession(sessionId, {
+      contextSummary: undefined,
+      contextSummarySourceLength: undefined,
+    });
+    setIsSummarized(false);
+    isSummarizedRef.current = false;
+    setShowClearConfirm(false);
+
+    // Re-fetch terminal to show current state (e.g. shell prompt) immediately
+    if (window.electron) {
+      const history = await window.electron.ipcRenderer.invoke(
+        IPC.TERMINAL_GET_HISTORY,
+        sessionId,
+      );
+      const text = stripAnsi(history);
+      setContextText(text);
+      setContextLength(text.length);
+    } else {
+      setContextText("");
+      setContextLength(0);
     }
   };
 
@@ -346,21 +402,20 @@ const ContextBar: React.FC<ContextBarProps> = ({
               style={{
                 ...(ctxRingRef.current
                   ? (() => {
-                      const rect = ctxRingRef.current!.getBoundingClientRect();
-                      return {
-                        bottom: window.innerHeight - rect.top + 4,
-                        right: window.innerWidth - rect.right,
-                      };
-                    })()
+                    const rect = ctxRingRef.current!.getBoundingClientRect();
+                    return {
+                      bottom: window.innerHeight - rect.top + 4,
+                      right: window.innerWidth - rect.right,
+                    };
+                  })()
                   : {}),
               }}
             >
               <div
-                className={`px-2 py-1 rounded text-[10px] whitespace-nowrap shadow-lg ${
-                  theme === "light"
-                    ? "bg-gray-800 text-white"
-                    : "bg-[#1a1a1a] text-gray-200 border border-white/10"
-                }`}
+                className={`px-2 py-1 rounded text-[10px] whitespace-nowrap shadow-lg ${theme === "light"
+                  ? "bg-gray-800 text-white"
+                  : "bg-[#1a1a1a] text-gray-200 border border-white/10"
+                  }`}
               >
                 {contextLength.toLocaleString()} / {maxContext.toLocaleString()}{" "}
                 chars
@@ -406,13 +461,13 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   style={{
                     ...(modelBtnRef.current
                       ? (() => {
-                          const rect =
-                            modelBtnRef.current!.getBoundingClientRect();
-                          return {
-                            bottom: window.innerHeight - rect.top + 6,
-                            right: window.innerWidth - rect.right,
-                          };
-                        })()
+                        const rect =
+                          modelBtnRef.current!.getBoundingClientRect();
+                        return {
+                          bottom: window.innerHeight - rect.top + 6,
+                          right: window.innerWidth - rect.right,
+                        };
+                      })()
                       : {}),
                   }}
                 >
@@ -438,7 +493,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                             "tron_provider_configs",
                           );
                           if (raw) providerCfg = JSON.parse(raw)[m.provider];
-                        } catch {}
+                        } catch { }
                         const apiKey =
                           providerCfg?.apiKey ||
                           (m.provider === globalCfg.provider
@@ -462,15 +517,14 @@ const ContextBar: React.FC<ContextBarProps> = ({
                         {m.capabilities?.map((cap) => (
                           <span
                             key={cap}
-                            className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                              cap === "thinking"
-                                ? "bg-purple-500/20 text-purple-400"
-                                : cap === "vision"
-                                  ? "bg-blue-500/20 text-blue-400"
-                                  : cap === "tools"
-                                    ? "bg-green-500/20 text-green-400"
-                                    : "bg-gray-500/20 text-gray-400"
-                            }`}
+                            className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
+                              ? "bg-purple-500/20 text-purple-400"
+                              : cap === "vision"
+                                ? "bg-blue-500/20 text-blue-400"
+                                : cap === "tools"
+                                  ? "bg-green-500/20 text-green-400"
+                                  : "bg-gray-500/20 text-gray-400"
+                              }`}
                           >
                             {cap}
                           </span>
@@ -529,33 +583,30 @@ const ContextBar: React.FC<ContextBarProps> = ({
               >
                 {/* Modal Header */}
                 <div
-                  className={`flex items-center justify-between px-4 py-3 border-b shrink-0 ${
-                    theme === "light"
-                      ? "border-gray-200 bg-gray-50"
-                      : "border-white/5 bg-white/5"
-                  }`}
+                  className={`flex items-center justify-between px-4 py-3 border-b shrink-0 ${theme === "light"
+                    ? "border-gray-200 bg-gray-50"
+                    : "border-white/5 bg-white/5"
+                    }`}
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-sm font-semibold">
                       Session Context
                     </span>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded-full ${
-                        theme === "light"
-                          ? "bg-gray-100 text-gray-500"
-                          : "bg-white/10 text-gray-400"
-                      }`}
+                      className={`text-[10px] px-2 py-0.5 rounded-full ${theme === "light"
+                        ? "bg-gray-100 text-gray-500"
+                        : "bg-white/10 text-gray-400"
+                        }`}
                     >
                       {contextText.length.toLocaleString()} chars
                     </span>
                   </div>
                   <button
                     onClick={() => setShowContextModal(false)}
-                    className={`p-1 rounded-md transition-colors ${
-                      theme === "light"
-                        ? "hover:bg-gray-200 text-gray-500"
-                        : "hover:bg-white/10 text-gray-400"
-                    }`}
+                    className={`p-1 rounded-md transition-colors ${theme === "light"
+                      ? "hover:bg-gray-200 text-gray-500"
+                      : "hover:bg-white/10 text-gray-400"
+                      }`}
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -563,31 +614,28 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
                 {/* Summarize Controls */}
                 <div
-                  className={`flex items-center gap-2 px-4 py-2 border-b shrink-0 ${
-                    theme === "light"
-                      ? "border-gray-100 bg-gray-50/50"
-                      : "border-white/5 bg-white/2"
-                  }`}
+                  className={`flex items-center gap-2 px-4 py-2 border-b shrink-0 ${theme === "light"
+                    ? "border-gray-100 bg-gray-50/50"
+                    : "border-white/5 bg-white/2"
+                    }`}
                 >
                   <span
-                    className={`text-[10px] uppercase tracking-wider font-semibold mr-1 ${
-                      theme === "light" ? "text-gray-400" : "text-gray-500"
-                    }`}
+                    className={`text-[10px] uppercase tracking-wider font-semibold mr-1 ${theme === "light" ? "text-gray-400" : "text-gray-500"
+                      }`}
                   >
                     Summarize:
                   </span>
                   {(["brief", "moderate", "detailed"] as const).map((level) => (
                     <button
                       key={level}
-                      disabled={isSummarizing}
+                      disabled={isSummarizing || contextText.length < 100}
                       onClick={() => handleSummarize(level)}
-                      className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
-                        isSummarizing
-                          ? "opacity-50 cursor-not-allowed"
-                          : theme === "light"
-                            ? "border-gray-200 hover:bg-gray-100 text-gray-600"
-                            : "border-white/10 hover:bg-white/5 text-gray-400"
-                      }`}
+                      className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${isSummarizing || contextText.length < 100
+                        ? "opacity-50 cursor-not-allowed"
+                        : theme === "light"
+                          ? "border-gray-200 hover:bg-gray-100 text-gray-600"
+                          : "border-white/10 hover:bg-white/5 text-gray-400"
+                        }`}
                     >
                       {level}
                     </button>
@@ -599,30 +647,82 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   <button
                     onClick={handleResetContext}
                     disabled={!isSummarized}
-                    className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
-                      !isSummarized
-                        ? "opacity-30 cursor-not-allowed border-white/5 text-gray-600"
-                        : theme === "light"
-                          ? "border-gray-200 hover:bg-gray-100 text-gray-500"
-                          : "border-white/10 hover:bg-white/5 text-gray-500"
-                    }`}
+                    className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${!isSummarized
+                      ? "opacity-30 cursor-not-allowed border-white/5 text-gray-600"
+                      : theme === "light"
+                        ? "border-gray-200 hover:bg-gray-100 text-gray-500"
+                        : "border-white/10 hover:bg-white/5 text-gray-500"
+                      }`}
                   >
                     Reset to raw
                   </button>
+                  <button
+                    onClick={() => setShowClearConfirm(true)}
+                    disabled={contextText.length < 100}
+                    className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors flex items-center gap-1 ${contextText.length < 100
+                      ? "opacity-30 cursor-not-allowed border-white/5 text-gray-600"
+                      : theme === "light"
+                        ? "border-red-200 hover:bg-red-50 text-red-500"
+                        : "border-red-500/20 hover:bg-red-500/10 text-red-400"
+                      }`}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Clear
+                  </button>
                 </div>
+
+                {/* Clear Confirmation */}
+                <AnimatePresence>
+                  {showClearConfirm && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.12 }}
+                      className={`mx-4 mt-3 p-3 rounded-lg border ${theme === "light"
+                        ? "bg-red-50 border-red-200"
+                        : "bg-red-500/10 border-red-500/20"
+                        }`}
+                    >
+                      <p className={`text-xs mb-2 ${theme === "light" ? "text-red-700" : "text-red-300"
+                        }`}>
+                        This will clear terminal history and agent conversation. This cannot be undone.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleClearContext}
+                          className={`text-[11px] px-3 py-1 rounded-md font-medium transition-colors ${theme === "light"
+                            ? "bg-red-500 hover:bg-red-600 text-white"
+                            : "bg-red-500/80 hover:bg-red-500 text-white"
+                            }`}
+                        >
+                          Clear All
+                        </button>
+                        <button
+                          onClick={() => setShowClearConfirm(false)}
+                          className={`text-[11px] px-3 py-1 rounded-md transition-colors ${theme === "light"
+                            ? "hover:bg-gray-100 text-gray-500"
+                            : "hover:bg-white/5 text-gray-400"
+                            }`}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 {/* Context Content */}
                 <pre
-                  className={`flex-1 overflow-y-auto overflow-x-hidden p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words ${
-                    theme === "light" ? "text-gray-700" : "text-gray-300"
-                  }`}
+                  className={`flex-1 overflow-y-auto overflow-x-hidden p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words ${theme === "light" ? "text-gray-700" : "text-gray-300"
+                    }`}
                   style={{ contain: "layout style paint" }}
                 >
                   {!isModalReady
                     ? "Retrieving context..."
                     : (contextText.length > 50_000
-                        ? contextText.slice(-50_000)
-                        : contextText) || "(No context yet)"}
+                      ? contextText.slice(-50_000)
+                      : contextText) || "(No context yet)"}
                 </pre>
               </motion.div>
             </>

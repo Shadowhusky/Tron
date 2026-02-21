@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Reorder, AnimatePresence, motion } from "framer-motion";
+import * as Popover from "@radix-ui/react-popover";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
@@ -300,21 +301,30 @@ const TabBar: React.FC<TabBarProps> = ({
       {/* Windows title bar overlay spacer (min/max/close buttons are on the right) */}
       {isWindows() && <div className="w-36 shrink-0" />}
 
-      {/* Context Menu */}
-      <AnimatePresence>
-        {contextMenu && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.1 }}
-            style={{
-              position: "fixed",
-              top: contextMenu.y,
-              left: contextMenu.x,
-              zIndex: 100,
-            }}
-            className={`w-48 py-1 rounded-md shadow-xl border overflow-hidden ${themeClass(
+      {/* Context Menu managed by Radix Popover */}
+      <Popover.Root open={!!contextMenu} onOpenChange={(open) => {
+        if (!open) setContextMenu(null);
+      }}>
+        <Popover.Anchor
+          // Virtual DOM anchor bound to the coordinates from right-click
+          virtualRef={{
+            current: {
+              getBoundingClientRect: () =>
+                DOMRect.fromRect({
+                  width: 0,
+                  height: 0,
+                  x: contextMenu?.x || 0,
+                  y: contextMenu?.y || 0,
+                }),
+            },
+          }}
+        />
+        <Popover.Portal>
+          <Popover.Content
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            className={`w-48 py-1 rounded-md shadow-xl border overflow-hidden z-[100] ${themeClass(
               resolvedTheme,
               {
                 dark: "bg-[#1e1e1e] border-white/10 text-gray-200",
@@ -323,13 +333,17 @@ const TabBar: React.FC<TabBarProps> = ({
                 light: "bg-white border-gray-200 text-gray-800 shadow-xl",
               },
             )}`}
-            onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => {
+              // Prevent browser native context menu if user right-clicks
+              // the custom context menu itself.
+              e.preventDefault();
+            }}
           >
             {/* Rename */}
             <button
               onClick={() => {
                 setContextMenu(null);
-                const tab = tabs.find((t) => t.id === contextMenu.tabId);
+                const tab = tabs.find((t) => t.id === contextMenu?.tabId);
                 if (!tab) return;
                 setRenamingTabId(tab.id);
                 setRenameValue(tab.title);
@@ -364,11 +378,11 @@ const TabBar: React.FC<TabBarProps> = ({
               ].map((clr, i) => (
                 <button
                   key={i}
-                  className={`w-4 h-4 rounded-full border border-gray-500/30 hover:scale-110 transition-transform ${clr.c === tabs.find(t => t.id === contextMenu.tabId)?.color ? "ring-2 ring-offset-1 ring-gray-400" : ""
+                  className={`w-4 h-4 rounded-full border border-gray-500/30 hover:scale-110 transition-transform ${clr.c === tabs.find(t => t.id === contextMenu?.tabId)?.color ? "ring-2 ring-offset-1 ring-gray-400" : ""
                     }`}
                   style={{ backgroundColor: clr.bg }}
                   onClick={() => {
-                    if (onUpdateTabColor) {
+                    if (onUpdateTabColor && contextMenu) {
                       onUpdateTabColor(contextMenu.tabId, clr.c);
                     }
                     setContextMenu(null);
@@ -381,9 +395,10 @@ const TabBar: React.FC<TabBarProps> = ({
             {/* Duplicate */}
             <button
               onClick={async () => {
+                const tabId = contextMenu?.tabId;
                 setContextMenu(null);
-                if (onDuplicateTab) {
-                  await onDuplicateTab(contextMenu.tabId);
+                if (onDuplicateTab && tabId) {
+                  await onDuplicateTab(tabId);
                 }
               }}
               className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${themeClass(
@@ -401,16 +416,17 @@ const TabBar: React.FC<TabBarProps> = ({
             {/* Close */}
             <button
               onClick={() => {
+                const tabId = contextMenu?.tabId;
                 setContextMenu(null);
-                const tab = tabs.find((t) => t.id === contextMenu.tabId);
-                const dirty = isTabDirty?.(contextMenu.tabId) ?? false;
+                const tab = tabs.find((t) => t.id === tabId);
+                const dirty = tabId ? (isTabDirty?.(tabId) ?? false) : false;
                 if (
-                  tab &&
+                  tab && tabId &&
                   (tab.title === "Settings" ||
                     !dirty ||
                     window.confirm("Close this terminal session?"))
                 ) {
-                  onClose(contextMenu.tabId);
+                  onClose(tabId);
                 }
               }}
               className={`w-full text-left px-3 py-1.5 text-sm transition-colors text-red-500 ${themeClass(
@@ -424,9 +440,9 @@ const TabBar: React.FC<TabBarProps> = ({
             >
               Close Tab
             </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   );
 };

@@ -130,6 +130,7 @@ const createWindow = () => {
     mainWindow = new electron_1.BrowserWindow({
         width: 1200,
         height: 800,
+        show: !process.argv.includes("--hidden"),
         webPreferences: {
             preload: preloadPath,
             nodeIntegration: false,

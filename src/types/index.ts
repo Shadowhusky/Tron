@@ -20,11 +20,14 @@ export interface AIModel {
 export interface AgentResult {
   success: boolean;
   message: string;
+  type?: string;
+  payload?: any;
 }
 
 export interface AgentStep {
   step: string;
   output: string;
+  payload?: any;
 }
 
 export interface AttachedImage {

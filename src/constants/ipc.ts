@@ -18,6 +18,7 @@ export const IPC = {
   TERMINAL_RESIZE: "terminal.resize",
   TERMINAL_CLOSE: "terminal.close",
   TERMINAL_READ_HISTORY: "terminal.readHistory",
+  TERMINAL_CLEAR_HISTORY: "terminal.clearHistory",
   TERMINAL_GET_SYSTEM_INFO: "terminal.getSystemInfo",
 
   // File — invoke

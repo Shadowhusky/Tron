@@ -672,7 +672,7 @@ Task: ${prompt}
             return `(Read terminal error: ${err.message})`;
           }
         },
-        (step, output) => {
+        (step, output, payload) => {
           const THROTTLE_MS = 100; // Max ~10 updates/sec for streaming
 
           // Streaming steps: buffer and throttle to reduce re-renders
@@ -748,7 +748,7 @@ Task: ${prompt}
                   }
                 }
                 if (lastExecIdx >= 0) {
-                  updated[lastExecIdx] = { step, output };
+                  updated[lastExecIdx] = { step, output, payload };
                   // Remove any leftover streaming entries
                   return updated.filter((s) => s.step !== "streaming");
                 }
@@ -763,10 +763,10 @@ Task: ${prompt}
                 }
               }
               if (lastStreamIdx >= 0) {
-                updated[lastStreamIdx] = { step, output };
+                updated[lastStreamIdx] = { step, output, payload };
                 return updated;
               }
-              return [...updated, { step, output }];
+              return [...updated, { step, output, payload }];
             });
             setIsThinking(false);
           }
@@ -804,18 +804,18 @@ Task: ${prompt}
         // Try to replace last streaming entry in-place
         let lastStreamIdx = -1;
         for (let j = prev.length - 1; j >= 0; j--) {
-          if (prev[j].step === "streaming") {
+          if (prev[j].step === "streaming" || prev[j].step === "streaming_response") {
             lastStreamIdx = j;
             break;
           }
         }
         if (lastStreamIdx >= 0) {
           const updated = [...prev];
-          updated[lastStreamIdx] = { step: finalStep, output: finalOutput };
+          updated[lastStreamIdx] = { step: finalStep, output: finalOutput, payload: finalAnswer.payload };
           return updated;
         }
         // No streaming entry — just append
-        return [...prev, { step: finalStep, output: finalOutput }];
+        return [...prev, { step: finalStep, output: finalOutput, payload: finalAnswer.payload }];
       });
 
       // Persist Agent Conclusion to Session State (Invisible Context)
