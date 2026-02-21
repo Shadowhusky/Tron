@@ -124,21 +124,20 @@ const AppContent = () => {
     [tabs, sessions],
   );
 
-  // Prevent initial flash/blink by waiting for hydration
-  if (!isHydrated) return null;
-
-  // Sync active session ID for cross-tab notification filtering
-  const activeTab = tabs.find((t) => t.id === activeTabId);
-  const activeSessionId = activeTab?.activeSessionId || null;
-  // Using a ref sync via effect would be cleaner, but for simplicity:
-  setActiveSessionForNotifications(activeSessionId);
-
   const handleDuplicateTab = useCallback(
     async (tabId: string) => {
       await duplicateTab(tabId, duplicateAgentSession);
     },
     [duplicateTab, duplicateAgentSession]
   );
+
+  // Prevent initial flash/blink by waiting for hydration
+  if (!isHydrated) return null;
+
+  // Sync active session ID for cross-tab notification filtering
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+  const activeSessionId = activeTab?.activeSessionId || null;
+  setActiveSessionForNotifications(activeSessionId);
 
   return (
     <motion.div
