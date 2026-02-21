@@ -15,11 +15,23 @@ type AppFixture = {
  */
 async function dismissOnboarding(page: Page): Promise<void> {
   // Inject required localStorage keys
-  await page.evaluate(() => {
+  await page.evaluate(({ provider, model, baseUrl, apiKey }) => {
     localStorage.setItem("tron_configured", "true");
     localStorage.setItem("tron_tutorial_completed", "true");
     localStorage.setItem("tron_theme", "dark");
     localStorage.setItem("tron_view_mode", "terminal");
+
+    // Inject AI settings so tests launch with the requested model instead of a fallback
+    if (provider && model) {
+      const config = { provider, model, baseUrl, apiKey, contextWindow: 4000, maxAgentSteps: 100 };
+      localStorage.setItem("tron_ai_config", JSON.stringify(config));
+      localStorage.setItem("tron_provider_configs", JSON.stringify({ [provider]: config }));
+    }
+  }, {
+    provider: process.env.TEST_PROVIDER,
+    model: process.env.TEST_MODEL,
+    baseUrl: process.env.TEST_BASE_URL,
+    apiKey: process.env.TEST_API_KEY
   });
 
   // Reload the Electron BrowserWindow to apply the injected state cleanly
@@ -32,7 +44,7 @@ export const test = base.extend<AppFixture>({
     const profilePath = path.join(__dirname, `../.test-profile-${Date.now()}`);
 
     const app = await _electron.launch({
-      args: [path.resolve(__dirname, "../../dist-electron/main.js")],
+      args: process.env.SHOW_UI === "true" ? [path.resolve(__dirname, "../../dist-electron/main.js")] : [path.resolve(__dirname, "../../dist-electron/main.js"), "--hidden", "--headless"],
       env: {
         ...process.env,
         NODE_ENV: "test",

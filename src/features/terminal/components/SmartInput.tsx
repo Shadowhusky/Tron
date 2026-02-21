@@ -107,10 +107,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
             inputRef.current.style.height = 'auto';
           }
         }
+        // Sync draft persistence whenever value changes programmatically
+        onDraftChange?.(newVal || undefined);
         return newVal;
       });
     },
-    [],
+    [onDraftChange],
   );
 
   // Mode State
@@ -587,7 +589,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
   const handleSend = () => {
     // Trigger same logic as Enter
-    handleKeyDown({ key: "Enter", preventDefault: () => {} } as any);
+    handleKeyDown({ key: "Enter", preventDefault: () => { }, stopPropagation: () => { } } as any);
   };
 
   // Shift Key Logic: Double-tap shift to switch mode
@@ -988,13 +990,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 : theme === "modern"
                   ? "bg-white/[0.03] border-white/[0.08] text-gray-100"
                   : "bg-[#0e0e0e] border-white/10 text-gray-200 shadow-xl"
-        }`}
+          }`}
       >
         {/* Drop zone hint */}
         {isDragOver && (
-          <div className={`flex items-center justify-center py-2 text-xs font-medium ${
-            theme === "light" ? "text-purple-600" : "text-purple-300"
-          }`}>
+          <div className={`flex items-center justify-center py-2 text-xs font-medium ${theme === "light" ? "text-purple-600" : "text-purple-300"
+            }`}>
             <ImagePlus className="w-4 h-4 mr-1.5 opacity-70" />
             Drop image here
           </div>
@@ -1008,15 +1009,13 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 <img
                   src={`data:${img.mediaType};base64,${img.base64}`}
                   alt={img.name}
-                  className={`h-10 w-10 rounded object-cover border ${
-                    theme === "light" ? "border-gray-200" : "border-white/10"
-                  }`}
+                  className={`h-10 w-10 rounded object-cover border ${theme === "light" ? "border-gray-200" : "border-white/10"
+                    }`}
                 />
                 <button
                   onClick={() => removeImage(i)}
-                  className={`absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full text-white flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity shadow-sm ${
-                    theme === "light" ? "bg-red-500" : "bg-red-500/90"
-                  }`}
+                  className={`absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full text-white flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity shadow-sm ${theme === "light" ? "bg-red-500" : "bg-red-500/90"
+                    }`}
                 >
                   <X className="w-2.5 h-2.5" />
                 </button>
@@ -1031,15 +1030,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
               ref={modeBtnRef}
               data-tutorial="mode-switcher"
               data-testid="mode-button"
-              className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors ${
-                isAuto
+              className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors ${isAuto
                   ? "bg-teal-500/10 text-teal-400"
                   : mode === "agent"
                     ? "bg-purple-500/10 text-purple-400"
                     : mode === "advice"
                       ? "bg-blue-500/10 text-blue-400"
                       : "bg-white/5 text-gray-400 hover:text-white"
-              }`}
+                }`}
               onClick={() => setShowModeMenu((v) => !v)}
             >
               {isAuto ? (
@@ -1063,21 +1061,20 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   />
                   <div
                     data-testid="mode-menu"
-                    className={`fixed w-36 rounded-lg shadow-xl overflow-hidden border z-[999] ${
-                      theme === "light"
+                    className={`fixed w-36 rounded-lg shadow-xl overflow-hidden border z-[999] ${theme === "light"
                         ? "bg-white border-gray-200"
                         : "bg-[#1e1e1e] border-white/10"
-                    }`}
+                      }`}
                     style={{
                       ...(modeBtnRef.current
                         ? (() => {
-                            const rect =
-                              modeBtnRef.current!.getBoundingClientRect();
-                            return {
-                              bottom: window.innerHeight - rect.top + 4,
-                              left: rect.left,
-                            };
-                          })()
+                          const rect =
+                            modeBtnRef.current!.getBoundingClientRect();
+                          return {
+                            bottom: window.innerHeight - rect.top + 4,
+                            left: rect.left,
+                          };
+                        })()
                         : {}),
                     }}
                   >
@@ -1120,17 +1117,16 @@ const SmartInput: React.FC<SmartInputProps> = ({
                           }
                           setShowModeMenu(false);
                         }}
-                        className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 ${
-                          theme === "light"
+                        className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 ${theme === "light"
                             ? (isAuto && m.id === "auto") ||
                               (!isAuto && mode === m.id)
                               ? "text-gray-900 bg-gray-100"
                               : "text-gray-600 hover:bg-gray-50"
                             : (isAuto && m.id === "auto") ||
-                                (!isAuto && mode === m.id)
+                              (!isAuto && mode === m.id)
                               ? "text-white bg-white/5"
                               : "text-gray-400 hover:bg-white/5"
-                        }`}
+                          }`}
                       >
                         <span className="w-4 text-center flex justify-center">
                           {m.icon}
@@ -1166,11 +1162,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
               ref={inputRef}
               data-testid="smart-input-textarea"
               rows={1}
-              className={`w-full bg-transparent font-mono text-sm outline-none resize-none overflow-hidden ${
-                theme === "light"
+              className={`w-full bg-transparent font-mono text-sm outline-none resize-none overflow-hidden ${theme === "light"
                   ? "text-gray-900 placeholder-gray-400"
                   : "text-gray-100 placeholder-gray-500"
-              }`}
+                }`}
               style={{ minHeight: '1.5em', maxHeight: '8em' }}
               placeholder={
                 aiPlaceholder
@@ -1244,7 +1239,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 className={`p-1.5 rounded-md transition-colors ${theme === "light"
                   ? "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
                   : "hover:bg-white/10 text-gray-500 hover:text-gray-300"
-                }`}
+                  }`}
                 title={`Attach image (${attachedImages.length}/${MAX_IMAGES})`}
               >
                 <ImagePlus className="w-4 h-4" />
@@ -1259,11 +1254,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 ? () => stopAgent && stopAgent()
                 : () => handleSend()
             }
-            className={`p-1.5 rounded-md transition-colors ${
-              theme === "light"
+            className={`p-1.5 rounded-md transition-colors ${theme === "light"
                 ? "hover:bg-gray-100 text-gray-500 hover:text-gray-700"
                 : "hover:bg-white/10 text-gray-500 hover:text-white"
-            } ${isLoading || isAgentRunning ? "text-red-400 hover:text-red-300 hover:bg-red-500/10" : ""}`}
+              } ${isLoading || isAgentRunning ? "text-red-400 hover:text-red-300 hover:bg-red-500/10" : ""}`}
             title={isLoading || isAgentRunning ? "Stop Agent (Ctrl+C)" : "Run"}
           >
             {isLoading || isAgentRunning ? (
@@ -1279,9 +1273,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
       {/* Hints bar */}
       <div
-        className={`flex items-center justify-between px-2 h-5 text-[10px] select-none overflow-hidden whitespace-nowrap ${
-          theme === "light" ? "text-gray-500" : "text-gray-400"
-        }`}
+        className={`flex items-center justify-between px-2 h-5 text-[10px] select-none overflow-hidden whitespace-nowrap ${theme === "light" ? "text-gray-500" : "text-gray-400"
+          }`}
       >
         {/* Left: mode indicator + feedback */}
         <div className="flex items-center gap-2 shrink-0">
@@ -1294,13 +1287,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
             </span>
           ) : (
             <span
-              className={`font-medium ${
-                mode === "agent"
+              className={`font-medium ${mode === "agent"
                   ? "text-purple-400"
                   : mode === "advice"
                     ? "text-blue-400"
                     : ""
-              }`}
+                }`}
             >
               {mode}
             </span>
@@ -1309,29 +1301,27 @@ const SmartInput: React.FC<SmartInputProps> = ({
             <span className="animate-in fade-in opacity-70">{feedbackMsg}</span>
           )}
           {modelCapabilities?.includes("thinking") && !isOverlayVisible && (
-              <button
-                onClick={() => setThinkingEnabled(!thinkingEnabled)}
-                className={`px-1 py-px rounded border transition-colors ${
-                  thinkingEnabled
-                    ? theme === "light"
-                      ? "border-purple-300 text-purple-600 bg-purple-50"
-                      : "border-purple-500/30 text-purple-400 bg-purple-500/10"
-                    : theme === "light"
-                      ? "border-gray-300 text-gray-400 bg-gray-50"
-                      : "border-white/10 text-gray-500 bg-white/5"
+            <button
+              onClick={() => setThinkingEnabled(!thinkingEnabled)}
+              className={`px-1 py-px rounded border transition-colors ${thinkingEnabled
+                  ? theme === "light"
+                    ? "border-purple-300 text-purple-600 bg-purple-50"
+                    : "border-purple-500/30 text-purple-400 bg-purple-500/10"
+                  : theme === "light"
+                    ? "border-gray-300 text-gray-400 bg-gray-50"
+                    : "border-white/10 text-gray-500 bg-white/5"
                 }`}
-                title={thinkingEnabled ? "Disable thinking" : "Enable thinking"}
-              >
-                think {thinkingEnabled ? "on" : "off"}
-              </button>
-            )}
+              title={thinkingEnabled ? "Disable thinking" : "Enable thinking"}
+            >
+              think {thinkingEnabled ? "on" : "off"}
+            </button>
+          )}
         </div>
 
         {/* Right: shortcuts */}
         <div
-          className={`flex items-center gap-0.5 shrink-0 ${
-            theme === "light" ? "opacity-70" : "opacity-80"
-          }`}
+          className={`flex items-center gap-0.5 shrink-0 ${theme === "light" ? "opacity-70" : "opacity-80"
+            }`}
         >
           <span>⇧⇧ next mode</span>
           <span className="opacity-40 mx-1">·</span>
@@ -1367,11 +1357,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.12 }}
-                className={`px-3 py-2 text-xs font-mono cursor-pointer flex items-center gap-2 ${
-                  i === selectedIndex
+                className={`px-3 py-2 text-xs font-mono cursor-pointer flex items-center gap-2 ${i === selectedIndex
                     ? "bg-blue-600 text-white"
                     : "text-gray-400 hover:bg-white/5"
-                }`}
+                  }`}
                 onClick={() => {
                   acceptCompletion(comp);
                   setTimeout(() => handleSend(), 0);
@@ -1398,11 +1387,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
             initial="hidden"
             animate="visible"
             exit="exit"
-            className={`absolute bottom-full left-0 mb-2 w-full border rounded-lg p-3 shadow-xl z-10 max-h-48 overflow-y-auto ${
-              theme === "light"
+            className={`absolute bottom-full left-0 mb-2 w-full border rounded-lg p-3 shadow-xl z-10 max-h-48 overflow-y-auto ${theme === "light"
                 ? "bg-white/95 border-blue-200"
                 : "bg-[#1a1a1a]/90 border-purple-500/20"
-            }`}
+              }`}
           >
             <div className="flex items-start gap-3">
               <Lightbulb
@@ -1423,11 +1411,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   <div className="flex flex-col gap-1">
                     {parsedSuggestion.command && (
                       <div
-                        className={`text-xs leading-relaxed font-mono px-2 py-1 rounded ${
-                          theme === "light"
+                        className={`text-xs leading-relaxed font-mono px-2 py-1 rounded ${theme === "light"
                             ? "bg-gray-100 text-gray-800"
                             : "bg-white/5 text-gray-200"
-                        }`}
+                          }`}
                       >
                         {parsedSuggestion.command}
                         {isLoading && (
@@ -1437,9 +1424,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     )}
                     {parsedSuggestion.text && (
                       <div
-                        className={`text-xs leading-relaxed ${
-                          theme === "light" ? "text-gray-500" : "text-gray-400"
-                        }`}
+                        className={`text-xs leading-relaxed ${theme === "light" ? "text-gray-500" : "text-gray-400"
+                          }`}
                       >
                         {parsedSuggestion.text}
                       </div>
@@ -1453,64 +1439,61 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 {suggestion && !isLoading && (
                   <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/10">
                     {parsedSuggestion?.command && (
-                    <button
-                      onClick={() => {
-                        setValue(parsedSuggestion.command);
-                        setSuggestedCommand(null);
-                        setIsAuto(false);
-                        setMode("command");
-                        inputRef.current?.focus();
-                      }}
-                      className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors flex items-center gap-1 ${
-                        theme === "light"
-                          ? "bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200"
-                          : "bg-white/10 hover:bg-white/15 text-gray-300 border border-white/10"
-                      }`}
-                    >
-                      <span
-                        className={`text-[9px] px-1 py-px rounded ${theme === "light" ? "bg-gray-200 text-gray-500" : "bg-white/10 text-gray-500"}`}
+                      <button
+                        onClick={() => {
+                          setValue(parsedSuggestion.command);
+                          setSuggestedCommand(null);
+                          setIsAuto(false);
+                          setMode("command");
+                          inputRef.current?.focus();
+                        }}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors flex items-center gap-1 ${theme === "light"
+                            ? "bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200"
+                            : "bg-white/10 hover:bg-white/15 text-gray-300 border border-white/10"
+                          }`}
                       >
-                        Tab
-                      </span>
-                      Edit
-                    </button>
+                        <span
+                          className={`text-[9px] px-1 py-px rounded ${theme === "light" ? "bg-gray-200 text-gray-500" : "bg-white/10 text-gray-500"}`}
+                        >
+                          Tab
+                        </span>
+                        Edit
+                      </button>
                     )}
                     {parsedSuggestion?.command && (
-                    <button
-                      onClick={() => {
-                        const cmd = parsedSuggestion.command;
-                        setSuggestedCommand(null);
-                        trackCommand(cmd);
-                        onSend(cmd);
-                        setValue("");
-                        setGhostText("");
-                        setCompletions([]);
-                        setShowCompletions(false);
-                      }}
-                      className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors flex items-center gap-1 ${
-                        theme === "light"
-                          ? "bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-200"
-                          : "bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/20"
-                      }`}
-                    >
-                      <span
-                        className={`text-[9px] px-1 py-px rounded ${theme === "light" ? "bg-blue-200 text-blue-500" : "bg-purple-500/20 text-purple-400"}`}
+                      <button
+                        onClick={() => {
+                          const cmd = parsedSuggestion.command;
+                          setSuggestedCommand(null);
+                          trackCommand(cmd);
+                          onSend(cmd);
+                          setValue("");
+                          setGhostText("");
+                          setCompletions([]);
+                          setShowCompletions(false);
+                        }}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded transition-colors flex items-center gap-1 ${theme === "light"
+                            ? "bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-200"
+                            : "bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/20"
+                          }`}
                       >
-                        ↵
-                      </span>
-                      Run
-                    </button>
+                        <span
+                          className={`text-[9px] px-1 py-px rounded ${theme === "light" ? "bg-blue-200 text-blue-500" : "bg-purple-500/20 text-purple-400"}`}
+                        >
+                          ↵
+                        </span>
+                        Run
+                      </button>
                     )}
                     <button
                       onClick={() => {
                         setSuggestedCommand(null);
                         inputRef.current?.focus();
                       }}
-                      className={`px-2 py-1 text-[11px] rounded transition-colors ${
-                        theme === "light"
+                      className={`px-2 py-1 text-[11px] rounded transition-colors ${theme === "light"
                           ? "text-gray-400 hover:text-gray-600"
                           : "text-gray-500 hover:text-gray-300"
-                      }`}
+                        }`}
                     >
                       Dismiss
                     </button>

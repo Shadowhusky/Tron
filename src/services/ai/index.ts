@@ -48,12 +48,11 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
   openai: {
     chatUrl: "https://api.openai.com/v1/chat/completions",
     defaultModels: [
-      "gpt-5.2",
-      "gpt-5.2-codex",
-      "o3",
-      "o4-mini",
-      "gpt-4.1",
+      "o3-mini",
+      "o1",
+      "gpt-4.5-preview",
       "gpt-4o",
+      "gpt-4o-mini"
     ],
     placeholder: "gpt-5.2",
     label: "OpenAI",
@@ -61,9 +60,10 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
   anthropic: {
     chatUrl: "https://api.anthropic.com/v1/messages",
     defaultModels: [
-      "claude-opus-4-6",
-      "claude-sonnet-4-6",
-      "claude-haiku-4-5-20251001",
+      "claude-3-7-sonnet-20250219",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+      "claude-3-opus-20240229"
     ],
     placeholder: "claude-sonnet-4-6",
     label: "Anthropic",
@@ -72,10 +72,11 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
     chatUrl:
       "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     defaultModels: [
-      "gemini-3-pro-preview",
-      "gemini-3-flash-preview",
       "gemini-2.5-pro",
       "gemini-2.5-flash",
+      "gemini-2.0-pro-exp-0205",
+      "gemini-2.0-flash-thinking-exp-0121",
+      "gemini-2.0-flash"
     ],
     placeholder: "gemini-2.5-flash",
     label: "Gemini (Google)",
@@ -173,6 +174,28 @@ function isOpenAICompatible(provider: string): boolean {
     provider !== "ollama" &&
     provider in CLOUD_PROVIDERS
   );
+}
+
+/**
+ * Detect models that need the legacy /v1/completions endpoint
+ * instead of /v1/chat/completions.
+ * Known patterns: codex models (e.g. "codex-mini-latest", "gpt-5.2-codex").
+ */
+function isCompletionsModel(model: string): boolean {
+  const lower = model.toLowerCase();
+  return lower.includes("codex") || lower.includes("davinci") || lower.includes("babbage");
+}
+
+/** Convert chat messages array into a single prompt string for the completions API. */
+function messagesToPrompt(messages: any[]): string {
+  return messages
+    .map((m) => {
+      if (m.role === "system") return m.content;
+      if (m.role === "user") return `User: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`;
+      if (m.role === "assistant") return `Assistant: ${m.content}`;
+      return m.content;
+    })
+    .join("\n\n");
 }
 
 /** Resolve the Anthropic Messages API URL for anthropic or anthropic-compat. */
@@ -779,6 +802,21 @@ class AIService {
     return "/v1/chat/completions";
   }
 
+  /** Resolve the legacy completions URL for non-chat models (codex, davinci, etc.). */
+  private getOpenAICompletionsUrl(provider: string, baseUrl?: string): string {
+    if (baseUrl) {
+      const url = baseUrl.replace(/\/+$/, "");
+      if (url.endsWith("/completions") && !url.endsWith("/chat/completions"))
+        return url;
+      if (url.endsWith("/v1")) return `${url}/completions`;
+      return `${url}/v1/completions`;
+    }
+    // Derive from the chatUrl by stripping /chat/completions → /completions
+    const chatUrl = CLOUD_PROVIDERS[provider]?.chatUrl;
+    if (chatUrl) return chatUrl.replace("/chat/completions", "/completions");
+    return "/v1/completions";
+  }
+
   /** Non-streaming OpenAI-compatible chat completion. */
   private async openAIChatSimple(
     provider: string,
@@ -940,6 +978,7 @@ class AIService {
 Reply ONLY in this format, nothing else:
 COMMAND: <raw command, no backticks>
 TEXT: <one short sentence>
+Give the command that DIRECTLY answers what the user asked. NOT prerequisite/install/setup commands — the actual command they want to run. Assume tools are already installed.
 Omit COMMAND line if no command applies (greetings, conceptual questions).
 NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 15 words.`;
 
@@ -1357,7 +1396,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       checkPermission?: boolean,
     ) => Promise<void> | void,
     readTerminal: (lines: number) => Promise<string>,
-    onUpdate: (step: string, output: string) => void,
+    onUpdate: (step: string, output: string, payload?: any) => void,
     sessionConfig?: AIConfig,
     signal?: AbortSignal,
     thinkingEnabled: boolean = true,
@@ -1420,7 +1459,8 @@ RULES:
 6. START DEV SERVER ONLY AS THE VERY LAST STEP. Do not start it until all files are written, dependencies installed, and configuration is complete. Once started, the terminal is blocked.
 7. SCAFFOLDING: If the target directory might exist, run "rm -rf <dir>" FIRST. Do NOT run "mkdir" before scaffolding tools (npm create, git clone) — let them create the directory. This avoids "Directory not empty" prompts. Use non-interactive flags (e.g. --yes) where possible.
 8. AUTONOMY & STATE: Do NOT ask the user questions about system state (e.g. "Is the server running?", "Is the file created?", "What is on port X?"). CHECK IT YOURSELF using commands like "ps aux | grep <name>", "curl -I localhost:<port>", "lsof -i :<port>", or "ls -F". Only ask if you cannot determine the state programmatically after trying.
-9. PROBLEM SOLVING: If a command fails or results are unexpected, do NOT just give up or retry blindly. ANALYZE the error message to find the root cause (missing file, permission denied, wrong path, dependency needed). PROACTIVELY FIX the issue (create the missing file, chmod, npm install, correct the path) and then retry. You have permission to fix environment issues to achieve the goal.
+9. INTERACTIVE PROMPTS: If a terminal command stops to ask a question (like "Use Experimental Vite?" or "Ok to proceed?"), do NOT ask the user what to choose unless it's a critical architectural choice they haven't clarified. Use send_text("\\r") to accept defaults, or send_text("y\\r") to proceed automatically! Be an autonomous agent.
+10. PROBLEM SOLVING: If a command fails or results are unexpected, do NOT just give up or retry blindly. ANALYZE the error message to find the root cause (missing file, permission denied, wrong path, dependency needed). PROACTIVELY FIX the issue (create the missing file, chmod, npm install, correct the path) and then retry. You have permission to fix environment issues to achieve the goal.
 10. CONTEXT AWARENESS: The [PROJECT FILES] section shows existing files. Do NOT recreate files that already exist — use read_file or edit_file to modify them. Do NOT scaffold a new project if one already exists. Always check the project structure before creating files.
 11. IMAGES: If the user mentions images or screenshots, they were already analyzed in a prior step. Use the description provided — do NOT try to access image files with read_file, execute_command, or ls.
 12. TAB TITLE: If this is your FIRST response to a new task, you MUST include a "_tab_title": "short 2-5 word title" property at the root of your JSON response. This will automatically set the terminal tab name. If the user's task is unclear or you are asking for clarification, do NOT include this property.
@@ -1843,7 +1883,7 @@ ${agentPrompt}
 
       // Handle auto tab naming requested in the prompt
       if (action && action._tab_title) {
-        onUpdate("set_tab_title", action._tab_title);
+        onUpdate("set_tab_title", action._tab_title, action);
         delete action._tab_title;
       }
 
@@ -1995,7 +2035,7 @@ ${agentPrompt}
           };
         }
 
-        onUpdate("failed", `Loop detected (${loopBreaks}/3): ${action.tool}`);
+        onUpdate("failed", `Loop detected (${loopBreaks}/3): ${action.tool}`, action);
         history.push({
           role: "user",
           content:
@@ -2023,7 +2063,7 @@ ${agentPrompt}
           const state = await detectTerminalState();
           // Only fail if it's explicitly idle. If "server" or "busy", assume it's fine.
           if (state === "idle") {
-            onUpdate("failed", "Premature completion: Dev server not running");
+            onUpdate("failed", "Premature completion: Dev server not running", action);
             history.push({
               role: "user",
               content: `Error: You scaffolded a project and implemented files, but the dev server is NOT running (terminal is idle). You MUST start the dev server (e.g. "npm run dev") using "run_in_terminal" before finishing. The user expects a running application.`,
@@ -2071,15 +2111,20 @@ ${agentPrompt}
           /\b(error|issue|problem|bug|fail|broken)\b/i.test(
             history[history.length - 2]?.content || "",
           ) || /\b(error|issue|problem|bug|fail|broken)\b/i.test(userTask);
+
+        // Guard against false positives like "it is set up for model management"
+        const isDescribingExistingState = /\b(is|are|shows? it's|was)\b\s+(set up)\b/.test(answerText);
+
         if (
           !isShortAck &&
           (isAskingToContinue ||
             isFuturePlan ||
-            (hasUnfinishedSteps && !loopBreaks))
+            (hasUnfinishedSteps && !loopBreaks && !isDescribingExistingState))
         ) {
           onUpdate(
             "failed",
             "Rejected: final_answer describes unfinished work",
+            action
           );
           history.push({
             role: "user",
@@ -2089,7 +2134,7 @@ ${agentPrompt}
         }
         // Reject if answer mentions unfixed errors (unless agent is stuck from loops or user reported the error)
         if (mentionsError && !loopBreaks && !userMentionedError) {
-          onUpdate("failed", "Rejected: final_answer mentions unfixed errors");
+          onUpdate("failed", "Rejected: final_answer mentions unfixed errors", action);
           history.push({
             role: "user",
             content: `REJECTED: Your final_answer mentions errors that are not fixed. Do NOT report errors as done. Fix them first (read the error, identify root cause, apply fix), then give final_answer when working.`,
@@ -2108,6 +2153,7 @@ ${agentPrompt}
             onUpdate(
               "failed",
               `Rejected: delegation — agent should run "${cmdMatch[1].slice(0, 40)}" itself`,
+              action
             );
             history.push({
               role: "user",
@@ -2127,8 +2173,11 @@ ${agentPrompt}
           "build ",
           "setup ",
         ];
+        const isQuestionPattern = /^(how\s+to|how\s+do\s+i|what\s+is|explain|can\s+you\s+explain|tell\s+me)\b/i.test(userTask);
         const hasActionRequest =
-          !isShortAck && actionKeywords.some((kw) => userTask.includes(kw));
+          !isShortAck &&
+          !isQuestionPattern &&
+          actionKeywords.some((kw) => userTask.toLowerCase().includes(kw));
 
         // If we executed no commands and wrote no files, almost certainly incomplete.
         if (
@@ -2140,6 +2189,7 @@ ${agentPrompt}
           onUpdate(
             "failed",
             "Rejected: lazy completion — no commands executed, no files written",
+            action
           );
           history.push({
             role: "user",
@@ -2147,7 +2197,7 @@ ${agentPrompt}
           });
           continue;
         }
-        return { success: true, message: action.content, type: "success" };
+        return { success: true, message: action.content, type: "success", payload: action };
       }
 
       if (action.tool === "ask_question") {
@@ -2204,7 +2254,7 @@ ${agentPrompt}
               // Process is waiting for user input — tell agent to ask
               consecutiveBusy = 0;
               const output = await readTerminal(15);
-              onUpdate("executed", `Terminal waiting for input`);
+              onUpdate("executed", `Terminal waiting for input`, action);
               history.push({
                 role: "user",
                 content: `(Command NOT executed — terminal is waiting for user input.)\n${output}\n\nUse ask_question to ask the user what to enter, then send_text to type it. The user may also type directly in the terminal.`,
@@ -2231,6 +2281,7 @@ ${agentPrompt}
                 onUpdate(
                   "executed",
                   `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
+                  action
                 );
                 history.push({
                   role: "user",
@@ -2244,6 +2295,7 @@ ${agentPrompt}
                   "executed",
                   "(Terminal busy — auto-read)\n---\n" +
                   (output || "(no output)"),
+                  action
                 );
                 history.push({
                   role: "user",
@@ -2259,6 +2311,7 @@ ${agentPrompt}
                 onUpdate(
                   "warning",
                   "Dev server is already running — task may be complete",
+                  action
                 );
                 history.push({
                   role: "user",
@@ -2267,7 +2320,7 @@ ${agentPrompt}
                 consecutiveGuardBlocks++;
                 continue;
               }
-              onUpdate("warning", "Terminal busy: Dev server running");
+              onUpdate("warning", "Terminal busy: Dev server running", action);
               history.push({
                 role: "user",
                 content: `(Command NOT executed — dev server is running.${usedScaffold ? " You can still use write_file to add/edit code — the dev server will hot-reload automatically." : ""} If you need to run a different terminal command, use send_text("\\x03") to stop the server first. Use final_answer when the task is complete.)`,
@@ -2299,6 +2352,7 @@ ${agentPrompt}
             onUpdate(
               "failed",
               `Blocked: duplicate command "${runCmd.slice(0, 80)}"`,
+              action
             );
             history.push({
               role: "user",
@@ -2319,6 +2373,7 @@ ${agentPrompt}
             onUpdate(
               "failed",
               `Blocked: "${runCmd}" — use write_file instead (it creates directories automatically)`,
+              action
             );
             history.push({
               role: "user",
@@ -2334,7 +2389,7 @@ ${agentPrompt}
             !wroteFiles &&
             /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(dev|start)\b/.test(runCmd)
           ) {
-            onUpdate("failed", "Blocked: dev server before code written");
+            onUpdate("failed", "Blocked: dev server before code written", action);
             history.push({
               role: "user",
               content: `Error: You scaffolded a template but haven't written any code yet. Use write_file to implement the features the user asked for BEFORE starting the dev server.`,
@@ -2366,6 +2421,7 @@ ${agentPrompt}
           onUpdate(
             "executed",
             runCmd + "\n---\n" + (snapshot || "(awaiting output)"),
+            action
           );
           history.push({
             role: "user",
@@ -2374,7 +2430,7 @@ ${agentPrompt}
         } catch (err: any) {
           terminalBusy = false; // Reset — command never actually ran
           const isDeny = err.message === "User denied command execution.";
-          onUpdate("failed", action.command + "\n---\n" + err.message);
+          onUpdate("failed", action.command + "\n---\n" + err.message, action);
           if (isDeny) {
             // Permission denied is a hard stop — don't let agent retry the same command
             history.push({
@@ -2393,8 +2449,23 @@ ${agentPrompt}
 
       if (action.tool === "send_text") {
         try {
-          // Process escape sequences in the text before sending
-          let processedText = action.text;
+          // Process escape sequences in the text before sending. Fallback to empty string to prevent TypeError.
+          let processedText = action.text || "";
+
+          // Guard: reject if no characters at all (but allow control chars like '\r', '\x1B[B' etc.)
+          if (!processedText || processedText.length === 0) {
+            onUpdate(
+              "failed",
+              "send_text: empty text rejected. Specify actual keystrokes.",
+              action
+            );
+            history.push({
+              role: "user",
+              content: `(send_text rejected: text was empty. Use specific keystrokes like \\r for Enter, \\x1B[B for Down Arrow.)`,
+            });
+            continue;
+          }
+
           // Map \n to \r (PTY Enter = carriage return 0x0D, not newline 0x0A)
           processedText = processedText.replace(/\\n/g, "\r");
           processedText = processedText.replace(/\\r/g, "\r");
@@ -2413,6 +2484,7 @@ ${agentPrompt}
             onUpdate(
               "failed",
               "send_text: empty text rejected. Specify actual keystrokes.",
+              action
             );
             history.push({
               role: "user",
@@ -2435,7 +2507,7 @@ ${agentPrompt}
           // Wait briefly for terminal to update, then snapshot
           await new Promise((r) => setTimeout(r, 1500));
           const snapshot = await readTerminal(10);
-          onUpdate("executed", desc + "\n---\n" + (snapshot || "(no output)"));
+          onUpdate("executed", desc + "\n---\n" + (snapshot || "(no output)"), action);
           if (stoppedProcess) {
             // Agent stopped a running process — remind it to continue, not restart
             history.push({
@@ -2449,7 +2521,7 @@ ${agentPrompt}
             });
           }
         } catch (err: any) {
-          onUpdate("failed", "Send text failed: " + err.message);
+          onUpdate("failed", "Send text failed: " + err.message, action);
           history.push({
             role: "user",
             content: `Send Text Failed: ${err.message} `,
@@ -2468,7 +2540,7 @@ ${agentPrompt}
             (globalThis as any).__tronAgentContinue = false;
             identicalReadCount = 0;
             lastReadTerminalOutput = "";
-            onUpdate("executed", `User confirmed ready — continuing`);
+            onUpdate("executed", `User confirmed ready — continuing`, action);
             history.push({
               role: "user",
               content: `${output}\n\n✅ The user has confirmed they completed the required action (e.g. finished browser login, entered input). The terminal output above shows the current state. Proceed with the task.`,
@@ -2513,6 +2585,7 @@ ${agentPrompt}
             onUpdate(
               "executed",
               `Checked terminal${suffix}: ${firstLine}\n---\n${fullPreview}`,
+              action
             );
           }
 
@@ -2550,7 +2623,7 @@ ${agentPrompt}
             });
           }
         } catch (err: any) {
-          onUpdate("failed", "Read terminal failed: " + err.message);
+          onUpdate("failed", "Read terminal failed: " + err.message, action);
           history.push({
             role: "user",
             content: `Read Failed: ${err.message} `,
@@ -2575,7 +2648,7 @@ ${agentPrompt}
           continue;
         }
         try {
-          onUpdate("executing", `Writing file: ${filePath}`);
+          onUpdate("executing", `Writing file: ${filePath}`, action);
           const result = await (window as any).electron.ipcRenderer.invoke(
             "file.writeFile",
             {
@@ -2590,7 +2663,7 @@ ${agentPrompt}
                 ? content.slice(0, MAX_PREVIEW) +
                 `\n... (${content.length - MAX_PREVIEW} more characters)`
                 : content;
-            onUpdate("executed", `Wrote file: ${filePath}\n---\n${preview}`);
+            onUpdate("executed", `Wrote file: ${filePath}\n---\n${preview}`, action);
             wroteFiles = true;
             consecutiveGuardBlocks = 0;
             // Track project root — use the shallowest (shortest) directory written to
@@ -2608,7 +2681,7 @@ ${agentPrompt}
             throw new Error(result.error || "Unknown write error");
           }
         } catch (err: any) {
-          onUpdate("failed", "Write file failed: " + err.message);
+          onUpdate("failed", "Write file failed: " + err.message, action);
           history.push({
             role: "user",
             content: `Write File Failed: ${err.message}`,
@@ -2623,7 +2696,7 @@ ${agentPrompt}
           if (!filePath) {
             throw new Error("read_file requires 'path' (string)");
           }
-          onUpdate("executing", `Reading file: ${filePath}`);
+          onUpdate("executing", `Reading file: ${filePath}`, action);
           const result = await (window as any).electron.ipcRenderer.invoke(
             "file.readFile",
             {
@@ -2642,6 +2715,7 @@ ${agentPrompt}
             onUpdate(
               "executed",
               `Read file: ${filePath} (${content.length} chars)`,
+              action
             );
             history.push({
               role: "user",
@@ -2653,7 +2727,7 @@ ${agentPrompt}
         } catch (err: any) {
           const errMsg = err.message || "Unknown error";
           const isNotFound = /not found|no such file|ENOENT/i.test(errMsg);
-          onUpdate("failed", "Read file failed: " + errMsg);
+          onUpdate("failed", "Read file failed: " + errMsg, action);
           history.push({
             role: "user",
             content: isNotFound
@@ -2678,7 +2752,7 @@ ${agentPrompt}
               "edit_file requires 'path', 'search', and 'replace' (all strings)",
             );
           }
-          onUpdate("executing", `Editing file: ${filePath}`);
+          onUpdate("executing", `Editing file: ${filePath}`, action);
           const result = await (window as any).electron.ipcRenderer.invoke(
             "file.editFile",
             {
@@ -2697,6 +2771,7 @@ ${agentPrompt}
             onUpdate(
               "executed",
               `Edited file: ${filePath} (${result.replacements} replacements)\n---\n${truncatedDiff}`,
+              action
             );
             wroteFiles = true;
             consecutiveGuardBlocks = 0;
@@ -2713,7 +2788,7 @@ ${agentPrompt}
             throw new Error(result.error || "Unknown edit error");
           }
         } catch (err: any) {
-          onUpdate("failed", "Edit file failed: " + err.message);
+          onUpdate("failed", "Edit file failed: " + err.message, action);
           history.push({
             role: "user",
             content: `Edit File Failed: ${err.message}`,
@@ -2726,7 +2801,7 @@ ${agentPrompt}
         try {
           const dirPath = action.path || action.dirPath;
           if (!dirPath) throw new Error("list_dir requires 'path' (string)");
-          onUpdate("executing", `Listing directory: ${dirPath}`);
+          onUpdate("executing", `Listing directory: ${dirPath}`, action);
           const result = await (window as any).electron.ipcRenderer.invoke(
             "file.listDir",
             { dirPath },
@@ -2738,6 +2813,7 @@ ${agentPrompt}
             onUpdate(
               "executed",
               `Listed directory: ${dirPath}\n---\n${contents.slice(0, 500)}${contents.length > 500 ? "..." : ""}`,
+              action
             );
             history.push({
               role: "user",
@@ -2747,7 +2823,7 @@ ${agentPrompt}
             throw new Error(result.error || "Unknown list error");
           }
         } catch (err: any) {
-          onUpdate("failed", "List dir failed: " + err.message);
+          onUpdate("failed", "List dir failed: " + err.message, action);
           history.push({
             role: "user",
             content: `List Dir Failed: ${err.message}`,
@@ -2763,7 +2839,7 @@ ${agentPrompt}
           if (!dirPath || typeof query !== "string") {
             throw new Error("search_dir requires 'path' and 'query' (strings)");
           }
-          onUpdate("executing", `Searching '${query}' in: ${dirPath}`);
+          onUpdate("executing", `Searching '${query}' in: ${dirPath}`, action);
           const result = await (window as any).electron.ipcRenderer.invoke(
             "file.searchDir",
             { dirPath, query },
@@ -2776,6 +2852,7 @@ ${agentPrompt}
             onUpdate(
               "executed",
               `Searched directory: ${dirPath}\n---\n${summary}`,
+              action
             );
             history.push({
               role: "user",
@@ -2785,7 +2862,7 @@ ${agentPrompt}
             throw new Error(result.error || "Unknown search error");
           }
         } catch (err: any) {
-          onUpdate("failed", "Search dir failed: " + err.message);
+          onUpdate("failed", "Search dir failed: " + err.message, action);
           history.push({
             role: "user",
             content: `Search Dir Failed: ${err.message}`,
@@ -2795,15 +2872,22 @@ ${agentPrompt}
       }
 
       if (action.tool === "execute_command") {
-        // Interactive commands MUST use run_in_terminal — sentinel exec can't handle TUI prompts
+        // Interactive commands MUST use run_in_terminal — sentinel exec can't handle TUI prompts.
+        // Also check parts after `&&` or `;` to properly catch `cd foo && npm create`
         const INTERACTIVE_CMD_RE =
           /\b(npm\s+create|npx\s+create|npm\s+init|yarn\s+create|pnpm\s+create|bun\s+create|npx\s+degit|npx\s+giget)\b/i;
-        if (INTERACTIVE_CMD_RE.test(action.command)) {
+
+        // Split chained commands to check if ANY part is interactive
+        const chainedCommands = action.command.split(/;|&&/);
+        const isInteractive = chainedCommands.some((part: string) => INTERACTIVE_CMD_RE.test(part));
+
+        if (isInteractive) {
           if (usedScaffold) {
             // Project already scaffolded — redirect to write_file, NOT run_in_terminal (which would also block)
             onUpdate(
               "failed",
               `Blocked: project already scaffolded — use write_file to implement features`,
+              action
             );
             history.push({
               role: "user",
@@ -2813,6 +2897,7 @@ ${agentPrompt}
             onUpdate(
               "failed",
               `Blocked: interactive command "${action.command.slice(0, 60)}" — use run_in_terminal`,
+              action
             );
             history.push({
               role: "user",
@@ -2829,10 +2914,10 @@ ${agentPrompt}
           if (state === "input_needed") {
             consecutiveBusy = 0;
             const output = await readTerminal(15);
-            onUpdate("executed", `Terminal waiting for input`);
+            onUpdate("executed", `Terminal waiting for input`, action);
             history.push({
               role: "user",
-              content: `(Command NOT executed — terminal is waiting for user input.)\n${output}\n\nUse ask_question to ask the user what to enter, then send_text to type it. The user may also type directly in the terminal — read_terminal again after to check.`,
+              content: `(Command NOT executed — terminal is waiting for user input.)\n${output}\n\nWARNING: The terminal is paused waiting for your response. Use send_text to type the answer and hit Enter (\\r). DO NOT ASK THE USER UNLESS CRITICAL. For scaffold/init prompts like "yes/no" or "framework", guess the best option and use send_text immediately.`,
             });
             continue;
           } else if (state === "busy") {
@@ -2855,6 +2940,7 @@ ${agentPrompt}
               onUpdate(
                 "executed",
                 `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
+                action
               );
               history.push({
                 role: "user",
@@ -2867,6 +2953,7 @@ ${agentPrompt}
                 "executed",
                 "(Terminal busy — auto-read)\n---\n" +
                 (output || "(no output)"),
+                action
               );
               history.push({
                 role: "user",
@@ -2881,6 +2968,7 @@ ${agentPrompt}
               onUpdate(
                 "warning",
                 "Dev server is already running — task may be complete",
+                action
               );
               history.push({
                 role: "user",
@@ -2889,7 +2977,7 @@ ${agentPrompt}
               consecutiveGuardBlocks++;
               continue;
             }
-            onUpdate("warning", "Terminal busy: Dev server running");
+            onUpdate("warning", "Terminal busy: Dev server running", action);
             history.push({
               role: "user",
               content: `Terminal is busy running a server. You cannot run execute_command while the server is active.${usedScaffold ? "\nYou CAN still use write_file to add/edit code — the dev server will hot-reload your changes automatically." : ""}\nIf the task is complete, use "final_answer".\nIf you need to run a different terminal command, use send_text("\\x03") to stop the server first.`,
@@ -2932,6 +3020,7 @@ ${agentPrompt}
             onUpdate(
               "failed",
               `Blocked: recursive ls without specific directory`,
+              action
             );
             history.push({
               role: "user",
@@ -2947,6 +3036,7 @@ ${agentPrompt}
           onUpdate(
             "failed",
             `Blocked: duplicate scaffold command "${cmd.slice(0, 80)}"`,
+            action
           );
           history.push({
             role: "user",
@@ -2965,6 +3055,7 @@ ${agentPrompt}
           onUpdate(
             "failed",
             `Blocked: "${cmd.slice(0, 60)}" — use write_file instead`,
+            action
           );
           history.push({
             role: "user",
@@ -2985,6 +3076,7 @@ ${agentPrompt}
             onUpdate(
               "failed",
               `Blocked: destructive rm on project directory after code written`,
+              action
             );
             history.push({
               role: "user",
@@ -2997,7 +3089,7 @@ ${agentPrompt}
 
         executedCommands.add(cmd);
 
-        onUpdate("executing", cmd);
+        onUpdate("executing", cmd, action);
         try {
           let output = await executeCommand(cmd);
           if (!output || output.trim() === "") {
@@ -3009,14 +3101,14 @@ ${agentPrompt}
           // Track mkdir as project dir
           const mkdirMatch = cmd.match(/\bmkdir\s+(?:-p\s+)?([^\s&;|]+)/);
           if (mkdirMatch) lastWriteDir = mkdirMatch[1];
-          onUpdate("executed", cmd + "\n---\n" + output);
+          onUpdate("executed", cmd + "\n---\n" + output, action);
           history.push({
             role: "user",
             content: `Command Output: \n${output} `,
           });
         } catch (err: any) {
           const isDeny = err.message === "User denied command execution.";
-          onUpdate("failed", cmd + "\n---\n" + err.message);
+          onUpdate("failed", cmd + "\n---\n" + err.message, action);
           if (isDeny) {
             history.push({
               role: "user",

@@ -13,6 +13,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.getCompletions",
   "terminal.getHistory",
   "terminal.readHistory",
+  "terminal.clearHistory",
   "terminal.scanCommands",
   "terminal.getSystemInfo",
   "ai.testConnection",

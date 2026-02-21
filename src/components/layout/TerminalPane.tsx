@@ -247,7 +247,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           sessionId,
           session: meta,
           interactions: session?.interactions || [],
-          agentThread: agentThread.map((s) => ({ step: s.step, output: s.output })),
+          agentThread: agentThread.map((s) => ({ step: s.step, output: s.output, payload: s.payload })),
           contextSummary: session?.contextSummary,
         });
 
@@ -457,8 +457,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap">
               <span
                 className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${resolvedTheme === "light"
-                    ? "text-amber-600"
-                    : "text-amber-400/70"
+                  ? "text-amber-600"
+                  : "text-amber-400/70"
                   }`}
               >
                 Queue ({inputQueue.length})
@@ -467,12 +467,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 <div
                   key={i}
                   className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono max-w-[200px] ${resolvedTheme === "light"
-                      ? item.type === "agent"
-                        ? "bg-purple-100 text-purple-700 border border-purple-200"
-                        : "bg-gray-100 text-gray-700 border border-gray-200"
-                      : item.type === "agent"
-                        ? "bg-purple-500/10 text-purple-300 border border-purple-500/20"
-                        : "bg-white/5 text-gray-400 border border-white/10"
+                    ? item.type === "agent"
+                      ? "bg-purple-100 text-purple-700 border border-purple-200"
+                      : "bg-gray-100 text-gray-700 border border-gray-200"
+                    : item.type === "agent"
+                      ? "bg-purple-500/10 text-purple-300 border border-purple-500/20"
+                      : "bg-white/5 text-gray-400 border border-white/10"
                     }`}
                 >
                   {item.type === "agent" ? (

@@ -489,6 +489,9 @@ function registerTerminalHandlers(getMainWindow) {
             return `(Error reading terminal: ${err.message})`;
         }
     });
+    electron_1.ipcMain.handle("terminal.clearHistory", (_event, sessionId) => {
+        sessionHistory.set(sessionId, "");
+    });
     // Execute a command visibly in the PTY and capture output via sentinel marker.
     // The command runs in the user's terminal so they see it, but we also capture
     // the output to feed back to the agent.
@@ -681,10 +684,10 @@ function registerTerminalHandlers(getMainWindow) {
             const structuredThread = cleanedThread.map((s) => {
                 // Strip base64 image data from separator outputs
                 if (s.step === "separator" && s.output.includes("\n---images---\n")) {
-                    return { step: s.step, prompt: s.output.slice(0, s.output.indexOf("\n---images---\n")), note: "(images attached)" };
+                    return { step: s.step, prompt: s.output.slice(0, s.output.indexOf("\n---images---\n")), note: "(images attached)", payload: s.payload };
                 }
                 if (s.step === "separator") {
-                    return { step: s.step, prompt: s.output };
+                    return { step: s.step, prompt: s.output, payload: s.payload };
                 }
                 // Split executed/failed steps on "\n---\n" into command + terminal output
                 if ((s.step === "executed" || s.step === "failed") && s.output.includes("\n---\n")) {
@@ -698,10 +701,10 @@ function registerTerminalHandlers(getMainWindow) {
                     terminalOutput = stripSentinels(terminalOutput);
                     // eslint-disable-next-line no-control-regex
                     terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-                    return { step: s.step, command, terminalOutput };
+                    return { step: s.step, command, terminalOutput, payload: s.payload };
                 }
                 // For done/question/thought/system/error/warning — keep as-is with a content field
-                return { step: s.step, content: s.output };
+                return { step: s.step, content: s.output, payload: s.payload };
             });
             // Generate log ID and paths
             const logId = (0, crypto_1.randomBytes)(5).toString("hex");
