@@ -2,19 +2,30 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerAIHandlers = registerAIHandlers;
 const electron_1 = require("electron");
-// Provider chat URLs — must match src/services/ai/index.ts CLOUD_PROVIDERS
-const PROVIDER_URLS = {
-    openai: "https://api.openai.com/v1/chat/completions",
-    deepseek: "https://api.deepseek.com/chat/completions",
-    kimi: "https://api.moonshot.ai/v1/chat/completions",
-    gemini: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    glm: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    minimax: "https://api.minimax.io/v1/text/chatcompletion_v2",
-};
+// Cloud providers that don't need a real API call to test — just validate config.
+const CLOUD_PROVIDERS = new Set([
+    "openai",
+    "anthropic",
+    "gemini",
+    "deepseek",
+    "kimi",
+    "qwen",
+    "glm",
+    "minimax",
+]);
 function registerAIHandlers() {
     electron_1.ipcMain.handle("ai.testConnection", async (_event, { provider, model, apiKey, baseUrl }) => {
         try {
+            // Cloud providers: just validate that API key is present.
+            // No real API call — saves tokens. User will see errors on first agent run.
+            if (CLOUD_PROVIDERS.has(provider)) {
+                if (!apiKey)
+                    return { success: false, error: "API key is required" };
+                if (!model)
+                    return { success: false, error: "Model name is required" };
+                return { success: true };
+            }
+            // Ollama — test via real chat completion (local, no token cost)
             if (provider === "ollama") {
                 const url = baseUrl || "http://localhost:11434";
                 const headers = { "Content-Type": "application/json" };
@@ -37,7 +48,7 @@ function registerAIHandlers() {
                 const data = await response.json();
                 return { success: !!data.message?.content };
             }
-            // LM Studio — test via real chat completion
+            // LM Studio — test via real chat completion (local, no token cost)
             if (provider === "lmstudio") {
                 const url = (baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
                 const headers = { "Content-Type": "application/json" };
@@ -59,11 +70,12 @@ function registerAIHandlers() {
                 const data = await response.json();
                 return { success: !!data.choices?.[0]?.message?.content };
             }
-            // Anthropic and Anthropic-compatible
-            if (provider === "anthropic" || provider === "anthropic-compat") {
-                const url = provider === "anthropic-compat" && baseUrl
-                    ? (() => { const u = baseUrl.replace(/\/+$/, ""); return u.endsWith("/v1/messages") ? u : `${u}/v1/messages`; })()
-                    : "https://api.anthropic.com/v1/messages";
+            // Custom compat providers — test connectivity with real call
+            if (provider === "anthropic-compat") {
+                if (!baseUrl)
+                    return { success: false, error: "Base URL is required" };
+                const u = baseUrl.replace(/\/+$/, "");
+                const url = u.endsWith("/v1/messages") ? u : `${u}/v1/messages`;
                 const headers = {
                     "Content-Type": "application/json",
                     "anthropic-version": "2023-06-01",
@@ -85,36 +97,32 @@ function registerAIHandlers() {
                 }
                 return { success: true };
             }
-            // All OpenAI-compatible providers (openai, deepseek, kimi, gemini, qwen, glm, lmstudio, openai-compat)
-            const chatUrl = baseUrl
-                ? (() => {
-                    const url = baseUrl.replace(/\/+$/, "");
-                    if (url.endsWith("/chat/completions"))
-                        return url;
-                    if (url.endsWith("/v1"))
-                        return `${url}/chat/completions`;
-                    return `${url}/v1/chat/completions`;
-                })()
-                : PROVIDER_URLS[provider];
-            if (!chatUrl)
-                return { success: false, error: `Unknown provider: ${provider}` };
-            const headers = { "Content-Type": "application/json" };
-            if (apiKey)
-                headers.Authorization = `Bearer ${apiKey}`;
-            const response = await fetch(chatUrl, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({
-                    model: model || "gpt-4o",
-                    messages: [{ role: "user", content: "hi" }],
-                    max_tokens: 5,
-                }),
-            });
-            if (!response.ok) {
-                const text = await response.text().catch(() => "");
-                return { success: false, error: `HTTP ${response.status}: ${text || response.statusText}` };
+            if (provider === "openai-compat") {
+                if (!baseUrl)
+                    return { success: false, error: "Base URL is required" };
+                const u = baseUrl.replace(/\/+$/, "");
+                const chatUrl = u.endsWith("/chat/completions") ? u
+                    : u.endsWith("/v1") ? `${u}/chat/completions`
+                        : `${u}/v1/chat/completions`;
+                const headers = { "Content-Type": "application/json" };
+                if (apiKey)
+                    headers.Authorization = `Bearer ${apiKey}`;
+                const response = await fetch(chatUrl, {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify({
+                        model: model || "default",
+                        messages: [{ role: "user", content: "hi" }],
+                        max_tokens: 5,
+                    }),
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => "");
+                    return { success: false, error: `HTTP ${response.status}: ${text || response.statusText}` };
+                }
+                return { success: true };
             }
-            return { success: true };
+            return { success: false, error: `Unknown provider: ${provider}` };
         }
         catch (e) {
             console.error("AI Connection Test Failed:", e);

@@ -27,6 +27,7 @@ import { marked } from "marked";
 import { useTheme } from "../../../contexts/ThemeContext";
 import type { AgentStep } from "../../../types";
 import { slideUp } from "../../../utils/motion";
+import { isDangerousCommand } from "../../../utils/dangerousCommand";
 import TokenHeatBar from "./TokenHeatBar";
 
 // Configure marked for minimal, safe output
@@ -167,31 +168,6 @@ function summarizeCommand(cmd: string): string {
   const firstWord = base.split(/\s/)[0];
   if (firstWord.length > 20) return base.slice(0, 60) + "...";
   return `Ran ${firstWord}`;
-}
-
-/** Dangerous command patterns — destructive, irreversible, or system-altering */
-const DANGEROUS_PATTERNS = [
-  /\brm\s+(-[a-zA-Z]*)?.*(-r|-f|--force|--recursive|\*)/, // rm -rf, rm -f, rm *
-  /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f/, // rm -rf combined
-  /\brm\s+-[a-zA-Z]*f[a-zA-Z]*r/, // rm -fr combined
-  /\bmkfs\b/, // format filesystem
-  /\bdd\s+.*of=/, // dd write to device
-  /\b(shutdown|reboot|halt|poweroff)\b/, // system power
-  /\bsudo\s+rm\b/, // sudo rm anything
-  /\bchmod\s+(-R\s+)?[0-7]*777\b/, // chmod 777
-  /\bchown\s+-R\b/, // recursive chown
-  />\s*\/dev\/(sda|hda|nvme|disk)/, // write to device
-  /\b(drop|truncate)\s+(database|table|schema)\b/i, // SQL destructive
-  /\bgit\s+(push\s+.*--force|reset\s+--hard|clean\s+-fd)/, // git destructive
-  /\bkill\s+-9\s+-1\b/, // kill all processes
-  /\b:(){ :\|:& };:/, // fork bomb
-  /\bcurl\s.*\|\s*(sudo\s+)?bash/, // pipe to bash
-  /\bwget\s.*\|\s*(sudo\s+)?bash/, // pipe to bash
-];
-
-function isDangerousCommand(cmd: string): boolean {
-  const trimmed = cmd.trim();
-  return DANGEROUS_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
 /** Renders markdown string as HTML. Memoized to avoid re-parsing identical content. */
@@ -339,6 +315,10 @@ interface AgentOverlayProps {
   overlayHeight?: number;
   /** Callback when user drags to resize. */
   onResizeHeight?: (height: number) => void;
+  /** Persisted scroll position (scrollTop px). */
+  scrollPosition?: number;
+  /** Callback to save scroll position for persistence. */
+  onScrollPositionChange?: (pos: number) => void;
 }
 
 /* Toast for transient execution-state notifications only */
@@ -536,6 +516,7 @@ const PermissionRequest: React.FC<{
 
   return (
     <div
+      data-testid="permission-modal"
       className={`flex flex-col p-4 border-t animate-in fade-in slide-in-from-bottom-2 ${
         dangerous
           ? isLight
@@ -653,6 +634,7 @@ const PermissionRequest: React.FC<{
         className="flex gap-2 justify-end shrink-0"
       >
         <button
+          data-testid="permission-deny"
           onClick={() => onPermission("deny")}
           className={`px-4 py-2 text-xs rounded-md border transition-colors flex items-center gap-1.5 ${
             isLight
@@ -676,6 +658,7 @@ const PermissionRequest: React.FC<{
         )}
         <button
           ref={allowBtnRef}
+          data-testid="permission-allow"
           onClick={handleAllow}
           className={`px-4 py-2 text-xs rounded-md transition-colors flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 ${
             dangerous
@@ -726,6 +709,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   fullHeight,
   overlayHeight,
   onResizeHeight,
+  scrollPosition,
+  onScrollPositionChange,
 }) => {
   const { resolvedTheme } = useTheme();
   const isLight = resolvedTheme === "light";
@@ -894,6 +879,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   const userScrolledUpRef = useRef(false);
   const isAutoScrolling = useRef(false);
 
+  const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
   const handleScroll = useCallback(() => {
     // Skip scroll events caused by our own programmatic scrolling
     if (isAutoScrolling.current) return;
@@ -903,7 +890,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     const scrolledUp = distFromBottom > 60;
     userScrolledUpRef.current = scrolledUp;
     setUserScrolledUp(scrolledUp);
-  }, []);
+
+    // Debounce-save scroll position for persistence
+    if (onScrollPositionChange) {
+      clearTimeout(scrollSaveTimerRef.current);
+      scrollSaveTimerRef.current = setTimeout(() => {
+        onScrollPositionChange(el.scrollTop);
+      }, 300);
+    }
+  }, [onScrollPositionChange]);
 
   const scrollToBottom = useCallback(() => {
     isAutoScrolling.current = true;
@@ -915,6 +910,31 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       isAutoScrolling.current = false;
     });
   }, []);
+
+  // Restore persisted scroll position on initial mount (once)
+  const hasRestoredScroll = useRef(false);
+  useEffect(() => {
+    if (hasRestoredScroll.current) return;
+    if (typeof scrollPosition !== "number" || !agentThread.length) return;
+    // Wait for virtualizer to render content, then restore
+    const timer = setTimeout(() => {
+      if (scrollRef.current && !hasRestoredScroll.current) {
+        hasRestoredScroll.current = true;
+        isAutoScrolling.current = true;
+        scrollRef.current.scrollTo(0, scrollPosition);
+        // Mark as scrolled-up if not at bottom, so auto-scroll doesn't override
+        const dist = scrollRef.current.scrollHeight - scrollPosition - scrollRef.current.clientHeight;
+        if (dist > 60) {
+          userScrolledUpRef.current = true;
+          setUserScrolledUp(true);
+        }
+        requestAnimationFrame(() => {
+          isAutoScrolling.current = false;
+        });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [scrollPosition, agentThread.length]);
 
   const lastEntry = agentThread[agentThread.length - 1];
   const scrollTrigger = `${agentThread.length}:${lastEntry?.output?.length || 0}`;
@@ -1099,6 +1119,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       {showPanel && (
         <motion.div
           ref={panelRef}
+          data-testid="agent-overlay"
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.25, ease: "easeOut" }}
@@ -1106,16 +1127,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
             !fullHeight &&
             isExpanded &&
             (liveHeight !== undefined || overlayHeight)
-              ? { height: liveHeight ?? overlayHeight, maxHeight: "85vh" }
+              ? { height: liveHeight ?? overlayHeight, maxHeight: "60%" }
               : undefined
           }
-          className={`w-full ${fullHeight ? "flex-1 min-h-0" : "shrink-0"} ${
+          className={`w-full ${fullHeight ? "flex-1 min-h-0" : ""} ${
             isExpanded
               ? fullHeight
                 ? "flex-col"
                 : liveHeight !== undefined || overlayHeight
                   ? "flex-col"
-                  : "max-h-[50vh] flex-col"
+                  : "max-h-[60%] flex-col"
               : "h-auto cursor-pointer hover:opacity-100 opacity-90"
           } overflow-hidden border-t flex shadow-lg z-20 ${
             isLight
@@ -1158,6 +1179,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 }`}
               />
               <span
+                data-testid="agent-status"
                 className={`text-xs font-medium ${
                   isLight ? "text-purple-700" : "text-purple-200"
                 }`}
@@ -1171,6 +1193,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
               <div className="flex items-center gap-1 flex-wrap justify-end">
                 {modelCapabilities?.includes("thinking") && (
                   <button
+                    data-testid="thinking-toggle"
                     onClick={onToggleThinking}
                     className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1 shrink-0 ${
                       thinkingEnabled
@@ -1192,6 +1215,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                   </button>
                 )}
                 <button
+                  data-testid="autoexec-toggle"
                   onClick={onToggleAutoExecute}
                   className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1 shrink-0 ${
                     autoExecuteEnabled
@@ -1214,6 +1238,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 </button>
                 {!isAgentRunning && agentThread.length > 0 && (
                   <button
+                    data-testid="agent-clear"
                     onClick={(e) => {
                       e.stopPropagation();
                       onClear();
@@ -1230,6 +1255,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 )}
                 {!fullHeight && (
                   <button
+                    data-testid="agent-minimize"
                     onClick={(e) => {
                       e.stopPropagation();
                       onClose();
@@ -1998,7 +2024,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                className="shrink-0"
+                className="shrink-0 max-h-[50%] overflow-y-auto"
               >
                 <PermissionRequest
                   command={pendingCommand}

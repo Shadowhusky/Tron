@@ -16,6 +16,15 @@ if (require("electron-squirrel-startup")) {
   app.quit();
 }
 
+// Ensure Playwright E2E tests do not mutate the user's real application state
+if (process.env.TRON_TEST_PROFILE) {
+  const fs = require("fs");
+  if (!fs.existsSync(process.env.TRON_TEST_PROFILE)) {
+    fs.mkdirSync(process.env.TRON_TEST_PROFILE, { recursive: true });
+  }
+  app.setPath("userData", process.env.TRON_TEST_PROFILE);
+}
+
 // Suppress Chromium GPU SharedImageManager / mailbox errors on macOS.
 app.commandLine.appendSwitch("disable-gpu");
 app.commandLine.appendSwitch("disable-software-rasterizer");
@@ -31,21 +40,21 @@ const createMenu = (win: BrowserWindow) => {
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
       ? ([
-          {
-            label: app.name,
-            submenu: [
-              { role: "about" },
-              { type: "separator" },
-              { role: "services" },
-              { type: "separator" },
-              { role: "hide" },
-              { role: "hideOthers" },
-              { role: "unhide" },
-              { type: "separator" },
-              { role: "quit" },
-            ],
-          },
-        ] as MenuItemConstructorOptions[])
+        {
+          label: app.name,
+          submenu: [
+            { role: "about" },
+            { type: "separator" },
+            { role: "services" },
+            { type: "separator" },
+            { role: "hide" },
+            { role: "hideOthers" },
+            { role: "unhide" },
+            { type: "separator" },
+            { role: "quit" },
+          ],
+        },
+      ] as MenuItemConstructorOptions[])
       : []),
     {
       label: "File",
@@ -103,29 +112,33 @@ const createWindow = () => {
       preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
+      // Disable CORS enforcement so renderer can call external APIs directly
+      // (Anthropic, LM Studio, Ollama, etc.). Safe for desktop apps with
+      // controlled content — contextIsolation + preload allowlist remain active.
+      webSecurity: false,
     },
     ...(isMacOS
       ? {
-          titleBarStyle: "hiddenInset",
-          vibrancy: "under-window",
-          visualEffectState: "active",
-          backgroundColor: "#00000000",
-        }
+        titleBarStyle: "hiddenInset",
+        vibrancy: "under-window",
+        visualEffectState: "active",
+        backgroundColor: "#00000000",
+      }
       : {
-          // Windows/Linux: hide title bar, use native overlay buttons
-          titleBarStyle: "hidden" as const,
-          ...(process.platform === "win32"
-            ? {
-                titleBarOverlay: {
-                  color: "#0a0a0a",
-                  symbolColor: "#ffffff",
-                  height: 40,
-                },
-                backgroundMaterial: "mica" as const,
-              }
-            : {}),
-          backgroundColor: "#0a0a0a",
-        }),
+        // Windows/Linux: hide title bar, use native overlay buttons
+        titleBarStyle: "hidden" as const,
+        ...(process.platform === "win32"
+          ? {
+            titleBarOverlay: {
+              color: "#0a0a0a",
+              symbolColor: "#ffffff",
+              height: 40,
+            },
+            backgroundMaterial: "mica" as const,
+          }
+          : {}),
+        backgroundColor: "#0a0a0a",
+      }),
   });
 
   createMenu(mainWindow);
@@ -143,7 +156,7 @@ const createWindow = () => {
     mainWindow = null;
   });
 
-  const isDev = !app.isPackaged;
+  const isDev = !app.isPackaged && process.env.NODE_ENV !== "test" && process.env.NODE_ENV !== "production";
   const devPort = process.env.PORT || 5173;
   if (isDev) {
     mainWindow.loadURL(`http://localhost:${devPort}`);

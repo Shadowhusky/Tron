@@ -50,14 +50,18 @@ const child_process_1 = require("child_process");
 /** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text) {
     let d = text;
-    // Unix: "; printf '\n__TRON_DONE_...' $?"
-    d = d.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-    d = d.replace(/printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
+    // Match ANSI escape codes (e.g., \x1b[32m) injected by zsh-syntax-highlighting
+    const A = "(?:\\x1B\\[[0-9;]*[a-zA-Z])*";
+    // Unix: "; printf '\n__TRON_DONE_...' $?" (ignores ANSI colors anywhere inside)
+    const unixRegex = new RegExp(`;${A}\\s*${A}printf${A}\\s+${A}["']?${A}\\\\n${A}__TRON_DONE_[a-z0-9]+__(?:%d|\\d+)${A}\\\\n${A}["']?${A}\\s*${A}\\$\\?${A}`, "g");
+    d = d.replace(unixRegex, "");
+    const unixRegexNoSemi = new RegExp(`printf${A}\\s+${A}["']?${A}\\\\n${A}__TRON_DONE_[a-z0-9]+__(?:%d|\\d+)${A}\\\\n${A}["']?${A}\\s*${A}\\$\\?${A}`, "g");
+    d = d.replace(unixRegexNoSemi, "");
     // Windows: '; Write-Host "__TRON_DONE_...$LASTEXITCODE"'
     d = d.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
     d = d.replace(/Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-    // Sentinel output itself (e.g. __TRON_DONE_abc12345__0)
-    d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__\d+\n?/g, "");
+    // Sentinel output itself (e.g. __TRON_DONE_abc12345__0 or __TRON_DONE_...__%d)
+    d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__(?:\d+|%d)\n?/g, "");
     return d;
 }
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
@@ -194,7 +198,7 @@ function registerTerminalHandlers(getMainWindow) {
             return reconnectId;
         }
         const { shell, args: shellArgs } = detectShell();
-        const sessionId = (0, crypto_1.randomUUID)();
+        const sessionId = reconnectId || (0, crypto_1.randomUUID)();
         try {
             // Clean environment: strip Electron/Node npm vars that conflict
             // with user tools like nvm (which rejects npm_config_prefix).
@@ -390,9 +394,11 @@ function registerTerminalHandlers(getMainWindow) {
             const parts = prefix.trim().split(/\s+/);
             if (parts.length <= 1) {
                 const word = parts[0] || "";
+                const safeWinWord = word.replace(/'/g, "''");
+                const safeUnixWord = word.replace(/"/g, '\\"');
                 const cmd = isWin
-                    ? `powershell -NoProfile -Command "Get-Command '${word}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
-                    : `bash -c 'compgen -abck "${word}" 2>/dev/null | sort -u | head -30'`;
+                    ? `powershell -NoProfile -Command "Get-Command '${safeWinWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+                    : `bash -c 'compgen -abck "${safeUnixWord}" 2>/dev/null | sort -u | head -30'`;
                 const { stdout } = await trackedExec(cmd, { cwd: workDir });
                 const results = stdout.trim().split("\n").filter(Boolean);
                 return [...new Set(results)]
@@ -400,9 +406,11 @@ function registerTerminalHandlers(getMainWindow) {
                     .slice(0, 15);
             }
             const lastWord = parts[parts.length - 1];
+            const safeWinLastWord = lastWord.replace(/'/g, "''");
+            const safeUnixLastWord = lastWord.replace(/"/g, '\\"');
             const cmd = isWin
-                ? `powershell -NoProfile -Command "Get-ChildItem '${lastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
-                : `bash -c 'compgen -df "${lastWord}" 2>/dev/null | head -30'`;
+                ? `powershell -NoProfile -Command "Get-ChildItem '${safeWinLastWord}*' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name"`
+                : `bash -c 'compgen -df "${safeUnixLastWord}" 2>/dev/null | head -30'`;
             const { stdout } = await trackedExec(cmd, { cwd: workDir });
             const results = stdout.trim().split("\n").filter(Boolean);
             return [...new Set(results)]
@@ -414,7 +422,8 @@ function registerTerminalHandlers(getMainWindow) {
         }
     });
     electron_1.ipcMain.handle("terminal.getHistory", (_event, sessionId) => {
-        return sessionHistory.get(sessionId) || "";
+        const raw = sessionHistory.get(sessionId) || "";
+        return stripSentinels(raw);
     });
     // Scan all available commands on the system (for auto-mode classification)
     // Two-phase: fast non-interactive scan first, then interactive scan for shell
@@ -537,7 +546,9 @@ function registerTerminalHandlers(getMainWindow) {
             let stallTimer = null;
             // Clear any text the user may have typed in the terminal before injecting the command.
             // Ctrl+U clears the current line in bash/zsh without killing a running process.
-            session.write("\x15");
+            // On Windows PowerShell/Cmd, Escape (\x1b) clears the line.
+            const clearChar = os_1.default.platform() === "win32" ? "\x1b" : "\x15";
+            session.write(clearChar);
             // Stall detection: if no new PTY output for 3s, assume process is
             // waiting for input. Return early so agent can interact via send_text.
             // Do NOT kill the process — mark session as occupied instead.
@@ -606,18 +617,52 @@ function registerTerminalHandlers(getMainWindow) {
             if (!fs_1.default.existsSync(dir)) {
                 fs_1.default.mkdirSync(dir, { recursive: true });
             }
+            const existed = fs_1.default.existsSync(filePath);
             fs_1.default.writeFileSync(filePath, content, "utf-8");
-            return { success: true };
+            return { success: true, existed };
         }
         catch (err) {
             return { success: false, error: err.message };
         }
     });
+    // Helper to provide intelligent file suggestions when the agent hallucinates paths
+    function getFuzzySuggestions(targetPath) {
+        try {
+            const dir = path_1.default.dirname(targetPath);
+            const base = path_1.default.basename(targetPath).toLowerCase();
+            if (!base || !fs_1.default.existsSync(dir))
+                return [];
+            const files = fs_1.default.readdirSync(dir);
+            const matches = files.filter(f => {
+                const fLower = f.toLowerCase();
+                // Exact prefix (e.g. package. -> package.json)
+                if (fLower.startsWith(base))
+                    return true;
+                // Truncated or slight typo (packa -> package.json)
+                if (base.length > 3 && fLower.startsWith(base.substring(0, 4)))
+                    return true;
+                // Missing extension (App -> App.tsx)
+                const parsed = path_1.default.parse(f);
+                if (parsed.name.toLowerCase() === base)
+                    return true;
+                return false;
+            });
+            // Return top 5 matches sorted by closest length
+            return matches
+                .sort((a, b) => Math.abs(a.length - base.length) - Math.abs(b.length - base.length))
+                .slice(0, 5);
+        }
+        catch {
+            return [];
+        }
+    }
     // Read a file directly via Node.js fs (bypasses terminal/PTY).
     electron_1.ipcMain.handle("file.readFile", async (_event, { filePath }) => {
         try {
             if (!fs_1.default.existsSync(filePath)) {
-                return { success: false, error: `File not found: ${filePath}` };
+                const suggestions = getFuzzySuggestions(filePath);
+                const sugStr = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
+                return { success: false, error: `File not found: ${filePath}.${sugStr}` };
             }
             const content = fs_1.default.readFileSync(filePath, "utf-8");
             return { success: true, content };
@@ -649,7 +694,8 @@ function registerTerminalHandlers(getMainWindow) {
                     // Clean ANSI codes and sentinels from terminal output
                     // eslint-disable-next-line no-control-regex
                     terminalOutput = terminalOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
-                    terminalOutput = terminalOutput.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+                    // Use robust sentinels stripped
+                    terminalOutput = stripSentinels(terminalOutput);
                     // eslint-disable-next-line no-control-regex
                     terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
                     return { step: s.step, command, terminalOutput };
@@ -684,7 +730,9 @@ function registerTerminalHandlers(getMainWindow) {
     electron_1.ipcMain.handle("file.editFile", async (_event, { filePath, search, replace, }) => {
         try {
             if (!fs_1.default.existsSync(filePath)) {
-                return { success: false, error: `File not found: ${filePath}` };
+                const suggestions = getFuzzySuggestions(filePath);
+                const sugStr = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
+                return { success: false, error: `File not found: ${filePath}.${sugStr}` };
             }
             const content = fs_1.default.readFileSync(filePath, "utf-8");
             if (!content.includes(search)) {
@@ -703,6 +751,89 @@ function registerTerminalHandlers(getMainWindow) {
             const updated = content.split(search).join(replace);
             fs_1.default.writeFileSync(filePath, updated, "utf-8");
             return { success: true, replacements: count };
+        }
+        catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
+    // List directory structure safely without OS-specific commands (ls/dir)
+    electron_1.ipcMain.handle("file.listDir", async (_event, { dirPath }) => {
+        try {
+            if (!fs_1.default.existsSync(dirPath)) {
+                return { success: false, error: `Directory not found: ${dirPath}` };
+            }
+            const stats = fs_1.default.statSync(dirPath);
+            if (!stats.isDirectory()) {
+                return { success: false, error: `Path is not a directory: ${dirPath}` };
+            }
+            const items = fs_1.default.readdirSync(dirPath, { withFileTypes: true });
+            const contents = items.map((item) => ({
+                name: item.name,
+                isDirectory: item.isDirectory(),
+            }));
+            // Sort directories first, then alphabetically
+            contents.sort((a, b) => {
+                if (a.isDirectory === b.isDirectory)
+                    return a.name.localeCompare(b.name);
+                return a.isDirectory ? -1 : 1;
+            });
+            return { success: true, contents };
+        }
+        catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
+    // Search directory contents recursively (ripgrep/grep equivalent) avoiding regex issues
+    electron_1.ipcMain.handle("file.searchDir", async (_event, { dirPath, query }) => {
+        try {
+            if (!fs_1.default.existsSync(dirPath)) {
+                return { success: false, error: `Directory not found: ${dirPath}` };
+            }
+            const results = [];
+            const maxResults = 50;
+            function walk(dir) {
+                if (results.length >= maxResults)
+                    return;
+                const items = fs_1.default.readdirSync(dir, { withFileTypes: true });
+                for (const item of items) {
+                    if (results.length >= maxResults)
+                        break;
+                    if (item.name === "node_modules" || item.name === ".git" || item.name === "dist" || item.name === "build") {
+                        continue;
+                    }
+                    const fullPath = path_1.default.join(dir, item.name);
+                    if (item.isDirectory()) {
+                        walk(fullPath);
+                    }
+                    else {
+                        try {
+                            const stat = fs_1.default.statSync(fullPath);
+                            if (stat.size > 2 * 1024 * 1024)
+                                continue; // Skip files > 2MB
+                            const content = fs_1.default.readFileSync(fullPath, "utf-8");
+                            if (content.includes("\0"))
+                                continue; // Skip binary files
+                            const lines = content.split("\n");
+                            for (let i = 0; i < lines.length; i++) {
+                                if (lines[i].includes(query)) {
+                                    results.push({
+                                        file: fullPath,
+                                        line: i + 1,
+                                        content: lines[i].trim().slice(0, 150),
+                                    });
+                                    if (results.length >= maxResults)
+                                        break;
+                                }
+                            }
+                        }
+                        catch {
+                            // Ignore read errors for individual files
+                        }
+                    }
+                }
+            }
+            walk(dirPath);
+            return { success: true, results };
         }
         catch (err) {
             return { success: false, error: err.message };

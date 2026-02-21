@@ -240,11 +240,12 @@ export function cleanContextForAI(rawHistory: string): string {
   let cleaned = emulateTerminal(rawHistory);
 
   // 2. Strip sentinel markers used internally by execInTerminal (Unix + Windows)
-  cleaned = cleaned.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-  cleaned = cleaned.replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "");
-  cleaned = cleaned.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-  cleaned = cleaned.replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-  cleaned = cleaned.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+  // Strip the `printf` echo which may contain literal '%d'
+  cleaned = cleaned.replace(/;?\s*printf\s+['"]?\\n__TRON_DONE_[a-z0-9]+__(?:%d|\d+)\\n['"]?\s*\$\?/g, "");
+  // Windows Write-Host echo
+  cleaned = cleaned.replace(/;?\s*Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+  // Sentinel output itself
+  cleaned = cleaned.replace(/__TRON_DONE_[a-z0-9]+__(?:\d+|%d)\n?/g, "");
 
   // 3. Collapse visual repeats and garbled text
   cleaned = collapseRepeats(cleaned);

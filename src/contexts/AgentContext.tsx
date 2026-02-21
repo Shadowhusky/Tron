@@ -24,6 +24,10 @@ interface AgentState {
   overlayHeight?: number;
   /** Draft input text preserved across tab switches. */
   draftInput?: string;
+  /** Which element had focus last: "input" (SmartInput) or "terminal" (xterm). */
+  focusTarget?: "input" | "terminal";
+  /** Persisted scroll position (scrollTop px) for the agent panel. */
+  scrollPosition?: number;
 }
 
 const defaultState: AgentState = {
@@ -61,8 +65,9 @@ class AgentStore {
   }
 
   subscribeToSession = (sessionId: string) => (listener: () => void) => {
+    const matchAll = sessionId === "";
     const wrapped = (changedId: string | null) => {
-      if (changedId === null || changedId === sessionId) {
+      if (matchAll || changedId === null || changedId === sessionId) {
         listener();
       }
     };
@@ -204,6 +209,21 @@ class AgentStore {
     this.notify(sessionId);
   }
 
+  duplicateSession = (fromSessionId: string, toSessionId: string) => {
+    const current = this.states.get(fromSessionId);
+    if (!current) return;
+    const nextStates = new Map(this.states);
+    nextStates.set(toSessionId, {
+      ...current,
+      isAgentRunning: false,
+      isThinking: false,
+      pendingCommand: null,
+      permissionResolve: null,
+    });
+    this.states = nextStates;
+    this.notify(toSessionId);
+  }
+
   dismissNotification = (id: number) => {
     this.notifications = this.notifications.filter((n) => n.id !== id);
     this.notifyNotifications();
@@ -212,7 +232,7 @@ class AgentStore {
 
 const AgentContext = createContext<AgentStore | null>(null);
 
-type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string };
+type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number };
 
 function parsePersistedData(parsed: Record<string, PersistedSession>): Map<string, AgentState> {
   const map = new Map<string, AgentState>();
@@ -246,6 +266,8 @@ function parsePersistedData(parsed: Record<string, PersistedSession>): Map<strin
         isOverlayVisible: cleanedThread.length > 0,
         overlayHeight: data.overlayHeight,
         draftInput: data.draftInput,
+        thinkingEnabled: data.thinkingEnabled ?? defaultState.thinkingEnabled,
+        scrollPosition: data.scrollPosition,
       });
     }
   }
@@ -279,39 +301,51 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // To persist safely, we can subscribe to all state changes
+  // Shared save function — serializes current state to file via IPC
+  const flushSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const serializable: Record<string, PersistedSession> = {};
+    for (const [id, state] of store.getSnapshot()) {
+      const hasThread = state.agentThread.length > 0;
+      const hasDraft = !!state.draftInput;
+      const hasHeight = typeof state.overlayHeight === "number";
+
+      if (hasThread || hasDraft || hasHeight) {
+        const persistableThread = state.agentThread.filter(
+          (s) => s.step !== "thinking",
+        );
+        serializable[id] = {
+          agentThread: persistableThread,
+          ...(hasHeight ? { overlayHeight: state.overlayHeight } : {}),
+          ...(hasDraft ? { draftInput: state.draftInput } : {}),
+          thinkingEnabled: state.thinkingEnabled,
+          ...(typeof state.scrollPosition === "number" ? { scrollPosition: state.scrollPosition } : {}),
+        };
+      }
+    }
+    window.electron?.ipcRenderer?.writeSessions(serializable).catch((e: unknown) => {
+      console.warn("Failed to persist agent sessions:", e);
+    });
+  }, [store]);
+
+  // Subscribe to ALL state changes (empty sessionId = wildcard) and debounce-save
   useEffect(() => {
     return store.subscribeToSession("")(() => {
       if (!hasLoadedRef.current) return;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => {
-        const serializable: Record<string, PersistedSession> = {};
-        for (const [id, state] of store.getSnapshot()) {
-          const hasThread = state.agentThread.length > 0;
-          const hasDraft = !!state.draftInput;
-          const hasHeight = typeof state.overlayHeight === "number";
-
-          if (hasThread || hasDraft || hasHeight) {
-            const persistableThread = state.agentThread.filter(
-              (s) => s.step !== "thinking",
-            );
-            serializable[id] = {
-              agentThread: persistableThread,
-              ...(hasHeight ? { overlayHeight: state.overlayHeight } : {}),
-              ...(hasDraft ? { draftInput: state.draftInput } : {}),
-            };
-          }
-        }
-        window.electron?.ipcRenderer?.writeSessions(serializable).catch((e: unknown) => {
-          console.warn("Failed to persist agent sessions:", e);
-        });
-      }, 500);
+      saveTimerRef.current = setTimeout(flushSave, 500);
     });
-  }, [store]);
+  }, [store, flushSave]);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
       store.stopAllAgents();
+      // Flush save immediately — the IPC message is sent synchronously,
+      // only the response is async, so it reaches the main process before unload.
+      flushSave();
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
 
@@ -321,6 +355,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
         IPC.WINDOW_CONFIRM_CLOSE,
         () => {
           store.stopAllAgents();
+          flushSave();
         },
       );
     }
@@ -329,7 +364,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
       window.removeEventListener("beforeunload", handleBeforeUnload);
       cleanupIpc?.();
     };
-  }, [store]);
+  }, [store, flushSave]);
 
   return (
     <AgentContext.Provider value={store}>
@@ -362,6 +397,7 @@ export const useAgentContext = () => {
     crossTabNotifications: notifications,
     dismissNotification,
     setActiveSessionForNotifications,
+    duplicateAgentSession: store.duplicateSession,
   };
 };
 
@@ -396,6 +432,10 @@ export const useAgent = (sessionId: string) => {
     setDraftInput: (text: string | undefined) => store.updateState(sessionId, { draftInput: text }),
     thinkingEnabled: state.thinkingEnabled,
     setThinkingEnabled: (enabled: boolean) => store.updateState(sessionId, { thinkingEnabled: enabled }),
+    focusTarget: state.focusTarget,
+    setFocusTarget: (target: "input" | "terminal") => store.updateState(sessionId, { focusTarget: target }),
+    scrollPosition: state.scrollPosition,
+    setScrollPosition: (pos: number | undefined) => store.updateState(sessionId, { scrollPosition: pos }),
     registerAbortController: (controller: AbortController) => store.registerAbortController(sessionId, controller),
     stopAgent: () => store.stopAgent(sessionId),
     resetSession: () => store.resetSession(sessionId),

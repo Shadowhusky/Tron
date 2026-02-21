@@ -25,6 +25,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   "file.writeFile",
   "file.readFile",
   "file.editFile",
+  "file.listDir",
+  "file.searchDir",
   "shell.openExternal",
   "shell.openPath",
   "shell.showItemInFolder",
@@ -132,6 +134,18 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("system.selectFolder", defaultPath) as Promise<string | null>,
     openExternal: (url: string) =>
       ipcRenderer.invoke("shell.openExternal", url) as Promise<void>,
+    listDir: (dirPath: string) =>
+      ipcRenderer.invoke("file.listDir", { dirPath }) as Promise<{
+        success: boolean;
+        contents?: { name: string; isDirectory: boolean }[];
+        error?: string;
+      }>,
+    searchDir: (dirPath: string, query: string) =>
+      ipcRenderer.invoke("file.searchDir", { dirPath, query }) as Promise<{
+        success: boolean;
+        results?: { file: string; line: number; content: string }[];
+        error?: string;
+      }>,
     openPath: (filePath: string) =>
       ipcRenderer.invoke("shell.openPath", filePath) as Promise<string>,
     showItemInFolder: (filePath: string) =>

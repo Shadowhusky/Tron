@@ -8,6 +8,7 @@ export function useModels(baseUrl?: string, provider?: string, apiKey?: string) 
     queryKey: ["models", baseUrl, provider, apiKey],
     queryFn: () => aiService.getModels(baseUrl, provider, apiKey),
     staleTime: 30_000,
+    retry: 0,
   });
 }
 
@@ -48,22 +49,35 @@ export function useModelsWithCaps(baseUrl?: string, enabled: boolean = true, pro
       return list;
     },
     staleTime: 30_000,
+    retry: 0,
   });
 }
 
 /**
  * Fetch models from ALL configured providers (for ContextBar model popover).
  * Reads provider configs from localStorage to find all set-up providers.
+ * Only refetches on explicit invalidateModels() (e.g. Settings Save).
  */
 export function useAllConfiguredModels() {
   return useQuery<AIModel[]>({
     queryKey: ["allConfiguredModels"],
     queryFn: () => aiService.getAllConfiguredModels(),
-    staleTime: 60_000,
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    retry: 0,
   });
 }
 
-/** Hook to get the invalidation helper for model queries (prefix-based, no args needed). */
+/** Invalidate only the current provider's model queries (for confirm/refresh buttons). */
+export function useInvalidateProviderModels() {
+  const queryClient = useQueryClient();
+  return () => {
+    queryClient.invalidateQueries({ queryKey: ["modelsWithCaps"] });
+  };
+}
+
+/** Invalidate ALL model queries including cross-provider allConfiguredModels (for save). */
 export function useInvalidateModels() {
   const queryClient = useQueryClient();
   return () => {

@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { AIConfig, AIProvider } from "../../../types";
+import type { AIConfig, AIModel, AIProvider } from "../../../types";
 import { aiService, getCloudProvider, getCloudProviderList, providerUsesBaseUrl, isProviderUsable } from "../../../services/ai";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { getTheme } from "../../../utils/theme";
 import { useLayout } from "../../../contexts/LayoutContext";
-import { useModelsWithCaps, useInvalidateModels } from "../../../hooks/useModels";
+import { useModelsWithCaps, useInvalidateModels, useInvalidateProviderModels } from "../../../hooks/useModels";
 import { useConfig, DEFAULT_HOTKEYS } from "../../../contexts/ConfigContext";
 import { formatHotkey, eventToCombo } from "../../../hooks/useHotkey";
 import { STORAGE_KEYS } from "../../../constants/storage";
@@ -139,19 +139,7 @@ const SettingsPane = () => {
   const baseUrlTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const apiKeyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  useEffect(() => {
-    clearTimeout(baseUrlTimerRef.current);
-    baseUrlTimerRef.current = setTimeout(() => setDebouncedBaseUrl(config.baseUrl), 1000);
-    return () => clearTimeout(baseUrlTimerRef.current);
-  }, [config.baseUrl]);
-
-  useEffect(() => {
-    clearTimeout(apiKeyTimerRef.current);
-    apiKeyTimerRef.current = setTimeout(() => setDebouncedApiKey(config.apiKey), 1000);
-    return () => clearTimeout(apiKeyTimerRef.current);
-  }, [config.apiKey]);
-
-  // Flush debounce immediately (used by confirm buttons)
+  // Flush debounce immediately (used by confirm/refresh buttons)
   const flushDebounce = useCallback(() => {
     clearTimeout(baseUrlTimerRef.current);
     clearTimeout(apiKeyTimerRef.current);
@@ -159,16 +147,18 @@ const SettingsPane = () => {
     setDebouncedApiKey(config.apiKey);
   }, [config.baseUrl, config.apiKey]);
 
+  const isLocal = config.provider === "ollama" || config.provider === "lmstudio";
   const { data: allModels = [], isFetching: isModelsFetching } = useModelsWithCaps(
-    providerUsesBaseUrl(config.provider) ? debouncedBaseUrl : undefined,
-    true,
+    isLocal ? debouncedBaseUrl : undefined,
+    isLocal,
     config.provider,
-    debouncedApiKey,
+    isLocal ? debouncedApiKey : undefined,
   );
   const invalidateModels = useInvalidateModels();
+  const invalidateProviderModels = useInvalidateProviderModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
   const lmstudioModels = allModels.filter((m) => m.provider === "lmstudio");
-  const compatModels = allModels.filter((m) => m.provider === "openai-compat" || m.provider === "anthropic-compat");
+  const [compatScannedModels, setCompatScannedModels] = useState<AIModel[]>([]);
 
   // Load initial config
   useEffect(() => {
@@ -209,7 +199,8 @@ const SettingsPane = () => {
     setConfig(newConfig);
     setInitialConfig(JSON.stringify(newConfig));
     setTestStatus("idle");
-    // Sync debounced values immediately on provider switch
+    setCompatScannedModels([]);
+    // Sync debounced values immediately on provider switch (for local providers)
     setDebouncedBaseUrl(newConfig.baseUrl);
     setDebouncedApiKey(newConfig.apiKey);
 
@@ -221,14 +212,25 @@ const SettingsPane = () => {
     aiService.saveConfig(configToSave);
 
     // Propagate to all existing sessions
-    sessions.forEach((_, sessionId) => {
+    sessions.forEach((session, sessionId) => {
       if (sessionId !== "settings") {
-        updateSessionConfig(sessionId, configToSave);
+        const update: Partial<AIConfig> = {};
+        if (configToSave.contextWindow !== undefined) update.contextWindow = configToSave.contextWindow;
+        if (configToSave.maxAgentSteps !== undefined) update.maxAgentSteps = configToSave.maxAgentSteps;
+
+        if (session.aiConfig?.provider === configToSave.provider) {
+          update.apiKey = configToSave.apiKey;
+          update.baseUrl = configToSave.baseUrl;
+        }
+
+        if (Object.keys(update).length > 0) {
+          updateSessionConfig(sessionId, update);
+        }
       }
     });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // Save current provider config to cache too
     const cache = providerCacheRef.current;
     cache[config.provider] = {
@@ -250,13 +252,36 @@ const SettingsPane = () => {
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 2000);
 
+    // For local providers, flush debounce so model query uses latest values
+    if (isLocal) flushDebounce();
+
+    // For compat providers, scan models from server after save
+    const isCompat = config.provider === "openai-compat" || config.provider === "anthropic-compat";
+    if (isCompat && config.baseUrl) {
+      try {
+        const models = await aiService.getModels(config.baseUrl, config.provider, config.apiKey);
+        setCompatScannedModels(models);
+      } catch { /* user will see empty list */ }
+    }
+
     // Refresh model queries (including ContextBar's allConfiguredModels)
     invalidateModels();
 
     // Propagate to all existing sessions
-    sessions.forEach((_, sessionId) => {
+    sessions.forEach((session, sessionId) => {
       if (sessionId !== "settings") {
-        updateSessionConfig(sessionId, configToSave);
+        const update: Partial<AIConfig> = {};
+        if (configToSave.contextWindow !== undefined) update.contextWindow = configToSave.contextWindow;
+        if (configToSave.maxAgentSteps !== undefined) update.maxAgentSteps = configToSave.maxAgentSteps;
+
+        if (session.aiConfig?.provider === configToSave.provider) {
+          update.apiKey = configToSave.apiKey;
+          update.baseUrl = configToSave.baseUrl;
+        }
+
+        if (Object.keys(update).length > 0) {
+          updateSessionConfig(sessionId, update);
+        }
       }
     });
   };
@@ -288,13 +313,12 @@ const SettingsPane = () => {
     <div className={`w-full h-full flex ${t.appBg}`}>
       {/* Sidebar */}
       <nav
-        className={`shrink-0 w-40 flex flex-col border-r pt-4 pb-4 gap-1 px-2 ${
-          resolvedTheme === "light"
+        className={`shrink-0 w-40 flex flex-col border-r pt-4 pb-4 gap-1 px-2 ${resolvedTheme === "light"
             ? "bg-gray-50/80 border-gray-200"
             : resolvedTheme === "modern"
               ? "bg-white/[0.02] border-white/6"
               : "bg-[#0a0a0a] border-white/5"
-        }`}
+          }`}
       >
         <div className={`px-2 pb-3 mb-1 border-b ${t.borderSubtle}`}>
           <h1 className={`text-sm font-bold ${t.text}`}>Settings</h1>
@@ -302,14 +326,14 @@ const SettingsPane = () => {
         {NAV_SECTIONS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
+            data-testid={`settings-nav-${id}`}
             onClick={() => scrollToSection(id)}
-            className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${
-              activeSection === id
+            className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${activeSection === id
                 ? resolvedTheme === "light"
                   ? "bg-purple-50 text-purple-700 font-medium"
                   : "bg-purple-500/10 text-purple-300 font-medium"
                 : `${t.textMuted} hover:${t.surfaceHover}`
-            }`}
+              }`}
           >
             <Icon className="w-3.5 h-3.5 shrink-0" />
             {label}
@@ -319,15 +343,15 @@ const SettingsPane = () => {
         {/* Save button at bottom of sidebar */}
         <div className="mt-auto pt-3">
           <button
+            data-testid="save-button"
             onClick={handleSave}
             disabled={!hasChanges && saveStatus !== "saved"}
-            className={`w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-xs transition-all ${
-              saveStatus === "saved"
+            className={`w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-xs transition-all ${saveStatus === "saved"
                 ? "bg-green-500/20 text-green-500"
                 : hasChanges
                   ? "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-900/20"
                   : `${t.textFaint} cursor-not-allowed opacity-40`
-            }`}
+              }`}
           >
             <Save className="w-3.5 h-3.5" />
             {saveStatus === "saved" ? "Saved" : "Save"}
@@ -363,6 +387,7 @@ const SettingsPane = () => {
                 <label className={labelClass}>Provider</label>
                 <div className="relative">
                   <select
+                    data-testid="provider-select"
                     value={config.provider}
                     onChange={(e) => handleProviderChange(e.target.value)}
                     className={selectClass}
@@ -390,162 +415,163 @@ const SettingsPane = () => {
               </div>
 
               <AnimatePresence mode="wait">
-              {config.provider === "ollama" || config.provider === "lmstudio" ? (
-                <motion.div
-                  key="local-settings"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="space-y-3 overflow-hidden"
-                >
-                  {/* Models List with Capability Badges */}
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center justify-between">
-                      <label className={labelClass}>Model</label>
-                      <button
-                        onClick={() => invalidateModels()}
-                        title="Refresh Models"
-                        className={`p-1 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
-                      >
-                        <svg
-                          className="w-3.5 h-3.5 opacity-70"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
+                {config.provider === "ollama" || config.provider === "lmstudio" ? (
+                  <motion.div
+                    key="local-settings"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="space-y-3 overflow-hidden"
+                  >
+                    {/* Models List with Capability Badges */}
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between">
+                        <label className={labelClass}>Model</label>
+                        <button
+                          onClick={() => { flushDebounce(); invalidateProviderModels(); }}
+                          title="Refresh Models"
+                          className={`p-1 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                    {(() => {
-                      const localModels = config.provider === "lmstudio" ? lmstudioModels : ollamaModels;
-                      const serverName = config.provider === "lmstudio" ? "LM Studio" : "Ollama";
-                      const defaultUrl = config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434";
-                      return (
-                        <div className={`rounded-lg border overflow-hidden max-h-48 overflow-y-auto ${t.surfaceInput}`}>
-                          {localModels.length === 0 && (
-                            <div className={`px-3 py-2 text-xs ${t.textFaint}`}>
-                              {isModelsFetching ? (
-                                <span className="italic">Scanning models...</span>
-                              ) : (
-                                <span>
-                                  Could not reach {serverName} server at{" "}
-                                  <span className="font-mono opacity-80">{config.baseUrl || defaultUrl}</span>.
-                                  <br />
-                                  Make sure {serverName} is running and the URL is correct.
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {localModels.map((m) => (
-                            <button
-                              key={m.name}
-                              onClick={() => setConfig({ ...config, model: m.name })}
-                              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
-                                config.model === m.name
-                                  ? "bg-purple-500/10 text-purple-400"
-                                  : `${t.surfaceHover} ${t.textMuted}`
-                              }`}
-                            >
-                              <span className="flex-1 truncate">{m.name}</span>
-                              <div className="flex gap-1 shrink-0">
-                                {m.capabilities?.map((cap) => (
-                                  <span
-                                    key={cap}
-                                    className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                                      cap === "thinking"
-                                        ? "bg-purple-500/20 text-purple-400"
-                                        : cap === "vision"
-                                          ? "bg-blue-500/20 text-blue-400"
-                                          : cap === "tools"
-                                            ? "bg-green-500/20 text-green-400"
-                                            : "bg-gray-500/20 text-gray-400"
-                                    }`}
-                                  >
-                                    {cap}
+                          <svg
+                            className="w-3.5 h-3.5 opacity-70"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                      {(() => {
+                        const localModels = config.provider === "lmstudio" ? lmstudioModels : ollamaModels;
+                        const serverName = config.provider === "lmstudio" ? "LM Studio" : "Ollama";
+                        const defaultUrl = config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434";
+                        return (
+                          <div className={`rounded-lg border overflow-hidden max-h-48 overflow-y-auto ${t.surfaceInput}`}>
+                            {localModels.length === 0 && (
+                              <div className={`px-3 py-2 text-xs ${t.textFaint}`}>
+                                {isModelsFetching ? (
+                                  <span className="italic">Scanning models...</span>
+                                ) : (
+                                  <span>
+                                    Could not reach {serverName} server at{" "}
+                                    <span className="font-mono opacity-80">{config.baseUrl || defaultUrl}</span>.
+                                    <br />
+                                    Make sure {serverName} is running and the URL is correct.
                                   </span>
-                                ))}
-                              </div>
-                            </button>
-                          ))}
-                          {!localModels.find((m) => m.name === config.model) &&
-                            config.model && (
-                              <div className={`px-3 py-1.5 text-xs ${t.textFaint}`}>
-                                {config.model} (not found)
+                                )}
                               </div>
                             )}
-                        </div>
-                      );
-                    })()}
-                  </div>
+                            {localModels.map((m) => (
+                              <button
+                                key={m.name}
+                                data-testid={`model-item-${m.name}`}
+                                onClick={() => setConfig({ ...config, model: m.name })}
+                                className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${config.model === m.name
+                                    ? "bg-purple-500/10 text-purple-400"
+                                    : `${t.surfaceHover} ${t.textMuted}`
+                                  }`}
+                              >
+                                <span className="flex-1 truncate">{m.name}</span>
+                                <div className="flex gap-1 shrink-0">
+                                  {m.capabilities?.map((cap) => (
+                                    <span
+                                      key={cap}
+                                      className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
+                                          ? "bg-purple-500/20 text-purple-400"
+                                          : cap === "vision"
+                                            ? "bg-blue-500/20 text-blue-400"
+                                            : cap === "tools"
+                                              ? "bg-green-500/20 text-green-400"
+                                              : "bg-gray-500/20 text-gray-400"
+                                        }`}
+                                    >
+                                      {cap}
+                                    </span>
+                                  ))}
+                                </div>
+                              </button>
+                            ))}
+                            {!localModels.find((m) => m.name === config.model) &&
+                              config.model && (
+                                <div className={`px-3 py-1.5 text-xs ${t.textFaint}`}>
+                                  {config.model} (not found)
+                                </div>
+                              )}
+                          </div>
+                        );
+                      })()}
+                    </div>
 
-                  {/* API Key (optional for local providers) */}
-                  <div className="flex flex-col gap-1">
-                    <label className={labelClass}>API Key (optional)</label>
-                    <input
-                      type="password"
-                      value={config.apiKey || ""}
-                      onChange={(e) =>
-                        setConfig({ ...config, apiKey: e.target.value })
-                      }
-                      placeholder="Leave empty if not required"
-                      className={inputClass}
-                    />
-                  </div>
-
-                  {/* Base URL Input */}
-                  <div className="flex flex-col gap-1">
-                    <label className={labelClass}>
-                      {config.provider === "lmstudio" ? "LM Studio" : "Ollama"} Base URL
-                    </label>
-                    <div className="flex gap-1.5">
+                    {/* API Key (optional for local providers) */}
+                    <div className="flex flex-col gap-1">
+                      <label className={labelClass}>API Key (optional)</label>
                       <input
-                        type="text"
-                        value={config.baseUrl || (config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434")}
+                        data-testid="api-key-input"
+                        type="password"
+                        value={config.apiKey || ""}
                         onChange={(e) =>
-                          setConfig({ ...config, baseUrl: e.target.value })
+                          setConfig({ ...config, apiKey: e.target.value })
                         }
-                        placeholder={config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434"}
+                        placeholder="Leave empty if not required"
                         className={inputClass}
                       />
-                      <button
-                        onClick={() => { flushDebounce(); invalidateModels(); }}
-                        title="Confirm URL"
-                        className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
-                      >
-                        <Check className="w-4 h-4 opacity-70" />
-                      </button>
                     </div>
-                  </div>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="cloud-settings"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="space-y-3 overflow-hidden"
-                >
-                  {(() => {
-                    const providerInfo = getCloudProvider(config.provider);
-                    const defaultModels = providerInfo?.defaultModels || [];
-                    const isCompat = config.provider === "openai-compat" || config.provider === "anthropic-compat";
-                    // For compat providers, show scanned models from the remote server
-                    const scannedModels = isCompat ? compatModels : [];
-                    const modelList = scannedModels.length > 0 ? scannedModels.map((m) => m.name) : defaultModels;
-                    return (
-                      <>
-                        {isCompat && (
-                          <div className="flex flex-col gap-1">
-                            <label className={labelClass}>Base URL</label>
-                            <div className="flex gap-1.5">
+
+                    {/* Base URL Input */}
+                    <div className="flex flex-col gap-1">
+                      <label className={labelClass}>
+                        {config.provider === "lmstudio" ? "LM Studio" : "Ollama"} Base URL
+                      </label>
+                      <div className="flex gap-1.5">
+                        <input
+                          data-testid="base-url-input"
+                          type="text"
+                          value={config.baseUrl || (config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434")}
+                          onChange={(e) =>
+                            setConfig({ ...config, baseUrl: e.target.value })
+                          }
+                          placeholder={config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434"}
+                          className={inputClass}
+                        />
+                        <button
+                          data-testid="base-url-confirm"
+                          onClick={() => { flushDebounce(); invalidateProviderModels(); }}
+                          title="Confirm URL"
+                          className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
+                        >
+                          <Check className="w-4 h-4 opacity-70" />
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="cloud-settings"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="space-y-3 overflow-hidden"
+                  >
+                    {(() => {
+                      const providerInfo = getCloudProvider(config.provider);
+                      const defaultModels = providerInfo?.defaultModels || [];
+                      const isCompat = config.provider === "openai-compat" || config.provider === "anthropic-compat";
+                      // For compat providers, show models scanned on save
+                      const scannedModels = isCompat ? compatScannedModels : [];
+                      const modelList = scannedModels.length > 0 ? scannedModels.map((m) => m.name) : defaultModels;
+                      return (
+                        <>
+                          {isCompat && (
+                            <div className="flex flex-col gap-1">
+                              <label className={labelClass}>Base URL</label>
                               <input
                                 type="text"
                                 value={config.baseUrl || ""}
@@ -555,77 +581,69 @@ const SettingsPane = () => {
                                 placeholder={config.provider === "anthropic-compat" ? "https://your-proxy.example.com" : "https://your-api.example.com/v1"}
                                 className={inputClass}
                               />
-                              <button
-                                onClick={() => { flushDebounce(); invalidateModels(); }}
-                                title="Scan Models"
-                                className={`p-1.5 rounded-lg ${t.surface} ${t.surfaceHover} transition-colors`}
-                              >
-                                <Check className="w-4 h-4 opacity-70" />
-                              </button>
                             </div>
-                          </div>
-                        )}
-                        <div className="flex flex-col gap-1">
-                          {(() => {
-                            const isCustomModel = !!config.model && modelList.length > 0 && !modelList.includes(config.model);
-                            const customValue = isCustomModel ? config.model : "";
-                            return (
-                              <>
-                                <div className="flex items-center justify-between">
-                                  <label className={labelClass}>Model</label>
-                                  {isCompat && modelList.length === 0 && config.baseUrl && !isModelsFetching && (
-                                    <span className={`text-[10px] ${t.textFaint}`}>
-                                      Could not list models from server — enter name below
-                                    </span>
-                                  )}
-                                </div>
-                                {modelList.length > 0 && (
-                                  <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 transition-opacity ${t.surfaceInput} ${customValue ? "opacity-40 pointer-events-none" : ""}`}>
-                                    {modelList.map((name) => (
-                                      <button
-                                        key={name}
-                                        onClick={() => setConfig({ ...config, model: name })}
-                                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                                          config.model === name
-                                            ? "bg-purple-500/10 text-purple-400"
-                                            : `${t.surfaceHover} ${t.textMuted}`
-                                        }`}
-                                      >
-                                        {name}
-                                      </button>
-                                    ))}
+                          )}
+                          <div className="flex flex-col gap-1">
+                            {(() => {
+                              const isCustomModel = !!config.model && !modelList.includes(config.model);
+                              const customValue = isCustomModel ? config.model : "";
+                              return (
+                                <>
+                                  <div className="flex items-center justify-between">
+                                    <label className={labelClass}>Model</label>
+                                    {isCompat && modelList.length === 0 && config.baseUrl && !isModelsFetching && (
+                                      <span className={`text-[10px] ${t.textFaint}`}>
+                                        Could not list models from server — enter name below
+                                      </span>
+                                    )}
                                   </div>
-                                )}
-                                <label className={`${labelClass} mt-1`}>Custom Model Name</label>
-                                <input
-                                  type="text"
-                                  value={customValue}
-                                  placeholder={providerInfo?.placeholder || "model-name"}
-                                  onChange={(e) =>
-                                    setConfig({ ...config, model: e.target.value })
-                                  }
-                                  className={inputClass}
-                                />
-                              </>
-                            );
-                          })()}
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <label className={labelClass}>API Key{isCompat ? " (optional)" : ""}</label>
-                          <input
-                            type="password"
-                            value={config.apiKey || ""}
-                            onChange={(e) =>
-                              setConfig({ ...config, apiKey: e.target.value })
-                            }
-                            className={inputClass}
-                          />
-                        </div>
-                      </>
-                    );
-                  })()}
-                </motion.div>
-              )}
+                                  {modelList.length > 0 && (
+                                    <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 transition-opacity ${t.surfaceInput} ${customValue ? "opacity-40 pointer-events-none" : ""}`}>
+                                      {modelList.map((name) => (
+                                        <button
+                                          key={name}
+                                          onClick={() => setConfig({ ...config, model: name })}
+                                          className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${config.model === name
+                                              ? "bg-purple-500/10 text-purple-400"
+                                              : `${t.surfaceHover} ${t.textMuted}`
+                                            }`}
+                                        >
+                                          {name}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <label className={`${labelClass} mt-1`}>Custom Model Name</label>
+                                  <input
+                                    data-testid="custom-model-input"
+                                    type="text"
+                                    value={customValue}
+                                    placeholder={providerInfo?.placeholder || "model-name"}
+                                    onChange={(e) =>
+                                      setConfig({ ...config, model: e.target.value })
+                                    }
+                                    className={inputClass}
+                                  />
+                                </>
+                              );
+                            })()}
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className={labelClass}>API Key{isCompat ? " (optional)" : ""}</label>
+                            <input
+                              type="password"
+                              value={config.apiKey || ""}
+                              onChange={(e) =>
+                                setConfig({ ...config, apiKey: e.target.value })
+                              }
+                              className={inputClass}
+                            />
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </motion.div>
+                )}
               </AnimatePresence>
 
               {/* Test Connection + Clear Config */}
@@ -664,6 +682,7 @@ const SettingsPane = () => {
                     setConfig(newConfig);
                     setTestStatus("idle");
                   }}
+                  data-testid="clear-provider-button"
                   className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
                 >
                   <span className="flex items-center gap-1">
@@ -671,28 +690,30 @@ const SettingsPane = () => {
                     Clear Provider
                   </span>
                 </button>
-                <button
-                  onClick={handleTestConnection}
-                  disabled={testStatus === "testing" || !config.model}
-                  className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${
-                    testStatus === "success"
-                      ? "border-green-500/50 text-green-400 bg-green-500/10"
-                      : testStatus === "error"
-                        ? "border-red-500/50 text-red-400 bg-red-500/10"
-                        : `${t.border} ${t.textMuted} ${t.surfaceHover}`
-                  }`}
-                >
-                  {testStatus === "testing"
-                    ? "Testing..."
-                    : testStatus === "success"
-                      ? "Connection Verified"
-                      : testStatus === "error"
-                        ? "Connection Failed"
-                        : "Test Connection"}
-                </button>
+                {(config.provider === "ollama" || config.provider === "lmstudio") && (
+                  <button
+                    data-testid="test-connection-button"
+                    onClick={handleTestConnection}
+                    disabled={testStatus === "testing" || !config.model}
+                    className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${testStatus === "success"
+                        ? "border-green-500/50 text-green-400 bg-green-500/10"
+                        : testStatus === "error"
+                          ? "border-red-500/50 text-red-400 bg-red-500/10"
+                          : `${t.border} ${t.textMuted} ${t.surfaceHover}`
+                      }`}
+                  >
+                    {testStatus === "testing"
+                      ? "Testing..."
+                      : testStatus === "success"
+                        ? "Connection Verified"
+                        : testStatus === "error"
+                          ? "Connection Failed"
+                          : "Test Connection"}
+                  </button>
+                )}
               </div>
               {testError && testStatus === "error" && (
-                <div className="text-[10px] text-red-400 bg-red-500/10 rounded-lg px-2 py-1.5 break-all max-h-20 overflow-y-auto">
+                <div data-testid="test-status" className="text-[10px] text-red-400 bg-red-500/10 rounded-lg px-2 py-1.5 break-all max-h-20 overflow-y-auto">
                   {testError}
                 </div>
               )}
@@ -714,6 +735,7 @@ const SettingsPane = () => {
 
               <div className="flex items-center gap-3">
                 <input
+                  data-testid="context-window-slider"
                   type="range"
                   min="1000"
                   max="128000"
@@ -725,9 +747,8 @@ const SettingsPane = () => {
                       contextWindow: Number(e.target.value),
                     })
                   }
-                  className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${
-                    resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
-                  }`}
+                  className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
+                    }`}
                 />
                 <span
                   className={`text-xs font-mono min-w-12 text-right ${t.accent}`}
@@ -753,6 +774,7 @@ const SettingsPane = () => {
 
               <div className="flex items-center gap-3">
                 <input
+                  data-testid="max-steps-slider"
                   type="range"
                   min="10"
                   max="200"
@@ -764,9 +786,8 @@ const SettingsPane = () => {
                       maxAgentSteps: Number(e.target.value),
                     })
                   }
-                  className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${
-                    resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
-                  }`}
+                  className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
+                    }`}
                 />
                 <span
                   className={`text-xs font-mono min-w-12 text-right ${t.accent}`}
@@ -816,14 +837,14 @@ const SettingsPane = () => {
                 ] as const).map(({ id, label, desc, icon: Icon, iconBg, activeBorder }) => (
                   <motion.button
                     key={id}
+                    data-testid={`view-mode-${id}`}
                     whileHover={{ scale: 1.04 }}
                     whileTap={{ scale: 0.96 }}
                     onClick={() => setViewMode(id)}
-                    className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${
-                      viewMode === id
+                    className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${viewMode === id
                         ? activeBorder
                         : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
-                    }`}
+                      }`}
                   >
                     <div className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}>
                       <Icon className="w-3 h-3" />
@@ -890,14 +911,14 @@ const SettingsPane = () => {
                 ).map(({ id, label, icon: Icon, iconBg, activeBorder }) => (
                   <motion.button
                     key={id}
+                    data-testid={`theme-${id}`}
                     whileHover={{ scale: 1.04 }}
                     whileTap={{ scale: 0.96 }}
                     onClick={() => setTheme(id)}
-                    className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${
-                      theme === id
+                    className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${theme === id
                         ? activeBorder
                         : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
-                    }`}
+                      }`}
                   >
                     <div
                       className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}
@@ -947,12 +968,12 @@ const SettingsPane = () => {
                   >
                     <span className={`text-xs ${t.textMuted}`}>{label}</span>
                     <button
+                      data-testid={`hotkey-${action}`}
                       onClick={() => setRecordingAction(isRecording ? null : action)}
-                      className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition-colors ${
-                        isRecording
+                      className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition-colors ${isRecording
                           ? "bg-purple-500/20 border border-purple-500 text-purple-300 ring-2 ring-purple-500/30"
                           : `${t.surface} border ${t.borderSubtle} ${t.surfaceHover} ${t.text}`
-                      }`}
+                        }`}
                       title={isRecording ? "Press a key combo... (Esc to cancel)" : "Click to change"}
                     >
                       {isRecording ? (
@@ -962,11 +983,10 @@ const SettingsPane = () => {
                           {formatHotkey(combo).split("").map((ch, i) => (
                             <span
                               key={i}
-                              className={`inline-flex items-center justify-center min-w-[18px] h-5 px-1 rounded text-[11px] font-medium ${
-                                resolvedTheme === "light"
+                              className={`inline-flex items-center justify-center min-w-[18px] h-5 px-1 rounded text-[11px] font-medium ${resolvedTheme === "light"
                                   ? "bg-gray-100 text-gray-700 border border-gray-200"
                                   : "bg-white/10 text-gray-200 border border-white/10"
-                              }`}
+                                }`}
                             >
                               {ch}
                             </span>

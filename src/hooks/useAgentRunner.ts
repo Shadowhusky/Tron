@@ -6,6 +6,7 @@ import { useAgent } from "../contexts/AgentContext";
 import { useLayout } from "../contexts/LayoutContext";
 import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
+import { isDangerousCommand } from "../utils/dangerousCommand";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -47,8 +48,15 @@ export function useAgentRunner(
 
   // Persisted agent state for resuming after ask_question
   const continuationRef = useRef<AgentContinuation | null>(null);
-  // Track whether tab title has been generated (only once per session)
-  const titleGeneratedRef = useRef(false);
+  // Track whether tab title has been generated and by whom
+  const titleSourceRef = useRef<"none" | "terminal" | "agent" | "user">(
+    session?.title !== "Terminal" && !!session?.title ? "user" : "none"
+  );
+
+  useEffect(() => {
+    // Reset title tracking when session mounts/switches
+    titleSourceRef.current = session?.title !== "Terminal" && !!session?.title ? "user" : "none";
+  }, [sessionId, session?.title]);
 
   // Streaming throttle — buffers token-level setAgentThread calls (max ~10/sec)
   const streamBufferRef = useRef<{
@@ -188,6 +196,13 @@ export function useAgentRunner(
       return;
     }
 
+    if (titleSourceRef.current === "none" && sessionId) {
+      titleSourceRef.current = "terminal";
+      const cmdStr = cmd.trim();
+      const title = cmdStr.length > 20 ? cmdStr.substring(0, 20) + "..." : cmdStr;
+      renameTab(sessionId, title);
+    }
+
     await writeCommandToTerminal(cmd, true);
     addToHistory(cmd);
   };
@@ -200,6 +215,13 @@ export function useAgentRunner(
     if (isAgentRunning && queueCallback) {
       queueCallback({ type: "command", content: cmd });
       return;
+    }
+
+    if (titleSourceRef.current === "none" && sessionId) {
+      titleSourceRef.current = "terminal";
+      const cmdStr = cmd.trim();
+      const title = cmdStr.length > 20 ? cmdStr.substring(0, 20) + "..." : cmdStr;
+      renameTab(sessionId, title);
     }
 
     if (!window.electron) return;
@@ -325,15 +347,9 @@ export function useAgentRunner(
       : prompt;
     setAgentThread((prev) => [...prev, { step: "separator", output: separatorOutput }]);
 
-    // Generate tab title once — on first agent command, fire-and-forget concurrent with agent
-    if (!titleGeneratedRef.current && sessionId) {
-      titleGeneratedRef.current = true;
-      aiService
-        .generateTabTitle(prompt, session?.aiConfig)
-        .then((title) => { if (title) renameTab(sessionId, title); })
-        .catch(() => { });
-    }
-
+    // Note: Tab title generation for Agent prompts has been shifted.
+    // The Agent is now instructed to stream a `_tab_title` parameter inside its
+    // first JSON response. We handle this in the `onUpdate` callback below.
     // --- Image analysis shortcut: bypass agent loop entirely ---
     if (images && images.length > 0) {
       // Build conversation history from recent interactions so model has context
@@ -537,18 +553,18 @@ Task: ${prompt}
         finalPrompt,
         async (cmd) => {
           // Helper: Check Permissions — use ref for latest value
+          // Dangerous commands always require confirmation, even with auto-exec on
           const checkPermission = async (command: string) => {
-            if (!alwaysAllowRef.current) {
-              setPendingCommand(command);
-              const allowed = await new Promise<boolean>((resolve) => {
-                setPermissionResolve(resolve);
-              });
-              setPendingCommand(null);
-              setPermissionResolve(null);
+            if (alwaysAllowRef.current && !isDangerousCommand(command)) return;
+            setPendingCommand(command);
+            const allowed = await new Promise<boolean>((resolve) => {
+              setPermissionResolve(resolve);
+            });
+            setPendingCommand(null);
+            setPermissionResolve(null);
 
-              if (!allowed) {
-                throw new Error("User denied command execution.");
-              }
+            if (!allowed) {
+              throw new Error("User denied command execution.");
             }
           };
 
@@ -589,17 +605,19 @@ Task: ${prompt}
           // For send_text (isRawInput=true, no checkPerm): write directly, no permission
           // For run_in_terminal (isRawInput=true, checkPerm=true): check permission, then raw write
           if (isRawInput) {
-            if (checkPerm && !alwaysAllowRef.current) {
-              // Show permission dialog (strip trailing \r for display)
+            if (checkPerm) {
               const displayCmd = cmd.replace(/\r$/, "");
-              setPendingCommand(displayCmd);
-              const allowed = await new Promise<boolean>((resolve) => {
-                setPermissionResolve(resolve);
-              });
-              setPendingCommand(null);
-              setPermissionResolve(null);
-              if (!allowed) {
-                throw new Error("User denied command execution.");
+              // Skip permission only if auto-exec on AND command is not dangerous
+              if (!(alwaysAllowRef.current && !isDangerousCommand(displayCmd))) {
+                setPendingCommand(displayCmd);
+                const allowed = await new Promise<boolean>((resolve) => {
+                  setPermissionResolve(resolve);
+                });
+                setPendingCommand(null);
+                setPermissionResolve(null);
+                if (!allowed) {
+                  throw new Error("User denied command execution.");
+                }
               }
             }
             if (!window.electron) return;
@@ -620,18 +638,18 @@ Task: ${prompt}
           }
 
           // For other commands: check permission, send with Ctrl+C prefix
+          // Dangerous commands always require confirmation, even with auto-exec on
           const checkPermission = async (command: string) => {
-            if (!alwaysAllowRef.current) {
-              setPendingCommand(command);
-              const allowed = await new Promise<boolean>((resolve) => {
-                setPermissionResolve(resolve);
-              });
-              setPendingCommand(null);
-              setPermissionResolve(null);
+            if (alwaysAllowRef.current && !isDangerousCommand(command)) return;
+            setPendingCommand(command);
+            const allowed = await new Promise<boolean>((resolve) => {
+              setPermissionResolve(resolve);
+            });
+            setPendingCommand(null);
+            setPermissionResolve(null);
 
-              if (!allowed) {
-                throw new Error("User denied command execution.");
-              }
+            if (!allowed) {
+              throw new Error("User denied command execution.");
             }
           }
 
@@ -682,6 +700,19 @@ Task: ${prompt}
 
           // Non-streaming step: flush any pending buffer first
           flushStreamBuffer();
+
+          if (step === "set_tab_title") {
+            const isUnknown = output.toLowerCase().includes("unknown") || output.toLowerCase().includes("unclear");
+            if (
+              (titleSourceRef.current === "none" || titleSourceRef.current === "terminal") &&
+              sessionId &&
+              !isUnknown
+            ) {
+              titleSourceRef.current = "agent";
+              renameTab(sessionId, output);
+            }
+            return;
+          }
 
           if (step === "thinking_complete") {
             // Replace the last thinking entry with finalized thought (search backwards)

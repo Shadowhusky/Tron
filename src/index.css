@@ -26,6 +26,14 @@ button,
   cursor: pointer;
 }
 
+/* Native <select> dropdown options render with a light background on Windows.
+   Force dark text so options remain readable in dark/modern themes. */
+select option,
+select optgroup {
+  color: #111;
+  background: #fff;
+}
+
 button:disabled {
   cursor: not-allowed;
 }

@@ -14,6 +14,7 @@ interface TerminalProps {
   isActive?: boolean;
   isAgentRunning?: boolean;
   stopAgent?: () => void;
+  focusTarget?: "input" | "terminal";
 }
 
 const THEMES: Record<string, Xterm["options"]["theme"]> = {
@@ -37,7 +38,7 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive, isAgentRunning = false, stopAgent }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive, isAgentRunning = false, stopAgent, focusTarget }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -48,6 +49,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
   const isAgentRunningRef = useRef(isAgentRunning);
   useEffect(() => { isAgentRunningRef.current = isAgentRunning; }, [isAgentRunning]);
   const stopAgentRef = useRef(stopAgent);
+  const focusTargetRef = useRef(focusTarget);
+  useEffect(() => { focusTargetRef.current = focusTarget; }, [focusTarget]);
   useEffect(() => { stopAgentRef.current = stopAgent; }, [stopAgent]);
   const hotkeysRef = useRef(hotkeys);
   useEffect(() => { hotkeysRef.current = hotkeys; }, [hotkeys]);
@@ -186,7 +189,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
           setTimeout(performResize, 50);
           setTimeout(performResize, 250);
           // Re-focus after animation may have completed (embedded terminal in agent view)
-          setTimeout(() => { if (xtermRef.current) xtermRef.current.focus(); }, 350);
+          // Only steal focus if user's last focus target was the terminal
+          setTimeout(() => {
+            if (xtermRef.current && focusTargetRef.current === "terminal") {
+              xtermRef.current.focus();
+            }
+          }, 350);
         });
     } else {
       term.write("\r\n\x1b[33m[Mock Mode] Electron not detected.\x1b[0m\r\n");
@@ -252,12 +260,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     }
   }, [resolvedTheme]);
 
-  // ---- Focus when tab becomes active ----
+  // ---- Focus when tab becomes active (only if user last focused terminal) ----
   useEffect(() => {
-    if (isActive && xtermRef.current) {
+    if (isActive && xtermRef.current && focusTarget === "terminal") {
       xtermRef.current.focus();
     }
-  }, [isActive]);
+  }, [isActive, focusTarget]);
 
   return <div className={className} ref={terminalRef} />;
 };

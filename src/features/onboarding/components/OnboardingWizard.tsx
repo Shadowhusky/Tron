@@ -6,7 +6,7 @@ import { aiService, getCloudProviderList, providerUsesBaseUrl } from "../../../s
 import { Monitor, Gem, Terminal, Bot } from "lucide-react";
 import {
   useModelsWithCaps,
-  useInvalidateModels,
+  useInvalidateProviderModels,
 } from "../../../hooks/useModels";
 import FeatureIcon from "../../../components/ui/FeatureIcon";
 import {
@@ -81,7 +81,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
     aiConfig.provider,
     aiConfig.apiKey,
   );
-  const invalidateModels = useInvalidateModels();
+  const invalidateModels = useInvalidateProviderModels();
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
   const lmstudioModels = allModels.filter((m) => m.provider === "lmstudio");
 
@@ -206,6 +206,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               ].map(({ id, label, swatch }) => (
                 <motion.button
                   key={id}
+                  data-testid={`onboarding-theme-${id}`}
                   variants={staggerItem}
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
@@ -275,6 +276,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               ).map(({ id, label, desc, icon: Icon, activeBorder }) => (
                 <motion.button
                   key={id}
+                  data-testid={`onboarding-view-${id}`}
                   variants={staggerItem}
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
@@ -318,6 +320,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   AI Provider
                 </label>
                 <select
+                  data-testid="onboarding-provider-select"
                   value={aiConfig.provider}
                   onChange={(e) => {
                     const newProvider = e.target.value;
@@ -597,7 +600,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+    <div data-testid="onboarding-wizard" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
       <AnimatePresence>
         {isWindowTooSmall && (
           <motion.div
@@ -714,6 +717,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               onClick={handleBack}
               disabled={currentStep === 0}
               className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/5 disabled:opacity-0 transition-all"
+              data-testid="onboarding-prev"
             >
               Back
             </motion.button>
@@ -721,6 +725,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.97 }}
               onClick={handleNext}
+              data-testid="onboarding-next"
               className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-purple-900/20"
             >
               {currentStep === STEPS.length - 1 ? "Get Started" : "Next"}

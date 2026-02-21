@@ -90,7 +90,8 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
   useEffect(() => {
     if (showContextModal) {
-      const timer = setTimeout(() => setIsModalReady(true), 250);
+      // Short delay: let the modal frame render before inserting content
+      const timer = setTimeout(() => setIsModalReady(true), 50);
       return () => clearTimeout(timer);
     } else {
       setIsModalReady(false);
@@ -267,6 +268,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   return (
     <div
       data-tutorial="context-bar"
+      data-testid="context-bar"
       className={`w-full h-8 border-t flex items-center justify-between px-3 transition-all duration-200 select-none shrink-0 overflow-hidden whitespace-nowrap ${themeClass(
         theme,
         {
@@ -279,6 +281,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
       {/* Left: Identity + Path */}
       <div className="flex items-center gap-4 min-w-0 overflow-hidden">
         <div
+          data-testid="cwd-display"
           className="flex items-center gap-1.5 overflow-hidden cursor-pointer group/path"
           title={`Current directory: ${cwd}\nClick to change`}
           onClick={async () => {
@@ -326,6 +329,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
         {/* Context Ring — click opens modal, hover shows tooltip */}
         <div
           ref={ctxRingRef}
+          data-testid="context-ring"
           className="relative flex items-center gap-1 opacity-70 hover:opacity-100 hover:scale-110 transition-all duration-200 cursor-pointer"
           onClick={handleOpenContextModal}
           onMouseEnter={() => setShowCtxTooltip(true)}
@@ -370,6 +374,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
         {/* Model Switcher */}
         <div ref={modelBtnRef}>
           <div
+            data-testid="model-selector"
             className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-purple-400 text-[10px]"
             onClick={() => setShowModelMenu(!showModelMenu)}
           >
@@ -385,6 +390,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   onClick={() => setShowModelMenu(false)}
                 />
                 <motion.div
+                  data-testid="model-menu"
                   initial={{ opacity: 0, scale: 0.95, y: 4 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   transition={{ duration: 0.15 }}
@@ -393,7 +399,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                     {
                       dark: "bg-[#1a1a1a] border border-white/10",
                       modern:
-                        "bg-[#12122e] border border-white/8 shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                        "bg-[#12122e] border border-white/8 shadow-xl",
                       light: "bg-white border border-gray-200",
                     },
                   )}`}
@@ -416,6 +422,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   {availableModels.map((m) => (
                     <button
                       key={`${m.provider}-${m.name}`}
+                      data-testid={`model-option-${m.name}`}
                       onClick={() => {
                         const update: Record<string, any> = {
                           provider: m.provider as any,
@@ -496,23 +503,27 @@ const ContextBar: React.FC<ContextBarProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="fixed inset-0 bg-black/50 z-[999]"
+                transition={{ duration: 0.12 }}
+                className={`fixed inset-0 z-[999] ${themeClass(theme, {
+                  dark: "bg-black/50",
+                  modern: "bg-[#020010]",
+                  light: "bg-black/40",
+                })}`}
                 onClick={() => setShowContextModal(false)}
               />
               <motion.div
                 key="context-modal-content"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 10 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-                style={{ willChange: "transform, opacity" }}
-                className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-[999] flex flex-col rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.4)] border overflow-hidden ${themeClass(
+                data-testid="context-modal"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.12 }}
+                className={`fixed inset-x-4 top-12 bottom-12 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[700px] z-[999] flex flex-col rounded-xl border overflow-hidden ${themeClass(
                   theme,
                   {
-                    dark: "bg-[#0e0e0e] border-white/10 text-gray-200",
-                    modern: "bg-[#0a0a1e] border-white/8 text-gray-200",
-                    light: "bg-white border-gray-200 text-gray-900",
+                    dark: "bg-[#0e0e0e] border-white/10 text-gray-200 shadow-xl",
+                    modern: "bg-[#0a0a1e] border-white/[0.08] text-gray-200",
+                    light: "bg-white border-gray-200 text-gray-900 shadow-xl",
                   },
                 )}`}
               >
@@ -605,10 +616,13 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   className={`flex-1 overflow-y-auto overflow-x-hidden p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words ${
                     theme === "light" ? "text-gray-700" : "text-gray-300"
                   }`}
+                  style={{ contain: "layout style paint" }}
                 >
                   {!isModalReady
                     ? "Retrieving context..."
-                    : contextText || "(No context yet)"}
+                    : (contextText.length > 50_000
+                        ? contextText.slice(-50_000)
+                        : contextText) || "(No context yet)"}
                 </pre>
               </motion.div>
             </>

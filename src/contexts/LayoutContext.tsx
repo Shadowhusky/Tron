@@ -33,12 +33,15 @@ interface LayoutContextType {
     sessionId: string,
     interaction: { role: "user" | "agent"; content: string; timestamp: number },
   ) => void;
+  clearInteractions: (sessionId: string) => void;
   markSessionDirty: (sessionId: string) => void;
   updateSplitSizes: (path: number[], sizes: number[]) => void;
   openSettingsTab: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
   renameTab: (sessionId: string, title: string) => void;
+  updateTabColor: (tabId: string, color?: string) => void;
+  duplicateTab: (tabId: string, onNewSession?: (oldId: string, newId: string) => void) => Promise<void>;
   /** Stop auto-saving layout and clear persisted data. Call before window close without saving. */
   discardPersistedLayout: () => void;
   isHydrated: boolean;
@@ -90,7 +93,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     localStorage.removeItem(STORAGE_KEYS.LAYOUT);
     // Write discard flag to sessions file (fs.writeFileSync — guaranteed on disk)
     // On next startup, hydration checks this flag and ignores localStorage
-    await window.electron?.ipcRenderer?.writeSessions({ _discardLayout: true }).catch(() => {});
+    await window.electron?.ipcRenderer?.writeSessions({ _discardLayout: true }).catch(() => { });
     // Clear in-memory state so auto-save effect has nothing to re-save
     setTabs([]);
     setSessions(new Map());
@@ -171,7 +174,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         if (sessionsData && (sessionsData as any)._discardLayout) {
           // Clear stale localStorage and reset sessions file
           localStorage.removeItem(STORAGE_KEYS.LAYOUT);
-          window.electron?.ipcRenderer?.writeSessions({}).catch(() => {});
+          window.electron?.ipcRenderer?.writeSessions({}).catch(() => { });
           // Fall through to create fresh tab
           createTab();
           return;
@@ -560,6 +563,21 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  const clearInteractions = (sessionId: string) => {
+    setSessions((prev) => {
+      const session = prev.get(sessionId);
+      if (!session) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, {
+        ...session,
+        interactions: [],
+        contextSummary: undefined,
+        contextSummarySourceLength: undefined,
+      });
+      return next;
+    });
+  };
+
   const markSessionDirty = (sessionId: string) => {
     setSessions((prev) => {
       const session = prev.get(sessionId);
@@ -607,6 +625,81 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setTabs((prev) =>
       prev.map((t) => (t.activeSessionId === sessionId ? { ...t, title } : t)),
     );
+  };
+
+  /** Update the color flag for a tab */
+  const updateTabColor = (tabId: string, color?: string) => {
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, color } : t)),
+    );
+  };
+
+  /** Duplicate an existing tab */
+  const duplicateTab = async (tabId: string, onNewSession?: (oldId: string, newId: string) => void) => {
+    const tabToDuplicate = tabs.find((t) => t.id === tabId);
+    if (!tabToDuplicate) return;
+
+    // Helper: Clone a node tree, creating new sessions for leaf nodes
+    const cloneNode = async (node: LayoutNode): Promise<LayoutNode> => {
+      if (node.type === "leaf") {
+        if (node.contentType === "settings") {
+          return { ...node }; // Just duplicate the settings pointer
+        }
+
+        const oldSessionId = node.sessionId;
+        const oldSession = sessions.get(oldSessionId);
+
+        // Let's create a new completely disconnected PTY running in the same CWD
+        const cwd = oldSession?.cwd;
+        const newSessionId = await createPTY(cwd);
+
+        // Copy the configs and contexts over
+        setSessions((prev) =>
+          new Map(prev).set(newSessionId, {
+            id: newSessionId,
+            title: oldSession?.title || "Terminal",
+            cwd,
+            aiConfig: oldSession?.aiConfig || aiService.getConfig(),
+            interactions: oldSession?.interactions ? [...oldSession.interactions] : [],
+            contextSummary: oldSession?.contextSummary,
+            contextSummarySourceLength: oldSession?.contextSummarySourceLength,
+            dirty: oldSession?.dirty,
+          }),
+        );
+        if (onNewSession) {
+          onNewSession(oldSessionId, newSessionId);
+        }
+        return { ...node, sessionId: newSessionId };
+      } else {
+        const newChildren = await Promise.all(node.children.map(cloneNode));
+        return { ...node, children: newChildren };
+      }
+    };
+
+    const newRoot = await cloneNode(tabToDuplicate.root);
+
+    // Find first active session for the duplicated tab
+    const findFirstSession = (n: LayoutNode): string => {
+      if (n.type === "leaf") return n.sessionId;
+      return findFirstSession(n.children[0]);
+    };
+
+    let activeSessionId = "settings";
+    try {
+      activeSessionId = findFirstSession(newRoot);
+    } catch { }
+
+    const newTabId = uuid();
+    const newTab: Tab = {
+      id: newTabId,
+      title: `${tabToDuplicate.title} (Copy)`,
+      color: tabToDuplicate.color,
+      root: newRoot,
+      activeSessionId,
+    };
+
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTabId); // Focus the duplicated tab immediately
   };
 
   const activeSessionId = getActiveTab()?.activeSessionId || null;
@@ -726,7 +819,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         reorderTabs,
         focusSession,
         renameTab,
+        updateTabColor,
+        duplicateTab,
         addInteraction,
+        clearInteractions,
         discardPersistedLayout,
         isHydrated,
       }}

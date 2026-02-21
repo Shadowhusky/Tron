@@ -15,6 +15,9 @@ interface TabBarProps {
   onReorder: (fromIndex: number, toIndex: number) => void;
   onOpenSettings: () => void;
   isTabDirty?: (tabId: string) => boolean;
+  onRenameTab?: (sessionId: string, title: string) => void;
+  onUpdateTabColor?: (tabId: string, color?: string) => void;
+  onDuplicateTab?: (tabId: string) => Promise<void>;
 }
 
 const TabBar: React.FC<TabBarProps> = ({
@@ -27,10 +30,31 @@ const TabBar: React.FC<TabBarProps> = ({
   onReorder,
   onOpenSettings,
   isTabDirty,
+  onRenameTab,
+  onUpdateTabColor,
+  onDuplicateTab,
 }) => {
   // Local visual order — avoids propagating every drag frame to parent
   const [localTabs, setLocalTabs] = useState(tabs);
   const isDraggingRef = useRef(false);
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    tabId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  // Rename State
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  // Close context menu on external click
+  useEffect(() => {
+    const closeContextMenu = () => setContextMenu(null);
+    window.addEventListener("click", closeContextMenu);
+    return () => window.removeEventListener("click", closeContextMenu);
+  }, []);
 
   // Sync from parent when not dragging
   useEffect(() => {
@@ -56,6 +80,7 @@ const TabBar: React.FC<TabBarProps> = ({
   return (
     <div
       data-tutorial="tab-bar"
+      data-testid="tab-bar"
       className={`flex items-center h-10 px-2 gap-2 border-b select-none shrink-0 ${themeClass(
         resolvedTheme,
         {
@@ -103,64 +128,109 @@ const TabBar: React.FC<TabBarProps> = ({
                 cursor: "grabbing",
               }}
               style={{ WebkitAppRegion: "no-drag" } as any}
-              className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-grab active:cursor-grabbing transition-colors border max-w-[200px] min-w-[100px] ${
-                tab.id === activeTabId
-                  ? themeClass(resolvedTheme, {
-                      dark: "bg-[#1e1e1e] text-white border-white/10",
-                      modern:
-                        "bg-white/[0.06] text-white border-white/[0.1] backdrop-blur-xl",
-                      light: "bg-white text-gray-900 border-gray-300 shadow-sm",
-                    })
-                  : themeClass(resolvedTheme, {
-                      dark: "bg-[#161616] border-white/5 hover:bg-[#1a1a1a] text-gray-500 hover:text-gray-300",
-                      modern:
-                        "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300",
-                      light:
-                        "bg-gray-100/80 border-gray-200/60 text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
-                    })
-              }`}
+              className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-grab active:cursor-grabbing transition-colors border max-w-[200px] min-w-[100px] ${tab.id === activeTabId
+                ? themeClass(resolvedTheme, {
+                  dark: "bg-[#1e1e1e] text-white border-white/10",
+                  modern:
+                    "bg-white/[0.06] text-white border-white/[0.1] backdrop-blur-xl",
+                  light: "bg-white text-gray-900 border-gray-300 shadow-sm",
+                })
+                : themeClass(resolvedTheme, {
+                  dark: "bg-[#161616] border-white/5 hover:bg-[#1a1a1a] text-gray-500 hover:text-gray-300",
+                  modern:
+                    "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300",
+                  light:
+                    "bg-gray-100/80 border-gray-200/60 text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                })
+                }`}
+              data-testid={`tab-${tab.id}`}
               onClick={() => onSelect(tab.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
+              }}
             >
-              <span className="truncate flex-1">{tab.title}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const dirty = isTabDirty?.(tab.id) ?? false;
-                  if (
-                    tab.title === "Settings" ||
-                    !dirty ||
-                    window.confirm("Close this terminal session?")
-                  ) {
-                    onClose(tab.id);
-                  }
-                }}
-                className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""} ${themeClass(
-                  resolvedTheme,
-                  {
-                    dark: "hover:bg-white/20",
-                    modern: "hover:bg-white/20",
-                    light: "hover:bg-black/10",
-                  },
-                )}`}
-              >
-                <svg
-                  className="w-3 h-3"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+              {tab.color && (
+                <div
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: tab.color }}
+                />
+              )}
+              {renamingTabId === tab.id ? (
+                <input
+                  autoFocus
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                      if (renameValue.trim() && tab.activeSessionId && onRenameTab && renameValue.trim() !== tab.title) {
+                        onRenameTab(tab.activeSessionId, renameValue.trim());
+                      }
+                      setRenamingTabId(null);
+                    } else if (e.key === "Escape") {
+                      setRenamingTabId(null);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (renameValue.trim() && tab.activeSessionId && onRenameTab && renameValue.trim() !== tab.title) {
+                      onRenameTab(tab.activeSessionId, renameValue.trim());
+                    }
+                    setRenamingTabId(null);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  onContextMenu={(e) => e.stopPropagation()}
+                  className={`flex-1 min-w-[50px] bg-transparent outline-none ring-1 ring-blue-500/50 rounded-sm px-1 -mx-1 ${themeClass(
+                    resolvedTheme,
+                    { dark: "text-white", modern: "text-white", light: "text-gray-900" },
+                  )}`}
+                />
+              ) : (
+                <span className="truncate flex-1 select-none">{tab.title}</span>
+              )}
+              {renamingTabId !== tab.id && (
+                <button
+                  data-testid={`tab-close-${tab.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const dirty = isTabDirty?.(tab.id) ?? false;
+                    if (
+                      tab.title === "Settings" ||
+                      !dirty ||
+                      window.confirm("Close this terminal session?")
+                    ) {
+                      onClose(tab.id);
+                    }
+                  }}
+                  className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""} ${themeClass(
+                    resolvedTheme,
+                    {
+                      dark: "hover:bg-white/20",
+                      modern: "hover:bg-white/20",
+                      light: "hover:bg-black/10",
+                    },
+                  )}`}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
+                  <svg
+                    className="w-3 h-3"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              )}
             </Reorder.Item>
           ))}
         </AnimatePresence>
         <motion.button
+          data-testid="tab-create"
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
           onClick={onCreate}
@@ -192,6 +262,7 @@ const TabBar: React.FC<TabBarProps> = ({
 
       {/* Settings Button */}
       <button
+        data-testid="tab-settings"
         onClick={onOpenSettings}
         className={`p-2 rounded-md transition-colors ${themeClass(
           resolvedTheme,
@@ -228,6 +299,134 @@ const TabBar: React.FC<TabBarProps> = ({
 
       {/* Windows title bar overlay spacer (min/max/close buttons are on the right) */}
       {isWindows() && <div className="w-36 shrink-0" />}
+
+      {/* Context Menu */}
+      <AnimatePresence>
+        {contextMenu && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.1 }}
+            style={{
+              position: "fixed",
+              top: contextMenu.y,
+              left: contextMenu.x,
+              zIndex: 100,
+            }}
+            className={`w-48 py-1 rounded-md shadow-xl border overflow-hidden ${themeClass(
+              resolvedTheme,
+              {
+                dark: "bg-[#1e1e1e] border-white/10 text-gray-200",
+                modern:
+                  "bg-white/[0.08] backdrop-blur-3xl border-white/[0.15] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                light: "bg-white border-gray-200 text-gray-800 shadow-xl",
+              },
+            )}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Rename */}
+            <button
+              onClick={() => {
+                setContextMenu(null);
+                const tab = tabs.find((t) => t.id === contextMenu.tabId);
+                if (!tab) return;
+                setRenamingTabId(tab.id);
+                setRenameValue(tab.title);
+              }}
+              className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${themeClass(
+                resolvedTheme,
+                {
+                  dark: "hover:bg-white/10",
+                  modern: "hover:bg-white/20",
+                  light: "hover:bg-gray-100",
+                },
+              )}`}
+            >
+              Rename Tab
+            </button>
+
+            {/* Colors */}
+            <div className={`px-3 py-1.5 flex gap-1 ${themeClass(resolvedTheme, {
+              dark: "border-b border-t border-white/5",
+              modern: "border-b border-t border-white/10",
+              light: "border-b border-t border-gray-100",
+            })}`}
+            >
+              {[
+                { c: undefined, bg: "transparent" },
+                { c: "#ef4444", bg: "#ef4444" },
+                { c: "#f97316", bg: "#f97316" },
+                { c: "#eab308", bg: "#eab308" },
+                { c: "#22c55e", bg: "#22c55e" },
+                { c: "#3b82f6", bg: "#3b82f6" },
+                { c: "#a855f7", bg: "#a855f7" },
+              ].map((clr, i) => (
+                <button
+                  key={i}
+                  className={`w-4 h-4 rounded-full border border-gray-500/30 hover:scale-110 transition-transform ${clr.c === tabs.find(t => t.id === contextMenu.tabId)?.color ? "ring-2 ring-offset-1 ring-gray-400" : ""
+                    }`}
+                  style={{ backgroundColor: clr.bg }}
+                  onClick={() => {
+                    if (onUpdateTabColor) {
+                      onUpdateTabColor(contextMenu.tabId, clr.c);
+                    }
+                    setContextMenu(null);
+                  }}
+                  title={clr.c ? "Set color" : "Clear color"}
+                />
+              ))}
+            </div>
+
+            {/* Duplicate */}
+            <button
+              onClick={async () => {
+                setContextMenu(null);
+                if (onDuplicateTab) {
+                  await onDuplicateTab(contextMenu.tabId);
+                }
+              }}
+              className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${themeClass(
+                resolvedTheme,
+                {
+                  dark: "hover:bg-white/10",
+                  modern: "hover:bg-white/20",
+                  light: "hover:bg-gray-100",
+                },
+              )}`}
+            >
+              Duplicate Tab
+            </button>
+
+            {/* Close */}
+            <button
+              onClick={() => {
+                setContextMenu(null);
+                const tab = tabs.find((t) => t.id === contextMenu.tabId);
+                const dirty = isTabDirty?.(contextMenu.tabId) ?? false;
+                if (
+                  tab &&
+                  (tab.title === "Settings" ||
+                    !dirty ||
+                    window.confirm("Close this terminal session?"))
+                ) {
+                  onClose(contextMenu.tabId);
+                }
+              }}
+              className={`w-full text-left px-3 py-1.5 text-sm transition-colors text-red-500 ${themeClass(
+                resolvedTheme,
+                {
+                  dark: "hover:bg-white/10",
+                  modern: "hover:bg-white/20",
+                  light: "hover:bg-red-50",
+                },
+              )}`}
+            >
+              Close Tab
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
