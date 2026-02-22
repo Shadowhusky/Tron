@@ -464,7 +464,7 @@ export function useAgentRunner(
               sessionId,
               command: listCommand,
             }).catch(() => null),
-            window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_SYSTEM_INFO).catch(() => null),
+            window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_SYSTEM_INFO, sessionId).catch(() => null),
           ]);
 
           sessionHistory = cleanContextForAI(rawHistory);
@@ -489,7 +489,8 @@ System Paths:
             const platformNames: Record<string, string> = {
               darwin: "macOS", win32: "Windows", linux: "Linux",
             };
-            systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}\n`;
+            const sshLabel = session?.sshProfileId ? " [Remote SSH Session]" : "";
+            systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}${sshLabel}\n`;
           }
         }
 
@@ -786,6 +787,7 @@ Task: ${prompt}
         thinkingEnabled && modelSupportsThinking,
         currentContinuation || undefined,
         images,
+        { isSSH: !!session?.sshProfileId, sessionId },
       );
 
       // Flush any remaining streaming buffer before processing final answer

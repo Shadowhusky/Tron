@@ -5,6 +5,7 @@ import type {
   TerminalSession,
   SplitDirection,
   AIConfig,
+  SSHConnectionConfig,
 } from "../types";
 import { aiService } from "../services/ai";
 import { STORAGE_KEYS } from "../constants/storage";
@@ -42,6 +43,7 @@ interface LayoutContextType {
   renameTab: (sessionId: string, title: string) => void;
   updateTabColor: (tabId: string, color?: string) => void;
   duplicateTab: (tabId: string, onNewSession?: (oldId: string, newId: string) => void) => Promise<void>;
+  createSSHTab: (config: SSHConnectionConfig) => Promise<void>;
   /** Stop auto-saving layout and clear persisted data. Call before window close without saving. */
   discardPersistedLayout: () => void;
   isHydrated: boolean;
@@ -295,6 +297,42 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     const newTab: Tab = {
       id: newTabId,
       title: "New Tab",
+      root: { type: "leaf", sessionId },
+      activeSessionId: sessionId,
+    };
+
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTabId);
+  };
+
+  const createSSHTab = async (config: SSHConnectionConfig) => {
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) return;
+
+    const connectFn = (ipc as any).connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
+    const result = await connectFn({
+      ...config,
+      cols: 80,
+      rows: 30,
+    });
+    const sessionId = result.sessionId;
+    const newTabId = uuid();
+
+    const defaultConfig = aiService.getConfig();
+    const tabTitle = config.name || `${config.username}@${config.host}`;
+
+    setSessions((prev) =>
+      new Map(prev).set(sessionId, {
+        id: sessionId,
+        title: tabTitle,
+        aiConfig: defaultConfig,
+        sshProfileId: config.id,
+      }),
+    );
+
+    const newTab: Tab = {
+      id: newTabId,
+      title: tabTitle,
       root: { type: "leaf", sessionId },
       activeSessionId: sessionId,
     };
@@ -821,6 +859,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         renameTab,
         updateTabColor,
         duplicateTab,
+        createSSHTab,
         addInteraction,
         clearInteractions,
         discardPersistedLayout,

@@ -9,6 +9,7 @@ A modern desktop terminal with a built-in AI agent that can execute commands, wr
 Most AI coding tools are chat-first: you paste context in, copy commands out, run them yourself. Tron flips that. It's a **terminal-first** app where the AI operates directly in your shell — running commands, reading output, writing files, and iterating until the job is done.
 
 - **Real terminal, real shell.** Full PTY with xterm.js. Your aliases, shell config, and tools all work.
+- **SSH remote connections.** Connect to remote servers via SSH — password, private key, or SSH agent auth. Terminal sessions work identically whether local or remote.
 - **Agent runs commands for you.** Describe what you want; the agent executes multi-step plans with permission controls.
 - **Any model, any provider.** Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax — or any OpenAI/Anthropic-compatible API.
 - **Safety built in.** Dangerous command detection, permission prompts, double-confirm for destructive operations, loop detection, and circuit breakers.
@@ -77,6 +78,17 @@ Most AI coding tools are chat-first: you paste context in, copy commands out, ru
 - **AI ghost text** — idle suggestions appear as inline ghost text after 3 seconds of inactivity
 - **Session persistence** — agent state, draft input, and overlay height survive app restarts
 - **Three themes** — Dark, Light, Modern (frosty glass), plus system auto-detect
+
+### SSH Remote Connections
+
+Connect to remote servers directly from Tron. SSH sessions are fully transparent — the terminal, AI agent, and all features work identically whether the session is local or remote.
+
+- **Three auth methods** — password, private key (with optional passphrase), and SSH agent
+- **Saved profiles** — save connection details for quick reconnect; optionally persist credentials
+- **Status indicator** — live connection status badge (connected/disconnected/reconnecting) on each SSH tab
+- **Agent compatibility** — the AI agent can execute commands, read/write files, and inspect the remote system over SSH
+- **Tab bar dropdown** — click `+` to choose "New Terminal" or "SSH Connection"
+- **Settings management** — view, edit, and delete saved SSH profiles in Settings > SSH
 
 ### AI Agent
 
@@ -196,10 +208,11 @@ src/                    # React renderer (Vite + TypeScript)
   utils/                # Platform, theme, command classification, context cleaning
 
 electron/               # Electron main process
-  ipc/                  # PTY management, file ops, config, AI test connection
+  ipc/                  # PTY management, SSH sessions, file ops, config, AI test
   preload.ts            # Secure IPC bridge with channel allowlists
 
 server/                 # Web mode (Express + WebSocket, no Electron)
+  handlers/ssh.ts       # SSH session adapter (PtyLike interface over ssh2)
 
 e2e/                    # Playwright E2E test suite (10 spec files)
 ```
@@ -237,6 +250,7 @@ npm run start:web        # Start production server
 - **Framer Motion** — smooth animations and transitions
 - **TanStack Virtual** — virtualized rendering for long agent threads
 - **TanStack Query** — model fetching with smart caching
+- **ssh2** — SSH client for remote terminal sessions (password, key, agent auth)
 - **Playwright** — E2E testing with Electron launch fixture
 
 ## License

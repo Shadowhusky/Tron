@@ -47,6 +47,7 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const crypto_1 = require("crypto");
 const child_process_1 = require("child_process");
+const ssh_1 = require("./ssh");
 /** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text) {
     let d = text;
@@ -308,10 +309,20 @@ function registerTerminalHandlers(getMainWindow) {
             sessionHistory.delete(id);
         }
     });
-    electron_1.ipcMain.handle("terminal.checkCommand", async (_event, command) => {
+    electron_1.ipcMain.handle("terminal.checkCommand", async (_event, data) => {
+        // Support both old (string) and new (object with sessionId) formats
+        const command = typeof data === "string" ? data : data.command;
+        const sessionId = typeof data === "object" ? data.sessionId : undefined;
         // Sanitize: only allow alphanumeric, dashes, underscores, dots
         if (!/^[a-zA-Z0-9._-]+$/.test(command))
             return false;
+        // SSH session: check on remote
+        if (sessionId && ssh_1.sshSessionIds.has(sessionId)) {
+            const sshSession = ssh_1.sshSessions.get(sessionId);
+            if (sshSession)
+                return sshSession.checkCommand(command);
+            return false;
+        }
         try {
             const checkCmd = os_1.default.platform() === "win32" ? `where ${command}` : `which ${command}`;
             await trackedExec(checkCmd);
@@ -323,6 +334,18 @@ function registerTerminalHandlers(getMainWindow) {
     });
     // Agent Execution (with 30s timeout to prevent blocking on long-running commands)
     electron_1.ipcMain.handle("terminal.exec", async (_event, { sessionId, command }) => {
+        // SSH session: exec on remote
+        if (ssh_1.sshSessionIds.has(sessionId)) {
+            const sshSession = ssh_1.sshSessions.get(sessionId);
+            if (!sshSession)
+                return { stdout: "", stderr: "SSH session not found", exitCode: 1 };
+            try {
+                return await sshSession.exec(command, 30000);
+            }
+            catch (e) {
+                return { stdout: "", stderr: e.message, exitCode: 1 };
+            }
+        }
         const session = sessions.get(sessionId);
         let cwd = os_1.default.homedir() || "/";
         if (session) {
@@ -362,13 +385,27 @@ function registerTerminalHandlers(getMainWindow) {
     });
     // Get CWD
     electron_1.ipcMain.handle("terminal.getCwd", async (_event, sessionId) => {
+        // SSH session: get remote CWD
+        if (ssh_1.sshSessionIds.has(sessionId)) {
+            const sshSession = ssh_1.sshSessions.get(sessionId);
+            if (sshSession)
+                return sshSession.getCwd();
+            return null;
+        }
         const session = sessions.get(sessionId);
         if (!session)
             return null;
         return getCwdForPid(session.pid);
     });
     // Get system info (OS, shell, arch) for agent environment context
-    electron_1.ipcMain.handle("terminal.getSystemInfo", async () => {
+    electron_1.ipcMain.handle("terminal.getSystemInfo", async (_event, sessionId) => {
+        // SSH session: get remote system info
+        if (sessionId && ssh_1.sshSessionIds.has(sessionId)) {
+            const sshSession = ssh_1.sshSessions.get(sessionId);
+            if (sshSession)
+                return sshSession.getSystemInfo();
+            return { platform: "linux", arch: "unknown", shell: "bash", release: "unknown" };
+        }
         const { shell } = detectShell();
         const shellName = path_1.default.basename(shell).replace(/\.exe$/i, "");
         return {
@@ -379,6 +416,13 @@ function registerTerminalHandlers(getMainWindow) {
         };
     });
     electron_1.ipcMain.handle("terminal.getCompletions", async (_event, { prefix, cwd, sessionId, }) => {
+        // SSH session: get completions from remote
+        if (sessionId && ssh_1.sshSessionIds.has(sessionId)) {
+            const sshSession = ssh_1.sshSessions.get(sessionId);
+            if (sshSession)
+                return sshSession.getCompletions(prefix);
+            return [];
+        }
         // Resolve CWD from session if available
         let workDir = cwd || os_1.default.homedir() || "/";
         if (!cwd && sessionId) {

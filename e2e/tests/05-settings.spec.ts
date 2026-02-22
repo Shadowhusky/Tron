@@ -12,7 +12,7 @@ test.describe("Settings", () => {
   });
 
   test("all navigation sections are visible", async ({ page }) => {
-    const sections = ["ai", "view", "appearance", "shortcuts"];
+    const sections = ["ai", "ai-features", "view", "appearance", "ssh", "shortcuts"];
     for (const section of sections) {
       const nav = page.locator(sel.settingsNav(section));
       await expect(nav).toBeVisible();
@@ -20,7 +20,7 @@ test.describe("Settings", () => {
   });
 
   test("can click each navigation section", async ({ page }) => {
-    const sections = ["ai", "view", "appearance", "shortcuts"];
+    const sections = ["ai", "ai-features", "view", "appearance", "ssh", "shortcuts"];
     for (const section of sections) {
       const nav = page.locator(sel.settingsNav(section));
       await nav.click();

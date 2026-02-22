@@ -10,4 +10,5 @@ export const STORAGE_KEYS = {
   AGENT_STATE: "tron_agent_state",
   VIEW_MODE: "tron_view_mode",
   TUTORIAL_COMPLETED: "tron_tutorial_completed",
+  SSH_PROFILES: "tron_ssh_profiles",
 } as const;

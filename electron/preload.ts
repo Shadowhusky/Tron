@@ -33,6 +33,11 @@ const ALLOWED_INVOKE_CHANNELS = [
   "shell.showItemInFolder",
   "system.flushStorage",
   "log.saveSessionLog",
+  "ssh.connect",
+  "ssh.testConnection",
+  "ssh.disconnect",
+  "ssh.profiles.read",
+  "ssh.profiles.write",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -49,6 +54,7 @@ const ALLOWED_RECEIVE_CHANNELS = [
   "menu.createTab",
   "menu.closeTab",
   "window.confirmClose",
+  "ssh.statusChange",
 ] as const;
 
 type InvokeChannel = (typeof ALLOWED_INVOKE_CHANNELS)[number];
@@ -117,8 +123,8 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("sessions.write", data) as Promise<boolean>,
     getSystemPaths: () =>
       ipcRenderer.invoke("config.getSystemPaths") as Promise<Record<string, string>>,
-    getSystemInfo: () =>
-      ipcRenderer.invoke("terminal.getSystemInfo") as Promise<{
+    getSystemInfo: (sessionId?: string) =>
+      ipcRenderer.invoke("terminal.getSystemInfo", sessionId) as Promise<{
         platform: string;
         arch: string;
         shell: string;
@@ -166,5 +172,16 @@ contextBridge.exposeInMainWorld("electron", {
         filePath?: string;
         error?: string;
       }>,
+    // SSH
+    connectSSH: (config: any) =>
+      ipcRenderer.invoke("ssh.connect", config) as Promise<{ sessionId: string }>,
+    testSSHConnection: (config: any) =>
+      ipcRenderer.invoke("ssh.testConnection", config) as Promise<{ success: boolean; error?: string }>,
+    disconnectSSH: (sessionId: string) =>
+      ipcRenderer.invoke("ssh.disconnect", sessionId) as Promise<boolean>,
+    readSSHProfiles: () =>
+      ipcRenderer.invoke("ssh.profiles.read") as Promise<any[]>,
+    writeSSHProfiles: (profiles: any[]) =>
+      ipcRenderer.invoke("ssh.profiles.write", profiles) as Promise<boolean>,
   },
 });

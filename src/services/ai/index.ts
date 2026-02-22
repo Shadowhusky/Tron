@@ -1411,6 +1411,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     thinkingEnabled: boolean = true,
     continuation?: AgentContinuation,
     images?: AttachedImage[],
+    options?: { isSSH?: boolean; sessionId?: string },
   ): Promise<AgentResult> {
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
@@ -2673,13 +2674,22 @@ ${agentPrompt}
         }
         try {
           onUpdate("executing", `Writing file: ${filePath}`, action);
-          const result = await (window as any).electron.ipcRenderer.invoke(
-            "file.writeFile",
-            {
-              filePath,
-              content,
-            },
-          );
+          let result: any;
+          if (options?.isSSH && options.sessionId) {
+            // SSH: use shell commands to write file
+            const escaped = content.replace(/\\/g, "\\\\").replace(/'/g, "'\\''");
+            const cmd = `mkdir -p "$(dirname '${filePath}')" && cat > '${filePath}' << 'TRON_SSH_EOF'\n${escaped}\nTRON_SSH_EOF`;
+            const execResult = await (window as any).electron.ipcRenderer.invoke("terminal.exec", { sessionId: options.sessionId, command: cmd });
+            result = execResult.exitCode === 0 ? { success: true, existed: false } : { success: false, error: execResult.stderr || "Write failed" };
+          } else {
+            result = await (window as any).electron.ipcRenderer.invoke(
+              "file.writeFile",
+              {
+                filePath,
+                content,
+              },
+            );
+          }
           if (result.success) {
             const MAX_PREVIEW = 5000;
             const preview =
@@ -2721,12 +2731,18 @@ ${agentPrompt}
             throw new Error("read_file requires 'path' (string)");
           }
           onUpdate("executing", `Reading file: ${filePath}`, action);
-          const result = await (window as any).electron.ipcRenderer.invoke(
-            "file.readFile",
-            {
-              filePath,
-            },
-          );
+          let result: any;
+          if (options?.isSSH && options.sessionId) {
+            const execResult = await (window as any).electron.ipcRenderer.invoke("terminal.exec", { sessionId: options.sessionId, command: `cat '${filePath}'` });
+            result = execResult.exitCode === 0 ? { success: true, content: execResult.stdout } : { success: false, error: execResult.stderr || "File not found" };
+          } else {
+            result = await (window as any).electron.ipcRenderer.invoke(
+              "file.readFile",
+              {
+                filePath,
+              },
+            );
+          }
           if (result.success) {
             const content = result.content || "(empty file)";
             // Truncate very large files
@@ -2777,14 +2793,24 @@ ${agentPrompt}
             );
           }
           onUpdate("executing", `Editing file: ${filePath}`, action);
-          const result = await (window as any).electron.ipcRenderer.invoke(
-            "file.editFile",
-            {
-              filePath,
-              search,
-              replace,
-            },
-          );
+          let result: any;
+          if (options?.isSSH && options.sessionId) {
+            // SSH: use sed for simple edits, or cat+write for complex ones
+            const escapedSearch = search.replace(/[/&\\]/g, "\\$&").replace(/\n/g, "\\n");
+            const escapedReplace = replace.replace(/[/&\\]/g, "\\$&").replace(/\n/g, "\\n");
+            const sedCmd = `sed -i 's/${escapedSearch}/${escapedReplace}/g' '${filePath}'`;
+            const execResult = await (window as any).electron.ipcRenderer.invoke("terminal.exec", { sessionId: options.sessionId, command: sedCmd });
+            result = execResult.exitCode === 0 ? { success: true, replacements: 1 } : { success: false, error: execResult.stderr || "Edit failed" };
+          } else {
+            result = await (window as any).electron.ipcRenderer.invoke(
+              "file.editFile",
+              {
+                filePath,
+                search,
+                replace,
+              },
+            );
+          }
           if (result.success) {
             // Build a compact diff preview for the overlay
             const diffPreview = `--- search\n${search}\n+++ replace\n${replace}`;
