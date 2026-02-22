@@ -1,6 +1,14 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { TronConfig, HotkeyMap } from "../types";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import type { TronConfig, HotkeyMap, AIBehavior } from "../types";
 import { STORAGE_KEYS } from "../constants/storage";
+
+export const DEFAULT_AI_BEHAVIOR: AIBehavior = {
+  ghostText: true,
+  autoDetect: true,
+  adviceMode: true,
+  aiTabTitles: true,
+  inputHints: true,
+};
 
 export const DEFAULT_HOTKEYS: HotkeyMap = {
   openSettings: "meta+,",
@@ -23,8 +31,10 @@ const DEFAULT_CONFIG: TronConfig = {
 interface ConfigContextType {
   config: TronConfig;
   hotkeys: HotkeyMap;
+  aiBehavior: AIBehavior;
   updateConfig: (partial: Partial<TronConfig>) => void;
   updateHotkey: (action: string, combo: string) => void;
+  updateAIBehavior: (partial: Partial<AIBehavior>) => void;
   resetHotkeys: () => void;
   isLoaded: boolean;
 }
@@ -118,10 +128,25 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, [persistConfig]);
 
+  const updateAIBehavior = useCallback((partial: Partial<AIBehavior>) => {
+    setConfig((prev) => {
+      const next = {
+        ...prev,
+        aiBehavior: { ...DEFAULT_AI_BEHAVIOR, ...prev.aiBehavior, ...partial },
+      };
+      persistConfig(next);
+      return next;
+    });
+  }, [persistConfig]);
+
   const hotkeys = config.hotkeys || DEFAULT_HOTKEYS;
+  const aiBehavior = useMemo(
+    () => ({ ...DEFAULT_AI_BEHAVIOR, ...config.aiBehavior }),
+    [config.aiBehavior],
+  );
 
   return (
-    <ConfigContext.Provider value={{ config, hotkeys, updateConfig, updateHotkey, resetHotkeys, isLoaded }}>
+    <ConfigContext.Provider value={{ config, hotkeys, aiBehavior, updateConfig, updateHotkey, updateAIBehavior, resetHotkeys, isLoaded }}>
       {children}
     </ConfigContext.Provider>
   );
