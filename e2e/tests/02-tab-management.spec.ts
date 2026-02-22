@@ -10,32 +10,34 @@ test.describe("Tab Management", () => {
   test("can create a new tab", async ({ page }) => {
     // Count initial tabs
     const tabBar = page.locator(sel.tabBar);
+    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"]';
     const initialTabs = await tabBar.locator('[data-testid^="tab-"]').filter({
-      hasNot: page.locator('[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"]'),
+      hasNot: page.locator(tabFilter),
     }).count();
 
-    // Click the create tab button
+    // Click the create tab button (opens dropdown), then click "New Terminal"
     await page.locator(sel.tabCreate).click();
+    await page.locator(sel.tabCreateTerminal).click();
     await page.waitForTimeout(1_000);
 
     // Verify a new tab was added
     const newTabs = await tabBar.locator('[data-testid^="tab-"]').filter({
-      hasNot: page.locator('[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"]'),
+      hasNot: page.locator(tabFilter),
     }).count();
     expect(newTabs).toBe(initialTabs + 1);
   });
 
   test("can switch between tabs", async ({ page }) => {
-    // Create a second tab so we have two
+    // Create a second tab so we have two (dropdown flow)
     await page.locator(sel.tabCreate).click();
+    await page.locator(sel.tabCreateTerminal).click();
     await page.waitForTimeout(1_000);
 
-    // Get all tab elements (excluding create/settings buttons)
+    // Get all tab elements (excluding create/settings/close/dropdown buttons)
     const tabBar = page.locator(sel.tabBar);
+    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"]';
     const tabs = tabBar.locator('[data-testid^="tab-"]').filter({
-      hasNot: page.locator(
-        '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"]',
-      ),
+      hasNot: page.locator(tabFilter),
     });
 
     const tabCount = await tabs.count();
@@ -55,18 +57,18 @@ test.describe("Tab Management", () => {
   });
 
   test("can close a tab", async ({ page }) => {
-    // Create a second tab
+    // Create a second tab (dropdown flow)
     await page.locator(sel.tabCreate).click();
+    await page.locator(sel.tabCreateTerminal).click();
     await page.waitForTimeout(1_000);
 
     const tabBar = page.locator(sel.tabBar);
+    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"]';
     const getTabCount = async () =>
       tabBar
         .locator('[data-testid^="tab-"]')
         .filter({
-          hasNot: page.locator(
-            '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"]',
-          ),
+          hasNot: page.locator(tabFilter),
         })
         .count();
 
@@ -81,9 +83,7 @@ test.describe("Tab Management", () => {
     // Hover over a tab to reveal the close button, then click it
     // Close buttons may only appear on hover, so hover first
     const tabs = tabBar.locator('[data-testid^="tab-"]').filter({
-      hasNot: page.locator(
-        '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"]',
-      ),
+      hasNot: page.locator(tabFilter),
     });
     await tabs.last().hover();
     await page.waitForTimeout(300);
@@ -115,8 +115,8 @@ test.describe("Tab Management", () => {
     await page.locator(sel.tabSettings).click();
     await page.waitForTimeout(1_000);
 
-    // All four navigation sections should be visible
-    const sections = ["ai", "view", "appearance", "shortcuts"];
+    // All six navigation sections should be visible
+    const sections = ["ai", "ai-features", "view", "appearance", "ssh", "shortcuts"];
     for (const section of sections) {
       const nav = page.locator(sel.settingsNav(section));
       await expect(nav).toBeVisible({ timeout: 5_000 });

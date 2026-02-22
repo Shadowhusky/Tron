@@ -13,6 +13,7 @@ interface TabBarProps {
   onSelect: (tabId: string) => void;
   onClose: (tabId: string) => void;
   onCreate: () => void;
+  onCreateSSH?: () => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onOpenSettings: () => void;
   isTabDirty?: (tabId: string) => boolean;
@@ -28,6 +29,7 @@ const TabBar: React.FC<TabBarProps> = ({
   onSelect,
   onClose,
   onCreate,
+  onCreateSSH,
   onReorder,
   onOpenSettings,
   isTabDirty,
@@ -230,35 +232,95 @@ const TabBar: React.FC<TabBarProps> = ({
             </Reorder.Item>
           ))}
         </AnimatePresence>
-        <motion.button
-          data-testid="tab-create"
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.9 }}
-          onClick={onCreate}
-          style={{ WebkitAppRegion: "no-drag" } as any}
-          className={`p-1.5 rounded-md transition-colors ${themeClass(
-            resolvedTheme,
-            {
-              dark: "hover:bg-white/10 text-gray-500",
-              modern: "hover:bg-white/10 text-gray-500",
-              light: "hover:bg-gray-200 text-gray-500",
-            },
-          )}`}
-        >
-          <svg
-            className="w-4 h-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-        </motion.button>
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            <motion.button
+              data-testid="tab-create"
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className={`p-1.5 rounded-md transition-colors ${themeClass(
+                resolvedTheme,
+                {
+                  dark: "hover:bg-white/10 text-gray-500",
+                  modern: "hover:bg-white/10 text-gray-500",
+                  light: "hover:bg-gray-200 text-gray-500",
+                },
+              )}`}
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 4v16m8-8H4"
+                />
+              </svg>
+            </motion.button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              className={`w-48 py-1 rounded-md shadow-xl border overflow-hidden z-[100] ${themeClass(
+                resolvedTheme,
+                {
+                  dark: "bg-[#1e1e1e] border-white/10 text-gray-200",
+                  modern:
+                    "bg-white/[0.08] backdrop-blur-3xl border-white/[0.15] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                  light: "bg-white border-gray-200 text-gray-800 shadow-xl",
+                },
+              )}`}
+            >
+              <Popover.Close asChild>
+                <button
+                  data-testid="tab-create-terminal"
+                  onClick={onCreate}
+                  className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+                    resolvedTheme,
+                    {
+                      dark: "hover:bg-white/10",
+                      modern: "hover:bg-white/20",
+                      light: "hover:bg-gray-100",
+                    },
+                  )}`}
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  New Terminal
+                </button>
+              </Popover.Close>
+              {onCreateSSH && (
+                <Popover.Close asChild>
+                  <button
+                    data-testid="tab-create-ssh"
+                    onClick={onCreateSSH}
+                    className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+                      resolvedTheme,
+                      {
+                        dark: "hover:bg-white/10",
+                        modern: "hover:bg-white/20",
+                        light: "hover:bg-gray-100",
+                      },
+                    )}`}
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                    </svg>
+                    SSH Connection
+                  </button>
+                </Popover.Close>
+              )}
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       </Reorder.Group>
 
       {/* Settings Button */}

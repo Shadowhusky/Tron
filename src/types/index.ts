@@ -73,6 +73,27 @@ export interface TronConfig {
   aiBehavior?: AIBehavior;
 }
 
+// --- SSH Types ---
+
+export type SSHAuthMethod = "password" | "key" | "agent";
+
+export interface SSHConnectionConfig {
+  id: string;
+  name: string;
+  host: string;
+  port: number;          // default 22
+  username: string;
+  authMethod: SSHAuthMethod;
+  privateKeyPath?: string;
+  password?: string;     // transient — only passed for connect, not persisted in plain text
+  passphrase?: string;   // transient — for key passphrase
+  saveCredentials?: boolean; // whether to persist password/passphrase
+  fingerprint?: string;      // cached host key fingerprint
+  lastConnected?: number;
+}
+
+export type SSHConnectionStatus = "connected" | "disconnected" | "connecting" | "reconnecting";
+
 // --- Terminal & Layout Types ---
 
 export interface TerminalSession {
@@ -83,6 +104,7 @@ export interface TerminalSession {
   dirty?: boolean; // true once user has entered commands
   contextSummary?: string; // Auto-generated summary of older context
   contextSummarySourceLength?: number; // Length of the original text that was summarized
+  sshProfileId?: string;  // If set, this is a remote SSH session
   interactions?: {
     role: "user" | "agent";
     content: string;

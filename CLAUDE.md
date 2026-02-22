@@ -28,6 +28,7 @@ src/
     terminal/         # Terminal.tsx (xterm.js), SmartInput.tsx
     agent/            # AgentOverlay.tsx
     settings/         # SettingsPane.tsx (per-provider config caching)
+    ssh/              # SSHConnectModal.tsx, SSHStatusBadge.tsx
     onboarding/       # OnboardingWizard.tsx (theme + AI setup)
   App.tsx             # Root: providers + TabBar + workspace + close confirm modal
   main.tsx            # React entry point
@@ -37,6 +38,7 @@ electron/
   main.ts             # Window creation, app lifecycle, close interception
   ipc/
     terminal.ts       # PTY session management, exec, execInTerminal (sentinel-based), completions, history, /log handler, session file persistence
+    ssh.ts            # SSH session adapter (PtyLike interface over ssh2), profile persistence, IPC handlers
     config.ts         # Config/session IPC handlers (readSessions, writeSessions)
     system.ts         # Folder picker, shell:openPath, shell:openExternal
     ai.ts             # AI connection test — cloud providers validate config only (no API call), local providers ping endpoint
@@ -44,7 +46,11 @@ electron/
 
 server/               # Web mode (Express + WebSocket, no Electron)
   index.ts            # HTTP server + WS bridge
-  handlers/           # Terminal, AI, system handlers (mirrors electron/ipc/)
+  handlers/
+    terminal.ts       # Terminal session handlers (mirrors electron/ipc/terminal.ts)
+    ssh.ts            # SSH session adapter for web mode (same PtyLike interface)
+    ai.ts             # AI connection test handler
+    system.ts         # System/file operation handlers
 
 e2e/                  # Playwright E2E test suite
   playwright.config.ts  # workers:1, 60s timeout, html+list reporters
@@ -76,6 +82,10 @@ e2e/                  # Playwright E2E test suite
 - **Multiline input**: Multiline text in SmartInput auto-classifies as agent mode (shell commands are single-line).
 - **Context modal**: ContextBar shows combined terminal history + agent thread activity. Clear button with confirmation clears both terminal history (`terminal.clearHistory` IPC) and agent thread. Summarize/clear buttons disabled when context is too short (< 100 chars).
 - **Agent overlay scroll**: Auto-scroll uses double `requestAnimationFrame` so the TanStack virtualizer can re-measure before scrolling to true bottom. Permission buttons pinned with `shrink-0` — command display scrolls independently so buttons never get clipped.
+- **SSH transparency**: SSH sessions implement the `PtyLike` interface (same as node-pty). Terminal handlers check `sshSessionIds.has(sessionId)` to branch between local PTY and SSH-specific logic (exec, getCwd, getSystemInfo, getCompletions, checkCommand). Renderer code works identically for both.
+- **SSH profiles**: Saved in `app.getPath("userData")/ssh-profiles/profiles.json` (Electron) or `~/.tron/ssh-profiles.json` (server mode). Credentials optionally persisted per profile.
+- **SSH auth**: Password, private key (with passphrase), and SSH agent (`SSH_AUTH_SOCK`). Keep-alive: `keepaliveInterval: 15000`, `keepaliveCountMax: 3`.
+- **SSH agent file ops**: For SSH sessions, `write_file`/`read_file`/`edit_file` tools fallback to shell commands (`cat`, heredoc, `sed`) executed over SSH instead of direct file IPC.
 
 ## Agent System (`src/services/ai/index.ts`)
 

@@ -27,6 +27,8 @@ import {
   Monitor,
   Star,
   Sparkles,
+  Globe,
+  Trash2,
 } from "lucide-react";
 
 
@@ -63,8 +65,89 @@ const NAV_SECTIONS = [
   { id: "ai-features", label: "AI Features", icon: Sparkles },
   { id: "view", label: "View Mode", icon: Monitor },
   { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "ssh", label: "SSH", icon: Globe },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 ] as const;
+
+// --- SSH Profiles Sub-component ---
+function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
+  cardClass: string;
+  t: any;
+  resolvedTheme: string;
+}) {
+  const [profiles, setProfiles] = useState<any[]>([]);
+  useEffect(() => {
+    const ipc = window.electron?.ipcRenderer;
+    if (ipc?.readSSHProfiles) {
+      ipc.readSSHProfiles().then(setProfiles).catch(() => {});
+    }
+  }, []);
+  const deleteProfile = async (id: string) => {
+    const updated = profiles.filter((p: any) => p.id !== id);
+    const ipc = window.electron?.ipcRenderer;
+    if (ipc?.writeSSHProfiles) {
+      await ipc.writeSSHProfiles(updated);
+    }
+    setProfiles(updated);
+  };
+  const toggleCredentials = async (id: string) => {
+    const updated = profiles.map((p: any) =>
+      p.id === id ? { ...p, saveCredentials: !p.saveCredentials, ...(!p.saveCredentials ? {} : { savedPassword: undefined, savedPassphrase: undefined }) } : p,
+    );
+    const ipc = window.electron?.ipcRenderer;
+    if (ipc?.writeSSHProfiles) {
+      await ipc.writeSSHProfiles(updated);
+    }
+    setProfiles(updated);
+  };
+  return (
+    <div className="space-y-3">
+      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+        <Globe className="w-3.5 h-3.5" />
+        SSH Profiles
+      </h3>
+      {profiles.length === 0 ? (
+        <div className={`${cardClass} text-center py-4`}>
+          <p className={`text-xs ${t.textMuted}`}>No saved SSH profiles</p>
+          <p className={`text-[10px] ${t.textFaint} mt-1`}>
+            Click + in the tab bar and choose &quot;SSH Connection&quot; to connect
+          </p>
+        </div>
+      ) : (
+        <div className={`${cardClass} divide-y ${resolvedTheme === "light" ? "divide-gray-100" : "divide-white/5"}`}>
+          {profiles.map((p: any) => (
+            <div key={p.id} className="flex items-center justify-between py-2 first:pt-0 last:pb-0">
+              <div className="flex-1 min-w-0">
+                <div className={`text-xs font-medium truncate ${t.text}`}>{p.name || `${p.username}@${p.host}`}</div>
+                <div className={`text-[10px] ${t.textFaint}`}>{p.username}@{p.host}:{p.port || 22} ({p.authMethod})</div>
+              </div>
+              <div className="flex items-center gap-1.5 ml-2">
+                <button
+                  onClick={() => toggleCredentials(p.id)}
+                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                    p.saveCredentials
+                      ? "border-green-500/50 text-green-400 bg-green-500/10"
+                      : `${t.border} ${t.textMuted} ${t.surfaceHover}`
+                  }`}
+                  title={p.saveCredentials ? "Credentials saved" : "Credentials not saved"}
+                >
+                  {p.saveCredentials ? "Creds saved" : "No creds"}
+                </button>
+                <button
+                  onClick={() => deleteProfile(p.id)}
+                  className={`p-1 rounded transition-colors ${t.surfaceHover} text-red-400 hover:text-red-300`}
+                  title="Delete profile"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const SettingsPane = () => {
   const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
@@ -998,6 +1081,15 @@ const SettingsPane = () => {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* SSH Profiles */}
+            {activeSection === "ssh" && (
+              <SSHProfilesSection
+                cardClass={cardClass}
+                t={t}
+                resolvedTheme={resolvedTheme}
+              />
             )}
 
             {/* Keyboard Shortcuts */}
