@@ -173,7 +173,7 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
   };
 
   // Spotlight cutout dimensions
-  const spotlightPad = 8;
+  const spotlightPad = 2;
   const spotlightRadius = 12;
 
   return (
@@ -227,11 +227,10 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
       {/* Skip button */}
       <button
         onClick={onSkip}
-        className={`absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors z-10 ${
-          isLight
-            ? "bg-white/90 text-gray-600 hover:text-gray-900 hover:bg-white shadow"
-            : "bg-white/10 text-gray-300 hover:text-white hover:bg-white/20"
-        }`}
+        className={`absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors z-10 ${isLight
+          ? "bg-white/90 text-gray-600 hover:text-gray-900 hover:bg-white shadow"
+          : "bg-white/10 text-gray-300 hover:text-white hover:bg-white/20"
+          }`}
       >
         <X className="w-3 h-3" />
         Skip Tutorial
@@ -246,23 +245,21 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -8, scale: 0.96 }}
           transition={{ duration: 0.25, ease: "easeOut" }}
-          className={`fixed max-w-sm w-80 rounded-2xl p-5 shadow-2xl border z-10 ${
-            isLight
-              ? "bg-white border-gray-200 text-gray-900"
-              : "bg-[#141420] border-white/10 text-white shadow-[0_8px_40px_rgba(0,0,0,0.5)]"
-          }`}
+          className={`fixed max-w-sm w-80 rounded-2xl p-5 shadow-2xl border z-10 ${isLight
+            ? "bg-white border-gray-200 text-gray-900"
+            : "bg-[#141420] border-white/10 text-white shadow-[0_8px_40px_rgba(0,0,0,0.5)]"
+            }`}
           style={getTooltipStyle()}
         >
           {/* Step icon */}
           <div className="flex items-center gap-2 mb-3">
             <div
-              className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                isLast
-                  ? "bg-linear-to-br from-purple-500 to-pink-500"
-                  : isFirst
-                    ? "bg-linear-to-br from-purple-500 to-blue-500"
-                    : "bg-purple-500/20"
-              }`}
+              className={`w-8 h-8 rounded-lg flex items-center justify-center ${isLast
+                ? "bg-linear-to-br from-purple-500 to-pink-500"
+                : isFirst
+                  ? "bg-linear-to-br from-purple-500 to-blue-500"
+                  : "bg-purple-500/20"
+                }`}
             >
               {isLast ? (
                 <Rocket className="w-4 h-4 text-white" />
@@ -298,15 +295,14 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
               {STEPS.map((_, i) => (
                 <div
                   key={i}
-                  className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
-                    i === currentStep
-                      ? "bg-purple-400 w-4"
-                      : i < currentStep
-                        ? "bg-purple-400/40"
-                        : isLight
-                          ? "bg-gray-300"
-                          : "bg-white/15"
-                  }`}
+                  className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${i === currentStep
+                    ? "bg-purple-400 w-4"
+                    : i < currentStep
+                      ? "bg-purple-400/40"
+                      : isLight
+                        ? "bg-gray-300"
+                        : "bg-white/15"
+                    }`}
                 />
               ))}
             </div>
@@ -316,11 +312,10 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
               {!isFirst && (
                 <button
                   onClick={handleBack}
-                  className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    isLight
-                      ? "text-gray-500 hover:bg-gray-100"
-                      : "text-gray-400 hover:bg-white/10"
-                  }`}
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isLight
+                    ? "text-gray-500 hover:bg-gray-100"
+                    : "text-gray-400 hover:bg-white/10"
+                    }`}
                 >
                   <ArrowLeft className="w-3 h-3" />
                   Back

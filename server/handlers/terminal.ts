@@ -1,7 +1,7 @@
 import os from "os";
 import fs from "fs";
 import path from "path";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID } from "crypto";
 import { exec, ChildProcess } from "child_process";
 import { sshSessionIds, sshSessions } from "./ssh.js";
 
@@ -52,69 +52,6 @@ const sessionHistory = new Map<string, string>();
 // Track which WS client owns each session
 const sessionOwners = new Map<string, string>();
 const activeChildProcesses = new Set<ChildProcess>();
-// Per-session push functions for display buffering during execInTerminal
-const sessionPushers = new Map<string, EventPusher>();
-const execActiveSessions = new Set<string>();
-const occupiedSessions = new Set<string>();
-const displayBuffers = new Map<string, { data: string; timer?: ReturnType<typeof setTimeout> }>();
-
-/** Strip sentinel patterns from terminal output. */
-function stripSentinels(text: string): string {
-  let d = text;
-  const A = "(?:\\x1B\\[[0-9;]*[a-zA-Z])*";
-  const unixRegex = new RegExp(`;${A}\\s*${A}printf${A}\\s+${A}["']?${A}\\\\n${A}__TRON_DONE_[a-z0-9]+__(?:%d|\\d+)${A}\\\\n${A}["']?${A}\\s*${A}\\$\\?${A}`, "g");
-  d = d.replace(unixRegex, "");
-  const unixRegexNoSemi = new RegExp(`printf${A}\\s+${A}["']?${A}\\\\n${A}__TRON_DONE_[a-z0-9]+__(?:%d|\\d+)${A}\\\\n${A}["']?${A}\\s*${A}\\$\\?${A}`, "g");
-  d = d.replace(unixRegexNoSemi, "");
-  d = d.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-  d = d.replace(/Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-  d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__(?:\d+|%d)/g, "");
-  return d;
-}
-
-/** Clean captured output from execInTerminal. */
-function cleanExecOutput(output: string, sentinel: string): string {
-  let captured = output;
-  // eslint-disable-next-line no-control-regex
-  captured = captured.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
-  captured = captured.replace(/[^\n]*\r(?!\n)/g, "");
-  const sentinelIdx = captured.indexOf(sentinel);
-  if (sentinelIdx >= 0) captured = captured.slice(0, sentinelIdx);
-  const firstNewline = captured.indexOf("\n");
-  if (firstNewline >= 0) captured = captured.slice(firstNewline + 1);
-  captured = captured.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-  captured = captured.replace(/; printf [^\n]*$/m, "");
-  captured = captured.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-  captured = captured.replace(/; Write-Host [^\n]*$/m, "");
-  // eslint-disable-next-line no-control-regex
-  captured = captured.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-  captured = captured.trim();
-  if (captured.length > 8000) {
-    captured = captured.slice(0, 4000) + "\n...(truncated)...\n" + captured.slice(-4000);
-  }
-  return captured;
-}
-
-/** Fuzzy file name suggestions for read/edit errors. */
-function getFuzzySuggestions(targetPath: string): string[] {
-  try {
-    const dir = path.dirname(targetPath);
-    const base = path.basename(targetPath).toLowerCase();
-    if (!base || !fs.existsSync(dir)) return [];
-    const files = fs.readdirSync(dir);
-    const matches = files.filter(f => {
-      const fLower = f.toLowerCase();
-      if (fLower.startsWith(base)) return true;
-      if (base.length > 3 && fLower.startsWith(base.substring(0, 4))) return true;
-      const parsed = path.parse(f);
-      if (parsed.name.toLowerCase() === base) return true;
-      return false;
-    });
-    return matches.sort((a, b) => Math.abs(a.length - base.length) - Math.abs(b.length - base.length)).slice(0, 5);
-  } catch {
-    return [];
-  }
-}
 
 /** Spawn a child process and track it for cleanup. */
 function trackedExec(
@@ -238,7 +175,6 @@ export function createSession(
 
   sessionHistory.set(sessionId, "");
   sessionOwners.set(sessionId, clientId);
-  sessionPushers.set(sessionId, pushEvent);
 
   ptyProcess.onData((data) => {
     const currentHistory = sessionHistory.get(sessionId) || "";
@@ -247,22 +183,7 @@ export function createSession(
     } else {
       sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
     }
-
-    if (execActiveSessions.has(sessionId)) {
-      // Buffer data for sentinel stripping during execInTerminal
-      const buf = displayBuffers.get(sessionId) || { data: "" };
-      buf.data += data;
-      displayBuffers.set(sessionId, buf);
-      if (buf.timer) clearTimeout(buf.timer);
-      buf.timer = setTimeout(() => {
-        const accumulated = buf.data;
-        buf.data = "";
-        const cleaned = stripSentinels(accumulated);
-        if (cleaned) pushEvent("terminal.incomingData", { id: sessionId, data: cleaned });
-      }, 10);
-    } else {
-      pushEvent("terminal.incomingData", { id: sessionId, data });
-    }
+    pushEvent("terminal.incomingData", { id: sessionId, data });
   });
 
   ptyProcess.onExit(({ exitCode }) => {
@@ -270,10 +191,6 @@ export function createSession(
     sessions.delete(sessionId);
     sessionHistory.delete(sessionId);
     sessionOwners.delete(sessionId);
-    sessionPushers.delete(sessionId);
-    execActiveSessions.delete(sessionId);
-    occupiedSessions.delete(sessionId);
-    displayBuffers.delete(sessionId);
   });
 
   sessions.set(sessionId, ptyProcess);
@@ -451,20 +368,25 @@ export async function getSystemInfo(sessionId?: string): Promise<{ platform: str
   };
 }
 
-// ------- Additional handlers for web mode parity -------
+// --- Additional handlers needed for web mode ---
 
-export function readHistory({ sessionId, lines = 100 }: { sessionId: string; lines?: number }): string {
+function stripSentinels(text: string): string {
+  return text
+    .replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "")
+    .replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "")
+    .replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "")
+    .replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "")
+    .replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+}
+
+export function readHistory(sessionId: string, lines: number = 100): string {
   try {
     const history = sessionHistory.get(sessionId) || "";
     if (!history) return "(No terminal output yet)";
     // eslint-disable-next-line no-control-regex
     let clean = history.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
     clean = clean.replace(/[^\n]*\r(?!\n)/g, "");
-    clean = clean.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-    clean = clean.replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "");
-    clean = clean.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-    clean = clean.replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-    clean = clean.replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+    clean = stripSentinels(clean);
     // eslint-disable-next-line no-control-regex
     clean = clean.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
     const allLines = clean.split("\n").filter(line => line.trim() !== "");
@@ -478,15 +400,18 @@ export function clearHistory(sessionId: string): void {
   sessionHistory.set(sessionId, "");
 }
 
+const occupiedSessions = new Set<string>();
+
 export async function execInTerminal(
-  { sessionId, command }: { sessionId: string; command: string },
+  sessionId: string,
+  command: string,
+  pushEvent: EventPusher,
 ): Promise<{ stdout: string; exitCode: number; error?: string }> {
   const session = sessions.get(sessionId);
   if (!session) {
     return { stdout: "", exitCode: 1, error: "No PTY session found" };
   }
 
-  // If a previous command left the terminal occupied, send Ctrl+C
   if (occupiedSessions.has(sessionId)) {
     occupiedSessions.delete(sessionId);
     session.write("\x03");
@@ -500,35 +425,13 @@ export async function execInTerminal(
     ? `${command}; Write-Host "${sentinel}$LASTEXITCODE"`
     : `${command}; printf '\\n${sentinel}%d\\n' $?`;
 
-  execActiveSessions.add(sessionId);
-
-  const finishExec = () => {
-    execActiveSessions.delete(sessionId);
-    const buf = displayBuffers.get(sessionId);
-    if (buf) {
-      if (buf.timer) clearTimeout(buf.timer);
-      setTimeout(() => {
-        const remaining = buf.data;
-        buf.data = "";
-        if (remaining) {
-          const cleaned = stripSentinels(remaining);
-          const pusher = sessionPushers.get(sessionId);
-          if (pusher && cleaned) {
-            pusher("terminal.incomingData", { id: sessionId, data: cleaned });
-          }
-        }
-        displayBuffers.delete(sessionId);
-      }, 15);
-    }
-  };
+  const clearChar = isWin ? "\x1b" : "\x15";
+  session.write(clearChar);
 
   return new Promise<{ stdout: string; exitCode: number }>((resolve) => {
     let output = "";
     let resolved = false;
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const clearChar = os.platform() === "win32" ? "\x1b" : "\x15";
-    session.write(clearChar);
 
     const resetStallTimer = () => {
       if (stallTimer) clearTimeout(stallTimer);
@@ -538,7 +441,6 @@ export async function execInTerminal(
           disposable.dispose();
           clearTimeout(hardTimer);
           occupiedSessions.add(sessionId);
-          finishExec();
           resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: 124 });
         }
       }, 3000);
@@ -556,10 +458,7 @@ export async function execInTerminal(
         clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
         occupiedSessions.delete(sessionId);
-        const exitCode = parseInt(match[1], 10);
-        const captured = cleanExecOutput(output, sentinel);
-        finishExec();
-        resolve({ stdout: captured, exitCode });
+        resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: parseInt(match[1], 10) });
       }
     });
 
@@ -572,48 +471,41 @@ export async function execInTerminal(
         disposable.dispose();
         if (stallTimer) clearTimeout(stallTimer);
         occupiedSessions.add(sessionId);
-        finishExec();
         resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: 124 });
       }
     }, 30000);
   });
 }
 
-export async function scanCommands(): Promise<string[]> {
-  const isWin = os.platform() === "win32";
-  const results: string[] = [];
-
-  if (isWin) {
-    try {
-      const cmd = `powershell -NoProfile -Command "Get-Command -CommandType Application,Cmdlet | Select-Object -ExpandProperty Name -First 500"`;
-      const { stdout } = await trackedExec(cmd, { timeout: 10000 });
-      results.push(...stdout.trim().split("\n").filter(Boolean));
-    } catch { /* non-critical */ }
-  } else {
-    try {
-      const { stdout } = await trackedExec(
-        `bash -c 'compgen -abck 2>/dev/null | sort -u | head -1000'`,
-        { timeout: 5000 },
-      );
-      results.push(...stdout.trim().split("\n").filter(Boolean));
-    } catch { /* non-critical */ }
-    try {
-      const shell = process.env.SHELL || "/bin/bash";
-      const isBash = shell.endsWith("/bash");
-      const funcCmd = isBash
-        ? `${shell} -lic 'compgen -A function 2>/dev/null' </dev/null`
-        : `${shell} -lic 'print -l \${(ok)functions} 2>/dev/null' </dev/null`;
-      const { stdout } = await trackedExec(funcCmd, { timeout: 8000 });
-      results.push(...stdout.trim().split("\n").filter(Boolean));
-    } catch { /* non-critical */ }
-  }
-
-  return [...new Set(results)];
+function cleanExecOutput(raw: string, sentinel: string): string {
+  // eslint-disable-next-line no-control-regex
+  let clean = raw.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+  clean = clean.replace(/[^\n]*\r(?!\n)/g, "");
+  clean = stripSentinels(clean);
+  // eslint-disable-next-line no-control-regex
+  clean = clean.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+  return clean.trim();
 }
 
-export async function writeFile(
-  { filePath, content }: { filePath: string; content: string },
-): Promise<{ success: boolean; existed?: boolean; error?: string }> {
+export async function scanCommands(): Promise<string[]> {
+  try {
+    const isWin = os.platform() === "win32";
+    const cmd = isWin
+      ? "powershell -Command \"Get-Command -CommandType Application,Cmdlet | Select-Object -ExpandProperty Name | Select-Object -First 200\""
+      : "compgen -c 2>/dev/null | sort -u | head -200";
+    const { stdout } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      exec(cmd, { timeout: 5000 }, (err, stdout, stderr) => {
+        if (err) reject(err); else resolve({ stdout, stderr });
+      });
+    });
+    return stdout.trim().split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// File operations
+export function writeFile(filePath: string, content: string): { success: boolean; existed?: boolean; error?: string } {
   try {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -625,14 +517,10 @@ export async function writeFile(
   }
 }
 
-export async function readFile(
-  { filePath }: { filePath: string },
-): Promise<{ success: boolean; content?: string; error?: string }> {
+export function readFile(filePath: string): { success: boolean; content?: string; error?: string } {
   try {
     if (!fs.existsSync(filePath)) {
-      const suggestions = getFuzzySuggestions(filePath);
-      const sugStr = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
-      return { success: false, error: `File not found: ${filePath}.${sugStr}` };
+      return { success: false, error: `File not found: ${filePath}` };
     }
     const content = fs.readFileSync(filePath, "utf-8");
     return { success: true, content };
@@ -641,18 +529,14 @@ export async function readFile(
   }
 }
 
-export async function editFile(
-  { filePath, search, replace }: { filePath: string; search: string; replace: string },
-): Promise<{ success: boolean; replacements?: number; error?: string }> {
+export function editFile(filePath: string, search: string, replace: string): { success: boolean; replacements?: number; error?: string } {
   try {
     if (!fs.existsSync(filePath)) {
-      const suggestions = getFuzzySuggestions(filePath);
-      const sugStr = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
-      return { success: false, error: `File not found: ${filePath}.${sugStr}` };
+      return { success: false, error: `File not found: ${filePath}` };
     }
     const content = fs.readFileSync(filePath, "utf-8");
     if (!content.includes(search)) {
-      return { success: false, error: `Search string not found in file. Make sure the search text matches exactly (including whitespace and newlines).` };
+      return { success: false, error: "Search string not found in file." };
     }
     let count = 0;
     let idx = 0;
@@ -665,15 +549,13 @@ export async function editFile(
   }
 }
 
-export async function listDir(
-  { dirPath }: { dirPath: string },
-): Promise<{ success: boolean; contents?: { name: string; isDirectory: boolean }[]; error?: string }> {
+export function listDir(dirPath: string): { success: boolean; contents?: { name: string; isDirectory: boolean }[]; error?: string } {
   try {
     if (!fs.existsSync(dirPath)) return { success: false, error: `Directory not found: ${dirPath}` };
     const stats = fs.statSync(dirPath);
-    if (!stats.isDirectory()) return { success: false, error: `Path is not a directory: ${dirPath}` };
+    if (!stats.isDirectory()) return { success: false, error: `Not a directory: ${dirPath}` };
     const items = fs.readdirSync(dirPath, { withFileTypes: true });
-    const contents = items.map((item) => ({ name: item.name, isDirectory: item.isDirectory() }));
+    const contents = items.map(item => ({ name: item.name, isDirectory: item.isDirectory() }));
     contents.sort((a, b) => {
       if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
       return a.isDirectory ? -1 : 1;
@@ -684,41 +566,34 @@ export async function listDir(
   }
 }
 
-export async function searchDir(
-  { dirPath, query }: { dirPath: string; query: string },
-): Promise<{ success: boolean; results?: { file: string; line: number; content: string }[]; error?: string }> {
+export function searchDir(dirPath: string, query: string): { success: boolean; results?: { file: string; line: number; content: string }[]; error?: string } {
   try {
     if (!fs.existsSync(dirPath)) return { success: false, error: `Directory not found: ${dirPath}` };
     const results: { file: string; line: number; content: string }[] = [];
     const maxResults = 50;
-
     function walk(dir: string) {
       if (results.length >= maxResults) return;
       const items = fs.readdirSync(dir, { withFileTypes: true });
       for (const item of items) {
         if (results.length >= maxResults) break;
-        if (item.name === "node_modules" || item.name === ".git" || item.name === "dist" || item.name === "build") continue;
+        if (["node_modules", ".git", "dist", "build"].includes(item.name)) continue;
         const fullPath = path.join(dir, item.name);
-        if (item.isDirectory()) {
-          walk(fullPath);
-        } else {
-          try {
-            const stat = fs.statSync(fullPath);
-            if (stat.size > 2 * 1024 * 1024) continue;
-            const content = fs.readFileSync(fullPath, "utf-8");
-            if (content.includes("\0")) continue;
-            const lines = content.split("\n");
-            for (let i = 0; i < lines.length; i++) {
-              if (lines[i].includes(query)) {
-                results.push({ file: fullPath, line: i + 1, content: lines[i].trim().slice(0, 150) });
-                if (results.length >= maxResults) break;
-              }
+        if (item.isDirectory()) { walk(fullPath); continue; }
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.size > 2 * 1024 * 1024) continue;
+          const content = fs.readFileSync(fullPath, "utf-8");
+          if (content.includes("\0")) continue;
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(query)) {
+              results.push({ file: fullPath, line: i + 1, content: lines[i].trim().slice(0, 150) });
+              if (results.length >= maxResults) break;
             }
-          } catch { /* ignore individual file read errors */ }
-        }
+          }
+        } catch { /* skip unreadable */ }
       }
     }
-
     walk(dirPath);
     return { success: true, results };
   } catch (err: any) {
@@ -726,56 +601,40 @@ export async function searchDir(
   }
 }
 
-export async function saveSessionLog(
-  data: {
-    sessionId: string;
-    session: Record<string, unknown>;
-    interactions: { role: string; content: string; timestamp: number }[];
-    agentThread: { step: string; output: string; payload?: any }[];
-    contextSummary?: string;
-  },
-): Promise<{ success: boolean; logId?: string; filePath?: string; error?: string }> {
+export function saveSessionLog(data: {
+  sessionId: string;
+  session: Record<string, unknown>;
+  interactions: { role: string; content: string; timestamp: number }[];
+  agentThread: { step: string; output: string; payload?: any }[];
+  contextSummary?: string;
+}): { success: boolean; logId?: string; filePath?: string; error?: string } {
   try {
-    const { session: sessionMeta, interactions, agentThread, contextSummary } = data;
     const transientSteps = new Set(["streaming", "thinking", "executing"]);
-    const cleanedThread = agentThread.filter((s) => !transientSteps.has(s.step));
-
-    const structuredThread = cleanedThread.map((s) => {
-      if (s.step === "separator" && s.output.includes("\n---images---\n")) {
-        return { step: s.step, prompt: s.output.slice(0, s.output.indexOf("\n---images---\n")), note: "(images attached)", payload: s.payload };
-      }
+    const cleanedThread = data.agentThread.filter(s => !transientSteps.has(s.step));
+    const structuredThread = cleanedThread.map(s => {
       if (s.step === "separator") return { step: s.step, prompt: s.output, payload: s.payload };
-
       if ((s.step === "executed" || s.step === "failed") && s.output.includes("\n---\n")) {
         const idx = s.output.indexOf("\n---\n");
-        const command = s.output.slice(0, idx);
         let terminalOutput = s.output.slice(idx + 5);
         // eslint-disable-next-line no-control-regex
         terminalOutput = terminalOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
         terminalOutput = stripSentinels(terminalOutput);
         // eslint-disable-next-line no-control-regex
         terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-        return { step: s.step, command, terminalOutput, payload: s.payload };
+        return { step: s.step, command: s.output.slice(0, idx), terminalOutput, payload: s.payload };
       }
-
       return { step: s.step, content: s.output, payload: s.payload };
     });
 
-    const logId = randomBytes(5).toString("hex");
+    const logId = randomUUID().slice(0, 10);
     const logsDir = path.join(os.homedir(), ".tron", "logs");
     if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
     const filePath = path.join(logsDir, `${logId}.json`);
-
     const logData = {
-      logId,
-      version: 2,
-      generatedAt: new Date().toISOString(),
-      session: sessionMeta,
-      interactions,
-      agentThread: structuredThread,
-      contextSummary: contextSummary || undefined,
+      logId, version: 2, generatedAt: new Date().toISOString(),
+      session: data.session, interactions: data.interactions,
+      agentThread: structuredThread, contextSummary: data.contextSummary,
     };
-
     fs.writeFileSync(filePath, JSON.stringify(logData, null, 2), "utf-8");
     return { success: true, logId, filePath };
   } catch (err: any) {
