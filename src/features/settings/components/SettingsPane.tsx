@@ -29,6 +29,7 @@ import {
   Sparkles,
   Globe,
   Trash2,
+  Plus,
 } from "lucide-react";
 
 
@@ -76,12 +77,22 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
   resolvedTheme: string;
 }) {
   const [profiles, setProfiles] = useState<any[]>([]);
-  useEffect(() => {
+  const refreshProfiles = useCallback(() => {
     const ipc = window.electron?.ipcRenderer;
     if (ipc?.readSSHProfiles) {
       ipc.readSSHProfiles().then(setProfiles).catch(() => {});
     }
   }, []);
+  useEffect(() => {
+    refreshProfiles();
+    // Refresh when SSH modal closes (new profile may have been created)
+    window.addEventListener("focus", refreshProfiles);
+    window.addEventListener("tron:ssh-profiles-changed", refreshProfiles);
+    return () => {
+      window.removeEventListener("focus", refreshProfiles);
+      window.removeEventListener("tron:ssh-profiles-changed", refreshProfiles);
+    };
+  }, [refreshProfiles]);
   const deleteProfile = async (id: string) => {
     const updated = profiles.filter((p: any) => p.id !== id);
     const ipc = window.electron?.ipcRenderer;
@@ -100,17 +111,30 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
     }
     setProfiles(updated);
   };
+  const openSSHModal = () => {
+    window.dispatchEvent(new CustomEvent("tron:open-ssh-modal"));
+  };
   return (
     <div className="space-y-3">
-      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
-        <Globe className="w-3.5 h-3.5" />
-        SSH Profiles
-      </h3>
+      <div className="flex items-center justify-between">
+        <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+          <Globe className="w-3.5 h-3.5" />
+          SSH Profiles
+        </h3>
+        <button
+          onClick={openSSHModal}
+          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+          title="New SSH Connection"
+        >
+          <Plus className="w-3 h-3" />
+          New
+        </button>
+      </div>
       {profiles.length === 0 ? (
         <div className={`${cardClass} text-center py-4`}>
           <p className={`text-xs ${t.textMuted}`}>No saved SSH profiles</p>
           <p className={`text-[10px] ${t.textFaint} mt-1`}>
-            Click + in the tab bar and choose &quot;SSH Connection&quot; to connect
+            Add a new connection to get started
           </p>
         </div>
       ) : (

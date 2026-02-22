@@ -20,7 +20,7 @@ import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import EmptyState from "./components/layout/EmptyState";
-import { isSshOnly, isDemoMode } from "./services/mode";
+import { isDemoMode, isSshOnly } from "./services/mode";
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -47,6 +47,7 @@ const AppContent = () => {
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showSSHModal, setShowSSHModal] = useState(false);
+  const [sshToast, setSshToast] = useState("");
 
   useEffect(() => {
     // Allow embedding pages to skip onboarding via URL param
@@ -60,6 +61,8 @@ const AppContent = () => {
     const hasConfigured = localStorage.getItem(STORAGE_KEYS.CONFIGURED);
     if (!hasConfigured) {
       setShowOnboarding(true);
+      // Clear server-side SSH profiles so fresh setup starts clean
+      window.electron?.ipcRenderer?.invoke?.("ssh.profiles.write", [])?.catch?.(() => {});
     }
   }, []);
 
@@ -86,11 +89,25 @@ const AppContent = () => {
   };
 
   const handleTutorialTestRun = (prompt: string) => {
+    if (isSshOnly()) {
+      // In SSH-only mode, agent needs an SSH session first — open the connect modal
+      setShowSSHModal(true);
+      setSshToast("Connect to a server first, then try the agent.");
+      setTimeout(() => setSshToast(""), 4000);
+      return;
+    }
     // Dispatch event that the active TerminalPane can listen for
     window.dispatchEvent(
       new CustomEvent("tutorial-run-agent", { detail: { prompt } }),
     );
   };
+
+  // Listen for SSH modal open requests (from Settings, LayoutContext, etc.)
+  useEffect(() => {
+    const handler = () => setShowSSHModal(true);
+    window.addEventListener("tron:open-ssh-modal", handler);
+    return () => window.removeEventListener("tron:open-ssh-modal", handler);
+  }, []);
 
   // Listen for window close confirmation from Electron main process
   useEffect(() => {
@@ -246,15 +263,34 @@ const AppContent = () => {
       />
 
       <SSHConnectModal
-        show={showSSHModal && !showOnboarding && !showTutorial}
+        show={showSSHModal && !showOnboarding}
         resolvedTheme={resolvedTheme}
         onConnect={async (config) => {
           await createSSHTab(config);
           setShowSSHModal(false);
+          window.dispatchEvent(new CustomEvent("tron:ssh-profiles-changed"));
         }}
         onClose={() => setShowSSHModal(false)}
         preventClose={false}
       />
+
+      {/* SSH-only toast */}
+      <AnimatePresence>
+        {sshToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-[9999] px-4 py-2 rounded-lg text-xs font-medium shadow-lg backdrop-blur-md ${
+              resolvedTheme === "light"
+                ? "bg-white/95 text-gray-700 border border-gray-200"
+                : "bg-gray-800/95 text-gray-200 border border-gray-600"
+            }`}
+          >
+            {sshToast}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Demo mode badge */}
       {isDemoMode() && (

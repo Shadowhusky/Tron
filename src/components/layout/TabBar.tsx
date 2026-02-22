@@ -53,9 +53,9 @@ const TabBar: React.FC<TabBarProps> = ({
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
-  // Check if a tab is a connect placeholder (no close, no context menu)
-  const isConnectTab = (tab: Tab) =>
-    tab.root.type === "leaf" && tab.root.contentType === "ssh-connect";
+  // Check if a tab is the sole connect placeholder (no close, no context menu)
+  const isOnlyConnectTab = (tab: Tab) =>
+    tab.root.type === "leaf" && tab.root.contentType === "ssh-connect" && tabs.length <= 1;
 
   // Stable ref for Radix Popover virtual anchor (avoids infinite re-render loop)
   const anchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
@@ -166,7 +166,7 @@ const TabBar: React.FC<TabBarProps> = ({
               onClick={() => onSelect(tab.id)}
               onContextMenu={(e) => {
                 e.preventDefault();
-                if (isConnectTab(tab)) return; // no context menu for connect tabs
+                if (isOnlyConnectTab(tab)) return; // no context menu for connect tabs
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
               }}
             >
@@ -208,15 +208,18 @@ const TabBar: React.FC<TabBarProps> = ({
               ) : (
                 <span className="truncate flex-1 select-none">{tab.title}</span>
               )}
-              {renamingTabId !== tab.id && !isConnectTab(tab) && (
+              {renamingTabId !== tab.id && !isOnlyConnectTab(tab) && (
                 <button
                   data-testid={`tab-close-${tab.id}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     const dirty = isTabDirty?.(tab.id) ?? false;
+                    // Skip confirm in sandboxed iframes where confirm() is blocked
+                    const canConfirm = !window.frameElement;
                     if (
                       tab.title === "Settings" ||
                       !dirty ||
+                      !canConfirm ||
                       window.confirm("Close this terminal session?")
                     ) {
                       onClose(tab.id);
@@ -366,7 +369,7 @@ const TabBar: React.FC<TabBarProps> = ({
       <button
         data-testid="tab-settings"
         onClick={onOpenSettings}
-        className={`p-2 rounded-md transition-colors ${themeClass(
+        className={`p-1 rounded-md transition-colors ${themeClass(
           resolvedTheme,
           {
             dark: "hover:bg-white/10 text-gray-500",
@@ -510,10 +513,12 @@ const TabBar: React.FC<TabBarProps> = ({
                 setContextMenu(null);
                 const tab = tabs.find((t) => t.id === tabId);
                 const dirty = tabId ? (isTabDirty?.(tabId) ?? false) : false;
+                const canConfirm = !window.frameElement;
                 if (
                   tab && tabId &&
                   (tab.title === "Settings" ||
                     !dirty ||
+                    !canConfirm ||
                     window.confirm("Close this terminal session?"))
                 ) {
                   onClose(tabId);

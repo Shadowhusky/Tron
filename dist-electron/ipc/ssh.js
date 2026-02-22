@@ -8,6 +8,7 @@ exports.registerSSHHandlers = registerSSHHandlers;
 exports.cleanupAllSSHSessions = cleanupAllSSHSessions;
 const electron_1 = require("electron");
 const ssh2_1 = require("ssh2");
+const terminal_1 = require("./terminal");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
@@ -293,7 +294,12 @@ function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
         sessions.set(sessionId, session);
         history.set(sessionId, "");
         const mainWindow = getMainWindow();
-        // Wire data/exit
+        // Wire data/exit — route through display buffer for sentinel stripping during execInTerminal
+        const sendToRenderer = (cleaned) => {
+            if (mainWindow && !mainWindow.isDestroyed() && cleaned) {
+                mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data: cleaned });
+            }
+        };
         session.onData((data) => {
             const currentHistory = history.get(sessionId) || "";
             if (currentHistory.length < 100000) {
@@ -302,9 +308,10 @@ function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
             else {
                 history.set(sessionId, currentHistory.slice(-80000) + data);
             }
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data });
-            }
+            // During execInTerminal: buffer and strip sentinels
+            if ((0, terminal_1.bufferIfExecActive)(sessionId, data, sendToRenderer))
+                return;
+            sendToRenderer(data);
         });
         session.onExit(() => {
             if (mainWindow && !mainWindow.isDestroyed()) {

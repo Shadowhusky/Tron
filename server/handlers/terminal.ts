@@ -53,6 +53,10 @@ const sessionHistory = new Map<string, string>();
 const sessionOwners = new Map<string, string>();
 const activeChildProcesses = new Set<ChildProcess>();
 
+// Per-session display buffering — active during execInTerminal to strip sentinels cleanly
+const displayBuffers = new Map<string, { data: string; timer: ReturnType<typeof setTimeout> | null; pushEvent: EventPusher }>();
+const execActiveSessions = new Set<string>(); // Sessions currently running execInTerminal
+
 /** Spawn a child process and track it for cleanup. */
 function trackedExec(
   command: string,
@@ -183,7 +187,7 @@ export function createSession(
     } else {
       sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
     }
-    pushEvent("terminal.incomingData", { id: sessionId, data });
+    pushSessionData(sessionId, data, pushEvent);
   });
 
   ptyProcess.onExit(({ exitCode }) => {
@@ -370,13 +374,70 @@ export async function getSystemInfo(sessionId?: string): Promise<{ platform: str
 
 // --- Additional handlers needed for web mode ---
 
+/** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text: string): string {
-  return text
-    .replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "")
-    .replace(/printf\s+'\\n__TRON_DONE_[^']*'\s*\$\?/g, "")
-    .replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "")
-    .replace(/Write-Host\s+["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "")
-    .replace(/__TRON_DONE_[a-z0-9]+__\d*/g, "");
+  let d = text;
+  // Match ANSI escape codes (e.g., \x1b[32m) injected by zsh-syntax-highlighting
+  const A = "(?:\\x1B\\[[0-9;]*[a-zA-Z])*";
+
+  // Unix: "; printf '\n__TRON_DONE_...' $?" (ignores ANSI colors anywhere inside)
+  const unixRegex = new RegExp(`;${A}\\s*${A}printf${A}\\s+${A}["']?${A}\\\\n${A}__TRON_DONE_[a-z0-9]+__(?:%d|\\d+)${A}\\\\n${A}["']?${A}\\s*${A}\\$\\?${A}`, "g");
+  d = d.replace(unixRegex, "");
+
+  const unixRegexNoSemi = new RegExp(`printf${A}\\s+${A}["']?${A}\\\\n${A}__TRON_DONE_[a-z0-9]+__(?:%d|\\d+)${A}\\\\n${A}["']?${A}\\s*${A}\\$\\?${A}`, "g");
+  d = d.replace(unixRegexNoSemi, "");
+
+  // Windows: '; Write-Host "__TRON_DONE_...$LASTEXITCODE"'
+  d = d.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+  d = d.replace(/Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
+
+  // Sentinel output itself (e.g. __TRON_DONE_abc12345__0 or __TRON_DONE_...__%d)
+  // Only consume leading \n (part of printf format), keep trailing \n so prompt starts on new line
+  d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__(?:\d+|%d)/g, "");
+  return d;
+}
+
+/** Push terminal data to renderer, buffering during execInTerminal to strip sentinels. */
+export function pushSessionData(sessionId: string, data: string, pushEvent: EventPusher) {
+  if (execActiveSessions.has(sessionId)) {
+    let buf = displayBuffers.get(sessionId);
+    if (!buf) {
+      buf = { data: "", timer: null, pushEvent };
+      displayBuffers.set(sessionId, buf);
+    }
+    buf.data += data;
+    if (buf.timer) clearTimeout(buf.timer);
+    buf.timer = setTimeout(() => {
+      if (buf!.data) {
+        const cleaned = stripSentinels(buf!.data);
+        buf!.data = "";
+        if (cleaned) {
+          buf!.pushEvent("terminal.incomingData", { id: sessionId, data: cleaned });
+        }
+      }
+      buf!.timer = null;
+    }, 8);
+    return;
+  }
+  // Normal path (no exec active): pass through immediately
+  pushEvent("terminal.incomingData", { id: sessionId, data });
+}
+
+function flushDisplayBuffer(sessionId: string) {
+  const buf = displayBuffers.get(sessionId);
+  if (buf) {
+    if (buf.timer) clearTimeout(buf.timer);
+    // Final flush with short delay so the last sentinel chunk arrives
+    const remaining = buf.data;
+    buf.data = "";
+    if (remaining) {
+      const cleaned = stripSentinels(remaining);
+      if (cleaned) {
+        buf.pushEvent("terminal.incomingData", { id: sessionId, data: cleaned });
+      }
+    }
+    displayBuffers.delete(sessionId);
+  }
 }
 
 export function readHistory(sessionId: string, lines: number = 100): string {
@@ -425,6 +486,15 @@ export async function execInTerminal(
     ? `${command}; Write-Host "${sentinel}$LASTEXITCODE"`
     : `${command}; printf '\\n${sentinel}%d\\n' $?`;
 
+  // Mark session as exec-active so display data gets buffered for sentinel stripping
+  execActiveSessions.add(sessionId);
+
+  const finishExec = () => {
+    execActiveSessions.delete(sessionId);
+    // Flush any remaining buffered display data with a tiny delay for last chunk
+    setTimeout(() => flushDisplayBuffer(sessionId), 15);
+  };
+
   const clearChar = isWin ? "\x1b" : "\x15";
   session.write(clearChar);
 
@@ -441,6 +511,7 @@ export async function execInTerminal(
           disposable.dispose();
           clearTimeout(hardTimer);
           occupiedSessions.add(sessionId);
+          finishExec();
           resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: 124 });
         }
       }, 3000);
@@ -458,6 +529,7 @@ export async function execInTerminal(
         clearTimeout(hardTimer);
         if (stallTimer) clearTimeout(stallTimer);
         occupiedSessions.delete(sessionId);
+        finishExec();
         resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: parseInt(match[1], 10) });
       }
     });
@@ -471,6 +543,7 @@ export async function execInTerminal(
         disposable.dispose();
         if (stallTimer) clearTimeout(stallTimer);
         occupiedSessions.add(sessionId);
+        finishExec();
         resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: 124 });
       }
     }, 30000);

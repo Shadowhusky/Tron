@@ -8,7 +8,7 @@
   "scripts": {
     "dev:react": "vite",
     "dev:electron": "tsc -p electron/tsconfig.json && electron .",
-    "dev": "concurrently \"npm run dev:react\" \"wait-on tcp:5173 && npm run dev:electron\"",
+    "dev": "concurrently \"npm run dev:react\" \"wait-on tcp:5173 && npm run dev:electron\" \"wait-on tcp:5174 && npm run dev:web \"",
     "build:react": "tsc -b && vite build",
     "build:electron": "tsc -p electron/tsconfig.json",
     "build": "npm run build:react && npm run build:electron && electron-builder",

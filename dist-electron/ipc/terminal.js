@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.bufferIfExecActive = bufferIfExecActive;
 exports.getSessions = getSessions;
 exports.getSessionHistory = getSessionHistory;
 exports.cleanupAllSessions = cleanupAllSessions;
@@ -105,9 +106,51 @@ const sessions = new Map();
 const sessionHistory = new Map();
 const occupiedSessions = new Set(); // Sessions with a stalled process still running
 const activeChildProcesses = new Set();
-// Per-session display buffering — active during execInTerminal to strip sentinels cleanly
 const displayBuffers = new Map();
 const execActiveSessions = new Set(); // Sessions currently running execInTerminal
+/**
+ * If the session is currently running execInTerminal, buffer data and strip sentinels.
+ * Returns true if data was buffered (caller should NOT send it directly).
+ */
+function bufferIfExecActive(sessionId, data, send) {
+    if (!execActiveSessions.has(sessionId))
+        return false;
+    let buf = displayBuffers.get(sessionId);
+    if (!buf) {
+        buf = { data: "", timer: null, send };
+        displayBuffers.set(sessionId, buf);
+    }
+    buf.data += data;
+    if (buf.timer)
+        clearTimeout(buf.timer);
+    buf.timer = setTimeout(() => {
+        const cleaned = stripSentinels(buf.data);
+        buf.data = "";
+        buf.timer = null;
+        if (cleaned)
+            buf.send(cleaned);
+    }, 8);
+    return true;
+}
+/** Flush remaining display buffer data for a session. */
+function flushDisplayBuffer(sessionId) {
+    const buf = displayBuffers.get(sessionId);
+    if (buf) {
+        if (buf.timer)
+            clearTimeout(buf.timer);
+        // Give a tiny delay so the last chunk arrives
+        setTimeout(() => {
+            const remaining = buf.data;
+            buf.data = "";
+            if (remaining) {
+                const cleaned = stripSentinels(remaining);
+                if (cleaned)
+                    buf.send(cleaned);
+            }
+            displayBuffers.delete(sessionId);
+        }, 15);
+    }
+}
 /** Spawn a child process and track it for cleanup. */
 function trackedExec(command, options) {
     return new Promise((resolve, reject) => {
@@ -220,23 +263,10 @@ function registerTerminalHandlers(getMainWindow) {
                 env: cleanEnv,
             });
             sessionHistory.set(sessionId, "");
-            // Helper: flush buffered display data to renderer
-            const flushDisplayBuffer = () => {
-                const buf = displayBuffers.get(sessionId);
-                if (!buf || !buf.data)
-                    return;
-                const cleaned = stripSentinels(buf.data);
-                buf.data = "";
-                if (buf.timer) {
-                    clearTimeout(buf.timer);
-                    buf.timer = null;
-                }
+            const sendToRenderer = (cleaned) => {
                 const mainWindow = getMainWindow();
                 if (mainWindow && !mainWindow.isDestroyed() && cleaned) {
-                    mainWindow.webContents.send("terminal.incomingData", {
-                        id: sessionId,
-                        data: cleaned,
-                    });
+                    mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data: cleaned });
                 }
             };
             ptyProcess.onData((data) => {
@@ -248,29 +278,11 @@ function registerTerminalHandlers(getMainWindow) {
                 else {
                     sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
                 }
-                // During execInTerminal: buffer display data so sentinel patterns
-                // spanning multiple chunks can be stripped in one pass
-                if (execActiveSessions.has(sessionId)) {
-                    let buf = displayBuffers.get(sessionId);
-                    if (!buf) {
-                        buf = { data: "", timer: null };
-                        displayBuffers.set(sessionId, buf);
-                    }
-                    buf.data += data;
-                    // Flush after short delay to accumulate chunks
-                    if (buf.timer)
-                        clearTimeout(buf.timer);
-                    buf.timer = setTimeout(flushDisplayBuffer, 8);
+                // During execInTerminal: buffer display data and strip sentinels
+                if (bufferIfExecActive(sessionId, data, sendToRenderer))
                     return;
-                }
                 // Normal path (no exec active): pass through immediately
-                const mainWindow = getMainWindow();
-                if (mainWindow && !mainWindow.isDestroyed() && data) {
-                    mainWindow.webContents.send("terminal.incomingData", {
-                        id: sessionId,
-                        data,
-                    });
-                }
+                sendToRenderer(data);
             });
             ptyProcess.onExit(({ exitCode }) => {
                 const mainWindow = getMainWindow();
@@ -564,29 +576,7 @@ function registerTerminalHandlers(getMainWindow) {
         execActiveSessions.add(sessionId);
         const finishExec = () => {
             execActiveSessions.delete(sessionId);
-            // Flush any remaining buffered display data
-            const buf = displayBuffers.get(sessionId);
-            if (buf) {
-                if (buf.timer)
-                    clearTimeout(buf.timer);
-                // Final flush — give a tiny delay so the last sentinel chunk arrives
-                setTimeout(() => {
-                    const remaining = buf.data;
-                    buf.data = "";
-                    if (remaining) {
-                        // Strip sentinels from the accumulated buffer (reuse same patterns)
-                        const cleaned = stripSentinels(remaining);
-                        const mainWindow = getMainWindow();
-                        if (mainWindow && !mainWindow.isDestroyed() && cleaned) {
-                            mainWindow.webContents.send("terminal.incomingData", {
-                                id: sessionId,
-                                data: cleaned,
-                            });
-                        }
-                    }
-                    displayBuffers.delete(sessionId);
-                }, 15);
-            }
+            flushDisplayBuffer(sessionId);
         };
         return new Promise((resolve) => {
             let output = "";

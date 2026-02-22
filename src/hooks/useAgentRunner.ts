@@ -9,7 +9,6 @@ import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 import { isDangerousCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
-import { isSshOnly } from "../services/mode";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -494,9 +493,9 @@ System Paths:
             systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}${sshLabel}\n`;
           }
 
-          // SSH-only mode: inform agent that file tools are unavailable
-          if (isSshOnly()) {
-            systemPathsStr += `\n[SSH-ONLY MODE] Connected to remote server via SSH. File tools (read_file, write_file, edit_file) unavailable. Use execute_command with shell commands instead.\n`;
+          // SSH session: inform agent about remote context
+          if (session?.sshProfileId) {
+            systemPathsStr += `\n[REMOTE SSH SESSION] You are connected to a remote machine via SSH. All commands (execute_command, run_in_terminal) run on the remote host. File tools (read_file, write_file, edit_file) work normally. Use execute_command with ls/find to explore directories and grep to search files.\n`;
           }
         }
 

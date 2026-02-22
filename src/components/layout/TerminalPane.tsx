@@ -32,7 +32,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const isConnectPane = sessionId.startsWith("ssh-connect");
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [connectToast, setConnectToast] = useState(false);
-  const connectToastTimer = useRef<ReturnType<typeof setTimeout>>();
+  const connectToastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const {
     agentThread,

@@ -85,34 +85,83 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const ollamaModels = allModels.filter((m) => m.provider === "ollama");
   const lmstudioModels = allModels.filter((m) => m.provider === "lmstudio");
 
-  const handleTestConnection = async () => {
+  // Reset connection status when config changes
+  useEffect(() => {
+    setConnectionStatus("idle");
+  }, [aiConfig.provider, aiConfig.model, aiConfig.apiKey, aiConfig.baseUrl]);
+
+  // Auto-select first model when models load for local providers,
+  // or when current model isn't in the available list
+  const localModels = isLocalProvider
+    ? (aiConfig.provider === "lmstudio" ? lmstudioModels : ollamaModels)
+    : [];
+  const firstLocalModel = localModels[0]?.name || "";
+  const modelNames = localModels.map((m) => m.name);
+  useEffect(() => {
+    if (!firstLocalModel) return;
+    setAiConfig((c) => {
+      // Auto-select if no model chosen or current model isn't available
+      if (!c.model || !modelNames.includes(c.model)) {
+        return { ...c, model: firstLocalModel };
+      }
+      return c;
+    });
+  }, [firstLocalModel, modelNames.join(",")]);
+
+  const handleTestConnection = async (): Promise<boolean> => {
     setConnectionStatus("testing");
     try {
       const result = await window.electron.ipcRenderer.testAIConnection(aiConfig);
       const success = typeof result === "boolean" ? result : result?.success;
       setConnectionStatus(success ? "success" : "error");
-    } catch (e) {
+      return !!success;
+    } catch {
       setConnectionStatus("error");
+      return false;
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentStep < STEPS.length - 1) {
       setStepDirection(1);
       setCurrentStep((c) => c + 1);
       setShowValidationWarn(false);
-    } else {
-      // Warn if no model or connection not tested, but allow skip
-      if (!aiConfig.model || connectionStatus !== "success") {
-        if (!showValidationWarn) {
-          setShowValidationWarn(true);
-          return;
-        }
-        // Second click = user wants to skip
-      }
-      aiService.saveConfig(aiConfig);
-      onComplete();
+      return;
     }
+
+    // Final step — AI config
+    if (!aiConfig.model) {
+      if (showValidationWarn) {
+        // Second click = skip
+        aiService.saveConfig(aiConfig);
+        onComplete();
+        return;
+      }
+      setShowValidationWarn(true);
+      return;
+    }
+
+    if (isLocalProvider && connectionStatus !== "success") {
+      if (showValidationWarn) {
+        // Second click after failed test = skip
+        aiService.saveConfig(aiConfig);
+        onComplete();
+        return;
+      }
+      // Auto-trigger test connection then proceed if successful
+      const ok = await handleTestConnection();
+      if (ok) {
+        aiService.saveConfig(aiConfig);
+        onComplete();
+      } else {
+        setShowValidationWarn(true);
+      }
+      return;
+    }
+
+    // Cloud provider with model selected, or local already tested — proceed
+    aiService.saveConfig(aiConfig);
+    onComplete();
   };
 
   const handleBack = () => {
@@ -121,17 +170,20 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   };
 
   const stepVariants = {
-    hidden: { opacity: 0, x: stepDirection > 0 ? 40 : -40 },
+    hidden: (dir: number) => ({
+      opacity: 0,
+      x: dir > 0 ? 40 : -40,
+    }),
     visible: {
       opacity: 1,
       x: 0,
       transition: { duration: 0.3, ease: "easeOut" as const },
     },
-    exit: {
+    exit: (dir: number) => ({
       opacity: 0,
-      x: stepDirection > 0 ? -40 : 40,
+      x: dir > 0 ? -40 : 40,
       transition: { duration: 0.2, ease: "easeIn" as const },
-    },
+    }),
   };
 
   const renderStepContent = () => {
@@ -334,6 +386,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                       model: "",
                       baseUrl: providerUsesBaseUrl(newProvider) ? (defaultBaseUrls[newProvider] || "") : undefined,
                     }));
+                    setConnectionStatus("idle");
                   }}
                   className={`w-full p-2.5 pr-8 rounded-lg border outline-none focus:border-purple-500 transition-colors
                       ${
@@ -570,29 +623,31 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                 )}
               </AnimatePresence>
 
-              <div className="flex justify-end pt-2">
-                <motion.button
-                  whileHover={{ scale: 1.03 }}
-                  whileTap={{ scale: 0.97 }}
-                  onClick={handleTestConnection}
-                  disabled={connectionStatus === "testing" || !aiConfig.model}
-                  className={`px-4 py-2 rounded-lg text-xs font-medium border transition-colors ${
-                    connectionStatus === "success"
-                      ? "border-green-500 text-green-500 bg-green-500/10"
-                      : connectionStatus === "error"
-                        ? "border-red-500 text-red-500 bg-red-500/10"
-                        : "border-white/10 hover:bg-white/5"
-                  }`}
-                >
-                  {connectionStatus === "testing"
-                    ? "Connecting..."
-                    : connectionStatus === "success"
-                      ? "Connected"
-                      : connectionStatus === "error"
-                        ? "Connection Failed"
-                        : "Test Connection"}
-                </motion.button>
-              </div>
+              {isLocalProvider && (
+                <div className="flex justify-end pt-2">
+                  <motion.button
+                    whileHover={{ scale: 1.03 }}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={handleTestConnection}
+                    disabled={connectionStatus === "testing" || !aiConfig.model}
+                    className={`px-4 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                      connectionStatus === "success"
+                        ? "border-green-500 text-green-500 bg-green-500/10"
+                        : connectionStatus === "error"
+                          ? "border-red-500 text-red-500 bg-red-500/10"
+                          : "border-white/10 hover:bg-white/5"
+                    }`}
+                  >
+                    {connectionStatus === "testing"
+                      ? "Connecting..."
+                      : connectionStatus === "success"
+                        ? "Connected"
+                        : connectionStatus === "error"
+                          ? "Connection Failed"
+                          : "Test Connection"}
+                  </motion.button>
+                </div>
+              )}
             </motion.div>
           </motion.div>
         );
@@ -686,9 +741,10 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
           >
             {STEPS[currentStep].description}
           </motion.div>
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="wait" custom={stepDirection}>
             <motion.div
               key={currentStep}
+              custom={stepDirection}
               variants={stepVariants}
               initial="hidden"
               animate="visible"
@@ -707,7 +763,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               animate={{ opacity: 1, y: 0 }}
               className="text-xs text-amber-400 text-center"
             >
-              No model validated yet. Click "Get Started" again to skip.
+              {!aiConfig.model
+                ? "No model selected. Click again to skip setup."
+                : connectionStatus === "error"
+                  ? "Connection failed. Click again to continue anyway."
+                  : "Click again to skip."}
             </motion.p>
           )}
           <div className="flex justify-between items-center">
@@ -722,13 +782,20 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               Back
             </motion.button>
             <motion.button
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
+              whileHover={connectionStatus !== "testing" ? { scale: 1.03 } : {}}
+              whileTap={connectionStatus !== "testing" ? { scale: 0.97 } : {}}
               onClick={handleNext}
+              disabled={connectionStatus === "testing"}
               data-testid="onboarding-next"
-              className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-purple-900/20"
+              className={`px-6 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-purple-900/20 ${
+                connectionStatus === "testing"
+                  ? "bg-purple-600/60 text-white/70 cursor-wait"
+                  : "bg-purple-600 hover:bg-purple-500 text-white"
+              }`}
             >
-              {currentStep === STEPS.length - 1 ? "Get Started" : "Next"}
+              {connectionStatus === "testing"
+                ? "Connecting..."
+                : currentStep === STEPS.length - 1 ? "Get Started" : "Next"}
             </motion.button>
           </div>
         </div>

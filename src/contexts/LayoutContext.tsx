@@ -112,6 +112,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
     // Filter out ssh-connect tabs from persistence (they're regenerated on startup)
     const persistableTabs = tabs.filter((t) => t.root.type !== "leaf" || t.root.contentType !== "ssh-connect");
+    if (persistableTabs.length === 0) {
+      // All tabs are connect-tabs or empty — clear stale layout so refresh starts fresh
+      localStorage.removeItem(STORAGE_KEYS.LAYOUT);
+      return;
+    }
     if (persistableTabs.length > 0) {
       const state = {
         tabs: persistableTabs,
@@ -161,6 +166,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           }),
           {} as Record<string, boolean>,
         ),
+        sessionSSHProfileIds: Array.from(sessions.entries()).reduce(
+          (acc, [id, session]) => {
+            if (session.sshProfileId) acc[id] = session.sshProfileId;
+            return acc;
+          },
+          {} as Record<string, string>,
+        ),
       };
       localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
     }
@@ -171,20 +183,19 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     if (initCalledRef.current) return;
     initCalledRef.current = true;
 
-    const init = async () => {
-      // SSH-only mode: start with a connect tab instead of a terminal
-      if (isSshOnly()) {
-        const tabId = uuid();
-        setTabs([{
-          id: tabId,
-          title: "Terminal",
-          root: { type: "leaf", sessionId: "ssh-connect", contentType: "ssh-connect" },
-          activeSessionId: null,
-        }]);
-        setActiveTabId(tabId);
-        return;
-      }
+    /** Create the default connect-tab placeholder for SSH-only mode. */
+    const createConnectTab = () => {
+      const tabId = uuid();
+      setTabs([{
+        id: tabId,
+        title: "Terminal",
+        root: { type: "leaf", sessionId: "ssh-connect", contentType: "ssh-connect" },
+        activeSessionId: null,
+      }]);
+      setActiveTabId(tabId);
+    };
 
+    const init = async () => {
       // Check file-based discard flag (written by "Exit Without Saving")
       // This is reliable because fs.writeFileSync guarantees it's on disk
       try {
@@ -194,7 +205,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           localStorage.removeItem(STORAGE_KEYS.LAYOUT);
           window.electron?.ipcRenderer?.writeSessions?.({})?.catch?.(() => { });
           // Fall through to create fresh tab
-          createTab();
+          if (isSshOnly()) { createConnectTab(); } else { createTab(); }
           return;
         }
       } catch { /* ignore — continue with normal hydration */ }
@@ -209,7 +220,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           console.log("Hydrating layout...", savedTabs);
 
           if (savedTabs.length === 0) {
-            createTab();
+            if (isSshOnly()) { createConnectTab(); } else { createTab(); }
             return;
           }
 
@@ -220,14 +231,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             // Recursively regenerate sessions for this tab
             const regenerateNode = async (
               node: LayoutNode,
-            ): Promise<LayoutNode> => {
+            ): Promise<LayoutNode | null> => {
               if (node.type === "leaf") {
                 // If settings node, just restore
                 if (node.contentType === "settings") {
                   return node;
                 }
 
-                // Found a session — try to reconnect to existing PTY, else create new
                 const oldId = node.sessionId;
                 const cwd = savedCwds[oldId];
                 const aiConfig = (parsed.sessionConfigs || {})[oldId];
@@ -235,33 +245,73 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 const summaryConstant = (parsed.sessionSummaries || {})[oldId];
                 const wasDirty =
                   (parsed.sessionDirtyFlags || {})[oldId] ?? false;
+                const sshProfileId = (parsed.sessionSSHProfileIds || {})[oldId];
 
-                const newId = await createPTY(cwd, oldId);
-                const reconnected = newId === oldId;
-                if (reconnected) {
-                  console.log(`Reconnected to PTY session: ${oldId}`);
+                let newId: string;
+                let sessionTitle = "Terminal";
+
+                if (sshProfileId) {
+                  // SSH session — reconnect via profile
+                  try {
+                    const ipc = window.electron?.ipcRenderer;
+                    const readFn = (ipc as any)?.readSSHProfiles || (() => ipc?.invoke("ssh.profiles.read"));
+                    const profiles = await readFn() || [];
+                    const profile = profiles.find((p: any) => p.id === sshProfileId);
+                    if (!profile) throw new Error("Profile not found");
+
+                    const connectFn = (ipc as any)?.connectSSH || ((c: any) => ipc?.invoke("ssh.connect", c));
+                    const result = await connectFn({
+                      ...profile,
+                      password: profile.savedPassword,
+                      passphrase: profile.savedPassphrase,
+                      cols: 80,
+                      rows: 30,
+                    });
+                    newId = result.sessionId;
+                    sessionTitle = profile.name || `${profile.username}@${profile.host}`;
+                    console.log(`Reconnected SSH session: ${oldId} → ${newId}`);
+                  } catch (err: any) {
+                    console.warn(`Failed to reconnect SSH session ${oldId}:`, err.message);
+                    return null; // Drop this leaf — SSH reconnect failed
+                  }
+                } else if (isSshOnly()) {
+                  // Non-SSH session in SSH-only mode — cannot reconnect
+                  return null;
+                } else {
+                  // Local PTY — try to reconnect to existing PTY, else create new
+                  newId = await createPTY(cwd, oldId);
+                  const reconnected = newId === oldId;
+                  if (reconnected) {
+                    console.log(`Reconnected to PTY session: ${oldId}`);
+                  }
                 }
+
                 const config = aiConfig || aiService.getConfig();
                 newSessions.set(newId, {
                   id: newId,
-                  title: "Terminal",
+                  title: sessionTitle,
                   cwd,
                   aiConfig: config,
                   interactions: interactions || [],
                   contextSummary: summaryConstant?.summary,
                   contextSummarySourceLength: summaryConstant?.sourceLength,
                   dirty: wasDirty,
+                  sshProfileId,
                 });
                 return { ...node, sessionId: newId };
               } else {
-                const newChildren = await Promise.all(
+                const newChildren = (await Promise.all(
                   node.children.map((c) => regenerateNode(c)),
-                );
+                )).filter((c): c is LayoutNode => c !== null);
+                if (newChildren.length === 0) return null;
                 return { ...node, children: newChildren };
               }
             };
 
             const newRoot = await regenerateNode(tab.root);
+
+            // Skip tabs where all sessions failed to reconnect
+            if (!newRoot) continue;
 
             // Fix activeSessionId if it pointed to an old session
             const findFirstSession = (n: LayoutNode): string => {
@@ -276,10 +326,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             });
           }
 
-          setSessions(newSessions);
-          setTabs(regeneratedTabs);
-          setActiveTabId(parsed.activeTabId || regeneratedTabs[0].id);
-          return;
+          if (regeneratedTabs.length > 0) {
+            setSessions(newSessions);
+            setTabs(regeneratedTabs);
+            setActiveTabId(parsed.activeTabId || regeneratedTabs[0].id);
+            return;
+          }
+          // All tabs failed to reconnect — fall through to create fresh tab
         } catch (e) {
           console.error("Failed to hydrate state:", e);
           localStorage.removeItem(STORAGE_KEYS.LAYOUT);
@@ -287,7 +340,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       // Fallback if no save or error
-      createTab();
+      if (isSshOnly()) { createConnectTab(); } else { createTab(); }
     };
 
     // Run once
@@ -822,7 +875,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       return;
     }
     const session = sessions.get(tab.activeSessionId || "");
-    if (!session?.dirty || window.confirm("Close this terminal session?")) {
+    const canConfirm = !window.frameElement;
+    if (!session?.dirty || !canConfirm || window.confirm("Close this terminal session?")) {
       closeActivePane();
     }
   };
