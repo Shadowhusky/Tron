@@ -8,7 +8,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { Folder, X, Loader2, Trash2, Search } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
-import { abbreviateHome } from "../../utils/platform";
+import { abbreviateHome, isWindows } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
 import { useAllConfiguredModels } from "../../hooks/useModels";
@@ -390,10 +390,17 @@ const ContextBar: React.FC<ContextBarProps> = ({
             const selected =
               await window.electron.ipcRenderer.selectFolder(cwd);
             if (selected && sessionId) {
-              // Clear current input line (Ctrl+U) then cd into the selected directory
+              // Clear current input line then cd into the selected directory
+              const clearChar = isWindows() ? "\x1b" : "\x15"; // Esc for Win, Ctrl+U for Unix
               window.electron.ipcRenderer.send("terminal.write", {
                 id: sessionId,
-                data: `\x15cd ${JSON.stringify(selected)}\r`,
+                data: clearChar,
+              });
+              // Delay on Windows so PSReadLine processes Esc as standalone keypress
+              if (isWindows()) await new Promise((r) => setTimeout(r, 50));
+              window.electron.ipcRenderer.send("terminal.write", {
+                id: sessionId,
+                data: `cd ${JSON.stringify(selected)}\r`,
               });
             }
           }}
