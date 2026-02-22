@@ -432,6 +432,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     // Prevent split if settings active
     if (tab.activeSessionId === "settings") return;
 
+    // Gateway mode: no local PTY to split into
+    if (isGatewayMode()) return;
+
     // Current session CWD
     const currentSession = sessions.get(tab.activeSessionId);
     const cwd = currentSession?.cwd;

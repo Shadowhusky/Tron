@@ -84,7 +84,7 @@ wss.on("connection", (ws) => {
         clientConfigs.delete(clientId);
     });
 });
-// Channels blocked in gateway mode (no local PTY or filesystem)
+// Channels completely blocked in gateway mode (no local PTY or filesystem)
 const GATEWAY_BLOCKED_CHANNELS = new Set([
     "terminal.create",
     "terminal.scanCommands",
@@ -94,21 +94,54 @@ const GATEWAY_BLOCKED_CHANNELS = new Set([
     "file.listDir",
     "file.searchDir",
     "log.saveSessionLog",
+    "config.getSystemPaths", // leaks server home/temp paths
 ]);
+// Terminal channels that take a sessionId — in gateway mode, only SSH sessions allowed
+const GATEWAY_SESSION_CHANNELS = new Set([
+    "terminal.exec",
+    "terminal.getCwd",
+    "terminal.getCompletions",
+    "terminal.getHistory",
+    "terminal.getSystemInfo",
+    "terminal.readHistory",
+    "terminal.clearHistory",
+    "terminal.execInTerminal",
+    "terminal.sessionExists",
+]);
+/** Extract sessionId from invoke data for gateway validation. */
+function extractSessionId(channel, data) {
+    if (!data)
+        return undefined;
+    if (typeof data === "string")
+        return data; // many channels pass sessionId as plain string
+    if (data.sessionId)
+        return data.sessionId;
+    // terminal.checkCommand passes { command, sessionId? }
+    if (channel === "terminal.checkCommand" && typeof data === "object")
+        return data.sessionId;
+    return undefined;
+}
 async function handleInvoke(channel, data, clientId, pushEvent) {
-    // Gateway mode: block local-only channels
-    if (serverMode === "gateway" && GATEWAY_BLOCKED_CHANNELS.has(channel)) {
-        const labels = {
-            "terminal.create": "Local terminals not available in gateway mode",
-            "terminal.scanCommands": "Command scanning not available in gateway mode",
-            "file.writeFile": "Local filesystem not available in gateway mode",
-            "file.readFile": "Local filesystem not available in gateway mode",
-            "file.editFile": "Local filesystem not available in gateway mode",
-            "file.listDir": "Local filesystem not available in gateway mode",
-            "file.searchDir": "Local filesystem not available in gateway mode",
-            "log.saveSessionLog": "Session logging not available in gateway mode",
-        };
-        throw new Error(labels[channel] || `Channel ${channel} not available in gateway mode`);
+    if (serverMode === "gateway") {
+        // Block channels that should never run in gateway mode
+        if (GATEWAY_BLOCKED_CHANNELS.has(channel)) {
+            throw new Error(`Not available in gateway mode: ${channel}`);
+        }
+        // For terminal channels with a sessionId, verify it's an SSH session.
+        // This prevents users from executing commands on the server's own shell.
+        if (GATEWAY_SESSION_CHANNELS.has(channel)) {
+            const sid = extractSessionId(channel, data);
+            if (!sid || !ssh.sshSessionIds.has(sid)) {
+                throw new Error("Only SSH sessions are available in gateway mode");
+            }
+        }
+        // terminal.checkCommand without a sessionId would run `which` on the server
+        if (channel === "terminal.checkCommand") {
+            const sid = typeof data === "object" ? data.sessionId : undefined;
+            if (!sid || !ssh.sshSessionIds.has(sid)) {
+                throw new Error("Only SSH sessions are available in gateway mode");
+            }
+        }
     }
     switch (channel) {
         case "terminal.create":
@@ -186,6 +219,12 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
     }
 }
 function handleSend(channel, data) {
+    // Gateway mode: only allow send channels for SSH sessions
+    if (serverMode === "gateway") {
+        const sid = data?.id || (typeof data === "string" ? data : undefined);
+        if (!sid || !ssh.sshSessionIds.has(sid))
+            return; // silently drop
+    }
     switch (channel) {
         case "terminal.write":
             terminal.writeToSession(data.id, data.data);
