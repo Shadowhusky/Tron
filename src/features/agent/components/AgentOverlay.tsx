@@ -517,7 +517,7 @@ const PermissionRequest: React.FC<{
   return (
     <div
       data-testid="permission-modal"
-      className={`flex flex-col p-4 border-t animate-in fade-in slide-in-from-bottom-2 ${
+      className={`flex flex-col border-t animate-in fade-in slide-in-from-bottom-2 ${
         dangerous
           ? isLight
             ? "bg-red-50/90 border-red-300"
@@ -527,111 +527,114 @@ const PermissionRequest: React.FC<{
             : "bg-blue-900/20 border-blue-500/20"
       }`}
     >
-      {/* Header */}
-      <div
-        className={`text-sm mb-2 font-medium flex items-center gap-2 shrink-0 ${
-          dangerous
-            ? isLight
-              ? "text-red-700"
-              : "text-red-300"
-            : isLight
-              ? "text-blue-700"
-              : "text-blue-200"
-        }`}
-      >
-        {dangerous ? (
-          <ShieldAlert className="w-4 h-4" />
-        ) : (
-          <Command className="w-4 h-4" />
-        )}
-        {dangerous
-          ? "Dangerous command — review carefully!"
-          : "Allow command execution?"}
-      </div>
-
-      {/* Command display — collapsed by default for long commands */}
-      <div className="shrink-0 mb-3">
-        <div className="rounded border overflow-hidden">
-          <code
-            className={`block p-3 text-xs font-mono break-all whitespace-pre-wrap transition-all ${
-              isLongCommand && !cmdExpanded
-                ? "max-h-[6rem] overflow-hidden"
-                : "max-h-[25vh] overflow-y-auto"
-            } ${
-              dangerous
-                ? isLight
-                  ? "bg-red-100 border-red-300 text-red-900"
-                  : "bg-red-950/50 border-red-500/20 text-red-200"
-                : isLight
-                  ? "bg-white border-blue-200 text-blue-800"
-                  : "bg-black/50 border-blue-500/10 text-blue-100"
-            }`}
-            style={
-              isLongCommand && !cmdExpanded
-                ? {
-                    WebkitMaskImage:
-                      "linear-gradient(to bottom, black 50%, transparent 100%)",
-                    maskImage:
-                      "linear-gradient(to bottom, black 50%, transparent 100%)",
-                  }
-                : undefined
-            }
-          >
-            {command}
-          </code>
-          {isLongCommand && (
-            <button
-              onClick={() => setCmdExpanded(!cmdExpanded)}
-              className={`w-full text-[10px] py-1 text-center uppercase tracking-wider transition-colors ${
-                isLight
-                  ? "bg-gray-50 text-gray-500 hover:text-gray-800 hover:bg-gray-100"
-                  : "bg-white/5 text-gray-500 hover:text-white hover:bg-white/10"
-              }`}
-            >
-              {cmdExpanded
-                ? "Collapse"
-                : `Show full command (${command.split("\n").length} lines)`}
-            </button>
+      {/* Scrollable content: header + command + warnings */}
+      <div className="overflow-y-auto min-h-0 p-4 pb-2" style={{ maxHeight: "calc(100% - 3rem)" }}>
+        {/* Header */}
+        <div
+          className={`text-sm mb-2 font-medium flex items-center gap-2 shrink-0 ${
+            dangerous
+              ? isLight
+                ? "text-red-700"
+                : "text-red-300"
+              : isLight
+                ? "text-blue-700"
+                : "text-blue-200"
+          }`}
+        >
+          {dangerous ? (
+            <ShieldAlert className="w-4 h-4" />
+          ) : (
+            <Command className="w-4 h-4" />
           )}
+          {dangerous
+            ? "Dangerous command — review carefully!"
+            : "Allow command execution?"}
         </div>
+
+        {/* Command display — collapsed by default for long commands */}
+        <div className="shrink-0 mb-3">
+          <div className="rounded border overflow-hidden">
+            <code
+              className={`block p-3 text-xs font-mono break-all whitespace-pre-wrap transition-all ${
+                isLongCommand && !cmdExpanded
+                  ? "max-h-[6rem] overflow-hidden"
+                  : "max-h-[25vh] overflow-y-auto"
+              } ${
+                dangerous
+                  ? isLight
+                    ? "bg-red-100 border-red-300 text-red-900"
+                    : "bg-red-950/50 border-red-500/20 text-red-200"
+                  : isLight
+                    ? "bg-white border-blue-200 text-blue-800"
+                    : "bg-black/50 border-blue-500/10 text-blue-100"
+              }`}
+              style={
+                isLongCommand && !cmdExpanded
+                  ? {
+                      WebkitMaskImage:
+                        "linear-gradient(to bottom, black 50%, transparent 100%)",
+                      maskImage:
+                        "linear-gradient(to bottom, black 50%, transparent 100%)",
+                    }
+                  : undefined
+              }
+            >
+              {command}
+            </code>
+            {isLongCommand && (
+              <button
+                onClick={() => setCmdExpanded(!cmdExpanded)}
+                className={`w-full text-[10px] py-1 text-center uppercase tracking-wider transition-colors ${
+                  isLight
+                    ? "bg-gray-50 text-gray-500 hover:text-gray-800 hover:bg-gray-100"
+                    : "bg-white/5 text-gray-500 hover:text-white hover:bg-white/10"
+                }`}
+              >
+                {cmdExpanded
+                  ? "Collapse"
+                  : `Show full command (${command.split("\n").length} lines)`}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Danger warning */}
+        {dangerous && (
+          <div
+            className={`shrink-0 flex items-start gap-2 mb-3 p-2 rounded text-xs ${
+              isLight
+                ? "bg-red-100/50 text-red-700"
+                : "bg-red-950/30 text-red-300/80"
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>
+              This command is potentially destructive and may cause irreversible
+              changes. Please verify before allowing.
+            </span>
+          </div>
+        )}
+
+        {/* Double-confirm step for dangerous commands */}
+        {dangerous && confirmStep === 1 && (
+          <div
+            className={`shrink-0 flex items-center gap-2 mb-3 p-2 rounded border text-xs font-semibold animate-in fade-in ${
+              isLight
+                ? "bg-red-200/60 border-red-400 text-red-800"
+                : "bg-red-900/40 border-red-500/40 text-red-200"
+            }`}
+          >
+            <ShieldAlert className="w-3.5 h-3.5 shrink-0 animate-pulse" />
+            Are you absolutely sure? Click "Confirm Execute" to proceed.
+          </div>
+        )}
       </div>
 
-      {/* Danger warning */}
-      {dangerous && (
-        <div
-          className={`shrink-0 flex items-start gap-2 mb-3 p-2 rounded text-xs ${
-            isLight
-              ? "bg-red-100/50 text-red-700"
-              : "bg-red-950/30 text-red-300/80"
-          }`}
-        >
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>
-            This command is potentially destructive and may cause irreversible
-            changes. Please verify before allowing.
-          </span>
-        </div>
-      )}
-
-      {/* Double-confirm step for dangerous commands */}
-      {dangerous && confirmStep === 1 && (
-        <div
-          className={`shrink-0 flex items-center gap-2 mb-3 p-2 rounded border text-xs font-semibold animate-in fade-in ${
-            isLight
-              ? "bg-red-200/60 border-red-400 text-red-800"
-              : "bg-red-900/40 border-red-500/40 text-red-200"
-          }`}
-        >
-          <ShieldAlert className="w-3.5 h-3.5 shrink-0 animate-pulse" />
-          Are you absolutely sure? Click "Confirm Execute" to proceed.
-        </div>
-      )}
-
-      {/* Action buttons */}
+      {/* Action buttons — always pinned at bottom, never clipped */}
       <div
         ref={actionsRef}
         onKeyDown={handleKeyDown}
-        className="flex gap-2 justify-end shrink-0"
+        className="flex gap-2 justify-end shrink-0 px-4 py-3"
       >
         <button
           data-testid="permission-deny"
@@ -902,12 +905,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
   const scrollToBottom = useCallback(() => {
     isAutoScrolling.current = true;
-    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
     userScrolledUpRef.current = false;
     setUserScrolledUp(false);
-    // Reset flag after scroll event fires
+    // Double-rAF: first lets virtualizer re-measure, second scrolls to true bottom
     requestAnimationFrame(() => {
-      isAutoScrolling.current = false;
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+        requestAnimationFrame(() => {
+          isAutoScrolling.current = false;
+        });
+      });
     });
   }, []);
 
@@ -941,9 +948,14 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   useEffect(() => {
     if (!userScrolledUpRef.current) {
       isAutoScrolling.current = true;
-      scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+      // Double-rAF: let virtualizer re-measure before scrolling to true bottom
       requestAnimationFrame(() => {
-        isAutoScrolling.current = false;
+        requestAnimationFrame(() => {
+          scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+          requestAnimationFrame(() => {
+            isAutoScrolling.current = false;
+          });
+        });
       });
     }
   }, [scrollTrigger]);
@@ -2024,7 +2036,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                className="shrink-0 max-h-[50%] overflow-y-auto"
+                className="shrink-0 max-h-[60%]"
               >
                 <PermissionRequest
                   command={pendingCommand}

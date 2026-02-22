@@ -48,6 +48,7 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
   openai: {
     chatUrl: "https://api.openai.com/v1/chat/completions",
     defaultModels: [
+      "gpt-5.2",
       "o3-mini",
       "o1",
       "gpt-4.5-preview",
@@ -95,7 +96,7 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
   },
   qwen: {
     chatUrl:
-      "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
     defaultModels: ["qwen3.5-plus", "qwen3-max", "qwen-plus-latest"],
     placeholder: "qwen3.5-plus",
     label: "Qwen (Alibaba)",
@@ -826,8 +827,13 @@ class AIService {
     maxTokens?: number,
     baseUrl?: string,
   ): Promise<string> {
-    const url = this.getOpenAIChatUrl(provider, baseUrl);
-    const body: any = { model, messages, stream: false };
+    const useCompletions = isCompletionsModel(model);
+    const url = useCompletions
+      ? this.getOpenAICompletionsUrl(provider, baseUrl)
+      : this.getOpenAIChatUrl(provider, baseUrl);
+    const body: any = useCompletions
+      ? { model, prompt: messagesToPrompt(messages), stream: false }
+      : { model, messages, stream: false };
     if (maxTokens) body.max_tokens = maxTokens;
 
     const response = await fetch(url, {
@@ -842,7 +848,12 @@ class AIService {
       );
     }
     const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || "";
+    // Completions API returns choices[0].text; Chat API returns choices[0].message.content
+    return (
+      data.choices?.[0]?.message?.content?.trim() ||
+      data.choices?.[0]?.text?.trim() ||
+      ""
+    );
   }
 
   /** Streaming OpenAI-compatible chat completion. Returns { content, thinking }. */
@@ -856,11 +867,16 @@ class AIService {
     responseFormat?: string,
     baseUrl?: string,
   ): Promise<{ content: string; thinking: string }> {
-    const url = this.getOpenAIChatUrl(provider, baseUrl);
-    const body: any = { model, messages, stream: true };
+    const useCompletions = isCompletionsModel(model);
+    const url = useCompletions
+      ? this.getOpenAICompletionsUrl(provider, baseUrl)
+      : this.getOpenAIChatUrl(provider, baseUrl);
+    const body: any = useCompletions
+      ? { model, prompt: messagesToPrompt(messages), stream: true }
+      : { model, messages, stream: true };
     // Only send response_format for cloud providers that support json_object.
     // Local/compat providers (lmstudio, openai-compat, ollama) often reject it.
-    if (responseFormat === "json" && !providerUsesBaseUrl(provider)) {
+    if (!useCompletions && responseFormat === "json" && !providerUsesBaseUrl(provider)) {
       body.response_format = { type: "json_object" };
     }
 
@@ -945,17 +961,27 @@ class AIService {
           );
         }
 
+        // Completions API uses choices[0].text; Chat API uses choices[0].delta
         const delta = chunk.choices?.[0]?.delta;
-        if (!delta) continue;
+        const completionText = chunk.choices?.[0]?.text;
 
-        // Handle reasoning_content (DeepSeek, GLM, Kimi K2)
-        if (delta.reasoning_content) {
-          thinkingText += delta.reasoning_content;
-          if (onToken) onToken("", delta.reasoning_content);
-        }
-        if (delta.content) {
-          fullText += delta.content;
-          if (onToken) onToken(delta.content);
+        if (completionText) {
+          // Legacy completions API format
+          fullText += completionText;
+          if (onToken) onToken(completionText);
+        } else if (delta) {
+          // Chat completions API format
+          // Handle reasoning_content (DeepSeek, GLM, Kimi K2)
+          if (delta.reasoning_content) {
+            thinkingText += delta.reasoning_content;
+            if (onToken) onToken("", delta.reasoning_content);
+          }
+          if (delta.content) {
+            fullText += delta.content;
+            if (onToken) onToken(delta.content);
+          }
+        } else {
+          continue;
         }
       }
     }
