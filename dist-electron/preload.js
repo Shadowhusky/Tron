@@ -33,6 +33,11 @@ const ALLOWED_INVOKE_CHANNELS = [
     "shell.showItemInFolder",
     "system.flushStorage",
     "log.saveSessionLog",
+    "ssh.connect",
+    "ssh.testConnection",
+    "ssh.disconnect",
+    "ssh.profiles.read",
+    "ssh.profiles.write",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -47,6 +52,7 @@ const ALLOWED_RECEIVE_CHANNELS = [
     "menu.createTab",
     "menu.closeTab",
     "window.confirmClose",
+    "ssh.statusChange",
 ];
 const invokeSet = new Set(ALLOWED_INVOKE_CHANNELS);
 const sendSet = new Set(ALLOWED_SEND_CHANNELS);
@@ -98,7 +104,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         readSessions: () => electron_1.ipcRenderer.invoke("sessions.read"),
         writeSessions: (data) => electron_1.ipcRenderer.invoke("sessions.write", data),
         getSystemPaths: () => electron_1.ipcRenderer.invoke("config.getSystemPaths"),
-        getSystemInfo: () => electron_1.ipcRenderer.invoke("terminal.getSystemInfo"),
+        getSystemInfo: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getSystemInfo", sessionId),
         // System
         testAIConnection: (config) => electron_1.ipcRenderer.invoke("ai.testConnection", config),
         selectFolder: (defaultPath) => electron_1.ipcRenderer.invoke("system.selectFolder", defaultPath),
@@ -109,6 +115,12 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         showItemInFolder: (filePath) => electron_1.ipcRenderer.invoke("shell.showItemInFolder", filePath),
         flushStorage: () => electron_1.ipcRenderer.invoke("system.flushStorage"),
         saveSessionLog: (data) => electron_1.ipcRenderer.invoke("log.saveSessionLog", data),
+        // SSH
+        connectSSH: (config) => electron_1.ipcRenderer.invoke("ssh.connect", config),
+        testSSHConnection: (config) => electron_1.ipcRenderer.invoke("ssh.testConnection", config),
+        disconnectSSH: (sessionId) => electron_1.ipcRenderer.invoke("ssh.disconnect", sessionId),
+        readSSHProfiles: () => electron_1.ipcRenderer.invoke("ssh.profiles.read"),
+        writeSSHProfiles: (profiles) => electron_1.ipcRenderer.invoke("ssh.profiles.write", profiles),
     },
 });
 //# sourceMappingURL=preload.js.map

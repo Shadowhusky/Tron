@@ -69,4 +69,8 @@ export const sel = {
   closeConfirmSave: '[data-testid="close-confirm-save"]',
   closeConfirmDiscard: '[data-testid="close-confirm-discard"]',
   closeConfirmCancel: '[data-testid="close-confirm-cancel"]',
+
+  // Tab Create Dropdown
+  tabCreateTerminal: '[data-testid="tab-create-terminal"]',
+  tabCreateSSH: '[data-testid="tab-create-ssh"]',
 };

@@ -18,6 +18,7 @@ import { fadeIn } from "./utils/motion";
 import { useHotkey } from "./hooks/useHotkey";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
+import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -36,12 +37,14 @@ const AppContent = () => {
     renameTab,
     updateTabColor,
     duplicateTab,
+    createSSHTab,
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession } = useAgentContext();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [showSSHModal, setShowSSHModal] = useState(false);
 
   useEffect(() => {
     const hasConfigured = localStorage.getItem(STORAGE_KEYS.CONFIGURED);
@@ -153,6 +156,7 @@ const AppContent = () => {
         onSelect={selectTab}
         onClose={closeTab}
         onCreate={createTab}
+        onCreateSSH={() => setShowSSHModal(true)}
         onReorder={reorderTabs}
         onOpenSettings={openSettingsTab}
         isTabDirty={isTabDirty}
@@ -221,6 +225,20 @@ const AppContent = () => {
         show={showCloseConfirm}
         resolvedTheme={resolvedTheme}
         onAction={handleCloseConfirm}
+      />
+
+      <SSHConnectModal
+        show={showSSHModal}
+        resolvedTheme={resolvedTheme}
+        onConnect={async (config) => {
+          setShowSSHModal(false);
+          try {
+            await createSSHTab(config);
+          } catch (e: any) {
+            console.error("SSH connect failed:", e);
+          }
+        }}
+        onClose={() => setShowSSHModal(false)}
       />
     </motion.div>
   );

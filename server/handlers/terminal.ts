@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { exec, ChildProcess } from "child_process";
+import { sshSessionIds, sshSessions } from "./ssh.js";
 
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
 function detectShell(): { shell: string; args: string[] } {
@@ -94,6 +95,10 @@ export function getSessions() {
 
 export function getSessionOwners() {
   return sessionOwners;
+}
+
+export function getSessionHistory() {
+  return sessionHistory;
 }
 
 export function cleanupClientSessions(clientId: string) {
@@ -199,7 +204,13 @@ export function closeSession(id: string) {
   }
 }
 
-export async function checkCommand(command: string): Promise<boolean> {
+export async function checkCommand(command: string, sessionId?: string): Promise<boolean> {
+  // SSH session: check on remote
+  if (sessionId && sshSessionIds.has(sessionId)) {
+    const sshSession = sshSessions.get(sessionId);
+    if (sshSession) return sshSession.checkCommand(command);
+    return false;
+  }
   try {
     const checkCmd = os.platform() === "win32" ? `where ${command}` : `which ${command}`;
     await trackedExec(checkCmd);
@@ -220,6 +231,17 @@ async function getSessionCwd(sessionId: string): Promise<string> {
 }
 
 export async function execCommand(sessionId: string, command: string): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
+  // SSH session: exec on remote
+  if (sshSessionIds.has(sessionId)) {
+    const sshSession = sshSessions.get(sessionId);
+    if (!sshSession) return { stdout: "", stderr: "SSH session not found", exitCode: 1 };
+    try {
+      return await sshSession.exec(command, 30000);
+    } catch (e: any) {
+      return { stdout: "", stderr: e.message, exitCode: 1 };
+    }
+  }
+
   const cwd = await getSessionCwd(sessionId);
   return new Promise((resolve) => {
     const child = exec(
@@ -254,12 +276,25 @@ export async function execCommand(sessionId: string, command: string): Promise<{
 }
 
 export async function getCwd(sessionId: string): Promise<string | null> {
+  // SSH session: get remote CWD
+  if (sshSessionIds.has(sessionId)) {
+    const sshSession = sshSessions.get(sessionId);
+    if (sshSession) return sshSession.getCwd();
+    return null;
+  }
   const session = sessions.get(sessionId);
   if (!session) return null;
   return getCwdForPid(session.pid);
 }
 
 export async function getCompletions({ prefix, cwd, sessionId }: { prefix: string; cwd?: string; sessionId?: string }): Promise<string[]> {
+  // SSH session: get completions from remote
+  if (sessionId && sshSessionIds.has(sessionId)) {
+    const sshSession = sshSessions.get(sessionId);
+    if (sshSession) return sshSession.getCompletions(prefix);
+    return [];
+  }
+
   let workDir = cwd || process.env.HOME || "/";
   if (!cwd && sessionId) {
     const session = sessions.get(sessionId);
@@ -303,7 +338,13 @@ export function getHistory(sessionId: string): string {
   return sessionHistory.get(sessionId) || "";
 }
 
-export function getSystemInfo(): { platform: string; arch: string; shell: string; release: string } {
+export async function getSystemInfo(sessionId?: string): Promise<{ platform: string; arch: string; shell: string; release: string }> {
+  // SSH session: get remote system info
+  if (sessionId && sshSessionIds.has(sessionId)) {
+    const sshSession = sshSessions.get(sessionId);
+    if (sshSession) return sshSession.getSystemInfo();
+    return { platform: "linux", arch: "unknown", shell: "bash", release: "unknown" };
+  }
   const { shell } = detectShell();
   const shellName = path.basename(shell).replace(/\.exe$/i, "");
   return {

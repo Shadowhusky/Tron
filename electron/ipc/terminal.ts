@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { randomUUID, randomBytes } from "crypto";
 import { exec, ChildProcess } from "child_process";
+import { sshSessionIds, sshSessions } from "./ssh";
 
 /** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text: string): string {
@@ -292,9 +293,21 @@ export function registerTerminalHandlers(
     }
   });
 
-  ipcMain.handle("terminal.checkCommand", async (_event, command) => {
+  ipcMain.handle("terminal.checkCommand", async (_event, data) => {
+    // Support both old (string) and new (object with sessionId) formats
+    const command = typeof data === "string" ? data : data.command;
+    const sessionId = typeof data === "object" ? data.sessionId : undefined;
+
     // Sanitize: only allow alphanumeric, dashes, underscores, dots
     if (!/^[a-zA-Z0-9._-]+$/.test(command)) return false;
+
+    // SSH session: check on remote
+    if (sessionId && sshSessionIds.has(sessionId)) {
+      const sshSession = sshSessions.get(sessionId);
+      if (sshSession) return sshSession.checkCommand(command);
+      return false;
+    }
+
     try {
       const checkCmd =
         os.platform() === "win32" ? `where ${command}` : `which ${command}`;
@@ -312,6 +325,17 @@ export function registerTerminalHandlers(
       _event,
       { sessionId, command }: { sessionId: string; command: string },
     ) => {
+      // SSH session: exec on remote
+      if (sshSessionIds.has(sessionId)) {
+        const sshSession = sshSessions.get(sessionId);
+        if (!sshSession) return { stdout: "", stderr: "SSH session not found", exitCode: 1 };
+        try {
+          return await sshSession.exec(command, 30000);
+        } catch (e: any) {
+          return { stdout: "", stderr: e.message, exitCode: 1 };
+        }
+      }
+
       const session = sessions.get(sessionId);
 
       let cwd = os.homedir() || "/";
@@ -356,13 +380,25 @@ export function registerTerminalHandlers(
 
   // Get CWD
   ipcMain.handle("terminal.getCwd", async (_event, sessionId: string) => {
+    // SSH session: get remote CWD
+    if (sshSessionIds.has(sessionId)) {
+      const sshSession = sshSessions.get(sessionId);
+      if (sshSession) return sshSession.getCwd();
+      return null;
+    }
     const session = sessions.get(sessionId);
     if (!session) return null;
     return getCwdForPid(session.pid);
   });
 
   // Get system info (OS, shell, arch) for agent environment context
-  ipcMain.handle("terminal.getSystemInfo", async () => {
+  ipcMain.handle("terminal.getSystemInfo", async (_event, sessionId?: string) => {
+    // SSH session: get remote system info
+    if (sessionId && sshSessionIds.has(sessionId)) {
+      const sshSession = sshSessions.get(sessionId);
+      if (sshSession) return sshSession.getSystemInfo();
+      return { platform: "linux", arch: "unknown", shell: "bash", release: "unknown" };
+    }
     const { shell } = detectShell();
     const shellName = path.basename(shell).replace(/\.exe$/i, "");
     return {
@@ -383,6 +419,13 @@ export function registerTerminalHandlers(
         sessionId,
       }: { prefix: string; cwd?: string; sessionId?: string },
     ) => {
+      // SSH session: get completions from remote
+      if (sessionId && sshSessionIds.has(sessionId)) {
+        const sshSession = sshSessions.get(sessionId);
+        if (sshSession) return sshSession.getCompletions(prefix);
+        return [];
+      }
+
       // Resolve CWD from session if available
       let workDir = cwd || os.homedir() || "/";
       if (!cwd && sessionId) {

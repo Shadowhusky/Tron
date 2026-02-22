@@ -6,10 +6,11 @@ import {
   ipcMain,
 } from "electron";
 import path from "path";
-import { registerTerminalHandlers, cleanupAllSessions } from "./ipc/terminal";
+import { registerTerminalHandlers, cleanupAllSessions, getSessions, getSessionHistory } from "./ipc/terminal";
 import { registerSystemHandlers } from "./ipc/system";
 import { registerAIHandlers } from "./ipc/ai";
 import { registerConfigHandlers } from "./ipc/config";
+import { registerSSHHandlers, cleanupAllSSHSessions } from "./ipc/ssh";
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -153,6 +154,7 @@ const createWindow = () => {
   });
 
   mainWindow.on("closed", () => {
+    cleanupAllSSHSessions();
     cleanupAllSessions();
     mainWindow = null;
   });
@@ -169,6 +171,7 @@ const createWindow = () => {
 
 // --- Register all IPC handlers ---
 registerTerminalHandlers(() => mainWindow);
+registerSSHHandlers(() => mainWindow, getSessions, getSessionHistory);
 registerSystemHandlers();
 registerAIHandlers();
 registerConfigHandlers();
@@ -200,5 +203,6 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   forceQuit = true;
+  cleanupAllSSHSessions();
   cleanupAllSessions();
 });

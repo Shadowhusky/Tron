@@ -14,7 +14,8 @@ import { useHotkey } from "../../hooks/useHotkey";
 import { isInteractiveCommand, smartQuotePaths } from "../../utils/commandClassifier";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome } from "../../utils/platform";
-import type { AttachedImage } from "../../types";
+import type { AttachedImage, SSHConnectionStatus } from "../../types";
+import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
 
 interface TerminalPaneProps {
   sessionId: string;
@@ -82,6 +83,22 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
   // Stable ref for queueItem so stableOnRunAgent can use it
   const queueItemRef = useRef<(item: { type: "command" | "agent"; content: string }) => void>(() => { });
+
+  // SSH status tracking
+  const isSSH = !!session?.sshProfileId;
+  const [sshStatus, setSshStatus] = useState<SSHConnectionStatus>(isSSH ? "connected" : "disconnected");
+
+  useEffect(() => {
+    if (!isSSH) return;
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc?.on) return;
+    const cleanup = ipc.on(IPC.SSH_STATUS_CHANGE, (data: any) => {
+      if (data.sessionId === sessionId) {
+        setSshStatus(data.status);
+      }
+    });
+    return cleanup;
+  }, [sessionId, isSSH]);
 
   // In agent view: show embedded terminal when user runs a command
   const [showEmbeddedTerminal, setShowEmbeddedTerminal] = useState(false);
@@ -313,13 +330,22 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               },
             )}`}
           >
-            <Folder
-              className={`w-3 h-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}
-            />
+            {isSSH && (
+              <SSHStatusBadge
+                status={sshStatus}
+                label={session?.title || "SSH"}
+                resolvedTheme={resolvedTheme}
+              />
+            )}
+            {!isSSH && (
+              <Folder
+                className={`w-3 h-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}
+              />
+            )}
             <span
               className={`text-[11px] font-mono truncate ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}
             >
-              {abbreviateHome(session?.cwd || "~")}
+              {isSSH ? (session?.cwd || "~") : abbreviateHome(session?.cwd || "~")}
             </span>
           </div>
 
