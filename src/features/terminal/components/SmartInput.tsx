@@ -577,22 +577,39 @@ const SmartInput: React.FC<SmartInputProps> = ({
     }
   };
 
+  /** Replace only the last path segment of the last word with the completion. */
+  const buildCompletionValue = (input: string, completion: string): string => {
+    // History items or full-line matches: replace the entire input
+    if (
+      completion.toLowerCase().startsWith(input.trim().toLowerCase()) &&
+      completion.includes(" ")
+    ) {
+      return completion + " ";
+    }
+    const parts = input.trimEnd().split(/\s+/);
+    const lastWord = parts[parts.length - 1] || "";
+    parts.pop();
+
+    // If the last word contains a path separator and completion is just a name,
+    // preserve the directory prefix (e.g. "C:/Users/HAOYA/S" + "SentinelClassifier"
+    // → "C:/Users/HAOYA/SentinelClassifier")
+    const pathSepIdx = Math.max(lastWord.lastIndexOf("/"), lastWord.lastIndexOf("\\"));
+    if (pathSepIdx >= 0 && !completion.includes("/") && !completion.includes("\\")) {
+      parts.push(lastWord.substring(0, pathSepIdx + 1) + completion);
+    } else {
+      parts.push(completion);
+    }
+    return parts.join(" ") + " ";
+  };
+
   const acceptCompletion = (item: CompletionItem) => {
     const completion = item.text;
     // Suppress the fetch that setValue will trigger
     suppressNextFetchRef.current = true;
-    // History items or full-line matches: replace the entire input
-    if (
-      item.source === "history" ||
-      (completion.toLowerCase().startsWith(value.trim().toLowerCase()) &&
-        completion.includes(" "))
-    ) {
+    if (item.source === "history") {
       setValue(completion + " ");
     } else {
-      const parts = value.trimEnd().split(/\s+/);
-      parts.pop(); // Remove partial word
-      parts.push(completion); // Add completion
-      setValue(parts.join(" ") + " ");
+      setValue(buildCompletionValue(value, completion));
     }
     setCompletions([]);
     setShowCompletions(false);
@@ -826,18 +843,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
         const item = completions[selectedIndex];
         // Apply completion and EXECUTE immediately
         let finalVal: string;
-        // History items or full-line matches: use text as-is
-        if (
-          item.source === "history" ||
-          (item.text.toLowerCase().startsWith(value.trim().toLowerCase()) &&
-            item.text.includes(" "))
-        ) {
+        if (item.source === "history") {
           finalVal = item.text.trim();
         } else {
-          const parts = value.trimEnd().split(/\s+/);
-          parts.pop();
-          parts.push(item.text);
-          finalVal = parts.join(" ").trim();
+          finalVal = buildCompletionValue(value, item.text).trim();
         }
 
         setFeedbackMsg("");
