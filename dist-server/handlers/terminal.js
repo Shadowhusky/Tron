@@ -1,10 +1,17 @@
-import * as pty from "node-pty";
 import os from "os";
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { exec } from "child_process";
 import { sshSessionIds, sshSessions } from "./ssh.js";
+// Conditional node-pty import — gateway deployments may not have the native module
+let pty = null;
+try {
+    pty = await import("node-pty");
+}
+catch {
+    console.log("[Terminal] node-pty not available (expected in gateway mode)");
+}
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
 function detectShell() {
     if (os.platform() === "win32") {
@@ -126,6 +133,9 @@ export function sessionExists(sessionId) {
     return sessions.has(sessionId);
 }
 export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEvent) {
+    if (!pty) {
+        throw new Error("Local terminals not available (node-pty not loaded)");
+    }
     if (reconnectId && sessions.has(reconnectId)) {
         const existing = sessions.get(reconnectId);
         try {

@@ -10,6 +10,7 @@ import type {
 import { aiService } from "../services/ai";
 import { STORAGE_KEYS } from "../constants/storage";
 import { IPC } from "../constants/ipc";
+import { isGatewayMode } from "../services/mode";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -169,6 +170,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     initCalledRef.current = true;
 
     const init = async () => {
+      // Gateway mode: start with empty tabs, user connects via SSH
+      if (isGatewayMode()) return;
+
       // Check file-based discard flag (written by "Exit Without Saving")
       // This is reliable because fs.writeFileSync guarantees it's on disk
       try {
@@ -281,6 +285,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isHydrated, setIsHydrated] = useState(false);
 
   const createTab = async () => {
+    // In gateway mode, open SSH modal instead of creating a local PTY
+    if (isGatewayMode()) {
+      window.dispatchEvent(new CustomEvent("tron:open-ssh-modal"));
+      return;
+    }
+
     const sessionId = await createPTY();
     const newTabId = uuid();
 
@@ -382,6 +392,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setTabs((prev) => {
       const newTabs = prev.filter((t) => t.id !== tabId);
       if (newTabs.length === 0) {
+        // In gateway mode, allow empty tab list (EmptyState will show)
+        if (isGatewayMode()) return newTabs;
         // Always keep at least one tab open — create outside the updater to avoid StrictMode double-call
         if (!creatingTabRef.current) {
           creatingTabRef.current = true;

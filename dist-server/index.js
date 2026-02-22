@@ -14,6 +14,9 @@ const __dirname = path.dirname(__filename);
 const PORT = 3888;
 const DEV_VITE_PORT = Number(process.env.PORT) || 5173;
 const isDev = process.argv.includes("--dev");
+const serverMode = process.env.TRON_MODE ||
+    (process.argv.includes("--gateway") ? "gateway" : "local");
+console.log(`[Tron Web] Mode: ${serverMode}`);
 // In-memory persistence for web mode (per client)
 const clientSessions = new Map();
 const clientConfigs = new Map();
@@ -41,6 +44,10 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (ws) => {
     const clientId = randomUUID();
     console.log(`[WS] Client connected: ${clientId}`);
+    // Immediately tell client which mode we're running in
+    if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "mode", mode: serverMode }));
+    }
     // Push events to this specific client
     const pushEvent = (channel, data) => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -77,7 +84,32 @@ wss.on("connection", (ws) => {
         clientConfigs.delete(clientId);
     });
 });
+// Channels blocked in gateway mode (no local PTY or filesystem)
+const GATEWAY_BLOCKED_CHANNELS = new Set([
+    "terminal.create",
+    "terminal.scanCommands",
+    "file.writeFile",
+    "file.readFile",
+    "file.editFile",
+    "file.listDir",
+    "file.searchDir",
+    "log.saveSessionLog",
+]);
 async function handleInvoke(channel, data, clientId, pushEvent) {
+    // Gateway mode: block local-only channels
+    if (serverMode === "gateway" && GATEWAY_BLOCKED_CHANNELS.has(channel)) {
+        const labels = {
+            "terminal.create": "Local terminals not available in gateway mode",
+            "terminal.scanCommands": "Command scanning not available in gateway mode",
+            "file.writeFile": "Local filesystem not available in gateway mode",
+            "file.readFile": "Local filesystem not available in gateway mode",
+            "file.editFile": "Local filesystem not available in gateway mode",
+            "file.listDir": "Local filesystem not available in gateway mode",
+            "file.searchDir": "Local filesystem not available in gateway mode",
+            "log.saveSessionLog": "Session logging not available in gateway mode",
+        };
+        throw new Error(labels[channel] || `Channel ${channel} not available in gateway mode`);
+    }
     switch (channel) {
         case "terminal.create":
             return terminal.createSession(data || {}, clientId, pushEvent);
