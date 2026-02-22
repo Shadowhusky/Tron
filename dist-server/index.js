@@ -1,5 +1,6 @@
 import express from "express";
 import http from "http";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
@@ -13,6 +14,9 @@ const __dirname = path.dirname(__filename);
 const PORT = 3888;
 const DEV_VITE_PORT = Number(process.env.PORT) || 5173;
 const isDev = process.argv.includes("--dev");
+// In-memory persistence for web mode (per client)
+const clientSessions = new Map();
+const clientConfigs = new Map();
 const app = express();
 const server = http.createServer(app);
 // Static files or proxy in dev
@@ -69,6 +73,8 @@ wss.on("connection", (ws) => {
         console.log(`[WS] Client disconnected: ${clientId}`);
         ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
         terminal.cleanupClientSessions(clientId);
+        clientSessions.delete(clientId);
+        clientConfigs.delete(clientId);
     });
 });
 async function handleInvoke(channel, data, clientId, pushEvent) {
@@ -101,6 +107,48 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return ssh.readProfiles();
         case "ssh.profiles.write":
             return ssh.writeProfiles(data);
+        case "terminal.readHistory":
+            return terminal.readHistory(data);
+        case "terminal.clearHistory":
+            return terminal.clearHistory(typeof data === "string" ? data : data?.sessionId);
+        case "terminal.execInTerminal":
+            return terminal.execInTerminal(data);
+        case "terminal.scanCommands":
+            return terminal.scanCommands();
+        case "file.writeFile":
+            return terminal.writeFile(data);
+        case "file.readFile":
+            return terminal.readFile(data);
+        case "file.editFile":
+            return terminal.editFile(data);
+        case "file.listDir":
+            return terminal.listDir(data);
+        case "file.searchDir":
+            return terminal.searchDir(data);
+        case "log.saveSessionLog":
+            return terminal.saveSessionLog(data);
+        case "sessions.read":
+            return clientSessions.get(clientId) || null;
+        case "sessions.write":
+            clientSessions.set(clientId, data);
+            return true;
+        case "config.read":
+            return clientConfigs.get(clientId) || null;
+        case "config.write":
+            clientConfigs.set(clientId, data);
+            return true;
+        case "config.getSystemPaths":
+            return { home: process.env.HOME || os.homedir(), temp: os.tmpdir() };
+        case "system.selectFolder":
+            return null; // Not available in web mode
+        case "shell.openExternal":
+            return; // No-op in web mode
+        case "shell.openPath":
+            return ""; // No-op in web mode
+        case "shell.showItemInFolder":
+            return; // No-op in web mode
+        case "system.flushStorage":
+            return; // No-op in web mode
         default:
             throw new Error(`Unknown channel: ${channel}`);
     }

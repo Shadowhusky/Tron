@@ -15,6 +15,14 @@ export function isWindows(): boolean {
   return false;
 }
 
+/** Detect if running inside Electron (vs. plain browser / web mode). */
+export function isElectronApp(): boolean {
+  if (typeof navigator !== "undefined") {
+    return navigator.userAgent.includes("Electron");
+  }
+  return false;
+}
+
 /** Extract filename from a path, handling both / and \ separators. */
 export function extractFilename(filePath: string): string {
   const lastSlash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
