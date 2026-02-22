@@ -1932,6 +1932,21 @@ ${agentPrompt}
           } else {
             action.tool = "final_answer";
           }
+        } else {
+          // Small models often use non-standard keys like "answer", "response", "text", "message", "result", "reply", "output"
+          const answerKey = ["answer", "response", "text", "message", "result", "reply", "output"].find(
+            (k) => typeof action[k] === "string"
+          );
+          if (answerKey) {
+            const val = action[answerKey] as string;
+            if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(val.trim()) || val.includes("?")) {
+              action.tool = "ask_question";
+              action.question = val;
+            } else {
+              action.tool = "final_answer";
+              action.content = val;
+            }
+          }
         }
       }
 
