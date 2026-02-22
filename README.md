@@ -14,6 +14,24 @@ Most AI coding tools are chat-first: you paste context in, copy commands out, ru
 - **Safety built in.** Dangerous command detection, permission prompts, double-confirm for destructive operations, loop detection, and circuit breakers.
 - **Cross-platform.** macOS, Windows, and Linux. Native window chrome on each platform.
 
+## Demo
+
+### Terminal — Tabs, Commands & Split Panes
+
+![Terminal Demo](screenshots/demo-terminal.gif)
+
+### Theme Switching — Dark, Light & Modern
+
+![Themes Demo](screenshots/demo-themes.gif)
+
+### Input Modes — Auto, Command, Advice & Agent
+
+![Modes Demo](screenshots/demo-modes.gif)
+
+### Settings — AI Config, Appearance & Shortcuts
+
+![Settings Demo](screenshots/demo-settings.gif)
+
 ## Screenshots
 
 <table>
