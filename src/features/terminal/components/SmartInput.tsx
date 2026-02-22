@@ -75,7 +75,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const stopAgent = stopAgentProp ?? stopAgentCtx;
   const thinkingEnabled = thinkingEnabledProp ?? thinkingEnabledCtx;
   const setThinkingEnabled = setThinkingEnabledProp ?? setThinkingEnabledCtx;
-  const { hotkeys } = useConfig();
+  const { hotkeys, aiBehavior } = useConfig();
 
   const { history, addToHistory } = useHistory();
   const [reactValue, setReactValue] = useState("");
@@ -285,7 +285,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   // Fetch AI placeholder when input is empty
   useEffect(() => {
     if (placeholderTimerRef.current) clearTimeout(placeholderTimerRef.current);
-    if (value.trim() !== "" || !sessionId || isAgentRunning) {
+    if (!aiBehavior.ghostText || value.trim() !== "" || !sessionId || isAgentRunning) {
       return;
     }
     placeholderTimerRef.current = setTimeout(async () => {
@@ -357,6 +357,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
   useEffect(() => {
     if (!isAuto) return;
 
+    // When auto-detect is disabled, stay in command mode
+    if (!aiBehavior.autoDetect) {
+      setMode("command");
+      return;
+    }
+
     if (value.trim() === "") {
       setMode("command");
       setCompletions([]);
@@ -384,6 +390,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
     // it means we deliberately classified it as Agent. DO NOT check PATH.
     // "isKnownExecutable" needs to be imported
     if (isKnownExecutable(firstWord)) {
+      setMode("agent");
+      return;
+    }
+
+    // 3b. Capitalized first word = natural language sentence, not a shell command.
+    // Executables are case-sensitive and virtually always lowercase on Unix;
+    // a capitalized word like "Find" or "Install" would fail in the shell anyway.
+    // Exception: known executables with genuine uppercase (e.g. "Rscript").
+    if (words.length >= 2 && /^[A-Z]/.test(firstWord) && !isKnownExecutable(firstWord)) {
       setMode("agent");
       return;
     }
@@ -612,7 +627,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
             setMode("command");
           } else if (mode === "command") {
             setIsAuto(false);
-            setMode("advice");
+            setMode(aiBehavior.adviceMode ? "advice" : "agent");
           } else if (mode === "advice") {
             setIsAuto(false);
             setMode("agent");
@@ -1091,12 +1106,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
                         shortcut: "⌘1",
                         icon: <ChevronRight className="w-3 h-3" />,
                       },
-                      {
+                      ...(aiBehavior.adviceMode ? [{
                         id: "advice",
                         label: "Advice",
                         shortcut: "⌘2",
                         icon: <Lightbulb className="w-3 h-3" />,
-                      },
+                      }] : []),
                       {
                         id: "agent",
                         label: "Agent",
@@ -1272,6 +1287,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       </div>
 
       {/* Hints bar */}
+      {aiBehavior.inputHints && (
       <div
         className={`flex items-center justify-between px-2 h-5 text-[10px] select-none overflow-hidden whitespace-nowrap ${theme === "light" ? "text-gray-500" : "text-gray-400"
           }`}
@@ -1338,6 +1354,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           <span>⌘D split</span>
         </div>
       </div>
+      )}
 
       {/* Completions Dropdown */}
       <AnimatePresence>
