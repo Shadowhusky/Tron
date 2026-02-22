@@ -4,6 +4,7 @@
  *
  * Usage: npx tsx scripts/record-demos.ts
  * Requires: ffmpeg, built app (npm run build:react && npm run build:electron)
+ * Reads: e2e/.env.test for AI provider config (needed for agent demo)
  */
 import { _electron, ElectronApplication, Page } from "@playwright/test";
 import path from "path";
@@ -17,24 +18,26 @@ const VIDEOS_DIR = path.resolve(__dirname, "../.demo-videos");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * All interactions with SmartInput go through page.evaluate() because:
- * - All tabs render simultaneously (visibility: hidden/visible pattern)
- * - Playwright's locator actionability checks reject "not visible" elements
- * - We need to find the VISIBLE textarea (computed visibility !== 'hidden')
- * - The native value setter + input event dispatch triggers React's onChange
- */
-
-/** Find the visible SmartInput textarea (not in a hidden tab) */
-const FIND_VISIBLE_TEXTAREA = `
-  (() => {
-    const all = document.querySelectorAll('[data-testid="smart-input-textarea"]');
-    for (const el of all) {
-      if (getComputedStyle(el).visibility !== 'hidden') return el;
+// ─── Load .env.test ───
+function loadEnvTest(): Record<string, string> {
+  const envPath = path.resolve(__dirname, "../e2e/.env.test");
+  const env: Record<string, string> = {};
+  if (!fs.existsSync(envPath)) {
+    console.warn("  ⚠ e2e/.env.test not found — agent demo will be skipped");
+    return env;
+  }
+  for (const line of fs.readFileSync(envPath, "utf-8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq > 0) {
+      env[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
     }
-    return all[all.length - 1]; // fallback to last
-  })()
-`;
+  }
+  return env;
+}
+
+const testEnv = loadEnvTest();
 
 // ─── Frame Recorder ───
 class Recorder {
@@ -65,6 +68,8 @@ class Recorder {
   /**
    * Type text into the visible SmartInput textarea with frame captures.
    * Uses native value setter + input event to trigger React's onChange.
+   * All tabs render simultaneously (visibility: hidden/visible), so we
+   * find the VISIBLE textarea via getComputedStyle.
    */
   async typeInInput(text: string, charDelay = 50) {
     for (let i = 0; i < text.length; i++) {
@@ -81,15 +86,12 @@ class Recorder {
         })();
         if (!el) return;
         el.focus();
-        // Use native setter to bypass React's controlled input tracking
         const setter = Object.getOwnPropertyDescriptor(
           window.HTMLTextAreaElement.prototype,
           "value",
         )?.set;
         setter?.call(el, val);
-        // Fire input event so React's onChange fires
         el.dispatchEvent(new Event("input", { bubbles: true }));
-        // Auto-resize textarea height
         el.style.height = "auto";
         el.style.height = el.scrollHeight + "px";
       }, partial);
@@ -133,15 +135,41 @@ async function launchApp(): Promise<{ app: ElectronApplication; page: Page; prof
   return { app, page, profile };
 }
 
-async function setup(app: ElectronApplication, page: Page, theme = "dark") {
+/** Build the AI config JSON from .env.test */
+function buildAIConfig(): { aiConfig: any; providerConfigs: any } | null {
+  const provider = testEnv.TEST_PROVIDER;
+  const model = testEnv.TEST_MODEL;
+  if (!provider || !model) return null;
+
+  const aiConfig: any = { provider, model };
+  if (testEnv.TEST_BASE_URL) aiConfig.baseUrl = testEnv.TEST_BASE_URL;
+  if (testEnv.TEST_API_KEY) aiConfig.apiKey = testEnv.TEST_API_KEY;
+
+  const providerConfigs: any = {};
+  providerConfigs[provider] = {
+    model,
+    ...(testEnv.TEST_BASE_URL && { baseUrl: testEnv.TEST_BASE_URL }),
+    ...(testEnv.TEST_API_KEY && { apiKey: testEnv.TEST_API_KEY }),
+  };
+
+  return { aiConfig, providerConfigs };
+}
+
+async function setup(app: ElectronApplication, page: Page, theme = "dark", withAI = false) {
+  const aiCfg = withAI ? buildAIConfig() : null;
+
   await page.evaluate(
-    (t) => {
+    ({ t, ai }) => {
       localStorage.setItem("tron_configured", "true");
       localStorage.setItem("tron_tutorial_completed", "true");
       localStorage.setItem("tron_theme", t);
       localStorage.setItem("tron_view_mode", "terminal");
+      if (ai) {
+        localStorage.setItem("tron_ai_config", JSON.stringify(ai.aiConfig));
+        localStorage.setItem("tron_provider_configs", JSON.stringify(ai.providerConfigs));
+      }
     },
-    theme,
+    { t: theme, ai: aiCfg },
   );
   await page.reload();
   await page.waitForSelector('[data-testid="tab-bar"]', { timeout: 15_000 });
@@ -154,27 +182,6 @@ async function setup(app: ElectronApplication, page: Page, theme = "dark") {
     }
   });
   await sleep(1500);
-}
-
-/** Focus the visible SmartInput textarea */
-async function focusInput(page: Page) {
-  await page.evaluate(() => {
-    const all = document.querySelectorAll<HTMLTextAreaElement>(
-      '[data-testid="smart-input-textarea"]',
-    );
-    for (const el of all) {
-      if (getComputedStyle(el).visibility !== "hidden") {
-        el.scrollIntoView();
-        el.focus();
-        return;
-      }
-    }
-    // fallback
-    if (all.length > 0) {
-      all[all.length - 1].focus();
-    }
-  });
-  await sleep(200);
 }
 
 /** Submit by dispatching Enter keydown on the visible textarea */
@@ -206,6 +213,36 @@ async function submitInput(page: Page) {
   });
 }
 
+/** Submit with Cmd+Enter (force agent mode) */
+async function submitAgent(page: Page) {
+  await page.evaluate(() => {
+    const all = document.querySelectorAll<HTMLTextAreaElement>(
+      '[data-testid="smart-input-textarea"]',
+    );
+    let el: HTMLTextAreaElement | null = null;
+    for (const t of all) {
+      if (getComputedStyle(t).visibility !== "hidden") {
+        el = t;
+        break;
+      }
+    }
+    if (!el && all.length > 0) el = all[all.length - 1] as HTMLTextAreaElement;
+    if (!el) return;
+    el.focus();
+    el.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+}
+
 /** Clear the visible SmartInput textarea */
 async function clearInput(page: Page) {
   await page.evaluate(() => {
@@ -230,7 +267,7 @@ async function clearInput(page: Page) {
 
 // ─── Demo 1: Terminal + Tabs + Splits ───
 async function demoTerminal() {
-  console.log("\n[1/4] Terminal + Tabs");
+  console.log("\n[1/5] Terminal + Tabs");
   const { app, page, profile } = await launchApp();
   await setup(app, page);
   const rec = new Recorder(page, "terminal");
@@ -281,7 +318,7 @@ async function demoTerminal() {
 
 // ─── Demo 2: Themes ───
 async function demoThemes() {
-  console.log("\n[2/4] Theme Switching");
+  console.log("\n[2/5] Theme Switching");
   const { app, page, profile } = await launchApp();
   await setup(app, page, "dark");
   const rec = new Recorder(page, "themes");
@@ -338,7 +375,7 @@ async function demoThemes() {
 
 // ─── Demo 3: Input Modes ───
 async function demoModes() {
-  console.log("\n[3/4] Input Modes");
+  console.log("\n[3/5] Input Modes");
   const { app, page, profile } = await launchApp();
   await setup(app, page);
   const rec = new Recorder(page, "modes");
@@ -388,9 +425,88 @@ async function demoModes() {
   rec.toGif("demo-modes", 5);
 }
 
-// ─── Demo 4: Settings ───
+// ─── Demo 4: Agent ───
+async function demoAgent() {
+  const aiCfg = buildAIConfig();
+  if (!aiCfg) {
+    console.log("\n[4/5] Agent — SKIPPED (no AI config in e2e/.env.test)");
+    return;
+  }
+  console.log(`\n[4/5] Agent (${testEnv.TEST_PROVIDER}/${testEnv.TEST_MODEL})`);
+  const { app, page, profile } = await launchApp();
+  await setup(app, page, "dark", true);
+  const rec = new Recorder(page, "agent");
+
+  await rec.hold(600);
+
+  // Type an agent prompt and submit with Cmd+Enter (force agent)
+  await rec.typeInInput("Create a Python script that prints the first 10 Fibonacci numbers", 30);
+  await rec.hold(600);
+  await submitAgent(page);
+  await sleep(1500);
+
+  // Enable auto-execute so the agent can run without manual permission clicks
+  const autoExecBtn = page.locator('[data-testid="autoexec-toggle"]').first();
+  if (await autoExecBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await autoExecBtn.click({ force: true });
+    await sleep(500);
+  }
+
+  // Capture frames while agent is working (stream overlay, permission prompts, etc.)
+  // Poll for up to 60 seconds, capturing frames every 500ms
+  const maxWait = 60_000;
+  const frameInterval = 500;
+  const startTime = Date.now();
+  let agentFinished = false;
+
+  while (Date.now() - startTime < maxWait) {
+    await rec.snap();
+    await sleep(frameInterval);
+
+    // Check if agent is done (no more spinning status / overlay shows completion)
+    const status = await page.evaluate(() => {
+      const statusEl = document.querySelector('[data-testid="agent-status"]');
+      return statusEl?.textContent || "";
+    });
+
+    // If there's a permission prompt, click Allow
+    const allowBtn = page.locator('[data-testid="permission-allow"]').first();
+    if (await allowBtn.isVisible({ timeout: 100 }).catch(() => false)) {
+      await rec.snap(); // Capture the permission prompt
+      await sleep(300);
+      await rec.snap();
+      await allowBtn.click({ force: true });
+      await sleep(500);
+    }
+
+    if (status.toLowerCase().includes("complete") || status.toLowerCase().includes("done")) {
+      agentFinished = true;
+      break;
+    }
+  }
+
+  // Hold on final state
+  await rec.hold(2500);
+
+  // If agent didn't finish yet, stop it
+  if (!agentFinished) {
+    const stopBtn = page.locator('[data-testid="stop-button"]').first();
+    if (await stopBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+      await stopBtn.click({ force: true });
+      await sleep(500);
+    }
+  }
+
+  await rec.hold(1200);
+
+  await app.close();
+  fs.rmSync(profile, { recursive: true, force: true });
+  rec.toGif("demo-agent", 4);
+}
+
+// ─── Demo 5: Settings ───
 async function demoSettings() {
-  console.log("\n[4/4] Settings");
+  console.log("\n[5/5] Settings");
   const { app, page, profile } = await launchApp();
   await setup(app, page);
   const rec = new Recorder(page, "settings");
@@ -430,9 +546,14 @@ async function main() {
   fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
   fs.mkdirSync(VIDEOS_DIR, { recursive: true });
 
+  console.log("AI config:", testEnv.TEST_PROVIDER
+    ? `${testEnv.TEST_PROVIDER}/${testEnv.TEST_MODEL} @ ${testEnv.TEST_BASE_URL || "default"}`
+    : "none (agent demo will be skipped)");
+
   await demoTerminal();
   await demoThemes();
   await demoModes();
+  await demoAgent();
   await demoSettings();
 
   // Cleanup temp frames
