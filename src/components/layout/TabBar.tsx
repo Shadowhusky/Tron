@@ -240,7 +240,7 @@ const TabBar: React.FC<TabBarProps> = ({
           whileTap={{ scale: 0.9 }}
           onClick={isGatewayMode() && onCreateSSH ? onCreateSSH : onCreate}
           style={{ WebkitAppRegion: "no-drag" } as any}
-          className={`p-1.5 rounded-md transition-colors ${themeClass(
+          className={`ml-1 p-1 rounded-md transition-colors ${themeClass(
             resolvedTheme,
             {
               dark: "hover:bg-white/10 text-gray-500",

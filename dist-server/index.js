@@ -140,23 +140,23 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
         case "ssh.profiles.write":
             return ssh.writeProfiles(data);
         case "terminal.readHistory":
-            return terminal.readHistory(data);
+            return terminal.readHistory(data?.sessionId || data, data?.lines);
         case "terminal.clearHistory":
             return terminal.clearHistory(typeof data === "string" ? data : data?.sessionId);
         case "terminal.execInTerminal":
-            return terminal.execInTerminal(data);
+            return terminal.execInTerminal(data.sessionId, data.command, pushEvent);
         case "terminal.scanCommands":
             return terminal.scanCommands();
         case "file.writeFile":
-            return terminal.writeFile(data);
+            return terminal.writeFile(data.filePath, data.content);
         case "file.readFile":
-            return terminal.readFile(data);
+            return terminal.readFile(data.filePath);
         case "file.editFile":
-            return terminal.editFile(data);
+            return terminal.editFile(data.filePath, data.search, data.replace);
         case "file.listDir":
-            return terminal.listDir(data);
+            return terminal.listDir(data.dirPath);
         case "file.searchDir":
-            return terminal.searchDir(data);
+            return terminal.searchDir(data.dirPath, data.query);
         case "log.saveSessionLog":
             return terminal.saveSessionLog(data);
         case "sessions.read":
