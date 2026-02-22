@@ -36,6 +36,16 @@ export interface AttachedImage {
   name: string;        // original filename
 }
 
+// --- AI Behavior Types ---
+
+export interface AIBehavior {
+  ghostText: boolean;      // AI ghost text suggestions (default: true)
+  autoDetect: boolean;     // Auto-detect input mode (default: true)
+  adviceMode: boolean;     // Advice mode available (default: true)
+  aiTabTitles: boolean;    // AI-generated tab titles (default: true)
+  inputHints: boolean;     // Show mode/shortcut hints (default: true)
+}
+
 // --- Config Types ---
 
 export interface HotkeyMap {
@@ -59,6 +69,7 @@ export interface TronConfig {
   viewMode?: string;
   configured?: boolean;
   hotkeys?: HotkeyMap;
+  aiBehavior?: AIBehavior;
 }
 
 // --- Terminal & Layout Types ---
