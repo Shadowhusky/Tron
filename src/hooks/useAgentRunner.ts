@@ -8,6 +8,7 @@ import { useConfig } from "../contexts/ConfigContext";
 import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 import { isDangerousCommand } from "../utils/dangerousCommand";
+import { isWindows } from "../utils/platform";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -177,13 +178,14 @@ export function useAgentRunner(
         });
         // Brief delay for shell to process interrupt and show a new prompt
         setTimeout(() => {
-          // Send Ctrl+U (mac/linux) or Esc (win) to clear current line
-          const isWin = navigator.platform?.startsWith("Win") ?? false;
+          // Clear current input line before sending the command
           window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
             id: sessionId,
-            data: isWin ? "\x1b" : "\x15",
+            data: isWindows() ? "\x1b" : "\x15", // Esc for Win, Ctrl+U for Unix
           });
-          sendCommand();
+          // On Windows, Esc must be a standalone keypress — delay before sending
+          // the command so PSReadLine doesn't merge it with the next characters
+          setTimeout(sendCommand, isWindows() ? 50 : 0);
         }, 80);
       }
     });
@@ -448,8 +450,7 @@ export function useAgentRunner(
 
         if (window.electron) {
           // Detect platform for cross-platform file listing command
-          const isWin = navigator.platform?.startsWith("Win") ?? false;
-          const listCommand = isWin
+          const listCommand = isWindows()
             ? 'Get-ChildItem -Recurse -Depth 2 -Name -Exclude node_modules,.git,dist,.next,__pycache__,venv,.venv,build | Select-Object -First 100'
             : "find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/build/*' 2>/dev/null | head -100";
 
@@ -624,18 +625,24 @@ Task: ${prompt}
             }
             if (!window.electron) return;
             // For run_in_terminal: clear any user-typed text before injecting command
-            if (checkPerm) {
-              const isWin = navigator.platform?.startsWith("Win") ?? false;
+            const sendRawCmd = () => {
               window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
                 id: sessionId,
-                data: isWin ? "\x1b" : "\x15", // Esc for Win, Ctrl+U for Unix
+                data: cmd,
               });
+              if (checkPerm) addToHistory(cmd.replace(/\r$/, "").trim());
+            };
+            if (checkPerm) {
+              window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+                id: sessionId,
+                data: isWindows() ? "\x1b" : "\x15", // Esc for Win, Ctrl+U for Unix
+              });
+              // On Windows, delay so PSReadLine processes Esc as standalone keypress
+              if (isWindows()) {
+                await new Promise((r) => setTimeout(r, 50));
+              }
             }
-            window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-              id: sessionId,
-              data: cmd,
-            });
-            if (checkPerm) addToHistory(cmd.replace(/\r$/, "").trim());
+            sendRawCmd();
             return;
           }
 
