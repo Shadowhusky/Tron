@@ -261,7 +261,7 @@ const AppContent = () => {
       />
 
       <SSHConnectModal
-        show={showSSHModal}
+        show={showSSHModal && !showOnboarding && !showTutorial}
         resolvedTheme={resolvedTheme}
         onConnect={async (config) => {
           await createSSHTab(config);
