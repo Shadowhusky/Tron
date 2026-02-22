@@ -28,6 +28,10 @@ Most AI coding tools are chat-first: you paste context in, copy commands out, ru
 
 ![Modes Demo](screenshots/demo-modes.gif)
 
+### AI Agent — Autonomous Task Execution
+
+![Agent Demo](screenshots/demo-agent.gif)
+
 ### Settings — AI Config, Appearance & Shortcuts
 
 ![Settings Demo](screenshots/demo-settings.gif)
