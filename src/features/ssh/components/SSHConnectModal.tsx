@@ -23,7 +23,7 @@ interface SSHProfile {
 interface SSHConnectModalProps {
   show: boolean;
   resolvedTheme: ResolvedTheme;
-  onConnect: (config: SSHConnectionConfig) => void;
+  onConnect: (config: SSHConnectionConfig) => Promise<void>;
   onClose: () => void;
 }
 
@@ -55,9 +55,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
 
   // Status
   const [connecting, setConnecting] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
 
   // Load profiles on open
   useEffect(() => {
@@ -91,7 +89,6 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
     setPassphrase("");
     setSaveCredentials(false);
     setError(null);
-    setTestResult(null);
   };
 
   const populateFromProfile = (profile: SSHProfile) => {
@@ -106,7 +103,6 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
     setPassword(profile.savedPassword || "");
     setPassphrase(profile.savedPassphrase || "");
     setError(null);
-    setTestResult(null);
   };
 
   const buildConfig = (): SSHConnectionConfig => ({
@@ -130,37 +126,12 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
     setConnecting(true);
     setError(null);
     try {
-      onConnect(buildConfig());
+      await onConnect(buildConfig());
+      // Success — modal will be closed by the parent
     } catch (e: any) {
       setError(e.message || "Connection failed");
     } finally {
       setConnecting(false);
-    }
-  };
-
-  const handleTest = async () => {
-    if (!host || !username) {
-      setError("Host and username are required");
-      return;
-    }
-    setTesting(true);
-    setError(null);
-    setTestResult(null);
-    try {
-      const ipc = window.electron?.ipcRenderer;
-      const config = buildConfig();
-      const result = ipc?.testSSHConnection
-        ? await ipc.testSSHConnection(config)
-        : await ipc?.invoke("ssh.testConnection", config);
-      setTestResult(result);
-      if (!result?.success) {
-        setError(result?.error || "Connection test failed");
-      }
-    } catch (e: any) {
-      setError(e.message || "Test failed");
-      setTestResult({ success: false, error: e.message });
-    } finally {
-      setTesting(false);
     }
   };
 
@@ -237,7 +208,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
             animate="visible"
             exit="exit"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh] ${themeClass(
+            className={`w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${themeClass(
               resolvedTheme,
               {
                 dark: "bg-gray-900 text-white border border-white/10",
@@ -263,61 +234,53 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
               </button>
             </div>
 
-            <div className="flex flex-1 overflow-hidden">
-              {/* Left: Saved profiles */}
-              <div className={`w-48 shrink-0 border-r overflow-y-auto ${themeClass(resolvedTheme, {
-                dark: "border-white/5",
-                modern: "border-white/5",
-                light: "border-gray-200",
-              })}`}>
-                <div className={`px-3 py-2 text-xs font-medium uppercase tracking-wide ${labelClass}`}>
-                  Saved Profiles
-                </div>
-                {profiles.length === 0 && (
-                  <div className={`px-3 py-2 text-xs ${themeClass(resolvedTheme, {
-                    dark: "text-gray-600",
-                    modern: "text-gray-600",
-                    light: "text-gray-400",
-                  })}`}>
-                    No saved profiles
+            <div className="flex flex-col flex-1 overflow-hidden">
+              {/* Saved profiles strip */}
+              {profiles.length > 0 && (
+                <div className={`shrink-0 border-b px-4 py-2 ${themeClass(resolvedTheme, {
+                  dark: "border-white/5",
+                  modern: "border-white/5",
+                  light: "border-gray-200",
+                })}`}>
+                  <div className="flex gap-2 overflow-x-auto">
+                    {profiles.map((profile) => (
+                      <button
+                        key={profile.id}
+                        onClick={() => populateFromProfile(profile)}
+                        onDoubleClick={() => {
+                          populateFromProfile(profile);
+                          handleConnect();
+                        }}
+                        className={`shrink-0 px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                          selectedProfileId === profile.id
+                            ? themeClass(resolvedTheme, {
+                                dark: "bg-purple-600/20 border-purple-500/30 text-purple-300",
+                                modern: "bg-purple-600/20 border-purple-500/30 text-purple-300",
+                                light: "bg-purple-50 border-purple-200 text-purple-700",
+                              })
+                            : themeClass(resolvedTheme, {
+                                dark: "border-white/10 hover:bg-white/5 text-gray-300",
+                                modern: "border-white/10 hover:bg-white/5 text-gray-300",
+                                light: "border-gray-200 hover:bg-gray-50 text-gray-700",
+                              })
+                        }`}
+                      >
+                        <span className="font-medium">{profile.name}</span>
+                        <span className={`ml-1.5 ${themeClass(resolvedTheme, {
+                          dark: "text-gray-500",
+                          modern: "text-gray-500",
+                          light: "text-gray-400",
+                        })}`}>
+                          {profile.username}@{profile.host}
+                        </span>
+                      </button>
+                    ))}
                   </div>
-                )}
-                {profiles.map((profile) => (
-                  <button
-                    key={profile.id}
-                    onClick={() => populateFromProfile(profile)}
-                    onDoubleClick={() => {
-                      populateFromProfile(profile);
-                      handleConnect();
-                    }}
-                    className={`w-full text-left px-3 py-2 text-sm transition-colors truncate ${
-                      selectedProfileId === profile.id
-                        ? themeClass(resolvedTheme, {
-                            dark: "bg-purple-600/20 text-purple-300",
-                            modern: "bg-purple-600/20 text-purple-300",
-                            light: "bg-purple-50 text-purple-700",
-                          })
-                        : themeClass(resolvedTheme, {
-                            dark: "hover:bg-white/5 text-gray-300",
-                            modern: "hover:bg-white/5 text-gray-300",
-                            light: "hover:bg-gray-50 text-gray-700",
-                          })
-                    }`}
-                  >
-                    <div className="font-medium truncate">{profile.name}</div>
-                    <div className={`text-xs truncate ${themeClass(resolvedTheme, {
-                      dark: "text-gray-500",
-                      modern: "text-gray-500",
-                      light: "text-gray-400",
-                    })}`}>
-                      {profile.username}@{profile.host}
-                    </div>
-                  </button>
-                ))}
-              </div>
+                </div>
+              )}
 
-              {/* Right: Connection form */}
-              <div className="flex-1 overflow-y-auto px-6 pb-5 space-y-3">
+              {/* Connection form */}
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
                 {/* Name */}
                 <div>
                   <label className={`block text-xs font-medium mb-1 ${labelClass}`}>Name (optional)</label>
@@ -458,13 +421,6 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                   </div>
                 )}
 
-                {/* Test success */}
-                {testResult?.success && (
-                  <div className="text-sm text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
-                    Connection successful
-                  </div>
-                )}
-
                 {/* Buttons */}
                 <div className="flex gap-2 pt-1">
                   <motion.button
@@ -476,17 +432,6 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                   >
                     {connecting ? "Connecting..." : "Connect"}
                   </motion.button>
-                  <button
-                    onClick={handleTest}
-                    disabled={testing || !host || !username}
-                    className={`px-4 py-2 text-sm rounded-lg border transition-colors disabled:opacity-50 ${themeClass(resolvedTheme, {
-                      dark: "border-white/10 hover:bg-white/5 text-gray-300",
-                      modern: "border-white/10 hover:bg-white/5 text-gray-300",
-                      light: "border-gray-200 hover:bg-gray-50 text-gray-700",
-                    })}`}
-                  >
-                    {testing ? "Testing..." : "Test"}
-                  </button>
                   <button
                     onClick={handleSaveProfile}
                     disabled={!host || !username}

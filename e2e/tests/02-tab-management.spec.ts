@@ -10,14 +10,13 @@ test.describe("Tab Management", () => {
   test("can create a new tab", async ({ page }) => {
     // Count initial tabs
     const tabBar = page.locator(sel.tabBar);
-    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"]';
+    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"], [data-testid="tab-create-dropdown"]';
     const initialTabs = await tabBar.locator('[data-testid^="tab-"]').filter({
       hasNot: page.locator(tabFilter),
     }).count();
 
-    // Click the create tab button (opens dropdown), then click "New Terminal"
+    // Click the + button (directly creates a new terminal tab)
     await page.locator(sel.tabCreate).click();
-    await page.locator(sel.tabCreateTerminal).click();
     await page.waitForTimeout(1_000);
 
     // Verify a new tab was added
@@ -28,14 +27,13 @@ test.describe("Tab Management", () => {
   });
 
   test("can switch between tabs", async ({ page }) => {
-    // Create a second tab so we have two (dropdown flow)
+    // Create a second tab so we have two
     await page.locator(sel.tabCreate).click();
-    await page.locator(sel.tabCreateTerminal).click();
     await page.waitForTimeout(1_000);
 
     // Get all tab elements (excluding create/settings/close/dropdown buttons)
     const tabBar = page.locator(sel.tabBar);
-    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"]';
+    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"], [data-testid="tab-create-dropdown"]';
     const tabs = tabBar.locator('[data-testid^="tab-"]').filter({
       hasNot: page.locator(tabFilter),
     });
@@ -57,13 +55,12 @@ test.describe("Tab Management", () => {
   });
 
   test("can close a tab", async ({ page }) => {
-    // Create a second tab (dropdown flow)
+    // Create a second tab
     await page.locator(sel.tabCreate).click();
-    await page.locator(sel.tabCreateTerminal).click();
     await page.waitForTimeout(1_000);
 
     const tabBar = page.locator(sel.tabBar);
-    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"]';
+    const tabFilter = '[data-testid="tab-create"], [data-testid="tab-settings"], [data-testid^="tab-close-"], [data-testid="tab-create-terminal"], [data-testid="tab-create-ssh"], [data-testid="tab-create-dropdown"]';
     const getTabCount = async () =>
       tabBar
         .locator('[data-testid^="tab-"]')
