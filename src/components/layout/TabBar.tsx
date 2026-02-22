@@ -53,6 +53,21 @@ const TabBar: React.FC<TabBarProps> = ({
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
+  // Check if a tab is a connect placeholder (no close, no context menu)
+  const isConnectTab = (tab: Tab) =>
+    tab.root.type === "leaf" && tab.root.contentType === "ssh-connect";
+
+  // Stable ref for Radix Popover virtual anchor (avoids infinite re-render loop)
+  const anchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
+    getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
+  });
+  if (contextMenu) {
+    anchorRef.current = {
+      getBoundingClientRect: () =>
+        DOMRect.fromRect({ width: 0, height: 0, x: contextMenu.x, y: contextMenu.y }),
+    };
+  }
+
   // Close context menu on external click
   useEffect(() => {
     const closeContextMenu = () => setContextMenu(null);
@@ -151,6 +166,7 @@ const TabBar: React.FC<TabBarProps> = ({
               onClick={() => onSelect(tab.id)}
               onContextMenu={(e) => {
                 e.preventDefault();
+                if (isConnectTab(tab)) return; // no context menu for connect tabs
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
               }}
             >
@@ -192,7 +208,7 @@ const TabBar: React.FC<TabBarProps> = ({
               ) : (
                 <span className="truncate flex-1 select-none">{tab.title}</span>
               )}
-              {renamingTabId !== tab.id && (
+              {renamingTabId !== tab.id && !isConnectTab(tab) && (
                 <button
                   data-testid={`tab-close-${tab.id}`}
                   onClick={(e) => {
@@ -391,18 +407,7 @@ const TabBar: React.FC<TabBarProps> = ({
         if (!open) setContextMenu(null);
       }}>
         <Popover.Anchor
-          // Virtual DOM anchor bound to the coordinates from right-click
-          virtualRef={{
-            current: {
-              getBoundingClientRect: () =>
-                DOMRect.fromRect({
-                  width: 0,
-                  height: 0,
-                  x: contextMenu?.x || 0,
-                  y: contextMenu?.y || 0,
-                }),
-            },
-          }}
+          virtualRef={anchorRef as any}
         />
         <Popover.Portal>
           <Popover.Content
