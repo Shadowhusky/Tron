@@ -32,6 +32,10 @@ const OPENAI_API_KEY = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
 const ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
 const GEMINI_API_KEY = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
 const DEEPSEEK_API_KEY = env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY || "";
+const KIMI_API_KEY = env.KIMI_API_KEY || process.env.KIMI_API_KEY || "";
+const QWEN_API_KEY = env.QWEN_API_KEY || process.env.QWEN_API_KEY || "";
+const GLM_API_KEY = env.GLM_API_KEY || process.env.GLM_API_KEY || "";
+const MINIMAX_API_KEY = env.MINIMAX_API_KEY || process.env.MINIMAX_API_KEY || "";
 
 const FILE_PATH = path.resolve("src", "constants", "models.json");
 
@@ -108,6 +112,55 @@ async function fetchDeepSeek(apiKey: string): Promise<string[]> {
     return models;
 }
 
+async function fetchKimi(apiKey: string): Promise<string[]> {
+    console.log("Fetching Kimi models...");
+    const data = await fetchJson("https://api.moonshot.ai/v1/models", {
+        Authorization: `Bearer ${apiKey}`,
+    });
+    const models = data.data
+        .filter((m: any) => m.id.includes("kimi") || m.id.includes("moonshot"))
+        .sort((a: any, b: any) => b.created - a.created)
+        .map((m: any) => m.id);
+    return models;
+}
+
+async function fetchQwen(apiKey: string): Promise<string[]> {
+    console.log("Fetching Qwen models...");
+    // Use DashScope OpenAI compatible endpoint
+    const data = await fetchJson("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models", {
+        Authorization: `Bearer ${apiKey}`,
+    });
+    const models = data.data
+        .filter((m: any) => m.id.includes("qwen"))
+        .sort((a: any, b: any) => b.created - a.created)
+        .map((m: any) => m.id);
+    return models;
+}
+
+async function fetchGLM(apiKey: string): Promise<string[]> {
+    console.log("Fetching GLM models...");
+    const data = await fetchJson("https://open.bigmodel.cn/api/paas/v4/models", {
+        Authorization: `Bearer ${apiKey}`,
+    });
+    const models = data.data
+        .filter((m: any) => m.id.includes("glm"))
+        .sort((a: any, b: any) => b.created - a.created)
+        .map((m: any) => m.id);
+    return models;
+}
+
+async function fetchMiniMax(apiKey: string): Promise<string[]> {
+    console.log("Fetching MiniMax models...");
+    const data = await fetchJson("https://api.minimax.io/v1/models", {
+        Authorization: `Bearer ${apiKey}`,
+    });
+    const models = data.data
+        .filter((m: any) => m.id.includes("MiniMax") || m.id.includes("M2"))
+        .sort((a: any, b: any) => b.created - a.created)
+        .map((m: any) => m.id);
+    return models;
+}
+
 // ---------------------------------------------------------------------------
 // Hardcoded fallbacks (used when no API key is provided)
 // ---------------------------------------------------------------------------
@@ -136,6 +189,10 @@ const FALLBACK_MODELS: Record<string, string[]> = {
         "gemini-2.5-flash",
     ],
     deepseek: ["deepseek-chat", "deepseek-reasoner"],
+    kimi: ["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"],
+    qwen: ["qwen3.5-plus", "qwen3-max", "qwen-plus-latest"],
+    glm: ["glm-5", "glm-4.5", "glm-4-plus"],
+    minimax: ["MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2", "M2-her"],
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +211,10 @@ async function updateModels() {
         { name: "anthropic", key: ANTHROPIC_API_KEY, fetcher: fetchAnthropic },
         { name: "gemini", key: GEMINI_API_KEY, fetcher: fetchGemini },
         { name: "deepseek", key: DEEPSEEK_API_KEY, fetcher: fetchDeepSeek },
+        { name: "kimi", key: KIMI_API_KEY, fetcher: fetchKimi },
+        { name: "qwen", key: QWEN_API_KEY, fetcher: fetchQwen },
+        { name: "glm", key: GLM_API_KEY, fetcher: fetchGLM },
+        { name: "minimax", key: MINIMAX_API_KEY, fetcher: fetchMiniMax },
     ];
 
     for (const { name, key, fetcher } of providers) {
