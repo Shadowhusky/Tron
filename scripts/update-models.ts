@@ -96,7 +96,7 @@ async function fetchGemini(apiKey: string): Promise<string[]> {
     const data = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
     const models = data.models
         .filter((m: any) => m.name.includes("gemini"))
-        .slice(0, 10)
+        .sort((a: any, b: any) => b.name.localeCompare(a.name))
         .map((m: any) => m.name.replace("models/", ""));
     return models;
 }
@@ -118,7 +118,12 @@ async function fetchKimi(apiKey: string): Promise<string[]> {
         Authorization: `Bearer ${apiKey}`,
     });
     const models = data.data
-        .filter((m: any) => m.id.includes("kimi") || m.id.includes("moonshot"))
+        .filter((m: any) => {
+            const id = m.id.toLowerCase();
+            // Exclude specific modal or explicit timestamp models if needed
+            if (id.includes("vision") || /\d{4}-\d{2}-\d{2}/.test(id)) return false;
+            return id.includes("kimi") || id.includes("moonshot");
+        })
         .sort((a: any, b: any) => b.created - a.created)
         .map((m: any) => m.id);
     return models;
@@ -131,7 +136,30 @@ async function fetchQwen(apiKey: string): Promise<string[]> {
         Authorization: `Bearer ${apiKey}`,
     });
     const models = data.data
-        .filter((m: any) => m.id.includes("qwen"))
+        .filter((m: any) => {
+            const id = m.id.toLowerCase();
+            // Purge non-chat and timestamped versions
+            if (
+                id.includes("-audio") ||
+                id.includes("-realtime") ||
+                id.includes("asr") ||
+                id.includes("tts") ||
+                id.includes("omni") ||
+                id.includes("vl") ||
+                id.includes("vd") ||
+                id.includes("image") ||
+                id.includes("mt-") ||
+                id.includes("character") ||
+                id.includes("livetranslate") ||
+                id.includes("s2s") ||
+                id.includes("captioner") ||
+                /\d{4}-\d{2}-\d{2}/.test(id) || // e.g. -2025-01-23
+                /-\d{4}$/.test(id) // e.g -2507
+            ) {
+                return false;
+            }
+            return id.includes("qwen");
+        })
         .sort((a: any, b: any) => b.created - a.created)
         .map((m: any) => m.id);
     return models;
@@ -143,7 +171,11 @@ async function fetchGLM(apiKey: string): Promise<string[]> {
         Authorization: `Bearer ${apiKey}`,
     });
     const models = data.data
-        .filter((m: any) => m.id.includes("glm"))
+        .filter((m: any) => {
+            const id = m.id.toLowerCase();
+            if (/\d{4}-\d{2}-\d{2}/.test(id)) return false;
+            return id.includes("glm");
+        })
         .sort((a: any, b: any) => b.created - a.created)
         .map((m: any) => m.id);
     return models;

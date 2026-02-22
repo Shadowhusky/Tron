@@ -62,23 +62,6 @@ test.describe("Settings", () => {
     }
   });
 
-  test("save button exists and reflects dirty state", async ({ page }) => {
-    const saveButton = page.locator(sel.saveButton);
-    await expect(saveButton).toBeVisible();
-
-    // Initially no changes so save button should be disabled
-    await expect(saveButton).toBeDisabled();
-
-    // Change the provider to trigger dirty state
-    const providerSelect = page.locator(sel.providerSelect);
-    const currentProvider = await providerSelect.inputValue();
-    const newProvider = currentProvider === "anthropic" ? "openai" : "anthropic";
-    await providerSelect.selectOption(newProvider);
-    await page.waitForTimeout(500);
-
-    // Now the save button should be enabled (has changes)
-    await expect(saveButton).toBeEnabled({ timeout: 3_000 });
-  });
 
   test("theme buttons are visible in appearance section", async ({ page }) => {
     // Navigate to appearance section
@@ -138,23 +121,21 @@ test.describe("Settings", () => {
     await expect(baseUrlInput).toBeVisible({ timeout: 5_000 });
   });
 
-  test("save button shows saved state after saving", async ({ page }) => {
-    // Make a change to enable save
+  test("auto-saves changes and shows saved indicator", async ({ page }) => {
+    // Switch to anthropic for consistent api-key-input rendering
     const providerSelect = page.locator(sel.providerSelect);
-    const currentProvider = await providerSelect.inputValue();
-    const newProvider = currentProvider === "anthropic" ? "openai" : "anthropic";
-    await providerSelect.selectOption(newProvider);
-    await page.waitForTimeout(500);
+    await providerSelect.selectOption("anthropic");
 
-    // Click save
-    const saveButton = page.locator(sel.saveButton);
-    await expect(saveButton).toBeEnabled({ timeout: 3_000 });
-    await saveButton.click();
-    await page.waitForTimeout(1_000);
+    // Change an input field to trigger dirty state & auto-save
+    const apiKeyInput = page.locator(sel.apiKeyInput);
+    await apiKeyInput.fill("12345");
 
-    // After saving, the button should become disabled again (no more changes)
-    // or show a "saved" state briefly
-    // Give it time to transition back to disabled
-    await expect(saveButton).toBeDisabled({ timeout: 5_000 });
+    // Auto-save triggers after 1000ms debounce
+    // Verify the Saved indicator fades in (opacity-100)
+    const savedIndicator = page.locator('span:has-text("Saved")');
+    await expect(savedIndicator).toHaveClass(/opacity-100/, { timeout: 3000 });
+
+    // Wait for the indicator to fade out (~2000ms timeout mapped)
+    await expect(savedIndicator).toHaveClass(/opacity-0/, { timeout: 4000 });
   });
 });

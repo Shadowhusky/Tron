@@ -25,6 +25,7 @@ import {
   Cpu,
   Palette,
   Monitor,
+  Star,
 } from "lucide-react";
 import { staggerContainer, staggerItem } from "../../../utils/motion";
 
@@ -169,6 +170,20 @@ const SettingsPane = () => {
 
   const hasChanges = JSON.stringify(config) !== initialConfig;
 
+  const toggleFavorite = (e: React.MouseEvent, modelName: string) => {
+    e.stopPropagation();
+    setConfig((prev) => {
+      const favs = prev.favoritedModels || [];
+      const newFavs = favs.includes(modelName)
+        ? favs.filter((m) => m !== modelName)
+        : [...favs, modelName];
+      // Automatically save favorited models to global storage without requiring "Save Settings" click
+      const newConfig = { ...prev, favoritedModels: newFavs };
+      aiService.saveConfig(newConfig);
+      return newConfig;
+    });
+  };
+
   // When switching providers, save current config to cache and load the new provider's cached config
   const handleProviderChange = (newProvider: string) => {
     // Save current provider's config to cache
@@ -286,6 +301,16 @@ const SettingsPane = () => {
     });
   };
 
+  // Auto-save changes with 1s debounce
+  useEffect(() => {
+    if (hasChanges) {
+      const handler = setTimeout(() => {
+        handleSave();
+      }, 1000);
+      return () => clearTimeout(handler);
+    }
+  }, [config, hasChanges]);
+
   const handleTestConnection = async () => {
     setTestStatus("testing");
     setTestError("");
@@ -310,14 +335,14 @@ const SettingsPane = () => {
   const cardClass = `p-3 rounded-xl ${t.surface} ${t.glass}`;
 
   return (
-    <div className={`w-full h-full flex ${t.appBg}`}>
+    <div data-testid="settings-pane" className={`w-full h-full flex ${t.appBg}`}>
       {/* Sidebar */}
       <nav
         className={`shrink-0 w-40 flex flex-col border-r pt-4 pb-4 gap-1 px-2 ${resolvedTheme === "light"
-            ? "bg-gray-50/80 border-gray-200"
-            : resolvedTheme === "modern"
-              ? "bg-white/[0.02] border-white/6"
-              : "bg-[#0a0a0a] border-white/5"
+          ? "bg-gray-50/80 border-gray-200"
+          : resolvedTheme === "modern"
+            ? "bg-white/[0.02] border-white/6"
+            : "bg-[#0a0a0a] border-white/5"
           }`}
       >
         <div className={`px-2 pb-3 mb-1 border-b ${t.borderSubtle}`}>
@@ -329,10 +354,10 @@ const SettingsPane = () => {
             data-testid={`settings-nav-${id}`}
             onClick={() => scrollToSection(id)}
             className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${activeSection === id
-                ? resolvedTheme === "light"
-                  ? "bg-purple-50 text-purple-700 font-medium"
-                  : "bg-purple-500/10 text-purple-300 font-medium"
-                : `${t.textMuted} hover:${t.surfaceHover}`
+              ? resolvedTheme === "light"
+                ? "bg-purple-50 text-purple-700 font-medium"
+                : "bg-purple-500/10 text-purple-300 font-medium"
+              : `${t.textMuted} hover:${t.surfaceHover}`
               }`}
           >
             <Icon className="w-3.5 h-3.5 shrink-0" />
@@ -340,22 +365,15 @@ const SettingsPane = () => {
           </button>
         ))}
 
-        {/* Save button at bottom of sidebar */}
-        <div className="mt-auto pt-3">
-          <button
-            data-testid="save-button"
-            onClick={handleSave}
-            disabled={!hasChanges && saveStatus !== "saved"}
-            className={`w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-xs transition-all ${saveStatus === "saved"
-                ? "bg-green-500/20 text-green-500"
-                : hasChanges
-                  ? "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-900/20"
-                  : `${t.textFaint} cursor-not-allowed opacity-40`
+        {/* Auto-save status indicator at bottom of sidebar */}
+        <div className="mt-auto pt-3 h-8 flex items-center justify-center">
+          <span
+            className={`text-[10px] flex items-center gap-1.5 transition-opacity duration-500 ${saveStatus === "saved" ? "text-green-500 opacity-100" : "opacity-0"
               }`}
           >
             <Save className="w-3.5 h-3.5" />
-            {saveStatus === "saved" ? "Saved" : "Save"}
-          </button>
+            Saved
+          </span>
         </div>
       </nav>
 
@@ -468,36 +486,49 @@ const SettingsPane = () => {
                                 )}
                               </div>
                             )}
-                            {localModels.map((m) => (
-                              <button
-                                key={m.name}
-                                data-testid={`model-item-${m.name}`}
-                                onClick={() => setConfig({ ...config, model: m.name })}
-                                className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${config.model === m.name
+                            {localModels.map((m) => {
+                              const isFav = config.favoritedModels?.includes(m.name);
+                              return (
+                                <div
+                                  key={m.name}
+                                  className={`w-full text-left px-3 py-1.5 text-xs flex items-center group transition-colors ${config.model === m.name
                                     ? "bg-purple-500/10 text-purple-400"
                                     : `${t.surfaceHover} ${t.textMuted}`
-                                  }`}
-                              >
-                                <span className="flex-1 truncate">{m.name}</span>
-                                <div className="flex gap-1 shrink-0">
-                                  {m.capabilities?.map((cap) => (
-                                    <span
-                                      key={cap}
-                                      className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
-                                          ? "bg-purple-500/20 text-purple-400"
-                                          : cap === "vision"
-                                            ? "bg-blue-500/20 text-blue-400"
-                                            : cap === "tools"
-                                              ? "bg-green-500/20 text-green-400"
-                                              : "bg-gray-500/20 text-gray-400"
-                                        }`}
-                                    >
-                                      {cap}
-                                    </span>
-                                  ))}
+                                    }`}
+                                >
+                                  <button
+                                    data-testid={`model-item-${m.name}`}
+                                    onClick={() => setConfig({ ...config, model: m.name })}
+                                    className="flex-1 flex items-center gap-2 truncate text-left"
+                                  >
+                                    <span className="truncate">{m.name}</span>
+                                    <div className="flex gap-1 shrink-0">
+                                      {m.capabilities?.map((cap) => (
+                                        <span
+                                          key={cap}
+                                          className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
+                                            ? "bg-purple-500/20 text-purple-400"
+                                            : cap === "vision"
+                                              ? "bg-blue-500/20 text-blue-400"
+                                              : cap === "tools"
+                                                ? "bg-green-500/20 text-green-400"
+                                                : "bg-gray-500/20 text-gray-400"
+                                            }`}
+                                        >
+                                          {cap}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </button>
+                                  <button
+                                    onClick={(e) => toggleFavorite(e, m.name)}
+                                    className={`shrink-0 p-1 opacity-50 hover:opacity-100 transition-opacity ml-2 ${isFav ? "text-yellow-400 opacity-100" : "text-gray-400 group-hover:opacity-100 opacity-0"}`}
+                                  >
+                                    <Star className={`w-3.5 h-3.5 ${isFav ? "fill-current" : ""}`} />
+                                  </button>
                                 </div>
-                              </button>
-                            ))}
+                              );
+                            })}
                             {!localModels.find((m) => m.name === config.model) &&
                               config.model && (
                                 <div className={`px-3 py-1.5 text-xs ${t.textFaint}`}>
@@ -599,18 +630,31 @@ const SettingsPane = () => {
                                   </div>
                                   {modelList.length > 0 && (
                                     <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 ${t.surfaceInput}`}>
-                                      {modelList.map((name) => (
-                                        <button
-                                          key={name}
-                                          onClick={() => setConfig({ ...config, model: name })}
-                                          className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${config.model === name
+                                      {modelList.map((name) => {
+                                        const isFav = config.favoritedModels?.includes(name);
+                                        return (
+                                          <div
+                                            key={name}
+                                            className={`w-full flex items-center px-3 py-1.5 text-xs transition-colors group ${config.model === name
                                               ? "bg-purple-500/10 text-purple-400"
                                               : `${t.surfaceHover} ${t.textMuted}`
-                                            }`}
-                                        >
-                                          {name}
-                                        </button>
-                                      ))}
+                                              }`}
+                                          >
+                                            <button
+                                              onClick={() => setConfig({ ...config, model: name })}
+                                              className="flex-1 text-left truncate"
+                                            >
+                                              {name}
+                                            </button>
+                                            <button
+                                              onClick={(e) => toggleFavorite(e, name)}
+                                              className={`shrink-0 p-1 opacity-50 hover:opacity-100 transition-opacity ml-2 ${isFav ? "text-yellow-400 opacity-100" : "text-gray-400 group-hover:opacity-100 opacity-0"}`}
+                                            >
+                                              <Star className={`w-3.5 h-3.5 ${isFav ? "fill-current" : ""}`} />
+                                            </button>
+                                          </div>
+                                        );
+                                      })}
                                     </div>
                                   )}
                                   <label className={`${labelClass} mt-1`}>Custom Model Name</label>
@@ -631,6 +675,7 @@ const SettingsPane = () => {
                           <div className="flex flex-col gap-1">
                             <label className={labelClass}>API Key{isCompat ? " (optional)" : ""}</label>
                             <input
+                              data-testid="api-key-input"
                               type="password"
                               value={config.apiKey || ""}
                               onChange={(e) =>
@@ -696,10 +741,10 @@ const SettingsPane = () => {
                     onClick={handleTestConnection}
                     disabled={testStatus === "testing" || !config.model}
                     className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${testStatus === "success"
-                        ? "border-green-500/50 text-green-400 bg-green-500/10"
-                        : testStatus === "error"
-                          ? "border-red-500/50 text-red-400 bg-red-500/10"
-                          : `${t.border} ${t.textMuted} ${t.surfaceHover}`
+                      ? "border-green-500/50 text-green-400 bg-green-500/10"
+                      : testStatus === "error"
+                        ? "border-red-500/50 text-red-400 bg-red-500/10"
+                        : `${t.border} ${t.textMuted} ${t.surfaceHover}`
                       }`}
                   >
                     {testStatus === "testing"
@@ -842,8 +887,8 @@ const SettingsPane = () => {
                     whileTap={{ scale: 0.96 }}
                     onClick={() => setViewMode(id)}
                     className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${viewMode === id
-                        ? activeBorder
-                        : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
+                      ? activeBorder
+                      : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
                       }`}
                   >
                     <div className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}>
@@ -916,8 +961,8 @@ const SettingsPane = () => {
                     whileTap={{ scale: 0.96 }}
                     onClick={() => setTheme(id)}
                     className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${theme === id
-                        ? activeBorder
-                        : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
+                      ? activeBorder
+                      : `${t.borderSubtle} ${t.surfaceHover} bg-black/10`
                       }`}
                   >
                     <div
@@ -971,8 +1016,8 @@ const SettingsPane = () => {
                       data-testid={`hotkey-${action}`}
                       onClick={() => setRecordingAction(isRecording ? null : action)}
                       className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition-colors ${isRecording
-                          ? "bg-purple-500/20 border border-purple-500 text-purple-300 ring-2 ring-purple-500/30"
-                          : `${t.surface} border ${t.borderSubtle} ${t.surfaceHover} ${t.text}`
+                        ? "bg-purple-500/20 border border-purple-500 text-purple-300 ring-2 ring-purple-500/30"
+                        : `${t.surface} border ${t.borderSubtle} ${t.surfaceHover} ${t.text}`
                         }`}
                       title={isRecording ? "Press a key combo... (Esc to cancel)" : "Click to change"}
                     >
@@ -984,8 +1029,8 @@ const SettingsPane = () => {
                             <span
                               key={i}
                               className={`inline-flex items-center justify-center min-w-[18px] h-5 px-1 rounded text-[11px] font-medium ${resolvedTheme === "light"
-                                  ? "bg-gray-100 text-gray-700 border border-gray-200"
-                                  : "bg-white/10 text-gray-200 border border-white/10"
+                                ? "bg-gray-100 text-gray-700 border border-gray-200"
+                                : "bg-white/10 text-gray-200 border border-white/10"
                                 }`}
                             >
                               {ch}
@@ -1004,7 +1049,7 @@ const SettingsPane = () => {
           </motion.div>
         </motion.div>
       </div>
-    </div>
+    </div >
   );
 };
 

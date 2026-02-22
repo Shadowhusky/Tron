@@ -9,6 +9,7 @@ export interface AIConfig {
   baseUrl?: string;
   contextWindow?: number; // Max context chars, default 4000
   maxAgentSteps?: number; // Max agent loop iterations, default 100
+  favoritedModels?: string[]; // Array of explicitly starred model strings
 }
 
 export interface AIModel {
