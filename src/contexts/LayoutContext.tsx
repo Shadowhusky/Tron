@@ -11,6 +11,8 @@ import { aiService } from "../services/ai";
 import { STORAGE_KEYS } from "../constants/storage";
 import { IPC } from "../constants/ipc";
 import { isSshOnly } from "../services/mode";
+import { matchesHotkey } from "../hooks/useHotkey";
+import { useConfig } from "./ConfigContext";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -881,27 +883,23 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Keyboard Shortcuts
+  // Keyboard Shortcuts (customizable via hotkey system)
+  const { hotkeys } = useConfig();
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase();
-      // Cmd/Ctrl + T: New Tab
-      if ((e.metaKey || e.ctrlKey) && key === "t") {
+      if (matchesHotkey(e, hotkeys.newTab || "meta+t")) {
         e.preventDefault();
         createTab();
       }
-      // Cmd/Ctrl + W: Close Pane (with confirmation for dirty sessions)
-      if ((e.metaKey || e.ctrlKey) && key === "w") {
+      if (matchesHotkey(e, hotkeys.closeTab || "meta+w")) {
         e.preventDefault();
         closeActivePaneWithConfirm();
       }
-      // Cmd/Ctrl + D: Split Horizontal (Side-by-side)
-      if ((e.metaKey || e.ctrlKey) && key === "d" && !e.shiftKey) {
+      if (matchesHotkey(e, hotkeys.splitHorizontal || "meta+d")) {
         e.preventDefault();
         splitUserAction("horizontal");
       }
-      // Cmd/Ctrl + Shift + D: Split Vertical (Stacked)
-      if ((e.metaKey || e.ctrlKey) && key === "d" && e.shiftKey) {
+      if (matchesHotkey(e, hotkeys.splitVertical || "meta+shift+d")) {
         e.preventDefault();
         splitUserAction("vertical");
       }
@@ -909,7 +907,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
     window.addEventListener("keydown", handleKeyDown);
 
-    // Handle Menu IPC
+    // Handle Menu IPC (Electron menu accelerators — always fire regardless of hotkey config)
     if (window.electron) {
       const removeCloseListener = window.electron.ipcRenderer.on(
         IPC.MENU_CLOSE_TAB,
@@ -932,7 +930,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tabs, activeTabId, sessions, closeActivePane, createTab]);
+  }, [tabs, activeTabId, sessions, closeActivePane, createTab, hotkeys]);
 
   return (
     <LayoutContext.Provider

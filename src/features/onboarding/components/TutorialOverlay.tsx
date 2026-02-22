@@ -224,10 +224,10 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
         />
       )}
 
-      {/* Skip button */}
+      {/* Skip button — z-50 to stay above tooltip card */}
       <button
         onClick={onSkip}
-        className={`absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors z-10 ${isLight
+        className={`absolute top-10 right-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors z-50 ${isLight
           ? "bg-white/90 text-gray-600 hover:text-gray-900 hover:bg-white shadow"
           : "bg-white/10 text-gray-300 hover:text-white hover:bg-white/20"
           }`}

@@ -1,6 +1,8 @@
 # Tron — AI-Powered Terminal
 
-A modern desktop terminal with a built-in AI agent that can execute commands, write files, and build projects on your behalf. Connect any LLM — local (Ollama, LM Studio) or cloud (OpenAI, Anthropic, Gemini, DeepSeek, and more) — and let the agent handle complex tasks while you watch in real-time.
+A modern terminal with a built-in AI agent that can execute commands, write files, and build projects on your behalf. Connect any LLM — local (Ollama, LM Studio) or cloud (OpenAI, Anthropic, Gemini, DeepSeek, and more) — and let the agent handle complex tasks while you watch in real-time.
+
+Works as a **desktop app** (Electron) or a **web app** (Express + WebSocket) with full SSH gateway support.
 
 ![Terminal Dark](screenshots/terminal-dark.png)
 
@@ -9,7 +11,8 @@ A modern desktop terminal with a built-in AI agent that can execute commands, wr
 Most AI coding tools are chat-first: you paste context in, copy commands out, run them yourself. Tron flips that. It's a **terminal-first** app where the AI operates directly in your shell — running commands, reading output, writing files, and iterating until the job is done.
 
 - **Real terminal, real shell.** Full PTY with xterm.js. Your aliases, shell config, and tools all work.
-- **SSH remote connections.** Connect to remote servers via SSH — password, private key, or SSH agent auth. Terminal sessions work identically whether local or remote.
+- **SSH remote connections.** Connect to remote servers via SSH — password, private key, or SSH agent auth.
+- **Web mode.** Run Tron as a web app — self-hosted with local terminals, or as an SSH gateway for cloud deployments.
 - **Agent runs commands for you.** Describe what you want; the agent executes multi-step plans with permission controls.
 - **Any model, any provider.** Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax — or any OpenAI/Anthropic-compatible API.
 - **Safety built in.** Dangerous command detection, permission prompts, double-confirm for destructive operations, loop detection, and circuit breakers.
@@ -20,6 +23,10 @@ Most AI coding tools are chat-first: you paste context in, copy commands out, ru
 ### Terminal — Tabs, Commands & Split Panes
 
 ![Terminal Demo](screenshots/demo-terminal.gif)
+
+### SSH — Remote Server Connections
+
+![SSH Demo](screenshots/demo-ssh.gif)
 
 ### Theme Switching — Dark, Light & Modern
 
@@ -33,11 +40,11 @@ Most AI coding tools are chat-first: you paste context in, copy commands out, ru
 
 ![Advice Demo](screenshots/demo-advice.gif)
 
-### AI Agent — Autonomous Task Execution with Confirmations
+### AI Agent — Autonomous Task Execution
 
 ![Agent Demo](screenshots/demo-agent.gif)
 
-### Settings — AI Config, Appearance & Shortcuts
+### Setup Wizard & Settings
 
 ![Settings Demo](screenshots/demo-settings.gif)
 
@@ -58,12 +65,14 @@ Most AI coding tools are chat-first: you paste context in, copy commands out, ru
 
 <table>
 <tr>
+<td><strong>SSH Connection</strong></td>
 <td><strong>Setup Wizard</strong></td>
 <td><strong>Settings</strong></td>
 </tr>
 <tr>
-<td><img src="screenshots/onboarding.png" width="400" /></td>
-<td><img src="screenshots/settings.png" width="400" /></td>
+<td><img src="screenshots/ssh-connect.png" width="300" /></td>
+<td><img src="screenshots/onboarding.png" width="300" /></td>
+<td><img src="screenshots/settings.png" width="300" /></td>
 </tr>
 </table>
 
@@ -88,7 +97,22 @@ Connect to remote servers directly from Tron. SSH sessions are fully transparent
 - **Status indicator** — live connection status badge (connected/disconnected/reconnecting) on each SSH tab
 - **Agent compatibility** — the AI agent can execute commands, read/write files, and inspect the remote system over SSH
 - **Tab bar dropdown** — click `+` to choose "New Terminal" or "SSH Connection"
-- **Settings management** — view, edit, and delete saved SSH profiles in Settings > SSH
+- **Settings management** — view, create, and delete saved SSH profiles in Settings > SSH
+
+### Web Mode
+
+Tron runs as a web application with three deployment modes:
+
+| Mode | Server | Terminal | Use Case |
+|------|--------|----------|----------|
+| **Local** | Express + WS | Local PTY + SSH | Self-hosted |
+| **Gateway** | Express + WS | SSH only | Cloud / hosted |
+| **Demo** | None (static) | Simulated | Website showcase |
+
+```bash
+npm run start:web                    # Local mode (default)
+TRON_MODE=gateway npm run start:web  # SSH gateway mode
+```
 
 ### AI Agent
 
@@ -143,6 +167,7 @@ The agent is an autonomous loop that plans and executes tasks step-by-step:
 - **Keyboard shortcuts** — fully customizable via Settings > Shortcuts, with hotkey recording
 - **Context bar** — shows current directory, model selector, and context usage ring
 - **Cross-tab notifications** — background agent completions show toast notifications
+- **Mobile-responsive** — SSH modal and settings adapt to small screen sizes
 
 ## Getting Started
 
@@ -163,8 +188,11 @@ npm install
 ### Run
 
 ```bash
-# Development (Electron + Vite hot-reload)
+# Desktop app (Electron + Vite hot-reload)
 npm run dev
+
+# Web app
+npm run dev:web
 
 # Production build
 npm run build
@@ -202,8 +230,8 @@ All shortcuts are customizable in Settings > Shortcuts.
 ```
 src/                    # React renderer (Vite + TypeScript)
   services/ai/          # Multi-provider AI service, agent loop, streaming
-  features/             # Terminal, Agent, Settings, Onboarding
-  components/layout/    # TabBar, SplitPane, ContextBar
+  features/             # Terminal, Agent, Settings, SSH, Onboarding
+  components/layout/    # TabBar, SplitPane, ContextBar, EmptyState
   contexts/             # Layout, Theme, History, Agent state management
   utils/                # Platform, theme, command classification, context cleaning
 
@@ -211,8 +239,9 @@ electron/               # Electron main process
   ipc/                  # PTY management, SSH sessions, file ops, config, AI test
   preload.ts            # Secure IPC bridge with channel allowlists
 
-server/                 # Web mode (Express + WebSocket, no Electron)
-  handlers/ssh.ts       # SSH session adapter (PtyLike interface over ssh2)
+server/                 # Web mode (Express + WebSocket)
+  handlers/             # Terminal, SSH, AI, system handlers
+  index.ts              # HTTP server + WS bridge + mode routing
 
 e2e/                    # Playwright E2E test suite (10 spec files)
 ```
@@ -222,22 +251,26 @@ e2e/                    # Playwright E2E test suite (10 spec files)
 ```bash
 npm run dev              # Full Electron + Vite dev
 npm run dev:react        # Vite dev server only (renderer)
+npm run dev:web          # Web mode dev (Express + WS + Vite)
 npm run build:react      # Build renderer (includes TypeScript check)
 npm run build:electron   # Build Electron main process
+npm run build:web        # Build web mode (server + client)
 npm run lint             # ESLint
 npm run test:e2e         # Playwright E2E tests (builds first)
 npm run test:e2e:headed  # E2E tests with visible window
 ```
 
-### Web Mode (No Electron)
+### Web Mode
 
-Tron can also run as a web application using Express + WebSocket:
+Tron can run as a web application without Electron:
 
 ```bash
-npm run dev:web          # Development
+npm run dev:web          # Development with hot-reload
 npm run build:web        # Production build
-npm run start:web        # Start production server
+npm run start:web        # Start production server (local mode)
 ```
+
+Set `TRON_MODE=gateway` for SSH-only deployments where local terminal access should be disabled.
 
 ## Tech Stack
 

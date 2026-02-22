@@ -11,6 +11,10 @@ export const DEFAULT_AI_BEHAVIOR: AIBehavior = {
 };
 
 export const DEFAULT_HOTKEYS: HotkeyMap = {
+  newTab: "meta+t",
+  closeTab: "meta+w",
+  splitHorizontal: "meta+d",
+  splitVertical: "meta+shift+d",
   openSettings: "meta+,",
   toggleOverlay: "meta+.",
   stopAgent: "ctrl+c",
