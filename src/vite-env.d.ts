@@ -27,7 +27,7 @@ interface Window {
         apiKey?: string;
         baseUrl?: string;
       }) => Promise<{ success: boolean; error?: string } | boolean>;
-      getSystemInfo: () => Promise<{
+      getSystemInfo: (sessionId?: string) => Promise<{
         platform: string;
         arch: string;
         shell: string;
@@ -54,6 +54,12 @@ interface Window {
         filePath?: string;
         error?: string;
       }>;
+      // SSH
+      connectSSH: (config: any) => Promise<{ sessionId: string }>;
+      testSSHConnection: (config: any) => Promise<{ success: boolean; error?: string }>;
+      disconnectSSH: (sessionId: string) => Promise<boolean>;
+      readSSHProfiles: () => Promise<any[]>;
+      writeSSHProfiles: (profiles: any[]) => Promise<boolean>;
     };
   };
 }

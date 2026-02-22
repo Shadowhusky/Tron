@@ -6,8 +6,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import * as terminal from "./handlers/terminal.js";
-import * as system from "./handlers/system.js";
 import * as ai from "./handlers/ai.js";
+import * as ssh from "./handlers/ssh.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = 3888;
@@ -67,6 +67,7 @@ wss.on("connection", (ws) => {
     });
     ws.on("close", () => {
         console.log(`[WS] Client disconnected: ${clientId}`);
+        ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
         terminal.cleanupClientSessions(clientId);
     });
 });
@@ -77,7 +78,7 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
         case "terminal.sessionExists":
             return terminal.sessionExists(data);
         case "terminal.checkCommand":
-            return terminal.checkCommand(data);
+            return terminal.checkCommand(typeof data === "string" ? data : data.command, typeof data === "object" ? data.sessionId : undefined);
         case "terminal.exec":
             return terminal.execCommand(data.sessionId, data.command);
         case "terminal.getCwd":
@@ -86,14 +87,20 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return terminal.getCompletions(data);
         case "terminal.getHistory":
             return terminal.getHistory(data);
-        case "system.fixPermissions":
-            return system.fixPermissions();
-        case "system.checkPermissions":
-            return system.checkPermissions();
-        case "system.openPrivacySettings":
-            return system.openPrivacySettings();
+        case "terminal.getSystemInfo":
+            return terminal.getSystemInfo(data);
         case "ai.testConnection":
             return ai.testConnection(data);
+        case "ssh.connect":
+            return ssh.createSSHSession(data, clientId, pushEvent, terminal.getSessions(), terminal.getSessionHistory(), terminal.getSessionOwners());
+        case "ssh.testConnection":
+            return ssh.testConnection(data);
+        case "ssh.disconnect":
+            return ssh.disconnectSession(data);
+        case "ssh.profiles.read":
+            return ssh.readProfiles();
+        case "ssh.profiles.write":
+            return ssh.writeProfiles(data);
         default:
             throw new Error(`Unknown channel: ${channel}`);
     }
@@ -117,4 +124,12 @@ server.listen(PORT, "0.0.0.0", () => {
         console.log(`[Tron Web] Proxying to Vite at http://localhost:${DEV_VITE_PORT}`);
     }
 });
+// Cleanup on server shutdown
+const shutdownHandler = () => {
+    ssh.cleanupAllSSHSessions();
+    terminal.cleanupAllServerSessions();
+    process.exit(0);
+};
+process.on("SIGINT", shutdownHandler);
+process.on("SIGTERM", shutdownHandler);
 //# sourceMappingURL=index.js.map

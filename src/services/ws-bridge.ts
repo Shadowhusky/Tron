@@ -157,8 +157,19 @@ export function initWebSocketBridge() {
         invoke("terminal.exec", { sessionId, command }),
       testAIConnection: (config: { provider: string; model: string; apiKey?: string; baseUrl?: string }) =>
         invoke("ai.testConnection", config),
-      getSystemInfo: () =>
-        invoke("terminal.getSystemInfo") as Promise<{ platform: string; arch: string; shell: string; release: string }>,
+      getSystemInfo: (sessionId?: string) =>
+        invoke("terminal.getSystemInfo", sessionId) as Promise<{ platform: string; arch: string; shell: string; release: string }>,
+      // SSH
+      connectSSH: (config: any) =>
+        invoke("ssh.connect", config) as Promise<{ sessionId: string }>,
+      testSSHConnection: (config: any) =>
+        invoke("ssh.testConnection", config) as Promise<{ success: boolean; error?: string }>,
+      disconnectSSH: (sessionId: string) =>
+        invoke("ssh.disconnect", sessionId) as Promise<boolean>,
+      readSSHProfiles: () =>
+        invoke("ssh.profiles.read") as Promise<any[]>,
+      writeSSHProfiles: (profiles: any[]) =>
+        invoke("ssh.profiles.write", profiles) as Promise<boolean>,
     },
   };
 }

@@ -42,6 +42,16 @@ export const IPC = {
   // AI — invoke
   AI_TEST_CONNECTION: "ai.testConnection",
 
+  // SSH — invoke
+  SSH_CONNECT: "ssh.connect",
+  SSH_TEST_CONNECTION: "ssh.testConnection",
+  SSH_DISCONNECT: "ssh.disconnect",
+  SSH_PROFILES_READ: "ssh.profiles.read",
+  SSH_PROFILES_WRITE: "ssh.profiles.write",
+
+  // SSH — main→renderer events
+  SSH_STATUS_CHANGE: "ssh.statusChange",
+
   // Menu — main→renderer events
   MENU_CREATE_TAB: "menu.createTab",
   MENU_CLOSE_TAB: "menu.closeTab",

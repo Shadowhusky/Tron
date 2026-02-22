@@ -42,6 +42,7 @@ const terminal_1 = require("./ipc/terminal");
 const system_1 = require("./ipc/system");
 const ai_1 = require("./ipc/ai");
 const config_1 = require("./ipc/config");
+const ssh_1 = require("./ipc/ssh");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
@@ -172,6 +173,7 @@ const createWindow = () => {
         }
     });
     mainWindow.on("closed", () => {
+        (0, ssh_1.cleanupAllSSHSessions)();
         (0, terminal_1.cleanupAllSessions)();
         mainWindow = null;
     });
@@ -187,6 +189,7 @@ const createWindow = () => {
 };
 // --- Register all IPC handlers ---
 (0, terminal_1.registerTerminalHandlers)(() => mainWindow);
+(0, ssh_1.registerSSHHandlers)(() => mainWindow, terminal_1.getSessions, terminal_1.getSessionHistory);
 (0, system_1.registerSystemHandlers)();
 (0, ai_1.registerAIHandlers)();
 (0, config_1.registerConfigHandlers)();
@@ -215,6 +218,7 @@ electron_1.app.on("window-all-closed", () => {
 });
 electron_1.app.on("before-quit", () => {
     forceQuit = true;
+    (0, ssh_1.cleanupAllSSHSessions)();
     (0, terminal_1.cleanupAllSessions)();
 });
 //# sourceMappingURL=main.js.map
