@@ -19,6 +19,8 @@ import { useHotkey } from "./hooks/useHotkey";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
+import EmptyState from "./components/layout/EmptyState";
+import { isGatewayMode, isDemoMode } from "./services/mode";
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -107,6 +109,13 @@ const AppContent = () => {
     window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CONFIRMED, {});
   };
 
+  // Listen for gateway mode SSH modal trigger (from LayoutContext.createTab)
+  useEffect(() => {
+    const handler = () => setShowSSHModal(true);
+    window.addEventListener("tron:open-ssh-modal", handler);
+    return () => window.removeEventListener("tron:open-ssh-modal", handler);
+  }, []);
+
   // Global Shortcuts
   useHotkey("openSettings", openSettingsTab, [openSettingsTab]);
 
@@ -175,18 +184,26 @@ const AppContent = () => {
           onSelectTab={selectTab}
           onDismiss={dismissNotification}
         />
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className="absolute inset-0"
-            style={{
-              visibility: tab.id === activeTabId ? "visible" : "hidden",
-              zIndex: tab.id === activeTabId ? 1 : 0,
-            }}
-          >
-            <SplitPane node={tab.root} />
-          </div>
-        ))}
+        {/* Gateway/demo empty state when no tabs exist */}
+        {tabs.length === 0 && (isGatewayMode() || isDemoMode()) ? (
+          <EmptyState
+            resolvedTheme={resolvedTheme}
+            onConnect={() => setShowSSHModal(true)}
+          />
+        ) : (
+          tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className="absolute inset-0"
+              style={{
+                visibility: tab.id === activeTabId ? "visible" : "hidden",
+                zIndex: tab.id === activeTabId ? 1 : 0,
+              }}
+            >
+              <SplitPane node={tab.root} />
+            </div>
+          ))
+        )}
       </div>
 
       <AnimatePresence>
@@ -236,6 +253,13 @@ const AppContent = () => {
         }}
         onClose={() => setShowSSHModal(false)}
       />
+
+      {/* Demo mode badge */}
+      {isDemoMode() && (
+        <div className="fixed bottom-3 right-3 z-50 px-3 py-1.5 rounded-full text-xs font-medium bg-amber-500/90 text-white shadow-lg backdrop-blur-sm">
+          Demo Mode — No server connected
+        </div>
+      )}
     </motion.div>
   );
 };

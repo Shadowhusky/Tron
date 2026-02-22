@@ -1,10 +1,19 @@
-import * as pty from "node-pty";
 import os from "os";
 import fs from "fs";
 import path from "path";
 import { randomUUID, randomBytes } from "crypto";
 import { exec, ChildProcess } from "child_process";
 import { sshSessionIds, sshSessions } from "./ssh.js";
+
+// Conditional node-pty import — gateway deployments may not have the native module
+let pty: typeof import("node-pty") | null = null;
+try {
+  pty = await import("node-pty");
+} catch {
+  console.log("[Terminal] node-pty not available (expected in gateway mode)");
+}
+
+type IPty = import("node-pty").IPty;
 
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
 function detectShell(): { shell: string; args: string[] } {
@@ -38,7 +47,7 @@ function detectShell(): { shell: string; args: string[] } {
   return { shell: "/bin/sh", args: [] };
 }
 
-const sessions = new Map<string, pty.IPty>();
+const sessions = new Map<string, IPty>();
 const sessionHistory = new Map<string, string>();
 // Track which WS client owns each session
 const sessionOwners = new Map<string, string>();
@@ -202,6 +211,10 @@ export function createSession(
   clientId: string,
   pushEvent: EventPusher
 ): string {
+  if (!pty) {
+    throw new Error("Local terminals not available (node-pty not loaded)");
+  }
+
   if (reconnectId && sessions.has(reconnectId)) {
     const existing = sessions.get(reconnectId)!;
     try { existing.resize(cols || 80, rows || 30); } catch { }
