@@ -598,7 +598,7 @@ const SettingsPane = () => {
                                     )}
                                   </div>
                                   {modelList.length > 0 && (
-                                    <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 transition-opacity ${t.surfaceInput} ${customValue ? "opacity-40 pointer-events-none" : ""}`}>
+                                    <div className={`rounded-lg border overflow-hidden max-h-32 overflow-y-auto mb-1 ${t.surfaceInput}`}>
                                       {modelList.map((name) => (
                                         <button
                                           key={name}

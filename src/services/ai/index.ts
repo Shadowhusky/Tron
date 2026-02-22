@@ -14,6 +14,7 @@ import {
   type TerminalState,
 } from "../../utils/terminalState";
 import agentPrompt from "./agent.md?raw";
+import DEFAULT_MODELS from "../../constants/models.json";
 
 export interface AgentContinuation {
   history: any[];
@@ -47,69 +48,51 @@ interface ProviderInfo {
 const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
   openai: {
     chatUrl: "https://api.openai.com/v1/chat/completions",
-    defaultModels: [
-      "gpt-5.2",
-      "o3-mini",
-      "o1",
-      "gpt-4.5-preview",
-      "gpt-4o",
-      "gpt-4o-mini"
-    ],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).openai || [],
     placeholder: "gpt-5.2",
     label: "OpenAI",
   },
   anthropic: {
     chatUrl: "https://api.anthropic.com/v1/messages",
-    defaultModels: [
-      "claude-3-7-sonnet-20250219",
-      "claude-3-5-sonnet-20241022",
-      "claude-3-5-haiku-20241022",
-      "claude-3-opus-20240229"
-    ],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).anthropic || [],
     placeholder: "claude-sonnet-4-6",
     label: "Anthropic",
   },
   gemini: {
     chatUrl:
       "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    defaultModels: [
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.0-pro-exp-0205",
-      "gemini-2.0-flash-thinking-exp-0121",
-      "gemini-2.0-flash"
-    ],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).gemini || [],
     placeholder: "gemini-2.5-flash",
     label: "Gemini (Google)",
   },
   deepseek: {
     chatUrl: "https://api.deepseek.com/chat/completions",
-    defaultModels: ["deepseek-chat", "deepseek-reasoner"],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).deepseek || [],
     placeholder: "deepseek-chat",
     label: "DeepSeek",
   },
   kimi: {
     chatUrl: "https://api.moonshot.ai/v1/chat/completions",
-    defaultModels: ["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).kimi || [],
     placeholder: "kimi-k2.5",
     label: "Kimi (Moonshot)",
   },
   qwen: {
     chatUrl:
       "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
-    defaultModels: ["qwen3.5-plus", "qwen3-max", "qwen-plus-latest"],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).qwen || [],
     placeholder: "qwen3.5-plus",
     label: "Qwen (Alibaba)",
   },
   glm: {
     chatUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    defaultModels: ["glm-5", "glm-4.5", "glm-4-plus"],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).glm || [],
     placeholder: "glm-5",
     label: "GLM (Zhipu)",
   },
   minimax: {
     chatUrl: "https://api.minimax.io/v1/text/chatcompletion_v2",
-    defaultModels: ["MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2", "M2-her"],
+    defaultModels: (DEFAULT_MODELS as Record<string, string[]>).minimax || [],
     placeholder: "MiniMax-M2.5",
     label: "MiniMax",
   },

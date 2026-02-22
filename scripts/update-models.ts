@@ -1,21 +1,43 @@
 import fs from "fs";
 import path from "path";
 import https from "https";
-import { parseArgs } from "util";
 
-const args = parseArgs({
-    options: {
-        openai: { type: "string" },
-        anthropic: { type: "string" },
-        gemini: { type: "string" },
-        deepseek: { type: "string" },
-    },
-}).values;
+// ---------------------------------------------------------------------------
+// Load environment variables from .env file
+// ---------------------------------------------------------------------------
+function loadEnv(envPath: string): Record<string, string> {
+    const env: Record<string, string> = {};
+    if (!fs.existsSync(envPath)) return env;
+    const lines = fs.readFileSync(envPath, "utf-8").split("\n");
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx === -1) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        let value = trimmed.slice(eqIdx + 1).trim();
+        // Strip surrounding quotes
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+        }
+        env[key] = value;
+    }
+    return env;
+}
 
-const FILE_PATH = path.resolve("src", "services", "ai", "index.ts");
-const code = fs.readFileSync(FILE_PATH, "utf-8");
+const envPath = path.resolve(".env");
+const env = loadEnv(envPath);
 
+const OPENAI_API_KEY = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
+const ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
+const GEMINI_API_KEY = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+const DEEPSEEK_API_KEY = env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY || "";
+
+const FILE_PATH = path.resolve("src", "constants", "models.json");
+
+// ---------------------------------------------------------------------------
 // Fetch helper
+// ---------------------------------------------------------------------------
 const fetchJson = (url: string, headers: Record<string, string> = {}) => {
     return new Promise<any>((resolve, reject) => {
         https
@@ -34,116 +56,133 @@ const fetchJson = (url: string, headers: Record<string, string> = {}) => {
     });
 };
 
-// Replace models in source code string for a specific provider
-function replaceModels(code: string, provider: string, models: string[]) {
-    // Finds: { ... chatUrl: "...", defaultModels: ["...", "..."], ... label: "..." }
-    const regex = new RegExp(`(${provider}:\\s*{[^}]*?defaultModels:\\s*\\[)([^\\]]*?)(\\])`, "g");
-    const match = code.match(regex);
-    if (!match) {
-        console.warn(`Could not find provider: ${provider} in CLOUD_PROVIDERS`);
-        return code;
-    }
-    const formattedModels = models.map((m) => `\n      "${m}"`).join(",") + "\n    ";
-    return code.replace(regex, `$1${formattedModels}$3`);
+// ---------------------------------------------------------------------------
+// Provider fetchers
+// ---------------------------------------------------------------------------
+
+async function fetchOpenAI(apiKey: string): Promise<string[]> {
+    console.log("Fetching OpenAI models...");
+    const data = await fetchJson("https://api.openai.com/v1/models", {
+        Authorization: `Bearer ${apiKey}`,
+    });
+    const models = data.data
+        .filter((m: any) => m.id.startsWith("gpt") || m.id.startsWith("o"))
+        .filter((m: any) => !m.id.includes("audio") && !m.id.includes("realtime") && !m.id.includes("tts") && !m.id.includes("transcribe") && !m.id.includes("embedding"))
+        .sort((a: any, b: any) => b.created - a.created)
+        .slice(0, 10)
+        .map((m: any) => m.id);
+    return models;
 }
 
+async function fetchAnthropic(apiKey: string): Promise<string[]> {
+    console.log("Fetching Anthropic models...");
+    const data = await fetchJson("https://api.anthropic.com/v1/models", {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+    });
+    const models = data.data
+        .filter((m: any) => m.type === "model" && m.id.includes("claude"))
+        .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+        .map((m: any) => m.id);
+    return models;
+}
+
+async function fetchGemini(apiKey: string): Promise<string[]> {
+    console.log("Fetching Gemini models...");
+    const data = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const models = data.models
+        .filter((m: any) => m.name.includes("gemini"))
+        .slice(0, 10)
+        .map((m: any) => m.name.replace("models/", ""));
+    return models;
+}
+
+async function fetchDeepSeek(apiKey: string): Promise<string[]> {
+    console.log("Fetching DeepSeek models...");
+    const data = await fetchJson("https://api.deepseek.com/models", {
+        Authorization: `Bearer ${apiKey}`,
+    });
+    const models = data.data
+        .sort((a: any, b: any) => b.created - a.created)
+        .map((m: any) => m.id);
+    return models;
+}
+
+// ---------------------------------------------------------------------------
+// Hardcoded fallbacks (used when no API key is provided)
+// ---------------------------------------------------------------------------
+
+const FALLBACK_MODELS: Record<string, string[]> = {
+    openai: [
+        "gpt-5.2",
+        "o3-mini",
+        "o1",
+        "gpt-4.5-preview",
+        "gpt-4o",
+        "gpt-4o-mini",
+    ],
+    anthropic: [
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-3-7-sonnet-20250219",
+        "claude-3-5-sonnet-20241022",
+    ],
+    gemini: [
+        "gemini-3.1-pro-preview",
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+    ],
+    deepseek: ["deepseek-chat", "deepseek-reasoner"],
+};
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
 async function updateModels() {
-    let newCode = code;
+    let modelsJson: Record<string, string[]> = {};
+    if (fs.existsSync(FILE_PATH)) {
+        modelsJson = JSON.parse(fs.readFileSync(FILE_PATH, "utf-8"));
+    }
+    let changed = false;
 
-    // 1. OpenAI (requires API Key)
-    if (args.openai) {
-        console.log("Fetching OpenAI models...");
-        try {
-            const data = await fetchJson("https://api.openai.com/v1/models", {
-                Authorization: `Bearer ${args.openai}`,
-            });
-            const models = data.data
-                .filter((m: any) => m.id.startsWith("gpt") || m.id.startsWith("o"))
-                .sort((a: any, b: any) => b.created - a.created)
-                .slice(0, 10) // Keep top 10 newest
-                .map((m: any) => m.id);
+    const providers: { name: string; key: string; fetcher: (key: string) => Promise<string[]> }[] = [
+        { name: "openai", key: OPENAI_API_KEY, fetcher: fetchOpenAI },
+        { name: "anthropic", key: ANTHROPIC_API_KEY, fetcher: fetchAnthropic },
+        { name: "gemini", key: GEMINI_API_KEY, fetcher: fetchGemini },
+        { name: "deepseek", key: DEEPSEEK_API_KEY, fetcher: fetchDeepSeek },
+    ];
 
-            console.log("OpenAI models:", models);
-            newCode = replaceModels(newCode, "openai", models);
-        } catch (err: any) {
-            console.error("OpenAI failed:", err.message);
+    for (const { name, key, fetcher } of providers) {
+        let newModels: string[] | null = null;
+        if (key) {
+            try {
+                newModels = await fetcher(key);
+                console.log(`${name} models:`, newModels);
+            } catch (err: any) {
+                console.error(`${name} failed:`, err.message);
+                console.log(`Using fallback ${name} models`);
+                newModels = FALLBACK_MODELS[name];
+            }
+        } else {
+            console.log(`No API key for ${name}, using fallback models`);
+            newModels = FALLBACK_MODELS[name];
         }
-    } else {
-        // Hardcoded fallback for OpenAI
-        console.log("Using default OpenAI models");
-        newCode = replaceModels(newCode, "openai", [
-            "o3-mini",
-            "o1",
-            "gpt-4.5-preview",
-            "gpt-4o",
-            "gpt-4o-mini"
-        ]);
+
+        if (newModels && JSON.stringify(modelsJson[name]) !== JSON.stringify(newModels)) {
+            modelsJson[name] = newModels;
+            changed = true;
+        }
     }
 
-    // 2. Anthropic (requires API key)
-    if (args.anthropic) {
-        console.log("Fetching Anthropic models...");
-        try {
-            const data = await fetchJson("https://api.anthropic.com/v1/models", {
-                "x-api-key": args.anthropic,
-                "anthropic-version": "2023-06-01",
-            });
-            const models = data.data
-                .filter((m: any) => m.type === "model" && m.id.includes("claude"))
-                // Approximate sorting by date parsing ID or using created_at
-                .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
-                .map((m: any) => m.id);
-
-            console.log("Anthropic models:", models);
-            newCode = replaceModels(newCode, "anthropic", models);
-        } catch (err: any) {
-            console.error("Anthropic failed:", err.message);
-        }
+    if (changed) {
+        fs.writeFileSync(FILE_PATH, JSON.stringify(modelsJson, null, 2) + "\n");
+        console.log(`\nSuccessfully updated models in ${FILE_PATH}`);
     } else {
-        // Hardcoding Anthropic standard models
-        console.log("Using default Anthropic models");
-        newCode = replaceModels(newCode, "anthropic", [
-            "claude-3-7-sonnet-20250219",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-            "claude-3-opus-20240229"
-        ]);
-    }
-
-    // 3. Gemini (requires API key)
-    if (args.gemini) {
-        console.log("Fetching Gemini models...");
-        try {
-            const data = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models?key=${args.gemini}`);
-            const models = data.models
-                .filter((m: any) => m.name.includes("gemini"))
-                // Keep the latest 10
-                .slice(0, 10)
-                .map((m: any) => m.name.replace("models/", ""));
-
-            console.log("Gemini models:", models);
-            newCode = replaceModels(newCode, "gemini", models);
-        } catch (err: any) {
-            console.error("Gemini failed:", err.message);
-        }
-    } else {
-        // Hardcoding Gemini newest models
-        console.log("Using default Gemini models");
-        newCode = replaceModels(newCode, "gemini", [
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.0-pro-exp-0205",
-            "gemini-2.0-flash-thinking-exp-0121",
-            "gemini-2.0-flash"
-        ]);
-    }
-
-    // Write changes
-    if (newCode !== code) {
-        fs.writeFileSync(FILE_PATH, newCode);
-        console.log(`Successfully updated models in ${FILE_PATH}`);
-    } else {
-        console.log("No changes made to models.");
+        console.log("\nNo changes made to models.");
     }
 }
 
