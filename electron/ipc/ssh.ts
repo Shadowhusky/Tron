@@ -54,6 +54,41 @@ export interface PtyLike {
   pid: number;
 }
 
+// --- Friendly error messages ---
+
+function friendlySSHError(err: Error, config: SSHConnectionConfig): string {
+  const msg = err.message || "";
+  if (/All configured authentication methods failed/i.test(msg)) {
+    if (config.authMethod === "password") {
+      return `Authentication failed — incorrect password for ${config.username}@${config.host}`;
+    } else if (config.authMethod === "key") {
+      return `Authentication failed — the server rejected the private key for ${config.username}@${config.host}. Check that the key is authorized and the passphrase is correct.`;
+    } else if (config.authMethod === "agent") {
+      return `Authentication failed — SSH agent has no key accepted by ${config.host}. Make sure your agent has the correct key loaded.`;
+    }
+    return `Authentication failed for ${config.username}@${config.host}`;
+  }
+  if (/ECONNREFUSED/i.test(msg)) {
+    return `Connection refused — ${config.host}:${config.port || 22} is not accepting SSH connections`;
+  }
+  if (/ENOTFOUND|getaddrinfo/i.test(msg)) {
+    return `Host not found — could not resolve "${config.host}"`;
+  }
+  if (/ETIMEDOUT|timed? ?out/i.test(msg)) {
+    return `Connection timed out — ${config.host}:${config.port || 22} did not respond`;
+  }
+  if (/EHOSTUNREACH/i.test(msg)) {
+    return `Host unreachable — cannot reach ${config.host}`;
+  }
+  if (/ECONNRESET/i.test(msg)) {
+    return `Connection reset by ${config.host}`;
+  }
+  if (/no such file|ENOENT/i.test(msg) && config.authMethod === "key") {
+    return `Private key file not found: ${config.privateKeyPath}`;
+  }
+  return msg;
+}
+
 // --- SSH Session Class ---
 
 let nextSyntheticPid = -1000;
@@ -138,7 +173,7 @@ class SSHSession implements PtyLike {
       this.client.on("error", (err: Error) => {
         clearTimeout(timeout);
         this._connected = false;
-        reject(err);
+        reject(new Error(friendlySSHError(err, config)));
       });
 
       this.client.on("close", () => {
