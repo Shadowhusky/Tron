@@ -394,6 +394,15 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
+    // 3b. Capitalized first word = natural language sentence, not a shell command.
+    // Executables are case-sensitive and virtually always lowercase on Unix;
+    // a capitalized word like "Find" or "Install" would fail in the shell anyway.
+    // Exception: known executables with genuine uppercase (e.g. "Rscript").
+    if (words.length >= 2 && /^[A-Z]/.test(firstWord) && !isKnownExecutable(firstWord)) {
+      setMode("agent");
+      return;
+    }
+
     // 4. Check scanned commands cache (instant, no IPC)
     if (isScannedCommand(firstWord)) {
       if (isLikelyImperative(value)) {
