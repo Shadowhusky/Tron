@@ -5,7 +5,7 @@ import { useLayout } from "../../contexts/LayoutContext";
 import { aiService, providerUsesBaseUrl } from "../../services/ai";
 import { STORAGE_KEYS } from "../../constants/storage";
 import { useTheme } from "../../contexts/ThemeContext";
-import { Folder, X, Loader2, Trash2 } from "lucide-react";
+import { Folder, X, Loader2, Trash2, Search } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome } from "../../utils/platform";
@@ -106,9 +106,54 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const isSummarizedRef = useRef(!!session?.contextSummary);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showCtxTooltip, setShowCtxTooltip] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const ctxRingRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLDivElement>(null);
   const { data: availableModels = [] } = useAllConfiguredModels();
+
+  const displayModels = React.useMemo(() => {
+    let filtered = availableModels;
+    const globalCfg = aiService.getConfig();
+    const favs = globalCfg.favoritedModels || [];
+
+    const grouped: Record<string, typeof availableModels> = {};
+
+    // 1. Filter by search query
+    if (searchQuery) {
+      const lower = searchQuery.toLowerCase();
+      filtered = filtered.filter(m => m.name.toLowerCase().includes(lower) || m.provider.toLowerCase().includes(lower));
+      // Limit to 50 models to prevent dropped frames when searching
+      filtered = filtered.slice(0, 50);
+
+      filtered.forEach((current) => {
+        if (!grouped[current.provider]) grouped[current.provider] = [];
+        grouped[current.provider].push(current);
+      });
+
+      return grouped;
+    }
+
+    // 2. Default View: Favorites/Active first, then top 3 per provider
+    const favoriteModels = filtered.filter(m => favs.includes(m.name) || m.name === activeModel);
+    // Ensure uniqueness
+    const uniqueFavs = favoriteModels.filter((m, i, self) => i === self.findIndex((t) => t.name === m.name));
+
+    if (uniqueFavs.length > 0) {
+      grouped["Favorites & Active"] = uniqueFavs;
+    }
+
+    filtered.forEach((current) => {
+      // Exclude favorites from the popular lists
+      if (favs.includes(current.name) || current.name === activeModel) return;
+
+      if (!grouped[current.provider]) grouped[current.provider] = [];
+      if (grouped[current.provider].length < 3) {
+        grouped[current.provider].push(current);
+      }
+    });
+
+    return grouped;
+  }, [availableModels, searchQuery, activeModel, showModelMenu]);
 
   // Auto-select model if current model is empty or unavailable — prefer user's saved choice
   useEffect(() => {
@@ -449,7 +494,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   initial={{ opacity: 0, scale: 0.95, y: 4 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   transition={{ duration: 0.15 }}
-                  className={`fixed w-64 py-1 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
+                  className={`fixed w-64 pb-1 pt-0 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
                     theme,
                     {
                       dark: "bg-[#1a1a1a] border border-white/10",
@@ -471,72 +516,90 @@ const ContextBar: React.FC<ContextBarProps> = ({
                       : {}),
                   }}
                 >
-                  <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-gray-500 font-semibold border-b border-white/5 mb-1">
-                    Select Model
+                  <div className={`sticky top-0 z-10 px-2 py-1.5 border-b mb-1 shadow-sm rounded-t-lg ${themeClass(theme, {
+                    dark: "bg-[#1a1a1a] border-white/10",
+                    modern: "bg-[#12122e] border-white/8",
+                    light: "bg-gray-50 border-gray-200",
+                  })}`}>
+                    <div className="relative flex items-center">
+                      <Search className="w-3 h-3 absolute left-2 opacity-50" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search models..."
+                        className="w-full bg-transparent text-xs py-1 pl-7 pr-2 outline-none placeholder:opacity-50"
+                        autoFocus
+                      />
+                    </div>
                   </div>
-                  {availableModels.map((m) => (
-                    <button
-                      key={`${m.provider}-${m.name}`}
-                      data-testid={`model-option-${m.name}`}
-                      onClick={() => {
-                        const update: Record<string, any> = {
-                          provider: m.provider as any,
-                          model: m.name,
-                        };
-                        // Resolve apiKey and baseUrl from provider configs or global config
-                        const globalCfg = aiService.getConfig();
-                        let providerCfg:
-                          | { apiKey?: string; baseUrl?: string }
-                          | undefined;
-                        try {
-                          const raw = localStorage.getItem(
-                            "tron_provider_configs",
-                          );
-                          if (raw) providerCfg = JSON.parse(raw)[m.provider];
-                        } catch { }
-                        const apiKey =
-                          providerCfg?.apiKey ||
-                          (m.provider === globalCfg.provider
-                            ? globalCfg.apiKey
-                            : undefined);
-                        const baseUrl =
-                          providerCfg?.baseUrl ||
-                          (m.provider === globalCfg.provider
-                            ? globalCfg.baseUrl
-                            : undefined);
-                        if (apiKey) update.apiKey = apiKey;
-                        if (providerUsesBaseUrl(m.provider) && baseUrl)
-                          update.baseUrl = baseUrl;
-                        updateSessionConfig(sessionId, update);
-                        setShowModelMenu(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center gap-2 group ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
-                    >
-                      <span className="flex-1 truncate">{m.name}</span>
-                      <div className="flex gap-1 shrink-0">
-                        {m.capabilities?.map((cap) => (
-                          <span
-                            key={cap}
-                            className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
-                              ? "bg-purple-500/20 text-purple-400"
-                              : cap === "vision"
-                                ? "bg-blue-500/20 text-blue-400"
-                                : cap === "tools"
-                                  ? "bg-green-500/20 text-green-400"
-                                  : "bg-gray-500/20 text-gray-400"
-                              }`}
-                          >
-                            {cap}
-                          </span>
-                        ))}
+                  {Object.entries(displayModels).map(([provider, models]) => (
+                    <div key={provider} className="mb-2">
+                      <div className="px-3 py-1 text-[9px] uppercase tracking-wider text-gray-500 font-semibold mb-0.5 opacity-80">
+                        {provider}
                       </div>
-                      <span className="text-[9px] opacity-30 uppercase shrink-0">
-                        {m.provider}
-                      </span>
-                    </button>
+                      {models.map((m) => (
+                        <button
+                          key={`${m.provider}-${m.name}`}
+                          data-testid={`model-option-${m.name}`}
+                          onClick={() => {
+                            const update: Record<string, any> = {
+                              provider: m.provider as any,
+                              model: m.name,
+                            };
+                            const globalCfg = aiService.getConfig();
+                            let providerCfg:
+                              | { apiKey?: string; baseUrl?: string }
+                              | undefined;
+                            try {
+                              const raw = localStorage.getItem(
+                                "tron_provider_configs",
+                              );
+                              if (raw) providerCfg = JSON.parse(raw)[m.provider];
+                            } catch { }
+                            const apiKey =
+                              providerCfg?.apiKey ||
+                              (m.provider === globalCfg.provider
+                                ? globalCfg.apiKey
+                                : undefined);
+                            const baseUrl =
+                              providerCfg?.baseUrl ||
+                              (m.provider === globalCfg.provider
+                                ? globalCfg.baseUrl
+                                : undefined);
+                            if (apiKey) update.apiKey = apiKey;
+                            if (providerUsesBaseUrl(m.provider) && baseUrl)
+                              update.baseUrl = baseUrl;
+                            updateSessionConfig(sessionId, update);
+                            setShowModelMenu(false);
+                            setSearchQuery("");
+                          }}
+                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center gap-2 group transition-colors ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
+                        >
+                          <span className="flex-1 truncate">{m.name}</span>
+                          <div className="flex gap-1 shrink-0">
+                            {m.capabilities?.map((cap) => (
+                              <span
+                                key={cap}
+                                className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
+                                  ? "bg-purple-500/20 text-purple-400"
+                                  : cap === "vision"
+                                    ? "bg-blue-500/20 text-blue-400"
+                                    : cap === "tools"
+                                      ? "bg-green-500/20 text-green-400"
+                                      : "bg-gray-500/20 text-gray-400"
+                                  }`}
+                              >
+                                {cap}
+                              </span>
+                            ))}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
                   ))}
-                  {availableModels.length === 0 && (
-                    <div className="px-3 py-2 text-gray-500 text-center italic">
+                  {Object.keys(displayModels).length === 0 && (
+                    <div className="px-3 py-4 text-gray-500 text-center italic text-xs">
                       No models found
                     </div>
                   )}

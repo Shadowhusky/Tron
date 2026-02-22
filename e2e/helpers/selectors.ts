@@ -37,7 +37,6 @@ export const sel = {
   baseUrlConfirm: '[data-testid="base-url-confirm"]',
   testConnectionButton: '[data-testid="test-connection-button"]',
   testStatus: '[data-testid="test-status"]',
-  saveButton: '[data-testid="save-button"]',
   themeButton: (id: string) => `[data-testid="theme-${id}"]`,
   viewModeButton: (id: string) => `[data-testid="view-mode-${id}"]`,
   hotkeyButton: (action: string) => `[data-testid="hotkey-${action}"]`,
