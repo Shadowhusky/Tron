@@ -177,7 +177,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         const tabId = uuid();
         setTabs([{
           id: tabId,
-          title: "Connect",
+          title: "Terminal",
           root: { type: "leaf", sessionId: "ssh-connect", contentType: "ssh-connect" },
           activeSessionId: null,
         }]);
@@ -302,7 +302,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       const tabId = uuid();
       const newTab: Tab = {
         id: tabId,
-        title: "Connect",
+        title: "Terminal",
         root: { type: "leaf", sessionId: "ssh-connect-" + tabId, contentType: "ssh-connect" },
         activeSessionId: null,
       };
