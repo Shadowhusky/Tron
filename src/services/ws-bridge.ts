@@ -181,11 +181,56 @@ export function initWebSocketBridge() {
         invoke("ai.testConnection", config),
       getSystemInfo: (sessionId?: string) =>
         invoke("terminal.getSystemInfo", sessionId) as Promise<{ platform: string; arch: string; shell: string; release: string }>,
+      execInTerminal: (sessionId: string, command: string) =>
+        invoke("terminal.execInTerminal", { sessionId, command }),
+      // Config
+      readConfig: () =>
+        invoke("config.read") as Promise<Record<string, unknown> | null>,
+      writeConfig: (data: Record<string, unknown>) =>
+        invoke("config.write", data) as Promise<boolean>,
       // Session persistence
       readSessions: () =>
         invoke("sessions.read") as Promise<Record<string, unknown> | null>,
       writeSessions: (data: Record<string, unknown>) =>
         invoke("sessions.write", data) as Promise<boolean>,
+      getSystemPaths: () =>
+        invoke("config.getSystemPaths") as Promise<Record<string, string>>,
+      // System
+      selectFolder: (_defaultPath?: string) =>
+        Promise.resolve(null) as Promise<string | null>,
+      openExternal: (url: string) =>
+        window.open(url, "_blank") as unknown as Promise<void>,
+      openPath: (_filePath: string) =>
+        Promise.resolve("") as Promise<string>,
+      showItemInFolder: (_filePath: string) =>
+        Promise.resolve() as Promise<void>,
+      flushStorage: () =>
+        Promise.resolve() as Promise<void>,
+      listDir: (dirPath: string) =>
+        invoke("file.listDir", { dirPath }) as Promise<{
+          success: boolean;
+          contents?: { name: string; isDirectory: boolean }[];
+          error?: string;
+        }>,
+      searchDir: (dirPath: string, query: string) =>
+        invoke("file.searchDir", { dirPath, query }) as Promise<{
+          success: boolean;
+          results?: { file: string; line: number; content: string }[];
+          error?: string;
+        }>,
+      saveSessionLog: (data: {
+        sessionId: string;
+        session: Record<string, unknown>;
+        interactions: unknown[];
+        agentThread: unknown[];
+        contextSummary?: string;
+      }) =>
+        invoke("log.saveSessionLog", data) as Promise<{
+          success: boolean;
+          logId?: string;
+          filePath?: string;
+          error?: string;
+        }>,
       // SSH
       connectSSH: (config: any) =>
         invoke("ssh.connect", config) as Promise<{ sessionId: string }>,
