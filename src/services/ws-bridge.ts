@@ -4,7 +4,7 @@
  * is installed so all existing React code works unchanged.
  */
 
-import { setMode } from "./mode";
+import { setMode, setSshOnly } from "./mode";
 import type { TronMode } from "./mode";
 
 type Listener = (...args: any[]) => void;
@@ -63,9 +63,10 @@ function connect() {
     }
 
     if (msg.type === "mode") {
-      // Server tells us its deployment mode on connect
+      // Server tells us its deployment mode and access restrictions
       const mode = msg.mode as TronMode;
       setMode(mode);
+      setSshOnly(!!msg.sshOnly);
       if (!modeResolved && _modeResolve) {
         modeResolved = true;
         _modeResolve(mode);
