@@ -16,6 +16,7 @@ import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
 import { fadeIn } from "./utils/motion";
 import { useHotkey } from "./hooks/useHotkey";
+import { useInvalidateModels } from "./hooks/useModels";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
@@ -43,6 +44,7 @@ const AppContent = () => {
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession } = useAgentContext();
+  const invalidateModels = useInvalidateModels();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
@@ -76,6 +78,8 @@ const AppContent = () => {
         updateSessionConfig(sessionId, newConfig);
       }
     });
+    // Refresh model list so ContextBar picks up the newly configured models
+    invalidateModels();
     // Show tutorial if not previously completed
     const tutorialDone = localStorage.getItem(STORAGE_KEYS.TUTORIAL_COMPLETED);
     if (!tutorialDone) {

@@ -48,6 +48,10 @@ function saveProviderCache(cache: ProviderCache) {
 }
 
 const HOTKEY_LABELS: Record<string, string> = {
+  newTab: "New Tab",
+  closeTab: "Close Tab",
+  splitHorizontal: "Split Horizontal",
+  splitVertical: "Split Vertical",
   openSettings: "Open Settings",
   toggleOverlay: "Toggle Agent Panel",
   stopAgent: "Stop Agent",

@@ -2900,31 +2900,41 @@ ${agentPrompt}
           const dirPath = action.path || action.dirPath;
           if (!dirPath) throw new Error("list_dir requires 'path' (string)");
           onUpdate("executing", `Listing directory: ${dirPath}`, action);
-          const result = await (window as any).electron.ipcRenderer.invoke(
-            "file.listDir",
-            { dirPath },
-          );
-          if (result.success) {
-            const contents = result.contents
+          let contents: string;
+          if (options?.isSSH && options.sessionId) {
+            // SSH: use ls command on remote host
+            const execResult = await (window as any).electron.ipcRenderer.invoke("terminal.exec", { sessionId: options.sessionId, command: `ls -1aF '${dirPath}'` });
+            if (execResult.exitCode !== 0) throw new Error(execResult.stderr || "Directory not found");
+            // Parse ls -1aF output: dirs end with /, skip . and ..
+            contents = execResult.stdout.trim().split("\n")
+              .filter((l: string) => l && l !== "./" && l !== "../")
+              .map((l: string) => l.endsWith("/") ? `[DIR] \t${l.slice(0, -1)}` : `[FILE]\t${l.replace(/[*@|=]$/, "")}`)
+              .join("\n");
+          } else {
+            const result = await (window as any).electron.ipcRenderer.invoke(
+              "file.listDir",
+              { dirPath },
+            );
+            if (!result.success) throw new Error(result.error || "Unknown list error");
+            contents = result.contents
               .map((c: any) => `${c.isDirectory ? "[DIR] " : "[FILE]"}\t${c.name}`)
               .join("\n");
-            onUpdate(
-              "executed",
-              `Listed directory: ${dirPath}\n---\n${contents.slice(0, 500)}${contents.length > 500 ? "..." : ""}`,
-              action
-            );
-            history.push({
-              role: "user",
-              content: `Directory contents for ${dirPath}:\n${contents}`,
-            });
-          } else {
-            throw new Error(result.error || "Unknown list error");
           }
-        } catch (err: any) {
-          onUpdate("failed", "List dir failed: " + err.message, action);
+          onUpdate(
+            "executed",
+            `Listed directory: ${dirPath}\n---\n${contents.slice(0, 500)}${contents.length > 500 ? "..." : ""}`,
+            action
+          );
           history.push({
             role: "user",
-            content: `List Dir Failed: ${err.message}`,
+            content: `Directory contents for ${dirPath}:\n${contents}`,
+          });
+        } catch (err: any) {
+          // Non-critical: agent can continue without listing
+          onUpdate("executed", `Could not list ${action.path || action.dirPath || "directory"} (${err.message})`, action);
+          history.push({
+            role: "user",
+            content: `list_dir was unable to read that directory (${err.message}). This is non-critical — proceed with your task using other tools.`,
           });
         }
         continue;
@@ -2938,32 +2948,48 @@ ${agentPrompt}
             throw new Error("search_dir requires 'path' and 'query' (strings)");
           }
           onUpdate("executing", `Searching '${query}' in: ${dirPath}`, action);
-          const result = await (window as any).electron.ipcRenderer.invoke(
-            "file.searchDir",
-            { dirPath, query },
-          );
-          if (result.success) {
-            const lines = result.results
+          let summary: string;
+          let lines: string;
+          if (options?.isSSH && options.sessionId) {
+            // SSH: use grep on remote host
+            const escaped = query.replace(/'/g, "'\\''");
+            const execResult = await (window as any).electron.ipcRenderer.invoke("terminal.exec", { sessionId: options.sessionId, command: `grep -rn --include='*' '${escaped}' '${dirPath}' 2>/dev/null | head -100` });
+            // grep returns exit code 1 when no matches — not an error
+            const output = (execResult.stdout || "").trim();
+            if (!output) {
+              summary = "Found 0 matches.";
+              lines = "";
+            } else {
+              const matchLines = output.split("\n");
+              summary = `Found ${matchLines.length} matches.`;
+              lines = output;
+            }
+          } else {
+            const result = await (window as any).electron.ipcRenderer.invoke(
+              "file.searchDir",
+              { dirPath, query },
+            );
+            if (!result.success) throw new Error(result.error || "Unknown search error");
+            lines = result.results
               .map((r: any) => `${r.file}:${r.line}: ${r.content}`)
               .join("\n");
-            const summary = `Found ${result.results.length} matches.`;
-            onUpdate(
-              "executed",
-              `Searched directory: ${dirPath}\n---\n${summary}`,
-              action
-            );
-            history.push({
-              role: "user",
-              content: `${summary}\n${lines}`,
-            });
-          } else {
-            throw new Error(result.error || "Unknown search error");
+            summary = `Found ${result.results.length} matches.`;
           }
-        } catch (err: any) {
-          onUpdate("failed", "Search dir failed: " + err.message, action);
+          onUpdate(
+            "executed",
+            `Searched directory: ${dirPath}\n---\n${summary}`,
+            action
+          );
           history.push({
             role: "user",
-            content: `Search Dir Failed: ${err.message}`,
+            content: `${summary}\n${lines}`,
+          });
+        } catch (err: any) {
+          // Non-critical: agent can continue without search results
+          onUpdate("executed", `Could not search ${action.path || action.dirPath || "directory"} (${err.message})`, action);
+          history.push({
+            role: "user",
+            content: `search_dir was unable to search that directory (${err.message}). This is non-critical — proceed with your task using other tools.`,
           });
         }
         continue;

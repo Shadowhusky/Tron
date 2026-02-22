@@ -474,7 +474,8 @@ export function useAgentRunner(
             projectFiles = dirListing.stdout.trim();
           }
 
-          if (paths) {
+          if (paths && !session?.sshProfileId) {
+            // Only show local system paths for local sessions — irrelevant for SSH
             systemPathsStr = `
 System Paths:
 - Home: ${paths.home}
@@ -495,7 +496,7 @@ System Paths:
 
           // SSH session: inform agent about remote context
           if (session?.sshProfileId) {
-            systemPathsStr += `\n[REMOTE SSH SESSION] You are connected to a remote machine via SSH. All commands (execute_command, run_in_terminal) run on the remote host. File tools (read_file, write_file, edit_file) work normally. Use execute_command with ls/find to explore directories and grep to search files.\n`;
+            systemPathsStr += `\n[REMOTE SSH SESSION] You are connected to a remote machine via SSH. All commands (execute_command, run_in_terminal) run on the remote host. All file tools (read_file, write_file, edit_file, list_dir, search_dir) work on the remote host.\n`;
           }
         }
 

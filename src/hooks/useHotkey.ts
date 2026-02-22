@@ -30,10 +30,10 @@ function matchesCombo(
   e: KeyboardEvent,
   combo: ReturnType<typeof parseCombo>,
 ): boolean {
-  if (combo.meta && !e.metaKey) return false;
-  if (combo.ctrl && !e.ctrlKey) return false;
-  if (combo.shift && !e.shiftKey) return false;
-  if (combo.alt && !e.altKey) return false;
+  if (combo.meta !== e.metaKey) return false;
+  if (combo.ctrl !== e.ctrlKey) return false;
+  if (combo.shift !== e.shiftKey) return false;
+  if (combo.alt !== e.altKey) return false;
 
   // For key matching: handle special names
   const eventKey = e.key.toLowerCase();
