@@ -5,6 +5,7 @@ import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
 import { isWindows, isElectronApp } from "../../utils/platform";
+import { isGatewayMode } from "../../services/mode";
 
 interface TabBarProps {
   tabs: Tab[];
@@ -232,12 +233,12 @@ const TabBar: React.FC<TabBarProps> = ({
             </Reorder.Item>
           ))}
         </AnimatePresence>
-        {/* New Tab button — directly creates a terminal */}
+        {/* New Tab button */}
         <motion.button
           data-testid="tab-create"
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
-          onClick={onCreate}
+          onClick={isGatewayMode() && onCreateSSH ? onCreateSSH : onCreate}
           style={{ WebkitAppRegion: "no-drag" } as any}
           className={`ml-1 p-1 rounded-md transition-colors ${themeClass(
             resolvedTheme,
@@ -247,7 +248,7 @@ const TabBar: React.FC<TabBarProps> = ({
               light: "hover:bg-gray-200 text-gray-500",
             },
           )}`}
-          title="New Terminal"
+          title={isGatewayMode() ? "New SSH Connection" : "New Terminal"}
         >
           <svg
             className="w-4 h-4"
@@ -264,8 +265,8 @@ const TabBar: React.FC<TabBarProps> = ({
           </svg>
         </motion.button>
 
-        {/* Dropdown arrow for SSH and other tab types */}
-        {onCreateSSH && (
+        {/* Dropdown arrow for SSH and other tab types (hidden in gateway mode — + goes straight to SSH) */}
+        {onCreateSSH && !isGatewayMode() && (
           <Popover.Root>
             <Popover.Trigger asChild>
               <button
