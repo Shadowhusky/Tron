@@ -124,12 +124,13 @@ const AppContent = () => {
     return () => window.removeEventListener("tron:open-ssh-modal", handler);
   }, []);
 
-  // SSH-only mode: auto-open SSH modal on startup when no tabs exist
+  // SSH-only mode: auto-open SSH modal on startup when no tabs exist.
+  // Waits for onboarding to finish first (showOnboarding becomes false).
   useEffect(() => {
-    if (isSshOnly() && tabs.length === 0 && !showOnboarding) {
+    if (isSshOnly() && isHydrated && tabs.length === 0 && !showOnboarding && !showTutorial) {
       setShowSSHModal(true);
     }
-  }, [isHydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isHydrated, showOnboarding, showTutorial]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Global Shortcuts
   useHotkey("openSettings", openSettingsTab, [openSettingsTab]);
