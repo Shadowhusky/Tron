@@ -71,15 +71,15 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     cwd?: string,
     reconnectId?: string,
   ): Promise<string> => {
-    if (window.electron) {
-      return await window.electron.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
+    try {
+      return await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
         cols: 80,
         rows: 30,
         cwd,
         reconnectId,
       });
-    } else {
-      console.warn("Mocking PTY creation");
+    } catch {
+      // Fallback for when WebSocket server isn't reachable
       return `mock-${uuid()}`;
     }
   };

@@ -14,6 +14,9 @@ interface PendingInvoke {
 
 let ws: WebSocket | null = null;
 let connected = false;
+let connectionFailed = false;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_BEFORE_FAIL = 3;
 const pendingInvokes = new Map<string, PendingInvoke>();
 const eventListeners = new Map<string, Set<Listener>>();
 const messageQueue: string[] = [];
@@ -32,6 +35,8 @@ function connect() {
 
   ws.onopen = () => {
     connected = true;
+    connectionFailed = false;
+    reconnectAttempts = 0;
     console.log("[WS Bridge] Connected");
     // Flush queued messages
     while (messageQueue.length > 0) {
@@ -70,8 +75,22 @@ function connect() {
 
   ws.onclose = () => {
     connected = false;
-    console.log("[WS Bridge] Disconnected, reconnecting in 1s...");
-    setTimeout(connect, 1000);
+    reconnectAttempts++;
+    if (reconnectAttempts >= MAX_RECONNECT_BEFORE_FAIL && !connectionFailed) {
+      connectionFailed = true;
+      console.error("[WS Bridge] Server unreachable. Make sure the web server is running (npm run dev:web or npm run start:web).");
+      // Reject all pending invokes so the app doesn't hang
+      for (const [id, pending] of pendingInvokes) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("WebSocket server unreachable. Start the server with: npm run dev:web"));
+        pendingInvokes.delete(id);
+      }
+      messageQueue.length = 0;
+    }
+    // Keep trying to reconnect (server may come up later)
+    const delay = connectionFailed ? 5000 : 1000;
+    console.log(`[WS Bridge] Disconnected, reconnecting in ${delay / 1000}s...`);
+    setTimeout(connect, delay);
   };
 
   ws.onerror = () => {
@@ -88,6 +107,9 @@ function sendRaw(data: string) {
 }
 
 function invoke(channel: string, data?: any): Promise<any> {
+  if (connectionFailed) {
+    return Promise.reject(new Error("WebSocket server unreachable. Start the server with: npm run dev:web"));
+  }
   return new Promise((resolve, reject) => {
     const id = uuid();
     const timer = setTimeout(() => {
