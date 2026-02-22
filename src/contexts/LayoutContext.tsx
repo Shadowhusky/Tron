@@ -95,7 +95,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     localStorage.removeItem(STORAGE_KEYS.LAYOUT);
     // Write discard flag to sessions file (fs.writeFileSync — guaranteed on disk)
     // On next startup, hydration checks this flag and ignores localStorage
-    await window.electron?.ipcRenderer?.writeSessions({ _discardLayout: true }).catch(() => { });
+    await window.electron?.ipcRenderer?.writeSessions?.({ _discardLayout: true })?.catch?.(() => { });
     // Clear in-memory state so auto-save effect has nothing to re-save
     setTabs([]);
     setSessions(new Map());
@@ -172,11 +172,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       // Check file-based discard flag (written by "Exit Without Saving")
       // This is reliable because fs.writeFileSync guarantees it's on disk
       try {
-        const sessionsData = await window.electron?.ipcRenderer?.readSessions();
+        const sessionsData = await window.electron?.ipcRenderer?.readSessions?.();
         if (sessionsData && (sessionsData as any)._discardLayout) {
           // Clear stale localStorage and reset sessions file
           localStorage.removeItem(STORAGE_KEYS.LAYOUT);
-          window.electron?.ipcRenderer?.writeSessions({}).catch(() => { });
+          window.electron?.ipcRenderer?.writeSessions?.({})?.catch?.(() => { });
           // Fall through to create fresh tab
           createTab();
           return;
