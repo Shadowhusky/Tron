@@ -31,7 +31,7 @@ const STEPS: TutorialStep[] = [
     target: "mode-switcher",
     title: "Input Modes",
     description:
-      "Click to switch between Command, Advice, and Agent modes. Or double-tap Shift to cycle through them.",
+      "Click to switch between Command, Advice, and Agent modes. Or press Ctrl+Shift+M to cycle through them.",
     position: "top",
   },
   {

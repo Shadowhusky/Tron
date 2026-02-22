@@ -24,6 +24,7 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   modeAdvice: "meta+2",
   modeAgent: "meta+3",
   modeAuto: "meta+0",
+  cycleMode: "ctrl+shift+m",
   forceAgent: "shift+enter",
   forceCommand: "meta+enter",
 };

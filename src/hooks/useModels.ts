@@ -63,7 +63,6 @@ export function useAllConfiguredModels() {
     queryKey: ["allConfiguredModels"],
     queryFn: () => aiService.getAllConfiguredModels(),
     staleTime: Infinity,
-    refetchOnMount: false,
     refetchOnWindowFocus: false,
     retry: 0,
   });

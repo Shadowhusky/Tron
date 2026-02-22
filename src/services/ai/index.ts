@@ -2677,11 +2677,11 @@ ${agentPrompt}
                 content: `${output}\n\n⚠️ The terminal is waiting for user input (password, confirmation, etc.). Use ask_question to ask the user what to enter, then use send_text to type their response. The user may also type directly in the terminal — if so, read_terminal again to see the result.`,
               });
             }
-          } else if (termState === "server" && identicalReadCount >= 2) {
+          } else if (termState === "server" && identicalReadCount >= 1) {
             // Running server/daemon with stable output — task is likely done
             history.push({
               role: "user",
-              content: `${output}\n\n✅ A server/daemon process is running with stable output (${identicalReadCount} identical reads). The process has started successfully. You MUST use final_answer NOW to report the result to the user. Do NOT call read_terminal again — the process will keep running in the background.`,
+              content: `${output}\n\n✅ A server/daemon process is running successfully. The process has started and is serving. You MUST use final_answer NOW to report the result to the user. Do NOT write more files, do NOT call read_terminal again — the server is running and the task is COMPLETE.`,
             });
           } else if (identicalReadCount >= 3) {
             // Terminal busy with unchanged output — likely a running process
@@ -2705,13 +2705,27 @@ ${agentPrompt}
         continue;
       }
 
-      // Reset identical-read counter when agent takes any other action
-      identicalReadCount = 0;
-      lastReadTerminalOutput = "";
+      // Reset identical-read counter when agent takes any other action —
+      // but preserve it while a server is running to avoid write→read→write loops
+      if (!terminalBusy) {
+        identicalReadCount = 0;
+        lastReadTerminalOutput = "";
+      }
 
       if (action.tool === "write_file") {
         const filePath = action.path;
         const content = action.content;
+
+        // Guard: block rewrites after server is running with files already written
+        if (terminalBusy && wroteFiles && identicalReadCount >= 1) {
+          history.push({
+            role: "user",
+            content: `STOP: A dev server is already running and you have already written code. The task is COMPLETE — the server will hot-reload your changes automatically. Do NOT rewrite files. Use final_answer NOW to report success.`,
+          });
+          consecutiveGuardBlocks++;
+          continue;
+        }
+
         // Silently retry if AI sent malformed write_file (missing path/content) — don't show error to user
         if (!filePath || typeof content !== "string") {
           history.push({
@@ -3129,7 +3143,7 @@ ${agentPrompt}
 
         // Guard: block recursive ls/find on broad directories to prevent massive output
         const cmdForCheck = cmd
-          .replace(/^cd\s+\S+\s*&&\s*/, "")
+          .replace(/^cd\s+\S+\s*(?:&&|;)\s*/, "")
           .trim()
           .toLowerCase();
         if (/^ls\s/.test(cmdForCheck) && /\s-[a-z]*r|-r\b/i.test(cmdForCheck)) {
@@ -3174,7 +3188,7 @@ ${agentPrompt}
         if (
           usedScaffold &&
           !wroteFiles &&
-          /^\s*(mkdir)\b/.test(cmd.replace(/^cd\s+[^\s&;|]+\s*&&\s*/, ""))
+          /^\s*(mkdir)\b/.test(cmd.replace(/^cd\s+[^\s&;|]+\s*(?:&&|;)\s*/, ""))
         ) {
           onUpdate(
             "failed",

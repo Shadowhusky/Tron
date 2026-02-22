@@ -59,6 +59,7 @@ export interface HotkeyMap {
   modeAdvice: string;
   modeAgent: string;
   modeAuto: string;
+  cycleMode: string;
   forceAgent: string;
   [key: string]: string;
 }
