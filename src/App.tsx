@@ -49,6 +49,14 @@ const AppContent = () => {
   const [showSSHModal, setShowSSHModal] = useState(false);
 
   useEffect(() => {
+    // Allow embedding pages to skip onboarding via URL param
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("skip-setup") === "true") {
+      localStorage.setItem(STORAGE_KEYS.CONFIGURED, "true");
+      localStorage.setItem(STORAGE_KEYS.TUTORIAL_COMPLETED, "true");
+      return;
+    }
+
     const hasConfigured = localStorage.getItem(STORAGE_KEYS.CONFIGURED);
     if (!hasConfigured) {
       setShowOnboarding(true);
