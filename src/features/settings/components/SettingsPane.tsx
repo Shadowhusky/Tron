@@ -61,6 +61,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   modeAdvice: "Advice Mode",
   modeAgent: "Agent Mode",
   modeAuto: "Auto Mode",
+  cycleMode: "Cycle Mode",
   forceAgent: "Force Agent (in input)",
   forceCommand: "Force Command (in input)",
 };

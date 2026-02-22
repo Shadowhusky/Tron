@@ -3,6 +3,8 @@
  * Extracted from ai/index.ts for testability.
  */
 
+import { isWindows } from "./platform";
+
 export type TerminalState = "idle" | "server" | "busy" | "input_needed";
 
 /**
@@ -126,7 +128,7 @@ const SCAFFOLD_PREFIXES = [
 
 /** Strip "cd /path && " prefix from a command for comparison. */
 function stripCdPrefix(cmd: string): string {
-  return cmd.replace(/^cd\s+\S+\s*&&\s*/, "");
+  return cmd.replace(/^cd\s+\S+\s*(?:&&|;)\s*/, "");
 }
 
 /**
@@ -164,7 +166,8 @@ export function autoCdCommand(cmd: string, lastWriteDir: string): string {
     // Don't auto-cd scaffold commands — they create their own directory
     const trimmedLower = cmd.trim().toLowerCase();
     if (SCAFFOLD_PREFIXES.some(p => trimmedLower.startsWith(p))) return cmd;
-    return `cd ${lastWriteDir} && ${cmd}`;
+    const sep = isWindows() ? " ; " : " && ";
+    return `cd ${lastWriteDir}${sep}${cmd}`;
   }
   return cmd;
 }

@@ -79,7 +79,7 @@ function describeStreamingContent(raw: string): {
 function summarizeCommand(cmd: string): string {
   const trimmed = cmd.trim();
   // Strip leading cd && ... to get the actual command
-  const withoutCd = trimmed.replace(/^cd\s+[^&]+&&\s*/i, "");
+  const withoutCd = trimmed.replace(/^cd\s+[^&;]+(?:&&|;)\s*/i, "");
   const base = withoutCd || trimmed;
 
   // File operations (from write_file, read_file, edit_file tools)

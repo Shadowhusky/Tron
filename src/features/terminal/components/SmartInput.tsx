@@ -630,51 +630,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
     handleKeyDown({ key: "Enter", preventDefault: () => { }, stopPropagation: () => { } } as any);
   };
 
-  // Shift Key Logic: Double-tap shift to switch mode
-  // Track shift press state and last tap timestamp for double-tap detection
-  const shiftPressedRef = useRef(false);
-  const otherKeyPressedRef = useRef(false);
-  const lastShiftTapRef = useRef(0);
-  const DOUBLE_TAP_THRESHOLD = 400; // ms
-
-  const handleKeyUp = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Shift") {
-      if (!otherKeyPressedRef.current && shiftPressedRef.current) {
-        // Clean shift tap (no other keys pressed during hold)
-        const now = Date.now();
-        if (now - lastShiftTapRef.current < DOUBLE_TAP_THRESHOLD) {
-          // Double-tap detected -> Switch mode
-          lastShiftTapRef.current = 0; // Reset to prevent triple-tap
-          if (isAuto) {
-            setIsAuto(false);
-            setMode("command");
-          } else if (mode === "command") {
-            setIsAuto(false);
-            setMode(aiBehavior.adviceMode ? "advice" : "agent");
-          } else if (mode === "advice") {
-            setIsAuto(false);
-            setMode("agent");
-          } else {
-            setIsAuto(true);
-          }
-        } else {
-          lastShiftTapRef.current = now;
-        }
-      }
-      shiftPressedRef.current = false;
-      otherKeyPressedRef.current = false;
-    }
-  };
-
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Track Shift key state
-    if (e.key === "Shift") {
-      shiftPressedRef.current = true;
-      return; // Don't do anything else on Shift down
-    }
-    if (shiftPressedRef.current) {
-      otherKeyPressedRef.current = true;
-    }
 
     // Tab / Right Arrow: Accept Ghost Text OR Selected Completion OR Placeholder
     // Strict Tab behavior: Only accept, never cycle
@@ -738,6 +694,22 @@ const SmartInput: React.FC<SmartInputProps> = ({
     if (matchesHotkey(e, hotkeys.modeAuto)) {
       e.preventDefault();
       setIsAuto(true);
+      return;
+    }
+    if (hotkeys.cycleMode && matchesHotkey(e, hotkeys.cycleMode)) {
+      e.preventDefault();
+      if (isAuto) {
+        setIsAuto(false);
+        setMode("command");
+      } else if (mode === "command") {
+        setIsAuto(false);
+        setMode(aiBehavior.adviceMode ? "advice" : "agent");
+      } else if (mode === "advice") {
+        setIsAuto(false);
+        setMode("agent");
+      } else {
+        setIsAuto(true);
+      }
       return;
     }
 
@@ -1233,7 +1205,6 @@ const SmartInput: React.FC<SmartInputProps> = ({
               }}
               onFocus={() => onFocusInput?.()}
               onKeyDown={handleKeyDown}
-              onKeyUp={handleKeyUp}
               onPaste={(e) => {
                 const items = e.clipboardData?.files;
                 if (items && items.length > 0) {
