@@ -5,6 +5,7 @@ import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
 import ContextBar from "./ContextBar";
+import SSHConnectModal from "../../features/ssh/components/SSHConnectModal";
 import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAgentRunner } from "../../hooks/useAgentRunner";
@@ -22,12 +23,16 @@ interface TerminalPaneProps {
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions } =
+  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions, createSSHTab } =
     useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
   const isActive = sessionId === activeSessionId;
   const session = sessions.get(sessionId);
+  const isConnectPane = sessionId.startsWith("ssh-connect");
+  const [showSSHModal, setShowSSHModal] = useState(false);
+  const [connectToast, setConnectToast] = useState(false);
+  const connectToastTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const {
     agentThread,
@@ -304,9 +309,20 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     }
   }, [sessionId, session, agentThread, setAgentThread, isOverlayVisible, setIsOverlayVisible]);
   // Update refs after function definitions so stable callbacks always call the latest version
-  wrappedHandleCommandRef.current = wrappedHandleCommand;
-  wrappedHandleAgentRunRef.current = wrappedHandleAgentRun;
-  handleSlashCommandRef.current = handleSlashCommand;
+  const showConnectToast = useCallback(() => {
+    setConnectToast(true);
+    clearTimeout(connectToastTimer.current);
+    connectToastTimer.current = setTimeout(() => setConnectToast(false), 2500);
+  }, []);
+  if (isConnectPane) {
+    wrappedHandleCommandRef.current = () => showConnectToast();
+    wrappedHandleAgentRunRef.current = () => showConnectToast();
+    handleSlashCommandRef.current = () => showConnectToast();
+  } else {
+    wrappedHandleCommandRef.current = wrappedHandleCommand;
+    wrappedHandleAgentRunRef.current = wrappedHandleAgentRun;
+    handleSlashCommandRef.current = handleSlashCommand;
+  }
 
   const handlePaneFocus = () => {
     if (!isActive) focusSession(sessionId);
@@ -421,16 +437,52 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       ) : (
         /* Terminal View Mode: terminal + overlay share remaining space above input */
         <div className="flex-1 min-h-0 flex flex-col">
-          <div className="flex-1 min-h-0" onMouseDown={() => setFocusTarget("terminal")}>
-            <Terminal
-              className="w-full h-full"
-              sessionId={sessionId}
-              onActivity={stableOnActivity}
-              isActive={isActive}
-              isAgentRunning={isAgentRunning}
-              stopAgent={stableStopAgent}
-              focusTarget={focusTarget}
-            />
+          <div className="flex-1 min-h-0 relative" onMouseDown={() => setFocusTarget("terminal")}>
+            {isConnectPane ? (
+              <div className={`w-full h-full flex items-center justify-center ${themeClass(resolvedTheme, {
+                dark: "bg-[#0d0d0d]",
+                modern: "bg-[#08081a]",
+                light: "bg-white",
+              })}`}>
+                <button
+                  onClick={() => setShowSSHModal(true)}
+                  className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${themeClass(resolvedTheme, {
+                    dark: "bg-purple-600/80 hover:bg-purple-600 text-white",
+                    modern: "bg-purple-500/70 hover:bg-purple-500 text-white",
+                    light: "bg-purple-600 hover:bg-purple-500 text-white",
+                  })}`}
+                >
+                  New Connection
+                </button>
+                {/* Toast */}
+                <AnimatePresence>
+                  {connectToast && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-xs font-medium shadow-lg ${themeClass(resolvedTheme, {
+                        dark: "bg-yellow-500/90 text-black",
+                        modern: "bg-yellow-500/90 text-black",
+                        light: "bg-yellow-500 text-black",
+                      })}`}
+                    >
+                      Connect to a server first
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            ) : (
+              <Terminal
+                className="w-full h-full"
+                sessionId={sessionId}
+                onActivity={stableOnActivity}
+                isActive={isActive}
+                isAgentRunning={isAgentRunning}
+                stopAgent={stableStopAgent}
+                focusTarget={focusTarget}
+              />
+            )}
           </div>
 
           {/* Agent Overlay — in flex flow so terminal shrinks to fit */}
@@ -572,6 +624,18 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           onShowOverlay={() => setIsOverlayVisible(true)}
         />
       </div>
+
+      {isConnectPane && (
+        <SSHConnectModal
+          show={showSSHModal}
+          resolvedTheme={resolvedTheme}
+          onConnect={async (config) => {
+            await createSSHTab(config);
+            setShowSSHModal(false);
+          }}
+          onClose={() => setShowSSHModal(false)}
+        />
+      )}
     </div>
   );
 };

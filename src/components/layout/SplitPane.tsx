@@ -3,7 +3,6 @@ import type { LayoutNode } from "../../types";
 import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import SettingsPane from "../../features/settings/components/SettingsPane";
-import SSHConnectPane from "./SSHConnectPane";
 import TerminalPane from "./TerminalPane";
 
 interface SplitPaneProps {
@@ -28,13 +27,9 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
   } | null>(null);
   const [liveSizes, setLiveSizes] = useState<number[] | null>(null);
 
-  // SSH connect leaf
+  // SSH connect leaf — renders through TerminalPane with connect placeholder
   if (node.type === "leaf" && node.contentType === "ssh-connect") {
-    return (
-      <div style={{ width: "100%", height: "100%", overflow: "hidden", position: "relative" }}>
-        <SSHConnectPane />
-      </div>
-    );
+    return <TerminalPane sessionId={node.sessionId} />;
   }
 
   // Settings leaf
