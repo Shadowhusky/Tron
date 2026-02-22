@@ -1895,6 +1895,13 @@ ${agentPrompt}
       if (action && action._tab_title) {
         onUpdate("set_tab_title", action._tab_title, action);
         delete action._tab_title;
+        // If _tab_title was the ONLY content (no tool call), skip this iteration
+        // without counting as a parse failure — model will send the real tool call next
+        if (!action.tool && Object.keys(action).length === 0) {
+          history.push({ role: "assistant", content: responseText || "" });
+          history.push({ role: "user", content: "Good. Now proceed with the actual tool call." });
+          continue;
+        }
       }
 
       // Coerce tool-less objects or plain conversational text into proper tool calls
@@ -2186,6 +2193,34 @@ ${agentPrompt}
             });
             continue;
           }
+        }
+
+        // Reject final_answer that IS a bare command (agent should execute, not report)
+        // e.g. "ollama list", "npm start", "git status" — short, no prose, no punctuation
+        const trimmedAnswer = (action.content || "").trim();
+        const looksLikeBareCommand =
+          trimmedAnswer.length > 0 &&
+          trimmedAnswer.length < 60 &&
+          !trimmedAnswer.includes(".") &&    // no sentences
+          !trimmedAnswer.includes(",") &&    // no lists
+          !trimmedAnswer.includes("!") &&
+          !/^(I |The |It |Yes|No |Done|Here|Sure|OK|Thank|Note)/i.test(trimmedAnswer) &&
+          /^[a-z][\w./-]*(\s+\S+)*$/i.test(trimmedAnswer) && // command-like pattern
+          executedCommands.size === 0 &&
+          !wroteFiles &&
+          !terminalBusy &&
+          !loopBreaks;
+        if (looksLikeBareCommand && !isShortAck) {
+          onUpdate(
+            "failed",
+            `Rejected: final_answer looks like a command — agent should execute "${trimmedAnswer}"`,
+            action
+          );
+          history.push({
+            role: "user",
+            content: `REJECTED: Your final_answer "${trimmedAnswer}" looks like a shell command you should EXECUTE, not report. Use execute_command to run it and show the user the RESULT, not the command itself.`,
+          });
+          continue;
         }
 
         // Check for "Lazy Completion": User asked for action, but agent did almost nothing.
