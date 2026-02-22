@@ -4,6 +4,7 @@ import { aiService, type AgentContinuation } from "../services/ai";
 import { useHistory } from "../contexts/HistoryContext";
 import { useAgent } from "../contexts/AgentContext";
 import { useLayout } from "../contexts/LayoutContext";
+import { useConfig } from "../contexts/ConfigContext";
 import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 import { isDangerousCommand } from "../utils/dangerousCommand";
@@ -23,6 +24,7 @@ export function useAgentRunner(
     renameTab,
   } = useLayout();
   const { addToHistory } = useHistory();
+  const { aiBehavior } = useConfig();
   const {
     agentThread,
     setAgentThread,
@@ -702,6 +704,7 @@ Task: ${prompt}
           flushStreamBuffer();
 
           if (step === "set_tab_title") {
+            if (!aiBehavior.aiTabTitles) return;
             const isUnknown = output.toLowerCase().includes("unknown") || output.toLowerCase().includes("unclear");
             if (
               (titleSourceRef.current === "none" || titleSourceRef.current === "terminal") &&

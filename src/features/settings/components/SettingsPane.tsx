@@ -25,8 +25,9 @@ import {
   Cpu,
   Palette,
   Monitor,
+  Sparkles,
 } from "lucide-react";
-import { staggerContainer, staggerItem } from "../../../utils/motion";
+
 
 // Per-provider saved configs (model, apiKey, baseUrl)
 type ProviderCache = Record<string, { model?: string; apiKey?: string; baseUrl?: string }>;
@@ -58,6 +59,7 @@ const HOTKEY_LABELS: Record<string, string> = {
 
 const NAV_SECTIONS = [
   { id: "ai", label: "AI", icon: Cpu },
+  { id: "ai-features", label: "AI Features", icon: Sparkles },
   { id: "view", label: "View Mode", icon: Monitor },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
@@ -66,7 +68,7 @@ const NAV_SECTIONS = [
 const SettingsPane = () => {
   const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
   const { sessions, updateSessionConfig } = useLayout();
-  const { hotkeys, updateHotkey, resetHotkeys } = useConfig();
+  const { hotkeys, updateHotkey, resetHotkeys, aiBehavior, updateAIBehavior } = useConfig();
   const t = getTheme(resolvedTheme);
   const [config, setConfig] = useState<AIConfig>(aiService.getConfig());
   const [initialConfig, setInitialConfig] = useState<string>(
@@ -82,36 +84,8 @@ const SettingsPane = () => {
   // Hotkey recording state
   const [recordingAction, setRecordingAction] = useState<string | null>(null);
 
-  // Sidebar active section tracking
+  // Sidebar active section tracking (page-based — each section is a page)
   const [activeSection, setActiveSection] = useState<string>("ai");
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
-
-  // IntersectionObserver to highlight active sidebar item on scroll
-  useEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setActiveSection(entry.target.id);
-          }
-        }
-      },
-      { root: container, rootMargin: "-20% 0px -60% 0px", threshold: 0 },
-    );
-    for (const sec of NAV_SECTIONS) {
-      const el = sectionRefs.current[sec.id];
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-  }, []);
-
-  const scrollToSection = (id: string) => {
-    const el = sectionRefs.current[id];
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
 
   // Listen for keydown when recording a hotkey
   useEffect(() => {
@@ -327,7 +301,7 @@ const SettingsPane = () => {
           <button
             key={id}
             data-testid={`settings-nav-${id}`}
-            onClick={() => scrollToSection(id)}
+            onClick={() => setActiveSection(id)}
             className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${activeSection === id
                 ? resolvedTheme === "light"
                   ? "bg-purple-50 text-purple-700 font-medium"
@@ -360,19 +334,20 @@ const SettingsPane = () => {
       </nav>
 
       {/* Content */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 flex flex-col items-center">
-        <motion.div
-          variants={staggerContainer}
-          initial="hidden"
-          animate="visible"
-          className="w-full max-w-xl flex flex-col gap-6 pb-16"
-        >
-          {/* AI Configuration */}
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center">
+        <AnimatePresence mode="wait">
           <motion.div
-            variants={staggerItem}
-            id="ai"
-            ref={(el) => { sectionRefs.current.ai = el; }}
-            className="space-y-3 scroll-mt-4"
+            key={activeSection}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.15 }}
+            className="w-full max-w-xl flex flex-col gap-6 pb-16"
+          >
+          {/* AI Configuration */}
+          {activeSection === "ai" && (
+          <div
+            className="space-y-3"
           >
             <h3
               className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
@@ -796,14 +771,64 @@ const SettingsPane = () => {
                 </span>
               </div>
             </div>
-          </motion.div>
+          </div>
+          )}
+
+          {/* AI Features */}
+          {activeSection === "ai-features" && (
+          <div className="space-y-3">
+            <h3
+              className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              AI Features
+            </h3>
+
+            <div className={`${cardClass} divide-y ${resolvedTheme === "light" ? "divide-gray-100" : "divide-white/5"}`}>
+              {([
+                { key: "ghostText" as const, label: "Ghost Text", desc: "AI-generated inline suggestions when input is empty" },
+                { key: "autoDetect" as const, label: "Auto-Detect Mode", desc: "Automatically classify input as command or agent prompt" },
+                { key: "adviceMode" as const, label: "Advice Mode", desc: "Ask AI for command suggestions before running" },
+                { key: "aiTabTitles" as const, label: "AI Tab Titles", desc: "Automatically generate tab titles from agent tasks" },
+                { key: "inputHints" as const, label: "Input Hints", desc: "Show keyboard shortcuts and mode hints below input" },
+              ]).map(({ key, label, desc }) => (
+                <div
+                  key={key}
+                  className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0"
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className={`text-xs font-medium ${t.text}`}>{label}</span>
+                    <span className={`text-[10px] ${t.textFaint}`}>{desc}</span>
+                  </div>
+                  <button
+                    data-testid={`toggle-${key}`}
+                    role="switch"
+                    aria-checked={aiBehavior[key]}
+                    onClick={() => updateAIBehavior({ [key]: !aiBehavior[key] })}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                      aiBehavior[key]
+                        ? "bg-purple-500"
+                        : resolvedTheme === "light"
+                          ? "bg-gray-300"
+                          : "bg-white/15"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
+                        aiBehavior[key] ? "translate-x-[18px]" : "translate-x-[3px]"
+                      }`}
+                    />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          )}
 
           {/* View Mode */}
-          <motion.div
-            variants={staggerItem}
-            id="view"
-            ref={(el) => { sectionRefs.current.view = el; }}
-            className="space-y-3 scroll-mt-4"
+          {activeSection === "view" && (
+          <div
+            className="space-y-3"
           >
             <h3
               className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
@@ -855,14 +880,13 @@ const SettingsPane = () => {
                 ))}
               </div>
             </div>
-          </motion.div>
+          </div>
+          )}
 
           {/* Appearance */}
-          <motion.div
-            variants={staggerItem}
-            id="appearance"
-            ref={(el) => { sectionRefs.current.appearance = el; }}
-            className="space-y-3 scroll-mt-4"
+          {activeSection === "appearance" && (
+          <div
+            className="space-y-3"
           >
             <h3
               className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
@@ -930,14 +954,13 @@ const SettingsPane = () => {
                 ))}
               </div>
             </div>
-          </motion.div>
+          </div>
+          )}
 
           {/* Keyboard Shortcuts */}
-          <motion.div
-            variants={staggerItem}
-            id="shortcuts"
-            ref={(el) => { sectionRefs.current.shortcuts = el; }}
-            className="space-y-3 scroll-mt-4"
+          {activeSection === "shortcuts" && (
+          <div
+            className="space-y-3"
           >
             <div className="flex items-center justify-between">
               <h3
@@ -1001,8 +1024,10 @@ const SettingsPane = () => {
                 );
               })}
             </div>
+          </div>
+          )}
           </motion.div>
-        </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );
