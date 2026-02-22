@@ -16,6 +16,9 @@ const PORT = 3888;
 const DEV_VITE_PORT = Number(process.env.PORT) || 5173;
 const isDev = process.argv.includes("--dev");
 
+// In-memory session persistence for web mode (per client)
+const clientSessions = new Map<string, Record<string, unknown>>();
+
 const app = express();
 const server = http.createServer(app);
 
@@ -78,6 +81,7 @@ wss.on("connection", (ws: WebSocket) => {
     console.log(`[WS] Client disconnected: ${clientId}`);
     ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
     terminal.cleanupClientSessions(clientId);
+    clientSessions.delete(clientId);
   });
 });
 
@@ -123,6 +127,11 @@ async function handleInvoke(
       return ssh.readProfiles();
     case "ssh.profiles.write":
       return ssh.writeProfiles(data);
+    case "sessions.read":
+      return clientSessions.get(clientId) || null;
+    case "sessions.write":
+      clientSessions.set(clientId, data);
+      return true;
     default:
       throw new Error(`Unknown channel: ${channel}`);
   }
