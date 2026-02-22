@@ -231,12 +231,8 @@ const AppContent = () => {
         show={showSSHModal}
         resolvedTheme={resolvedTheme}
         onConnect={async (config) => {
+          await createSSHTab(config);
           setShowSSHModal(false);
-          try {
-            await createSSHTab(config);
-          } catch (e: any) {
-            console.error("SSH connect failed:", e);
-          }
         }}
         onClose={() => setShowSSHModal(false)}
       />
