@@ -24,7 +24,8 @@
     "pretest:e2e": "npm run build:react && npm run build:electron",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "test:e2e:headed": "playwright test --config e2e/playwright.config.ts --headed",
-    "test:e2e:report": "playwright test --config e2e/playwright.config.ts --reporter=html && playwright show-report"
+    "test:e2e:report": "playwright test --config e2e/playwright.config.ts --reporter=html && playwright show-report",
+    "update-models": "npx tsx scripts/update-models.ts"
   },
   "dependencies": {
     "@radix-ui/react-popover": "^1.1.15",

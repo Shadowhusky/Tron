@@ -115,7 +115,7 @@ The agent is an autonomous loop that plans and executes tasks step-by-step:
 | **LM Studio** | Local | Local inference server with OpenAI-compatible API. |
 | **OpenAI** | Cloud | GPT-5.2, GPT-4o, o1, o3-mini, Codex models. |
 | **Anthropic** | Cloud | Claude Sonnet, Claude Opus, Claude Haiku. |
-| **Gemini** | Cloud | Google's Gemini 2.5 Pro/Flash models. |
+| **Gemini** | Cloud | Google's Gemini 3.x and 2.5 Pro/Flash models. |
 | **DeepSeek** | Cloud | DeepSeek Chat and Reasoner with thinking support. |
 | **Kimi** | Cloud | Moonshot AI's Kimi K2.5 models. |
 | **Qwen** | Cloud | Alibaba's Qwen 3.5 models via DashScope. |
