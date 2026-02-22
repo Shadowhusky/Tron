@@ -110,9 +110,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       localStorage.removeItem(STORAGE_KEYS.LAYOUT);
       return;
     }
-    if (tabs.length > 0) {
+    // Filter out ssh-connect tabs from persistence (they're regenerated on startup)
+    const persistableTabs = tabs.filter((t) => t.root.type !== "leaf" || t.root.contentType !== "ssh-connect");
+    if (persistableTabs.length > 0) {
       const state = {
-        tabs,
+        tabs: persistableTabs,
         activeTabId,
         sessionCwds: Array.from(sessions.entries()).reduce(
           (acc, [id, session]) => ({
@@ -170,8 +172,18 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     initCalledRef.current = true;
 
     const init = async () => {
-      // Gateway mode: start with empty tabs, user connects via SSH
-      if (isSshOnly()) return;
+      // SSH-only mode: start with a connect tab instead of a terminal
+      if (isSshOnly()) {
+        const tabId = uuid();
+        setTabs([{
+          id: tabId,
+          title: "Connect",
+          root: { type: "leaf", sessionId: "ssh-connect", contentType: "ssh-connect" },
+          activeSessionId: null,
+        }]);
+        setActiveTabId(tabId);
+        return;
+      }
 
       // Check file-based discard flag (written by "Exit Without Saving")
       // This is reliable because fs.writeFileSync guarantees it's on disk
@@ -285,9 +297,17 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isHydrated, setIsHydrated] = useState(false);
 
   const createTab = async () => {
-    // In gateway mode, open SSH modal instead of creating a local PTY
+    // In SSH-only mode, create a connect tab instead of a local PTY
     if (isSshOnly()) {
-      window.dispatchEvent(new CustomEvent("tron:open-ssh-modal"));
+      const tabId = uuid();
+      const newTab: Tab = {
+        id: tabId,
+        title: "Connect",
+        root: { type: "leaf", sessionId: "ssh-connect-" + tabId, contentType: "ssh-connect" },
+        activeSessionId: null,
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(tabId);
       return;
     }
 
@@ -392,8 +412,16 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setTabs((prev) => {
       const newTabs = prev.filter((t) => t.id !== tabId);
       if (newTabs.length === 0) {
-        // In gateway mode, allow empty tab list (EmptyState will show)
-        if (isSshOnly()) return newTabs;
+        // In SSH-only mode, create a new connect tab
+        if (isSshOnly()) {
+          if (!creatingTabRef.current) {
+            creatingTabRef.current = true;
+            setTimeout(() => {
+              createTab().finally(() => { creatingTabRef.current = false; });
+            }, 0);
+          }
+          return newTabs;
+        }
         // Always keep at least one tab open — create outside the updater to avoid StrictMode double-call
         if (!creatingTabRef.current) {
           creatingTabRef.current = true;
@@ -543,7 +571,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const closeSession = (sessionId: string) => {
-    if (sessionId === "settings") return; // settings is pseudo-session
+    if (sessionId === "settings" || sessionId.startsWith("ssh-connect")) return; // pseudo-sessions
 
     if (window.electron) {
       window.electron.ipcRenderer.send(IPC.TERMINAL_CLOSE, sessionId);

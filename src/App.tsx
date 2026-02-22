@@ -117,13 +117,6 @@ const AppContent = () => {
     window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CONFIRMED, {});
   };
 
-  // Listen for SSH modal trigger (from LayoutContext.createTab in SSH-only mode)
-  useEffect(() => {
-    const handler = () => setShowSSHModal(true);
-    window.addEventListener("tron:open-ssh-modal", handler);
-    return () => window.removeEventListener("tron:open-ssh-modal", handler);
-  }, []);
-
   // Global Shortcuts
   useHotkey("openSettings", openSettingsTab, [openSettingsTab]);
 
@@ -192,8 +185,8 @@ const AppContent = () => {
           onSelectTab={selectTab}
           onDismiss={dismissNotification}
         />
-        {/* Gateway/demo empty state when no tabs exist */}
-        {tabs.length === 0 && (isSshOnly() || isDemoMode()) ? (
+        {/* Demo empty state when no tabs exist */}
+        {tabs.length === 0 && isDemoMode() ? (
           <EmptyState
             resolvedTheme={resolvedTheme}
             onConnect={() => setShowSSHModal(true)}
