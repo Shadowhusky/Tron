@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass, getTheme } from "../../utils/theme";
+import logoSvg from "../../assets/logo.svg";
 
 interface EmptyStateProps {
   resolvedTheme: ResolvedTheme;
@@ -16,19 +17,13 @@ const EmptyState: React.FC<EmptyStateProps> = ({ resolvedTheme, onConnect }) => 
         transition={{ duration: 0.5, ease: "easeOut" }}
         className="flex flex-col items-center gap-8 text-center px-6"
       >
-        {/* Terminal / SSH icon */}
-        <div className={`p-6 rounded-3xl ${themeClass(resolvedTheme, {
+        {/* Logo */}
+        <div className={`p-5 rounded-3xl ${themeClass(resolvedTheme, {
           dark: "bg-white/[0.03] border border-white/[0.06]",
           modern: "bg-white/[0.03] border border-white/[0.06] backdrop-blur-xl",
           light: "bg-gray-50 border border-gray-200",
         })}`}>
-          <svg className={`w-16 h-16 ${themeClass(resolvedTheme, {
-            dark: "text-gray-500",
-            modern: "text-purple-400/50",
-            light: "text-gray-400",
-          })}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
-          </svg>
+          <img src={logoSvg} alt="Tron" className="w-16 h-16" />
         </div>
 
         <div className="space-y-2">

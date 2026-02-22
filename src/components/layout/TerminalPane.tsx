@@ -11,19 +11,21 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { useAgentRunner } from "../../hooks/useAgentRunner";
 import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
+import logoSvg from "../../assets/logo.svg";
 import { useHotkey } from "../../hooks/useHotkey";
 import { isInteractiveCommand, smartQuotePaths } from "../../utils/commandClassifier";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome } from "../../utils/platform";
 import type { AttachedImage, SSHConnectionStatus } from "../../types";
 import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
+import { useAllConfiguredModels } from "../../hooks/useModels";
 
 interface TerminalPaneProps {
   sessionId: string;
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions, createSSHTab } =
+  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions, createSSHTab, openSettingsTab } =
     useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
@@ -33,6 +35,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [connectToast, setConnectToast] = useState(false);
   const connectToastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const { data: availableModels = [] } = useAllConfiguredModels();
+  const noModelConfigured = availableModels.length === 0;
+  const [modelToast, setModelToast] = useState(false);
+  const modelToastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const {
     agentThread,
@@ -75,6 +81,15 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const stableOnSend = useCallback((cmd: string) => wrappedHandleCommandRef.current(cmd), []);
   const stableOnRunAgent = useCallback(async (prompt: string, images?: AttachedImage[]) => wrappedHandleAgentRunRef.current(prompt, (item: any) => queueItemRef.current(item), images), []);
   const stableSlashCommand = useCallback((cmd: string) => handleSlashCommandRef.current(cmd), []);
+
+  // No-model toast handler
+  const openSettingsTabRef = useRef(openSettingsTab);
+  openSettingsTabRef.current = openSettingsTab;
+  const stableHandleNoModel = useCallback(() => {
+    setModelToast(true);
+    if (modelToastTimer.current) clearTimeout(modelToastTimer.current);
+    modelToastTimer.current = setTimeout(() => setModelToast(false), 6000);
+  }, []);
 
   // Stable callback for Terminal memo
   const markSessionDirtyRef = useRef(markSessionDirty);
@@ -439,11 +454,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         <div className="flex-1 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 relative" onMouseDown={() => setFocusTarget("terminal")}>
             {isConnectPane ? (
-              <div className={`w-full h-full flex items-center justify-center ${themeClass(resolvedTheme, {
+              <div className={`w-full h-full flex flex-col items-center justify-center gap-5 ${themeClass(resolvedTheme, {
                 dark: "bg-[#0d0d0d]",
                 modern: "bg-[#08081a]",
                 light: "bg-white",
               })}`}>
+                <img src={logoSvg} alt="Tron" className="w-12 h-12 opacity-50" />
                 <button
                   onClick={() => setShowSSHModal(true)}
                   className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${themeClass(resolvedTheme, {
@@ -614,6 +630,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           awaitingAnswer={awaitingAnswer}
           focusTarget={focusTarget}
           onFocusInput={() => setFocusTarget("input")}
+          noModelConfigured={noModelConfigured}
+          onNoModel={stableHandleNoModel}
         />
       </div>
       <div className="shrink-0 relative z-30">
@@ -636,6 +654,33 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           onClose={() => setShowSSHModal(false)}
         />
       )}
+
+      {/* No-model toast */}
+      <AnimatePresence>
+        {modelToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            className={`absolute bottom-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg text-xs font-medium shadow-lg ${themeClass(resolvedTheme, {
+              dark: "bg-gray-800/95 text-gray-200 border border-gray-600",
+              modern: "bg-[#1a1a3e]/95 text-gray-200 border border-white/10",
+              light: "bg-white/95 text-gray-700 border border-gray-200",
+            })}`}
+          >
+            No AI model configured.{" "}
+            <button
+              className="underline font-semibold hover:opacity-80 cursor-pointer"
+              onClick={() => {
+                setModelToast(false);
+                openSettingsTabRef.current();
+              }}
+            >
+              Settings
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

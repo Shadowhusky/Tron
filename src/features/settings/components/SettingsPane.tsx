@@ -417,24 +417,26 @@ const SettingsPane = () => {
 
   return (
     <div data-testid="settings-pane" className={`w-full h-full flex ${t.appBg}`}>
-      {/* Sidebar */}
+      {/* Sidebar — icon-only on narrow screens, full labels on wider */}
       <nav
-        className={`shrink-0 w-40 flex flex-col border-r pt-4 pb-4 gap-1 px-2 ${resolvedTheme === "light"
+        className={`shrink-0 w-10 sm:w-40 flex flex-col border-r pt-4 pb-4 gap-1 px-1 sm:px-2 ${resolvedTheme === "light"
           ? "bg-gray-50/80 border-gray-200"
           : resolvedTheme === "modern"
             ? "bg-white/[0.02] border-white/6"
             : "bg-[#0a0a0a] border-white/5"
           }`}
       >
-        <div className={`px-2 pb-3 mb-1 border-b ${t.borderSubtle}`}>
-          <h1 className={`text-sm font-bold ${t.text}`}>Settings</h1>
+        <div className={`px-1 sm:px-2 pb-3 mb-1 border-b ${t.borderSubtle}`}>
+          <h1 className={`text-sm font-bold ${t.text} hidden sm:block`}>Settings</h1>
+          <SlidersHorizontal className={`w-4 h-4 mx-auto ${t.text} sm:hidden`} />
         </div>
         {NAV_SECTIONS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             data-testid={`settings-nav-${id}`}
             onClick={() => setActiveSection(id)}
-            className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${activeSection === id
+            title={label}
+            className={`flex items-center justify-center sm:justify-start gap-2 px-1 sm:px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${activeSection === id
               ? resolvedTheme === "light"
                 ? "bg-purple-50 text-purple-700 font-medium"
                 : "bg-purple-500/10 text-purple-300 font-medium"
@@ -442,7 +444,7 @@ const SettingsPane = () => {
               }`}
           >
             <Icon className="w-3.5 h-3.5 shrink-0" />
-            {label}
+            <span className="hidden sm:inline">{label}</span>
           </button>
         ))}
 
@@ -453,13 +455,13 @@ const SettingsPane = () => {
               }`}
           >
             <Save className="w-3.5 h-3.5" />
-            Saved
+            <span className="hidden sm:inline">Saved</span>
           </span>
         </div>
       </nav>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center">
+      <div className="flex-1 min-w-0 overflow-y-auto p-2 sm:p-4 flex flex-col items-center">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeSection}
@@ -467,7 +469,7 @@ const SettingsPane = () => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.15 }}
-            className="w-full max-w-xl flex flex-col gap-6 pb-16"
+            className="w-full max-w-xl flex flex-col gap-4 sm:gap-6 pb-16"
           >
             {/* AI Configuration */}
             {activeSection === "ai" && (
