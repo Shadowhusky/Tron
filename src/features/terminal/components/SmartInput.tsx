@@ -42,6 +42,8 @@ interface SmartInputProps {
   awaitingAnswer?: boolean;
   focusTarget?: "input" | "terminal";
   onFocusInput?: () => void;
+  noModelConfigured?: boolean;
+  onNoModel?: () => void;
 }
 
 const SmartInput: React.FC<SmartInputProps> = ({
@@ -62,6 +64,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
   awaitingAnswer = false,
   focusTarget,
   onFocusInput,
+  noModelConfigured = false,
+  onNoModel,
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId: layoutActiveSessionId } = useLayout();
@@ -422,7 +426,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
           .checkCommand(words[0])
           .then((exists: boolean) => {
             setMode(exists && !isLikelyImperative(value) ? "command" : "agent");
-          });
+          })
+          .catch(() => setMode("agent"));
       } else {
         setMode("agent");
       }
@@ -815,6 +820,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       // Cmd+Enter: force agent
       if (e.metaKey) {
         e.preventDefault();
+        if (noModelConfigured) { onNoModel?.(); return; }
         const hasImgs = attachedImages.length > 0;
         setFeedbackMsg("Agent Started");
         if (value.trim()) addToHistory(value.trim());
@@ -890,6 +896,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
       // If images attached with no text, force agent mode
       if (hasImages && finalVal === "") {
+        if (noModelConfigured) { onNoModel?.(); return; }
         setFeedbackMsg("Agent Started");
         onRunAgent("Describe the attached image(s)", attachedImages);
         setAttachedImages([]);
@@ -903,6 +910,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       // Execute based on active mode
       // When awaiting an agent answer (continuation), force agent mode regardless of classifier
       if (awaitingAnswer || mode === "agent") {
+        if (noModelConfigured) { onNoModel?.(); return; }
         setFeedbackMsg("Agent Started");
         addToHistory(finalVal);
         onRunAgent(finalVal, hasImages ? attachedImages : undefined);
@@ -912,6 +920,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         trackCommand(finalVal);
         onSend(finalVal);
       } else if (mode === "advice") {
+        if (noModelConfigured) { onNoModel?.(); return; }
         setIsLoading(true);
         setFeedbackMsg("Asking AI...");
         setShowCompletions(false);

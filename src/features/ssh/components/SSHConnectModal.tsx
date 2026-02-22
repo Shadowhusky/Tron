@@ -181,6 +181,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
     } catch { /* ignore */ }
   };
 
+  const inputBase = "w-full px-2.5 sm:px-3 py-1.5 sm:py-2 text-sm rounded-lg border outline-none transition-colors";
   const inputClass = themeClass(resolvedTheme, {
     dark: "bg-white/5 border-white/10 text-white placeholder-gray-500 focus:border-purple-500/50",
     modern: "bg-white/5 border-white/10 text-white placeholder-gray-500 focus:border-purple-400/50",
@@ -211,7 +212,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
             animate="visible"
             exit="exit"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-xl mx-4 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${themeClass(
+            className={`w-full max-w-xl mx-2 sm:mx-4 rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] sm:max-h-[85vh] ${themeClass(
               resolvedTheme,
               {
                 dark: "bg-gray-900 text-white border border-white/10",
@@ -221,8 +222,8 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
             )}`}
           >
             {/* Header */}
-            <div className="px-6 pt-5 pb-3 flex items-center justify-between shrink-0">
-              <h3 className="text-lg font-semibold">SSH Connection</h3>
+            <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2 sm:pb-3 flex items-center justify-between shrink-0">
+              <h3 className="text-base sm:text-lg font-semibold">SSH Connection</h3>
               {!preventClose && (
                 <button
                   onClick={onClose}
@@ -242,12 +243,12 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
             <div className="flex flex-col flex-1 overflow-hidden">
               {/* Saved profiles strip */}
               {profiles.length > 0 && (
-                <div className={`shrink-0 border-b px-4 py-2 ${themeClass(resolvedTheme, {
+                <div className={`shrink-0 border-b px-3 sm:px-4 py-2 ${themeClass(resolvedTheme, {
                   dark: "border-white/5",
                   modern: "border-white/5",
                   light: "border-gray-200",
                 })}`}>
-                  <div className="flex gap-2 overflow-x-auto">
+                  <div className="flex gap-1.5 sm:gap-2 overflow-x-auto">
                     {profiles.map((profile) => (
                       <button
                         key={profile.id}
@@ -256,7 +257,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                           populateFromProfile(profile);
                           handleConnect();
                         }}
-                        className={`shrink-0 px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                        className={`shrink-0 max-w-[10rem] sm:max-w-[14rem] px-2.5 sm:px-3 py-1.5 text-xs rounded-lg border transition-colors truncate ${
                           selectedProfileId === profile.id
                             ? themeClass(resolvedTheme, {
                                 dark: "bg-purple-600/20 border-purple-500/30 text-purple-300",
@@ -269,9 +270,10 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                                 light: "border-gray-200 hover:bg-gray-50 text-gray-700",
                               })
                         }`}
+                        title={`${profile.name} — ${profile.username}@${profile.host}`}
                       >
                         <span className="font-medium">{profile.name}</span>
-                        <span className={`ml-1.5 ${themeClass(resolvedTheme, {
+                        <span className={`ml-1 sm:ml-1.5 ${themeClass(resolvedTheme, {
                           dark: "text-gray-500",
                           modern: "text-gray-500",
                           light: "text-gray-400",
@@ -285,7 +287,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
               )}
 
               {/* Connection form */}
-              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+              <div className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 sm:py-4 space-y-2.5 sm:space-y-3">
                 {/* Name */}
                 <div>
                   <label className={`block text-xs font-medium mb-1 ${labelClass}`}>Name (optional)</label>
@@ -293,28 +295,28 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="My Server"
-                    className={`w-full px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                    className={`${inputBase} ${inputClass}`}
                   />
                 </div>
 
                 {/* Host + Port */}
-                <div className="flex gap-3">
-                  <div className="flex-1">
+                <div className="flex gap-2 sm:gap-3">
+                  <div className="flex-1 min-w-0">
                     <label className={`block text-xs font-medium mb-1 ${labelClass}`}>Host</label>
                     <input
                       value={host}
                       onChange={(e) => setHost(e.target.value)}
-                      placeholder="192.168.1.100 or hostname"
-                      className={`w-full px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                      placeholder="192.168.1.100"
+                      className={`${inputBase} ${inputClass}`}
                     />
                   </div>
-                  <div className="w-20">
+                  <div className="w-16 sm:w-20 shrink-0">
                     <label className={`block text-xs font-medium mb-1 ${labelClass}`}>Port</label>
                     <input
                       value={port}
                       onChange={(e) => setPort(e.target.value)}
                       placeholder="22"
-                      className={`w-full px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                      className={`${inputBase} ${inputClass}`}
                     />
                   </div>
                 </div>
@@ -326,7 +328,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="root"
-                    className={`w-full px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                    className={`${inputBase} ${inputClass}`}
                   />
                 </div>
 
@@ -336,7 +338,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                   <select
                     value={authMethod}
                     onChange={(e) => setAuthMethod(e.target.value as SSHAuthMethod)}
-                    className={`w-full px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                    className={`${inputBase} ${inputClass}`}
                   >
                     <option value="password">Password</option>
                     <option value="key">Private Key</option>
@@ -353,7 +355,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Enter password"
-                      className={`w-full px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                      className={`${inputBase} ${inputClass}`}
                     />
                   </div>
                 )}
@@ -368,11 +370,11 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                           value={privateKeyPath}
                           onChange={(e) => setPrivateKeyPath(e.target.value)}
                           placeholder="~/.ssh/id_rsa"
-                          className={`flex-1 px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                          className={`flex-1 min-w-0 px-2.5 sm:px-3 py-1.5 sm:py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
                         />
                         <button
                           onClick={handleBrowseKey}
-                          className={`px-3 py-2 text-sm rounded-lg border transition-colors ${themeClass(resolvedTheme, {
+                          className={`shrink-0 px-2.5 sm:px-3 py-1.5 sm:py-2 text-sm rounded-lg border transition-colors ${themeClass(resolvedTheme, {
                             dark: "border-white/10 hover:bg-white/5 text-gray-300",
                             modern: "border-white/10 hover:bg-white/5 text-gray-300",
                             light: "border-gray-200 hover:bg-gray-50 text-gray-700",
@@ -389,7 +391,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                         value={passphrase}
                         onChange={(e) => setPassphrase(e.target.value)}
                         placeholder="Key passphrase"
-                        className={`w-full px-3 py-2 text-sm rounded-lg border outline-none transition-colors ${inputClass}`}
+                        className={`${inputBase} ${inputClass}`}
                       />
                     </div>
                   </>
@@ -428,7 +430,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
               </div>
 
               {/* Buttons — sticky footer, never clipped */}
-              <div className={`shrink-0 px-5 py-4 flex gap-2 border-t ${themeClass(resolvedTheme, {
+              <div className={`shrink-0 px-3 sm:px-5 py-3 sm:py-4 flex flex-wrap gap-2 border-t ${themeClass(resolvedTheme, {
                 dark: "border-white/5",
                 modern: "border-white/5",
                 light: "border-gray-200",
@@ -438,25 +440,25 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                   whileTap={{ scale: 0.98 }}
                   onClick={handleConnect}
                   disabled={connecting || !host || !username}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                  className="px-3 sm:px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
                 >
                   {connecting ? "Connecting..." : "Connect"}
                 </motion.button>
                 <button
                   onClick={handleSaveProfile}
                   disabled={!host || !username}
-                  className={`px-4 py-2 text-sm rounded-lg border transition-colors disabled:opacity-50 ${themeClass(resolvedTheme, {
+                  className={`px-3 sm:px-4 py-2 text-sm rounded-lg border transition-colors disabled:opacity-50 ${themeClass(resolvedTheme, {
                     dark: "border-white/10 hover:bg-white/5 text-gray-300",
                     modern: "border-white/10 hover:bg-white/5 text-gray-300",
                     light: "border-gray-200 hover:bg-gray-50 text-gray-700",
                   })}`}
                 >
-                  Save Profile
+                  Save
                 </button>
                 {selectedProfileId && (
                   <button
                     onClick={handleDeleteProfile}
-                    className="px-4 py-2 text-sm rounded-lg text-red-400 hover:bg-red-500/10 transition-colors"
+                    className="px-3 sm:px-4 py-2 text-sm rounded-lg text-red-400 hover:bg-red-500/10 transition-colors"
                   >
                     Delete
                   </button>

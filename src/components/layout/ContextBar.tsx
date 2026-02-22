@@ -79,7 +79,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   // Derived state
   const session = sessions.get(sessionId);
   const cwd = session?.cwd || "~/";
-  const activeModel = session?.aiConfig?.model || aiService.getConfig().model;
+  const rawModel = session?.aiConfig?.model || aiService.getConfig().model;
   const maxContext =
     session?.aiConfig?.contextWindow ||
     aiService.getConfig().contextWindow ||
@@ -110,6 +110,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const ctxRingRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLDivElement>(null);
   const { data: availableModels = [] } = useAllConfiguredModels();
+  const activeModel = availableModels.length > 0 ? rawModel : null;
 
   const displayModels = React.useMemo(() => {
     let filtered = availableModels;
@@ -485,7 +486,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
             className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-purple-400 text-[10px]"
             onClick={() => setShowModelMenu(!showModelMenu)}
           >
-            <span className="font-semibold">{activeModel}</span>
+            <span className={`font-semibold ${!activeModel ? "opacity-50 italic" : ""}`}>{activeModel || "No model"}</span>
           </div>
 
           {/* Model Menu — portal to escape overflow-hidden */}

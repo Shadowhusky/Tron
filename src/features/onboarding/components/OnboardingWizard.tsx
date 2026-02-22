@@ -4,6 +4,7 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import type { AIConfig } from "../../../types";
 import { aiService, getCloudProviderList, providerUsesBaseUrl } from "../../../services/ai";
 import { Monitor, Gem, Terminal, Bot } from "lucide-react";
+import logoSvg from "../../../assets/logo.svg";
 import {
   useModelsWithCaps,
   useInvalidateProviderModels,
@@ -703,12 +704,15 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
           className="px-5 py-4 border-b border-white/5 flex items-center justify-between drag-region"
           style={{ WebkitAppRegion: "drag", appRegion: "drag" } as any}
         >
-          <div>
-            <h2 className="text-xl font-bold">Setup Tron</h2>
-            <p className="text-sm opacity-60">
-              Step {currentStep + 1} of {STEPS.length}:{" "}
-              {STEPS[currentStep].title}
-            </p>
+          <div className="flex items-center gap-2.5">
+            <img src={logoSvg} alt="Tron" className="w-8 h-8" />
+            <div>
+              <h2 className="text-xl font-bold">Setup Tron</h2>
+              <p className="text-sm opacity-60">
+                Step {currentStep + 1} of {STEPS.length}:{" "}
+                {STEPS[currentStep].title}
+              </p>
+            </div>
           </div>
           <div className="flex gap-1.5">
             {STEPS.map((_, i) => (
