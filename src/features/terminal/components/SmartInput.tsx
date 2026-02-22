@@ -357,8 +357,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
   useEffect(() => {
     if (!isAuto) return;
 
-    // When auto-detect is disabled, stay in command mode
+    // When auto-detect is disabled, exit auto mode entirely
     if (!aiBehavior.autoDetect) {
+      setIsAuto(false);
       setMode("command");
       return;
     }
