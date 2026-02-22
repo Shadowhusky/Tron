@@ -11,54 +11,57 @@ const EmptyState: React.FC<EmptyStateProps> = ({ resolvedTheme, onConnect }) => 
   return (
     <div className={`flex items-center justify-center h-full ${getTheme(resolvedTheme).appBg}`}>
       <motion.div
-        initial={{ opacity: 0, y: 12 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="flex flex-col items-center gap-6 text-center max-w-sm"
+        transition={{ duration: 0.5, ease: "easeOut" }}
+        className="flex flex-col items-center gap-8 text-center px-6"
       >
-        {/* Globe / SSH icon */}
-        <div className={`p-4 rounded-2xl ${themeClass(resolvedTheme, {
-          dark: "bg-white/5",
-          modern: "bg-white/[0.04] backdrop-blur-xl",
-          light: "bg-gray-100",
+        {/* Terminal / SSH icon */}
+        <div className={`p-6 rounded-3xl ${themeClass(resolvedTheme, {
+          dark: "bg-white/[0.03] border border-white/[0.06]",
+          modern: "bg-white/[0.03] border border-white/[0.06] backdrop-blur-xl",
+          light: "bg-gray-50 border border-gray-200",
         })}`}>
-          <svg className={`w-12 h-12 ${themeClass(resolvedTheme, {
+          <svg className={`w-16 h-16 ${themeClass(resolvedTheme, {
             dark: "text-gray-500",
-            modern: "text-purple-400/60",
+            modern: "text-purple-400/50",
             light: "text-gray-400",
-          })}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+          })}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
           </svg>
         </div>
 
-        <div>
-          <h2 className={`text-lg font-semibold mb-1 ${themeClass(resolvedTheme, {
+        <div className="space-y-2">
+          <h1 className={`text-2xl font-bold tracking-tight ${themeClass(resolvedTheme, {
             dark: "text-white",
             modern: "text-white",
             light: "text-gray-900",
           })}`}>
-            Connect to a Server
-          </h2>
-          <p className={`text-sm ${themeClass(resolvedTheme, {
+            Welcome to Tron
+          </h1>
+          <p className={`text-sm max-w-xs ${themeClass(resolvedTheme, {
             dark: "text-gray-500",
             modern: "text-gray-400",
             light: "text-gray-500",
           })}`}>
-            Open an SSH connection to start a remote terminal session.
+            Connect to a remote server via SSH to start your terminal session.
           </p>
         </div>
 
         <motion.button
-          whileHover={{ scale: 1.03 }}
+          whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.97 }}
           onClick={onConnect}
-          className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors ${themeClass(resolvedTheme, {
-            dark: "bg-blue-600 hover:bg-blue-500 text-white",
-            modern: "bg-purple-500/80 hover:bg-purple-500 text-white backdrop-blur-sm",
-            light: "bg-blue-600 hover:bg-blue-500 text-white",
+          className={`flex items-center gap-3 px-8 py-4 rounded-xl text-base font-semibold transition-all shadow-lg cursor-pointer ${themeClass(resolvedTheme, {
+            dark: "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20",
+            modern: "bg-purple-500/90 hover:bg-purple-500 text-white shadow-purple-500/25 backdrop-blur-sm",
+            light: "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20",
           })}`}
         >
-          New SSH Connection
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.54a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L4.343 8.04" />
+          </svg>
+          Connect to Server
         </motion.button>
       </motion.div>
     </div>
