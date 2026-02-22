@@ -151,14 +151,9 @@ async function fetchGLM(apiKey: string): Promise<string[]> {
 
 async function fetchMiniMax(apiKey: string): Promise<string[]> {
     console.log("Fetching MiniMax models...");
-    const data = await fetchJson("https://api.minimax.io/v1/models", {
-        Authorization: `Bearer ${apiKey}`,
-    });
-    const models = data.data
-        .filter((m: any) => m.id.includes("MiniMax") || m.id.includes("M2"))
-        .sort((a: any, b: any) => b.created - a.created)
-        .map((m: any) => m.id);
-    return models;
+    // MiniMax does not provide a /v1/models API endpoint.
+    // Returning latest hardcoded models.
+    return ["MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2", "M2-her"];
 }
 
 // ---------------------------------------------------------------------------
