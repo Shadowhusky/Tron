@@ -2,7 +2,7 @@ import { Client, ClientChannel, ConnectConfig } from "ssh2";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { EventPusher } from "./terminal.js";
+import { EventPusher, pushSessionData } from "./terminal.js";
 
 // --- Types ---
 
@@ -399,7 +399,7 @@ export async function createSSHSession(
   historyMap.set(sessionId, "");
   if (ownerMap) ownerMap.set(sessionId, clientId);
 
-  // Wire up data/exit events
+  // Wire up data/exit events — route through display buffer for sentinel stripping
   session.onData((data) => {
     const currentHistory = historyMap.get(sessionId) || "";
     if (currentHistory.length < 100000) {
@@ -407,7 +407,7 @@ export async function createSSHSession(
     } else {
       historyMap.set(sessionId, currentHistory.slice(-80000) + data);
     }
-    pushEvent("terminal.incomingData", { id: sessionId, data });
+    pushSessionData(sessionId, data, pushEvent);
   });
 
   session.onExit(() => {

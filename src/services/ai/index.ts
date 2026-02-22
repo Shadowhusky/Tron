@@ -2067,7 +2067,7 @@ ${agentPrompt}
           };
         }
 
-        onUpdate("failed", `Loop detected (${loopBreaks}/3): ${action.tool}`, action);
+        // Silent retry — don't show guard rejection to user
         history.push({
           role: "user",
           content:
@@ -2095,7 +2095,7 @@ ${agentPrompt}
           const state = await detectTerminalState();
           // Only fail if it's explicitly idle. If "server" or "busy", assume it's fine.
           if (state === "idle") {
-            onUpdate("failed", "Premature completion: Dev server not running", action);
+            // Silent retry — don't show guard rejection to user
             history.push({
               role: "user",
               content: `Error: You scaffolded a project and implemented files, but the dev server is NOT running (terminal is idle). You MUST start the dev server (e.g. "npm run dev") using "run_in_terminal" before finishing. The user expects a running application.`,
@@ -2153,11 +2153,7 @@ ${agentPrompt}
             isFuturePlan ||
             (hasUnfinishedSteps && !loopBreaks && !isDescribingExistingState))
         ) {
-          onUpdate(
-            "failed",
-            "Rejected: final_answer describes unfinished work",
-            action
-          );
+          // Silent retry — don't show guard rejection to user
           history.push({
             role: "user",
             content: `REJECTED: Your final_answer describes unfinished work. You are an ACTION agent — do NOT ask permission to continue. Just DO the remaining steps yourself (fix errors, install dependencies, write code, etc.) and THEN give final_answer when everything is actually done and working.`,
@@ -2166,7 +2162,7 @@ ${agentPrompt}
         }
         // Reject if answer mentions unfixed errors (unless agent is stuck from loops or user reported the error)
         if (mentionsError && !loopBreaks && !userMentionedError) {
-          onUpdate("failed", "Rejected: final_answer mentions unfixed errors", action);
+          // Silent retry — don't show guard rejection to user
           history.push({
             role: "user",
             content: `REJECTED: Your final_answer mentions errors that are not fixed. Do NOT report errors as done. Fix them first (read the error, identify root cause, apply fix), then give final_answer when working.`,
@@ -2182,11 +2178,7 @@ ${agentPrompt}
             /[`"']([^`"']{5,})[`"']/,
           );
           if (cmdMatch) {
-            onUpdate(
-              "failed",
-              `Rejected: delegation — agent should run "${cmdMatch[1].slice(0, 40)}" itself`,
-              action
-            );
+            // Silent retry — don't show guard rejection to user
             history.push({
               role: "user",
               content: `REJECTED: Do NOT tell the user to run commands. You are an ACTION agent — execute "${cmdMatch[1]}" yourself using run_in_terminal or execute_command. Then give final_answer when done.`,
@@ -2211,14 +2203,21 @@ ${agentPrompt}
           !terminalBusy &&
           !loopBreaks;
         if (looksLikeBareCommand && !isShortAck) {
-          onUpdate(
-            "failed",
-            `Rejected: final_answer looks like a command — agent should execute "${trimmedAnswer}"`,
-            action
-          );
+          // Silent retry — don't show guard rejection to user
           history.push({
             role: "user",
             content: `REJECTED: Your final_answer "${trimmedAnswer}" looks like a shell command you should EXECUTE, not report. Use execute_command to run it and show the user the RESULT, not the command itself.`,
+          });
+          continue;
+        }
+
+        // Reject generic terse completion messages that don't convey actual results
+        const genericCompletionPatterns = /^(task completed|done|finished|completed|all done|it'?s done|that'?s it|everything is (set up|done|ready))\s*[.!]?\s*$/i;
+        if (genericCompletionPatterns.test(trimmedAnswer) && executedCommands.size > 0 && !isShortAck) {
+          // Silent retry — don't show guard rejection to user
+          history.push({
+            role: "user",
+            content: `REJECTED: Your final_answer "${trimmedAnswer}" is too generic. Provide the ACTUAL results/output of what you did. For example, if you ran a command, include what it returned. If you modified files, explain what changed. Be specific.`,
           });
           continue;
         }
@@ -2232,6 +2231,24 @@ ${agentPrompt}
           "make ",
           "build ",
           "setup ",
+          "find ",
+          "locate ",
+          "check ",
+          "search ",
+          "verify ",
+          "test ",
+          "show ",
+          "list ",
+          "get ",
+          "run ",
+          "open ",
+          "set up ",
+          "update ",
+          "fix ",
+          "debug ",
+          "deploy ",
+          "delete ",
+          "remove ",
         ];
         const isQuestionPattern = /^(how\s+to|how\s+do\s+i|what\s+is|explain|can\s+you\s+explain|tell\s+me)\b/i.test(userTask);
         const hasActionRequest =
@@ -2246,11 +2263,7 @@ ${agentPrompt}
           !wroteFiles &&
           !terminalBusy
         ) {
-          onUpdate(
-            "failed",
-            "Rejected: lazy completion — no commands executed, no files written",
-            action
-          );
+          // Silent retry — don't show guard rejection to user
           history.push({
             role: "user",
             content: `REJECTED: The user asked you to "${userTask.slice(0, 60)}" but you have executed 0 commands and written 0 files. Reading files is NOT completing the task. You MUST take action — use execute_command, run_in_terminal, or write_file to actually DO the work.`,
@@ -2449,7 +2462,7 @@ ${agentPrompt}
             !wroteFiles &&
             /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(dev|start)\b/.test(runCmd)
           ) {
-            onUpdate("failed", "Blocked: dev server before code written", action);
+            // Silent retry — don't show guard rejection to user
             history.push({
               role: "user",
               content: `Error: You scaffolded a template but haven't written any code yet. Use write_file to implement the features the user asked for BEFORE starting the dev server.`,

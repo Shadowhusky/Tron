@@ -2,6 +2,7 @@ import { Client } from "ssh2";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { pushSessionData } from "./terminal.js";
 // --- Friendly error messages ---
 function friendlySSHError(err, config) {
     const msg = err.message || "";
@@ -311,7 +312,7 @@ export async function createSSHSession(config, clientId, pushEvent, sessionMap, 
     historyMap.set(sessionId, "");
     if (ownerMap)
         ownerMap.set(sessionId, clientId);
-    // Wire up data/exit events
+    // Wire up data/exit events — route through display buffer for sentinel stripping
     session.onData((data) => {
         const currentHistory = historyMap.get(sessionId) || "";
         if (currentHistory.length < 100000) {
@@ -320,7 +321,7 @@ export async function createSSHSession(config, clientId, pushEvent, sessionMap, 
         else {
             historyMap.set(sessionId, currentHistory.slice(-80000) + data);
         }
-        pushEvent("terminal.incomingData", { id: sessionId, data });
+        pushSessionData(sessionId, data, pushEvent);
     });
     session.onExit(() => {
         pushEvent("terminal.exit", { id: sessionId, exitCode: 0 });

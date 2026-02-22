@@ -108,7 +108,6 @@ const SSH_ONLY_BLOCKED_CHANNELS = new Set([
     "file.listDir",
     "file.searchDir",
     "log.saveSessionLog",
-    "config.getSystemPaths", // leaks server home/temp paths
 ]);
 // Terminal channels that take a sessionId — in SSH-only mode, must be an SSH session
 const SSH_ONLY_SESSION_CHANNELS = new Set([
@@ -210,8 +209,16 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
         case "config.write":
             clientConfigs.set(clientId, data);
             return true;
-        case "config.getSystemPaths":
-            return { home: process.env.HOME || os.homedir(), temp: os.tmpdir() };
+        case "config.getSystemPaths": {
+            const home = process.env.HOME || os.homedir();
+            return {
+                home,
+                desktop: path.join(home, "Desktop"),
+                documents: path.join(home, "Documents"),
+                downloads: path.join(home, "Downloads"),
+                temp: os.tmpdir(),
+            };
+        }
         case "system.selectFolder":
             return null; // Not available in web mode
         case "shell.openExternal":

@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow, app } from "electron";
 import { Client, ConnectConfig } from "ssh2";
+import { bufferIfExecActive } from "./terminal";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -338,7 +339,12 @@ export function registerSSHHandlers(
 
     const mainWindow = getMainWindow();
 
-    // Wire data/exit
+    // Wire data/exit — route through display buffer for sentinel stripping during execInTerminal
+    const sendToRenderer = (cleaned: string) => {
+      if (mainWindow && !mainWindow.isDestroyed() && cleaned) {
+        mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data: cleaned });
+      }
+    };
     session.onData((data) => {
       const currentHistory = history.get(sessionId) || "";
       if (currentHistory.length < 100000) {
@@ -346,9 +352,9 @@ export function registerSSHHandlers(
       } else {
         history.set(sessionId, currentHistory.slice(-80000) + data);
       }
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data });
-      }
+      // During execInTerminal: buffer and strip sentinels
+      if (bufferIfExecActive(sessionId, data, sendToRenderer)) return;
+      sendToRenderer(data);
     });
 
     session.onExit(() => {
