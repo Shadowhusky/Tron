@@ -74,6 +74,8 @@ e2e/                  # Playwright E2E test suite
 - **Image attachments**: SmartInput supports drag-and-drop, paste, and file picker for images. `AttachedImage` type. Vision models analyzed via `aiService.analyzeImages()`, bypassing agent loop.
 - **Interactive commands in agent mode**: `isInteractiveCommand()` detects TUI/REPL/editor commands → routes to embedded terminal in TerminalPane instead of overlay exec.
 - **Multiline input**: Multiline text in SmartInput auto-classifies as agent mode (shell commands are single-line).
+- **Context modal**: ContextBar shows combined terminal history + agent thread activity. Clear button with confirmation clears both terminal history (`terminal.clearHistory` IPC) and agent thread. Summarize/clear buttons disabled when context is too short (< 100 chars).
+- **Agent overlay scroll**: Auto-scroll uses double `requestAnimationFrame` so the TanStack virtualizer can re-measure before scrolling to true bottom. Permission buttons pinned with `shrink-0` — command display scrolls independently so buttons never get clipped.
 
 ## Agent System (`src/services/ai/index.ts`)
 
@@ -102,6 +104,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **lastWriteDir tracking**: Tracks the shallowest (shortest) directory written to — approximates project root, not the last file's parent dir.
 - **Parse fallback**: After 3 JSON parse failures, raw text becomes final_answer — but rejects text containing tool-call syntax (`<tool_call>`, `<function=`, `{"tool":`).
 - **JSON repair**: `normalizeToolKey` unwraps array-wrapped tool calls (e.g. MiniMax). `escapeNewlinesInStrings` fixes bare newlines inside JSON string values (common in `write_file` with large content). Both applied as fallback parse steps.
+- **Completions API fallback**: `isCompletionsModel()` detects non-chat models (codex, davinci). Routes to `/v1/completions` with `messagesToPrompt()` conversion. `parseOpenAIStream` handles both `choices[0].delta.content` (chat) and `choices[0].text` (completions) SSE formats.
 - **Dangerous command detection**: `isDangerousCommand()` in `src/utils/dangerousCommand.ts` — pattern-based + heuristic detection for destructive commands (rm -rf, sudo, force-push, etc.). Used by agent permission system.
 - **Progress reflection**: Every 8 steps, if no progress in 6+ steps, injects reflection prompt.
 - **Context compaction**: Old tool results compressed after history exceeds 30 messages.
@@ -125,7 +128,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 ## SmartInput Features
 
 - **Mode detection**: Classifies input as command vs agent prompt. Multiline input auto-classifies as agent mode.
-- **Advice mode**: Sends prompt + session context (CWD, last 30 lines of terminal history) to AI. Response parsed into `COMMAND:` and `TEXT:` parts — command shown in code block with Edit/Run buttons, description shown separately. Tab accepts command into input, Enter runs it directly.
+- **Advice mode**: Sends prompt + session context (CWD, last 30 lines of terminal history) to AI. System prompt instructs: give the command that DIRECTLY answers the question (not prerequisites/install steps), assume tools are installed. Response parsed into `COMMAND:` and `TEXT:` parts — command shown in code block with Edit/Run buttons, description shown separately. Tab accepts command into input, Enter runs it directly.
 - **Slash commands**: `/log` intercepted before mode routing via `onSlashCommand` prop from TerminalPane. Any input starting with `/` is routed through this prop.
 - **History**: Agent prompts tracked alongside commands; up/down arrow navigates without triggering completions dropdown
 - **AI ghost text**: Generates inline suggestions when input is empty (idle prediction, 3s delay)
@@ -153,7 +156,7 @@ npm run test:e2e:headed # E2E tests with visible browser
 - Tailwind CSS for all styling (no CSS modules)
 - Three themes: dark, light, modern (+ system auto-detect)
 - `resolvedTheme` (never raw `theme`) for visual decisions — `theme` can be `"system"`
-- Agent supports all configured providers (Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, OpenAI Compatible, Anthropic Compatible)
+- Agent supports all configured providers (Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI Compatible, Anthropic Compatible). Non-chat models (codex, davinci) auto-route to `/v1/completions`.
 - Per-provider API URLs defined in `CLOUD_PROVIDERS` (ai/index.ts). Test connection in `electron/ipc/ai.ts` and `server/handlers/ai.ts` — cloud providers validate config only (no API call), local providers ping endpoint
 - Settings provider dropdown organized into Local / Cloud / Custom optgroups
 - `agent.md` is appended to the agent system prompt — keep it compact (< 10 lines) since it's sent on every LLM call
