@@ -117,12 +117,19 @@ const AppContent = () => {
     window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CONFIRMED, {});
   };
 
-  // Listen for gateway mode SSH modal trigger (from LayoutContext.createTab)
+  // Listen for SSH modal trigger (from LayoutContext.createTab in SSH-only mode)
   useEffect(() => {
     const handler = () => setShowSSHModal(true);
     window.addEventListener("tron:open-ssh-modal", handler);
     return () => window.removeEventListener("tron:open-ssh-modal", handler);
   }, []);
+
+  // SSH-only mode: auto-open SSH modal on startup when no tabs exist
+  useEffect(() => {
+    if (isSshOnly() && tabs.length === 0 && !showOnboarding) {
+      setShowSSHModal(true);
+    }
+  }, [isHydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Global Shortcuts
   useHotkey("openSettings", openSettingsTab, [openSettingsTab]);
@@ -260,6 +267,7 @@ const AppContent = () => {
           setShowSSHModal(false);
         }}
         onClose={() => setShowSSHModal(false)}
+        preventClose={isSshOnly() && tabs.length === 0}
       />
 
       {/* Demo mode badge */}
