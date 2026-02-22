@@ -4,6 +4,9 @@
  * is installed so all existing React code works unchanged.
  */
 
+import { setMode } from "./mode";
+import type { TronMode } from "./mode";
+
 type Listener = (...args: any[]) => void;
 
 interface PendingInvoke {
@@ -20,6 +23,13 @@ const MAX_RECONNECT_BEFORE_FAIL = 3;
 const pendingInvokes = new Map<string, PendingInvoke>();
 const eventListeners = new Map<string, Set<Listener>>();
 const messageQueue: string[] = [];
+
+// Promise that resolves once we know the deployment mode
+let _modeResolve: ((mode: TronMode) => void) | null = null;
+export const modeReady: Promise<TronMode> = new Promise((resolve) => {
+  _modeResolve = resolve;
+});
+let modeResolved = false;
 
 function getWsUrl(): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -52,6 +62,17 @@ function connect() {
       return;
     }
 
+    if (msg.type === "mode") {
+      // Server tells us its deployment mode on connect
+      const mode = msg.mode as TronMode;
+      setMode(mode);
+      if (!modeResolved && _modeResolve) {
+        modeResolved = true;
+        _modeResolve(mode);
+      }
+      return;
+    }
+
     if (msg.type === "invoke-response") {
       const pending = pendingInvokes.get(msg.id);
       if (pending) {
@@ -78,7 +99,15 @@ function connect() {
     reconnectAttempts++;
     if (reconnectAttempts >= MAX_RECONNECT_BEFORE_FAIL && !connectionFailed) {
       connectionFailed = true;
-      console.error("[WS Bridge] Server unreachable. Make sure the web server is running (npm run dev:web or npm run start:web).");
+      console.warn("[WS Bridge] Server unreachable — entering demo mode.");
+      // Resolve mode as "demo" so the app can render without a server
+      setMode("demo");
+      if (!modeResolved && _modeResolve) {
+        modeResolved = true;
+        _modeResolve("demo");
+      }
+      // Install demo bridge for mock IPC
+      import("./demo-bridge").then(({ installDemoBridge }) => installDemoBridge());
       // Reject all pending invokes so the app doesn't hang
       for (const [id, pending] of pendingInvokes) {
         clearTimeout(pending.timer);

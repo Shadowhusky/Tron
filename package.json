@@ -19,6 +19,7 @@
     "dev:web": "concurrently \"npm run dev:react\" \"wait-on tcp:5173 && npm run dev:web-server\"",
     "build:web": "npm run build:react && npm run build:server",
     "start:web": "node dist-server/index.js",
+    "start:gateway": "TRON_MODE=gateway node dist-server/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "pretest:e2e": "npm run build:react && npm run build:electron",
@@ -41,7 +42,6 @@
     "http-proxy-middleware": "^3.0.5",
     "lucide-react": "^0.564.0",
     "marked": "^17.0.2",
-    "node-pty": "^1.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "ssh2": "^1.17.0",
@@ -76,5 +76,8 @@
     "vite": "^7.3.1",
     "vitest": "^4.0.18",
     "wait-on": "^9.0.4"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }
