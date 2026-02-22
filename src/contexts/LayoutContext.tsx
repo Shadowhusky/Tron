@@ -10,7 +10,7 @@ import type {
 import { aiService } from "../services/ai";
 import { STORAGE_KEYS } from "../constants/storage";
 import { IPC } from "../constants/ipc";
-import { isGatewayMode } from "../services/mode";
+import { isSshOnly } from "../services/mode";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -171,7 +171,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const init = async () => {
       // Gateway mode: start with empty tabs, user connects via SSH
-      if (isGatewayMode()) return;
+      if (isSshOnly()) return;
 
       // Check file-based discard flag (written by "Exit Without Saving")
       // This is reliable because fs.writeFileSync guarantees it's on disk
@@ -286,7 +286,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const createTab = async () => {
     // In gateway mode, open SSH modal instead of creating a local PTY
-    if (isGatewayMode()) {
+    if (isSshOnly()) {
       window.dispatchEvent(new CustomEvent("tron:open-ssh-modal"));
       return;
     }
@@ -393,7 +393,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       const newTabs = prev.filter((t) => t.id !== tabId);
       if (newTabs.length === 0) {
         // In gateway mode, allow empty tab list (EmptyState will show)
-        if (isGatewayMode()) return newTabs;
+        if (isSshOnly()) return newTabs;
         // Always keep at least one tab open — create outside the updater to avoid StrictMode double-call
         if (!creatingTabRef.current) {
           creatingTabRef.current = true;
@@ -433,7 +433,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     if (tab.activeSessionId === "settings") return;
 
     // Gateway mode: no local PTY to split into
-    if (isGatewayMode()) return;
+    if (isSshOnly()) return;
 
     // Current session CWD
     const currentSession = sessions.get(tab.activeSessionId);

@@ -20,7 +20,7 @@ import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import EmptyState from "./components/layout/EmptyState";
-import { isGatewayMode, isDemoMode } from "./services/mode";
+import { isSshOnly, isDemoMode } from "./services/mode";
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -185,7 +185,7 @@ const AppContent = () => {
           onDismiss={dismissNotification}
         />
         {/* Gateway/demo empty state when no tabs exist */}
-        {tabs.length === 0 && (isGatewayMode() || isDemoMode()) ? (
+        {tabs.length === 0 && (isSshOnly() || isDemoMode()) ? (
           <EmptyState
             resolvedTheme={resolvedTheme}
             onConnect={() => setShowSSHModal(true)}

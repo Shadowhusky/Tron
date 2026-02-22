@@ -20,6 +20,7 @@
     "build:web": "npm run build:react && npm run build:server",
     "start:web": "node dist-server/index.js",
     "start:gateway": "TRON_MODE=gateway node dist-server/index.js",
+    "start:ssh-only": "TRON_SSH_ONLY=true node dist-server/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "pretest:e2e": "npm run build:react && npm run build:electron",

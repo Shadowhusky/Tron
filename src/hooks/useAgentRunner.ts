@@ -9,7 +9,7 @@ import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 import { isDangerousCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
-import { isGatewayMode } from "../services/mode";
+import { isSshOnly } from "../services/mode";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -494,9 +494,9 @@ System Paths:
             systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}${sshLabel}\n`;
           }
 
-          // Gateway mode: inform agent that file tools are unavailable
-          if (isGatewayMode()) {
-            systemPathsStr += `\n[GATEWAY MODE] Connected to remote server via SSH. File tools (read_file, write_file, edit_file) unavailable. Use execute_command with shell commands instead.\n`;
+          // SSH-only mode: inform agent that file tools are unavailable
+          if (isSshOnly()) {
+            systemPathsStr += `\n[SSH-ONLY MODE] Connected to remote server via SSH. File tools (read_file, write_file, edit_file) unavailable. Use execute_command with shell commands instead.\n`;
           }
         }
 

@@ -17,13 +17,24 @@ const PORT = 3888;
 const DEV_VITE_PORT = Number(process.env.PORT) || 5173;
 const isDev = process.argv.includes("--dev");
 
-// Deployment mode: "local" (default), "gateway" (SSH-only, no local PTY)
+// Deployment mode: "local" (default), "gateway" (cloud/hosted, node-pty optional)
 type ServerMode = "local" | "gateway";
 const serverMode: ServerMode =
   (process.env.TRON_MODE as ServerMode) ||
   (process.argv.includes("--gateway") ? "gateway" : "local");
 
-console.log(`[Tron Web] Mode: ${serverMode}`);
+// SSH-only restriction: blocks local terminal, file ops, server shell access.
+// Gateway defaults to true; explicit env var overrides either way.
+const sshOnly: boolean = (() => {
+  const env = process.env.TRON_SSH_ONLY?.toLowerCase();
+  if (env === "true" || env === "1") return true;
+  if (env === "false" || env === "0") return false;
+  if (process.argv.includes("--ssh-only")) return true;
+  // Gateway defaults to SSH-only unless explicitly disabled
+  return serverMode === "gateway";
+})();
+
+console.log(`[Tron Web] Mode: ${serverMode}${sshOnly ? " (SSH-only)" : ""}`);
 
 // In-memory persistence for web mode (per client)
 const clientSessions = new Map<string, Record<string, unknown>>();
@@ -58,9 +69,9 @@ wss.on("connection", (ws: WebSocket) => {
   const clientId = randomUUID();
   console.log(`[WS] Client connected: ${clientId}`);
 
-  // Immediately tell client which mode we're running in
+  // Immediately tell client which mode and restrictions we're running with
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "mode", mode: serverMode }));
+    ws.send(JSON.stringify({ type: "mode", mode: serverMode, sshOnly }));
   }
 
   // Push events to this specific client
@@ -101,8 +112,8 @@ wss.on("connection", (ws: WebSocket) => {
   });
 });
 
-// Channels completely blocked in gateway mode (no local PTY or filesystem)
-const GATEWAY_BLOCKED_CHANNELS = new Set([
+// Channels completely blocked in SSH-only mode (no local PTY or filesystem)
+const SSH_ONLY_BLOCKED_CHANNELS = new Set([
   "terminal.create",
   "terminal.scanCommands",
   "file.writeFile",
@@ -114,8 +125,8 @@ const GATEWAY_BLOCKED_CHANNELS = new Set([
   "config.getSystemPaths",  // leaks server home/temp paths
 ]);
 
-// Terminal channels that take a sessionId — in gateway mode, only SSH sessions allowed
-const GATEWAY_SESSION_CHANNELS = new Set([
+// Terminal channels that take a sessionId — in SSH-only mode, must be an SSH session
+const SSH_ONLY_SESSION_CHANNELS = new Set([
   "terminal.exec",
   "terminal.getCwd",
   "terminal.getCompletions",
@@ -125,9 +136,10 @@ const GATEWAY_SESSION_CHANNELS = new Set([
   "terminal.clearHistory",
   "terminal.execInTerminal",
   "terminal.sessionExists",
+  "terminal.checkCommand",
 ]);
 
-/** Extract sessionId from invoke data for gateway validation. */
+/** Extract sessionId from invoke data for SSH-only validation. */
 function extractSessionId(channel: string, data: any): string | undefined {
   if (!data) return undefined;
   if (typeof data === "string") return data; // many channels pass sessionId as plain string
@@ -143,26 +155,18 @@ async function handleInvoke(
   clientId: string,
   pushEvent: terminal.EventPusher
 ): Promise<any> {
-  if (serverMode === "gateway") {
-    // Block channels that should never run in gateway mode
-    if (GATEWAY_BLOCKED_CHANNELS.has(channel)) {
-      throw new Error(`Not available in gateway mode: ${channel}`);
+  if (sshOnly) {
+    // Block channels that expose the server's local shell / filesystem
+    if (SSH_ONLY_BLOCKED_CHANNELS.has(channel)) {
+      throw new Error(`Not available in SSH-only mode: ${channel}`);
     }
 
     // For terminal channels with a sessionId, verify it's an SSH session.
     // This prevents users from executing commands on the server's own shell.
-    if (GATEWAY_SESSION_CHANNELS.has(channel)) {
+    if (SSH_ONLY_SESSION_CHANNELS.has(channel)) {
       const sid = extractSessionId(channel, data);
       if (!sid || !ssh.sshSessionIds.has(sid)) {
-        throw new Error("Only SSH sessions are available in gateway mode");
-      }
-    }
-
-    // terminal.checkCommand without a sessionId would run `which` on the server
-    if (channel === "terminal.checkCommand") {
-      const sid = typeof data === "object" ? data.sessionId : undefined;
-      if (!sid || !ssh.sshSessionIds.has(sid)) {
-        throw new Error("Only SSH sessions are available in gateway mode");
+        throw new Error("Only SSH sessions are available in SSH-only mode");
       }
     }
   }
@@ -251,8 +255,8 @@ async function handleInvoke(
 }
 
 function handleSend(channel: string, data: any) {
-  // Gateway mode: only allow send channels for SSH sessions
-  if (serverMode === "gateway") {
+  // SSH-only mode: only allow send channels for SSH sessions
+  if (sshOnly) {
     const sid = data?.id || (typeof data === "string" ? data : undefined);
     if (!sid || !ssh.sshSessionIds.has(sid)) return; // silently drop
   }
