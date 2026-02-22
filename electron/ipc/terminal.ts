@@ -25,7 +25,8 @@ function stripSentinels(text: string): string {
   d = d.replace(/Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
 
   // Sentinel output itself (e.g. __TRON_DONE_abc12345__0 or __TRON_DONE_...__%d)
-  d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__(?:\d+|%d)\n?/g, "");
+  // Only consume leading \n (part of printf format), keep trailing \n so prompt starts on new line
+  d = d.replace(/\n?__TRON_DONE_[a-z0-9]+__(?:\d+|%d)/g, "");
   return d;
 }
 
