@@ -12,7 +12,6 @@ import {
 import FeatureIcon from "../../../components/ui/FeatureIcon";
 import {
   fadeScale,
-  overlay,
   staggerContainer,
   staggerItem,
   scalePop,
@@ -42,30 +41,6 @@ const STEPS = [
 
 const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
-  const [windowSize, setWindowSize] = useState({
-    width: window.innerWidth,
-    height: window.innerHeight,
-  });
-
-  useEffect(() => {
-    let rafId: number;
-    const handleResize = () => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        setWindowSize({
-          width: window.innerWidth,
-          height: window.innerHeight,
-        });
-      });
-    };
-    window.addEventListener("resize", handleResize);
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      cancelAnimationFrame(rafId);
-    };
-  }, []);
-
-  const isWindowTooSmall = windowSize.width < 600 || windowSize.height < 600;
   const [currentStep, setCurrentStep] = useState(0);
   const [stepDirection, setStepDirection] = useState(1); // 1 = forward, -1 = back
   const [aiConfig, setAiConfig] = useState<AIConfig>(aiService.getConfig());
@@ -657,43 +632,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
 
   return (
     <div data-testid="onboarding-wizard" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-      <AnimatePresence>
-        {isWindowTooSmall && (
-          <motion.div
-            key="too-small"
-            variants={overlay}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
-            className="absolute inset-0 z-60 flex items-center justify-center bg-black/95 text-center p-8"
-          >
-            <motion.div
-              variants={fadeScale}
-              initial="hidden"
-              animate="visible"
-              className="space-y-4 max-w-md"
-            >
-              <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Monitor className="w-8 h-8 text-red-500" />
-              </div>
-              <h3 className="text-xl font-bold">Window Too Small</h3>
-              <p className="text-gray-400">
-                Please resize your window to at least 600x600 pixels to continue
-                setup.
-              </p>
-              <div className="text-xs text-gray-600 font-mono mt-4">
-                Current: {windowSize.width}x{windowSize.height}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       <motion.div
         variants={fadeScale}
         initial="hidden"
         animate="visible"
-        className={`w-full max-w-[360px] flex flex-col rounded-2xl shadow-2xl overflow-hidden
+        className={`w-full max-w-[360px] max-h-[calc(100dvh-2rem)] flex flex-col rounded-2xl shadow-2xl overflow-hidden
           ${resolvedTheme === "light" ? "bg-white text-gray-900 border border-gray-200" : ""}
           ${resolvedTheme === "dark" ? "bg-gray-900 text-white border border-white/10" : ""}
           ${resolvedTheme === "modern" ? "bg-[#0d0d0d] text-white border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]" : ""}
@@ -701,7 +644,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
       >
         {/* Header */}
         <div
-          className="px-5 py-4 border-b border-white/5 flex items-center justify-between drag-region"
+          className="px-5 py-3 sm:py-4 border-b border-white/5 flex items-center justify-between drag-region shrink-0"
           style={{ WebkitAppRegion: "drag", appRegion: "drag" } as any}
         >
           <div className="flex items-center gap-2.5">
@@ -735,7 +678,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
         </div>
 
         {/* Content */}
-        <div className="px-5 py-4 min-h-[240px] overflow-hidden">
+        <div className="px-5 py-3 sm:py-4 min-h-0 flex-1 overflow-y-auto">
           <motion.div
             key={currentStep}
             className="mb-4 text-sm opacity-70"
@@ -760,7 +703,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-white/5 flex flex-col gap-2 bg-black/20">
+        <div className="px-5 py-3 border-t border-white/5 flex flex-col gap-2 bg-black/20 shrink-0">
           {showValidationWarn && (
             <motion.p
               initial={{ opacity: 0, y: 4 }}
