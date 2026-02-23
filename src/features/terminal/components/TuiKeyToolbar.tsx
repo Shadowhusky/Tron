@@ -19,6 +19,7 @@ const KEYS = [
   { label: "\u2192", data: "\x1b[C" },
   "divider",
   { label: "^C", data: "\x03" },
+  { label: "^U", data: "\x15" },
   { label: "Clear", data: null },
   { label: "Enter", data: "\r", accent: true },
 ] as const;
