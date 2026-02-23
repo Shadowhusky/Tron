@@ -201,6 +201,10 @@ export function initWebSocketBridge() {
         invoke("terminal.exec", { sessionId, command }),
       testAIConnection: (config: { provider: string; model: string; apiKey?: string; baseUrl?: string }) =>
         invoke("ai.testConnection", config),
+      fetchModels: (config: { provider: string; baseUrl?: string; apiKey?: string }) =>
+        invoke("ai.getModels", config) as Promise<any[]>,
+      fetchModelCapabilities: (config: { provider: string; modelName: string; baseUrl?: string; apiKey?: string }) =>
+        invoke("ai.getModelCapabilities", config) as Promise<string[]>,
       getSystemInfo: (sessionId?: string) =>
         invoke("terminal.getSystemInfo", sessionId) as Promise<{ platform: string; arch: string; shell: string; release: string }>,
       execInTerminal: (sessionId: string, command: string) =>

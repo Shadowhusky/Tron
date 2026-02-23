@@ -122,3 +122,134 @@ export async function testConnection({ provider, model, apiKey, baseUrl }: { pro
     return { success: false, error: msg };
   }
 }
+
+/**
+ * Server-side model fetching proxy.
+ * In web mode, the browser can't reliably fetch from local providers (CORS, auth).
+ * This runs server-side where the provider is reachable on localhost.
+ */
+export async function getModels({ provider, baseUrl, apiKey }: { provider: string; baseUrl?: string; apiKey?: string }): Promise<any[]> {
+  try {
+    if (provider === "ollama") {
+      const url = baseUrl || "http://localhost:11434";
+      const headers: Record<string, string> = {};
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      const response = await fetch(`${url}/api/tags`, { headers });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.models || []).map((m: any) => ({ name: m.name, provider: "ollama" }));
+    }
+
+    if (provider === "lmstudio") {
+      const url = (baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
+      const headers: Record<string, string> = {};
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      const response = await fetch(`${url}/api/v1/models`, { headers });
+      if (!response.ok) return [];
+      const data = await response.json();
+      const allModels: any[] = data.models || data.data || [];
+      return allModels
+        .filter((m: any) => !m.type || m.type === "llm")
+        .map((m: any) => {
+          const caps: string[] = [];
+          if (m.capabilities?.vision) caps.push("vision");
+          if (m.capabilities?.trained_for_tool_use) caps.push("tools");
+          return {
+            name: m.key || m.id || m.name,
+            provider: "lmstudio",
+            capabilities: caps.length > 0 ? caps : undefined,
+          };
+        });
+    }
+
+    if (provider === "openai-compat") {
+      if (!baseUrl) return [];
+      const url = baseUrl.replace(/\/+$/, "");
+      const headers: Record<string, string> = {};
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      const response = await fetch(`${url}/v1/models`, { headers });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.data || []).map((m: any) => ({ name: m.id || m.name, provider: "openai-compat" }));
+    }
+
+    if (provider === "anthropic-compat") {
+      if (!baseUrl) return [];
+      const url = baseUrl.replace(/\/+$/, "");
+      const headers: Record<string, string> = { "anthropic-version": "2023-06-01" };
+      if (apiKey) headers["x-api-key"] = apiKey;
+      const response = await fetch(`${url}/v1/models`, { headers });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.data || []).map((m: any) => ({ name: m.id || m.name, provider: "anthropic-compat" }));
+    }
+
+    return [];
+  } catch (e: any) {
+    console.error("getModels failed:", e?.message || e);
+    return [];
+  }
+}
+
+export async function getModelCapabilities({ provider, modelName, baseUrl, apiKey }: { provider: string; modelName: string; baseUrl?: string; apiKey?: string }): Promise<string[]> {
+  try {
+    if (provider === "lmstudio") {
+      const url = (baseUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
+      const headers: Record<string, string> = {};
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      const response = await fetch(`${url}/api/v1/models`, { headers });
+      if (!response.ok) return [];
+      const data = await response.json();
+      const allModels: any[] = data.models || data.data || [];
+      const model = allModels.find((m: any) => (m.key || m.id || m.name) === modelName);
+      if (model?.capabilities) {
+        const caps: string[] = [];
+        if (model.capabilities.vision) caps.push("vision");
+        if (model.capabilities.trained_for_tool_use) caps.push("tools");
+        if (model.capabilities.reasoning || model.capabilities.thinking) caps.push("thinking");
+        return caps;
+      }
+      const key = (model?.key || model?.id || modelName || "").toLowerCase();
+      if (/\b(think|reason|r1|qwq)\b/.test(key)) return ["thinking"];
+      return [];
+    }
+
+    if (provider === "ollama") {
+      const url = baseUrl || "http://localhost:11434";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      const response = await fetch(`${url}/api/show`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: modelName }),
+      });
+      if (!response.ok) return [];
+      const data = await response.json();
+
+      if (data.capabilities && Array.isArray(data.capabilities)) {
+        return data.capabilities.filter((c: string) => c !== "completion");
+      }
+
+      const capabilities: string[] = [];
+      const modelInfo = data.model_info || {};
+      const template = data.template || "";
+      const parameters = data.parameters || "";
+
+      if (template.includes("<think>") || template.includes("thinking") || parameters.includes("think")) {
+        capabilities.push("thinking");
+      }
+      if (Object.keys(modelInfo).some((k) => k.includes("vision") || k.includes("projector") || k.includes("mmproj"))) {
+        capabilities.push("vision");
+      }
+      if (template.includes("<tool_call>") || template.includes("tools") || template.includes("<function")) {
+        capabilities.push("tools");
+      }
+      return capabilities;
+    }
+
+    return [];
+  } catch (e: any) {
+    console.error("getModelCapabilities failed:", e?.message || e);
+    return [];
+  }
+}

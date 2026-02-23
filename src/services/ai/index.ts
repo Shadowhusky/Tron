@@ -282,6 +282,16 @@ class AIService {
   ): Promise<string[]> {
     const effectiveApiKey = apiKey ?? this.config.apiKey;
 
+    // In web mode, proxy through server to avoid CORS/auth issues with local providers
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (ipc?.fetchModelCapabilities && (provider === "lmstudio" || provider === "ollama")) {
+      try {
+        return await ipc.fetchModelCapabilities({ provider, modelName, baseUrl, apiKey: effectiveApiKey });
+      } catch {
+        return [];
+      }
+    }
+
     // LM Studio: fetch capabilities from /api/v1/models
     if (provider === "lmstudio") {
       try {
@@ -408,6 +418,17 @@ class AIService {
   ): Promise<AIModel[]> {
     const provider = providerOverride || this.config.provider;
     const effectiveApiKey = apiKey ?? this.config.apiKey;
+
+    // In web mode, proxy local provider fetches through server to avoid CORS/auth issues
+    const LOCAL_PROVIDERS = new Set(["ollama", "lmstudio", "openai-compat", "anthropic-compat"]);
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (ipc?.fetchModels && LOCAL_PROVIDERS.has(provider)) {
+      try {
+        return await ipc.fetchModels({ provider, baseUrl: baseUrl || this.config.baseUrl, apiKey: effectiveApiKey });
+      } catch {
+        // Fall through to direct fetch
+      }
+    }
 
     // Ollama
     if (provider === "ollama" || !provider) {
