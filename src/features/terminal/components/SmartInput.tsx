@@ -1259,11 +1259,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
           <button
             data-testid={isLoading || isAgentRunning ? "stop-button" : "send-button"}
-            onClick={
-              isLoading || isAgentRunning
-                ? () => stopAgent && stopAgent()
-                : () => handleSend()
-            }
+            onPointerDown={(e) => {
+              e.preventDefault(); // Prevent blur/keyboard-dismiss on mobile
+              if (isLoading || isAgentRunning) {
+                stopAgent && stopAgent();
+              } else {
+                handleSend();
+              }
+            }}
             className={`p-1.5 rounded-md transition-colors ${theme === "light"
                 ? "hover:bg-gray-100 text-gray-500 hover:text-gray-700"
                 : "hover:bg-white/10 text-gray-500 hover:text-white"
