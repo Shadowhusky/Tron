@@ -4,7 +4,7 @@ import * as Popover from "@radix-ui/react-popover";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
-import { isWindows, isElectronApp } from "../../utils/platform";
+import { isWindows, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { isSshOnly } from "../../services/mode";
 
 interface TabBarProps {
@@ -161,7 +161,7 @@ const TabBar: React.FC<TabBarProps> = ({
             <Reorder.Item
               key={tab.id}
               value={tab}
-              drag="x"
+              drag={isTouchDevice() ? false : "x"}
               dragConstraints={{ top: 0, bottom: 0 }}
               initial={{ opacity: 0, scale: 0.9, width: 0 }}
               animate={{ opacity: 1, scale: 1, width: "auto" }}
@@ -262,7 +262,7 @@ const TabBar: React.FC<TabBarProps> = ({
                       onClose(tab.id);
                     }
                   }}
-                  className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : ""} ${themeClass(
+                  className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
                     resolvedTheme,
                     {
                       dark: "hover:bg-white/20",

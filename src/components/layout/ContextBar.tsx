@@ -382,7 +382,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
       )}`}
     >
       {/* Left: Identity + Path */}
-      <div className="flex items-center gap-4 min-w-0 overflow-hidden">
+      <div className="flex items-center gap-4 min-w-0 overflow-hidden flex-1">
         <div
           data-testid="cwd-display"
           className="flex items-center gap-1.5 overflow-hidden cursor-pointer group/path"
