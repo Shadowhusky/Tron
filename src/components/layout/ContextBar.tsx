@@ -558,7 +558,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder="Search models..."
                         className="w-full bg-transparent text-xs py-1 pl-7 pr-2 outline-none placeholder:opacity-50"
-                        autoFocus
+                        autoFocus={!isTouchDevice()}
                       />
                     </div>
                   </div>
