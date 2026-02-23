@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { LayoutProvider, useLayout } from "./contexts/LayoutContext";
 import type { LayoutNode } from "./types";
@@ -21,6 +21,37 @@ import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import { isSshOnly } from "./services/mode";
+import { isTouchDevice } from "./utils/platform";
+
+/**
+ * On mobile, the virtual keyboard shrinks the visible area but the browser
+ * viewport (100vh/100dvh) doesn't always update. We use the visualViewport
+ * API to set a CSS custom property --app-height that tracks the real visible
+ * height, keeping the input/toolbar above the keyboard.
+ */
+function useVisualViewportHeight() {
+  useLayoutEffect(() => {
+    if (!isTouchDevice()) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+
+    const update = () => {
+      const h = vv.height;
+      document.documentElement.style.setProperty("--app-height", `${h}px`);
+      // On iOS the page may scroll behind the keyboard — pin it back
+      window.scrollTo(0, 0);
+    };
+
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      document.documentElement.style.removeProperty("--app-height");
+    };
+  }, []);
+}
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -44,6 +75,7 @@ const AppContent = () => {
   const { resolvedTheme } = useTheme();
   const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession } = useAgentContext();
   const invalidateModels = useInvalidateModels();
+  useVisualViewportHeight();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);

@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="screenshots/terminal-dark.png" width="820" />
+
+https://github.com/Shadowhusky/Tron/raw/main/screenshots/demo-hero.mp4
+
 </p>
 
 <h1 align="center">Tron — AI-Powered Terminal</h1>

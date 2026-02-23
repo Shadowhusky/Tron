@@ -176,6 +176,8 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 
 // Delayed cleanup map — cancel if client reconnects within grace period
 const pendingCleanups = new Map<string, ReturnType<typeof setTimeout>>();
+// Track the current active WS per client so stale close events don't start cleanup
+const activeConnections = new Map<string, WebSocket>();
 
 wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   // Use persistent client token from URL query (survives reconnects) or fall back to random
@@ -189,6 +191,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
     pendingCleanups.delete(clientId);
     console.log(`[Tron Web] Client ${clientId.slice(0, 8)}… reconnected, cancelled cleanup`);
   }
+
+  // Mark this as the active connection for this client
+  activeConnections.set(clientId, ws);
 
   // Immediately tell client which mode and restrictions we're running with
   if (ws.readyState === WebSocket.OPEN) {
@@ -229,6 +234,12 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   });
 
   ws.on("close", () => {
+    // If this client already has a newer active connection (page refresh race),
+    // this is a stale close event — skip cleanup entirely.
+    if (activeConnections.get(clientId) !== ws) return;
+
+    activeConnections.delete(clientId);
+
     // Delay cleanup to allow page reload / reconnection within grace period
     pendingCleanups.set(clientId, setTimeout(() => {
       ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());

@@ -15,9 +15,10 @@ import logoSvg from "../../assets/logo.svg";
 import { useHotkey } from "../../hooks/useHotkey";
 import { isInteractiveCommand, smartQuotePaths } from "../../utils/commandClassifier";
 import { IPC } from "../../constants/ipc";
-import { abbreviateHome } from "../../utils/platform";
+import { abbreviateHome, isTouchDevice } from "../../utils/platform";
 import type { AttachedImage, SSHConnectionStatus } from "../../types";
 import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
+import TuiKeyToolbar from "../../features/terminal/components/TuiKeyToolbar";
 import { useAllConfiguredModels } from "../../hooks/useModels";
 
 interface TerminalPaneProps {
@@ -122,6 +123,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
   // In agent view: show embedded terminal when user runs a command
   const [showEmbeddedTerminal, setShowEmbeddedTerminal] = useState(false);
+  const showTuiToolbar = isTouchDevice() && !isConnectPane && (isAgentMode ? showEmbeddedTerminal : focusTarget === "terminal");
 
   // Toggle agent panel (no-op in agent view mode — overlay is always visible)
   useHotkey(
@@ -448,6 +450,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* TUI key toolbar — touch devices, agent mode */}
+          <AnimatePresence>
+            {showTuiToolbar && <TuiKeyToolbar sessionId={sessionId} />}
+          </AnimatePresence>
         </>
       ) : (
         /* Terminal View Mode: terminal + overlay share remaining space above input */
@@ -530,6 +537,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 onScrollPositionChange={setScrollPosition}
               />
             )}
+          </AnimatePresence>
+
+          {/* TUI key toolbar — touch devices, terminal mode */}
+          <AnimatePresence>
+            {showTuiToolbar && <TuiKeyToolbar sessionId={sessionId} />}
           </AnimatePresence>
         </div>
       )}
