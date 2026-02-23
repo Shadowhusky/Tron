@@ -130,6 +130,15 @@ export function getSessionHistory() {
   return sessionHistory;
 }
 
+/** Update pushEvent for all sessions owned by this client (called on WebSocket reconnect). */
+export function updateClientPushEvent(clientId: string, pushEvent: EventPusher) {
+  for (const [sessionId, owner] of sessionOwners.entries()) {
+    if (owner === clientId && sessions.has(sessionId)) {
+      sessionPushEvents.set(sessionId, pushEvent);
+    }
+  }
+}
+
 export function cleanupClientSessions(clientId: string) {
   for (const [sessionId, owner] of sessionOwners.entries()) {
     if (owner === clientId) {

@@ -202,6 +202,10 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
     }
   };
 
+  // Update pushEvent for all existing sessions owned by this client
+  // (handles WS reconnect without page reload — e.g., mobile sleep/wake)
+  terminal.updateClientPushEvent(clientId, pushEvent);
+
   ws.on("message", async (raw: Buffer) => {
     let msg: any;
     try {

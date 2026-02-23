@@ -191,6 +191,9 @@ wss.on("connection", (ws, req) => {
             ws.send(JSON.stringify({ type: "event", channel, data }));
         }
     };
+    // Update pushEvent for all existing sessions owned by this client
+    // (handles WS reconnect without page reload — e.g., mobile sleep/wake)
+    terminal.updateClientPushEvent(clientId, pushEvent);
     ws.on("message", async (raw) => {
         let msg;
         try {
