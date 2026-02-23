@@ -508,6 +508,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             )}
           </div>
 
+          {/* TUI key toolbar — touch devices, terminal mode (above agent overlay) */}
+          <AnimatePresence>
+            {showTuiToolbar && <TuiKeyToolbar sessionId={sessionId} />}
+          </AnimatePresence>
+
           {/* Agent Overlay — in flex flow so terminal shrinks to fit */}
           <AnimatePresence>
             {(isOverlayVisible || isAgentRunning) && (
@@ -537,11 +542,6 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 onScrollPositionChange={setScrollPosition}
               />
             )}
-          </AnimatePresence>
-
-          {/* TUI key toolbar — touch devices, terminal mode */}
-          <AnimatePresence>
-            {showTuiToolbar && <TuiKeyToolbar sessionId={sessionId} />}
           </AnimatePresence>
         </div>
       )}
