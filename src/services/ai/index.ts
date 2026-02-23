@@ -182,6 +182,33 @@ function messagesToPrompt(messages: any[]): string {
     .join("\n\n");
 }
 
+/**
+ * In web mode (WS bridge), route fetch to local/private AI providers through
+ * the server's HTTP proxy, avoiding CORS and auth issues.
+ * Cloud provider URLs (public IPs) and Electron mode pass through to native fetch.
+ */
+function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
+  // Only proxy in web mode (WS bridge exposes fetchModels, Electron preload does not)
+  const isWebMode = !!(window as any).electron?.ipcRenderer?.fetchModels;
+  if (!isWebMode) return fetch(url, init);
+
+  try {
+    const parsed = new URL(url);
+    const h = parsed.hostname;
+    const isLocal =
+      h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0.0.0.0" ||
+      /^10\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^192\.168\./.test(h);
+    if (!isLocal) return fetch(url, init);
+
+    const proxyPath = `/api/ai-proxy${parsed.pathname}${parsed.search}`;
+    const headers = new Headers(init?.headers as HeadersInit);
+    headers.set("X-Target-Base", `${parsed.protocol}//${parsed.host}`);
+    return fetch(proxyPath, { ...init, headers });
+  } catch {
+    return fetch(url, init);
+  }
+}
+
 /** Resolve the Anthropic Messages API URL for anthropic or anthropic-compat. */
 function getAnthropicChatUrl(provider: string, baseUrl?: string): string {
   if (provider === "anthropic-compat" && baseUrl) {
@@ -282,16 +309,6 @@ class AIService {
   ): Promise<string[]> {
     const effectiveApiKey = apiKey ?? this.config.apiKey;
 
-    // In web mode, proxy through server to avoid CORS/auth issues with local providers
-    const ipc = (window as any).electron?.ipcRenderer;
-    if (ipc?.fetchModelCapabilities && (provider === "lmstudio" || provider === "ollama")) {
-      try {
-        return await ipc.fetchModelCapabilities({ provider, modelName, baseUrl, apiKey: effectiveApiKey });
-      } catch {
-        return [];
-      }
-    }
-
     // LM Studio: fetch capabilities from /api/v1/models
     if (provider === "lmstudio") {
       try {
@@ -299,7 +316,7 @@ class AIService {
         const headers: Record<string, string> = {};
         if (effectiveApiKey)
           headers.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/api/v1/models`, { headers });
+        const response = await proxyFetch(`${url}/api/v1/models`, { headers });
         if (!response.ok) return [];
         const data = await response.json();
         const allModels: any[] = data.models || data.data || [];
@@ -329,7 +346,7 @@ class AIService {
     if (provider === "ollama" || !provider) {
       const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
       try {
-        const response = await fetch(`${url}/api/show`, {
+        const response = await proxyFetch(`${url}/api/show`, {
           method: "POST",
           headers: this.jsonHeaders(effectiveApiKey),
           body: JSON.stringify({ model: modelName }),
@@ -419,17 +436,6 @@ class AIService {
     const provider = providerOverride || this.config.provider;
     const effectiveApiKey = apiKey ?? this.config.apiKey;
 
-    // In web mode, proxy local provider fetches through server to avoid CORS/auth issues
-    const LOCAL_PROVIDERS = new Set(["ollama", "lmstudio", "openai-compat", "anthropic-compat"]);
-    const ipc = (window as any).electron?.ipcRenderer;
-    if (ipc?.fetchModels && LOCAL_PROVIDERS.has(provider)) {
-      try {
-        return await ipc.fetchModels({ provider, baseUrl: baseUrl || this.config.baseUrl, apiKey: effectiveApiKey });
-      } catch {
-        // Fall through to direct fetch
-      }
-    }
-
     // Ollama
     if (provider === "ollama" || !provider) {
       try {
@@ -437,7 +443,7 @@ class AIService {
         const headers: Record<string, string> = {};
         if (effectiveApiKey)
           headers.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/api/tags`, { headers });
+        const response = await proxyFetch(`${url}/api/tags`, { headers });
         if (response.ok) {
           const data = await response.json();
           return (data.models || []).map((m: any) => ({
@@ -462,7 +468,7 @@ class AIService {
         const lmsHeaders: Record<string, string> = {};
         if (effectiveApiKey)
           lmsHeaders.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/api/v1/models`, {
+        const response = await proxyFetch(`${url}/api/v1/models`, {
           headers: lmsHeaders,
         });
         if (response.ok) {
@@ -495,7 +501,7 @@ class AIService {
         const headers: Record<string, string> = {};
         if (effectiveApiKey)
           headers.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/v1/models`, { headers });
+        const response = await proxyFetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
           return (data.data || []).map((m: any) => ({
@@ -515,7 +521,7 @@ class AIService {
       try {
         const url = baseUrl.replace(/\/+$/, "");
         const headers = this.anthropicHeaders(effectiveApiKey);
-        const response = await fetch(`${url}/v1/models`, { headers });
+        const response = await proxyFetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
           return (data.data || []).map((m: any) => ({
@@ -616,7 +622,7 @@ class AIService {
 
     try {
       if (provider === "ollama") {
-        const response = await fetch(
+        const response = await proxyFetch(
           `${baseUrl || "http://localhost:11434"}/api/generate`,
           {
             method: "POST",
@@ -633,7 +639,7 @@ class AIService {
         isAnthropicProtocol(provider) &&
         (apiKey || provider === "anthropic-compat")
       ) {
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -676,7 +682,7 @@ class AIService {
     signal?: AbortSignal,
     apiKey?: string,
   ): Promise<string> {
-    const response = await fetch(`${baseUrl}/api/generate`, {
+    const response = await proxyFetch(`${baseUrl}/api/generate`, {
       method: "POST",
       headers: this.jsonHeaders(apiKey),
       body: JSON.stringify({ model, prompt, stream: true }),
@@ -734,7 +740,7 @@ class AIService {
     }
 
     const headers = this.jsonHeaders(apiKey);
-    let response = await fetch(`${baseUrl}/api/chat`, {
+    let response = await proxyFetch(`${baseUrl}/api/chat`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -744,7 +750,7 @@ class AIService {
     // Retry without format/think if model still returns 400
     if (response.status === 400 && (body.format || body.think)) {
       const retryBody: any = { model, messages, stream: true };
-      response = await fetch(`${baseUrl}/api/chat`, {
+      response = await proxyFetch(`${baseUrl}/api/chat`, {
         method: "POST",
         headers,
         body: JSON.stringify(retryBody),
@@ -840,7 +846,7 @@ class AIService {
       : { model, messages, stream: false };
     if (maxTokens) body.max_tokens = maxTokens;
 
-    const response = await fetch(url, {
+    const response = await proxyFetch(url, {
       method: "POST",
       headers: this.jsonHeaders(apiKey || undefined),
       body: JSON.stringify(body),
@@ -884,7 +890,7 @@ class AIService {
       body.response_format = { type: "json_object" };
     }
 
-    const response = await fetch(url, {
+    const response = await proxyFetch(url, {
       method: "POST",
       headers: this.jsonHeaders(apiKey || undefined),
       body: JSON.stringify(body),
@@ -1039,7 +1045,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       if (isAnthropicProtocol(provider)) {
         if (!apiKey && provider === "anthropic")
           throw new Error("Anthropic API Key required");
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -1106,7 +1112,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
 
     try {
       if (provider === "ollama") {
-        const response = await fetch(
+        const response = await proxyFetch(
           `${baseUrl || "http://localhost:11434"}/api/generate`,
           {
             method: "POST",
@@ -1129,7 +1135,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         isAnthropicProtocol(provider) &&
         (apiKey || provider === "anthropic-compat")
       ) {
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -1201,7 +1207,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
         try {
-          const response = await fetch(
+          const response = await proxyFetch(
             `${baseUrl || "http://localhost:11434"}/api/generate`,
             {
               method: "POST",
@@ -1231,7 +1237,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         isAnthropicProtocol(provider) &&
         (apiKey || provider === "anthropic-compat")
       ) {
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -1340,7 +1346,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         role: msg.role as "user" | "assistant",
         content: msg.content,
       }));
-      const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+      const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
         method: "POST",
         headers: this.anthropicHeaders(apiKey),
         body: JSON.stringify({
@@ -1637,7 +1643,7 @@ ${agentPrompt}
         ) {
           // Anthropic Messages API with streaming
           let contentAccumulated = "";
-          const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+          const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
             method: "POST",
             headers: this.anthropicHeaders(apiKey),
             body: JSON.stringify({
