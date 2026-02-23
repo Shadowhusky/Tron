@@ -89,6 +89,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Flag to disable auto-save when user chose "Exit Without Saving"
   const skipSaveRef = useRef(false);
+  // Guard: prevent save effect from running before init has read saved state
+  const initDoneRef = useRef(false);
   // Guard: prevent double-init from React StrictMode (effects fire twice in dev)
   const initCalledRef = useRef(false);
 
@@ -105,8 +107,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId("");
   }, []);
 
-  // Persistence Logic
+  // Persistence Logic — guarded by initDoneRef to prevent clearing saved state
+  // before init has read it (save effect fires before init effect on first render)
   useEffect(() => {
+    if (!initDoneRef.current) return; // Don't persist until initialization is complete
     if (skipSaveRef.current) {
       // Actively clear any stale saved state after "Exit Without Saving"
       localStorage.removeItem(STORAGE_KEYS.LAYOUT);
@@ -177,6 +181,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         ),
       };
       localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
+      // Also back up layout to server (survives localStorage loss, private mode, etc.)
+      window.electron?.ipcRenderer?.writeSessions?.({ _layout: state })?.catch?.(() => { });
     }
   }, [tabs, activeTabId, sessions]);
 
@@ -209,6 +215,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           // Fall through to create fresh tab
           if (isSshOnly()) { createConnectTab(); } else { createTab(); }
           return;
+        }
+        // Try server-backed layout (survives localStorage loss / private mode)
+        if (sessionsData && (sessionsData as any)._layout) {
+          const serverLayout = (sessionsData as any)._layout;
+          // Sync to localStorage so downstream code can use it
+          localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(serverLayout));
         }
       } catch { /* ignore — continue with normal hydration */ }
 
@@ -345,8 +357,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       if (isSshOnly()) { createConnectTab(); } else { createTab(); }
     };
 
-    // Run once
-    init().finally(() => setIsHydrated(true));
+    // Run once — mark init done so save effect can start persisting
+    init().finally(() => { initDoneRef.current = true; setIsHydrated(true); });
   }, []);
 
   const [isHydrated, setIsHydrated] = useState(false);
