@@ -13,7 +13,7 @@
     "build:electron": "tsc -p electron/tsconfig.json",
     "build": "npm run build:react && npm run build:electron && electron-builder",
     "build:mac": "npm run build:react && npm run build:electron && electron-builder --mac",
-    "build:win": "npm run build:react && npm run build:electron && electron-builder --win",
+    "build:win": "npm run build:react && npm run build:electron && electron-builder --win --config.npmRebuild=false",
     "build:linux": "npm run build:react && npm run build:electron && electron-builder --linux",
     "lint": "eslint .",
     "preview": "vite preview",
