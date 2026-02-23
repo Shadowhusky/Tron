@@ -88,7 +88,29 @@ const createMenu = (win: BrowserWindow) => {
           label: "Learn More",
           click: async () => {
             const { shell } = await import("electron");
-            await shell.openExternal("https://electronjs.org");
+            await shell.openExternal("https://tronai.dev");
+          },
+        },
+        {
+          label: "GitHub",
+          click: async () => {
+            const { shell } = await import("electron");
+            await shell.openExternal("https://github.com/Shadowhusky/Tron");
+          },
+        },
+        {
+          label: "Discord",
+          click: async () => {
+            const { shell } = await import("electron");
+            await shell.openExternal("https://discord.gg/EeTCS7A6");
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Report Issue",
+          click: async () => {
+            const { shell } = await import("electron");
+            await shell.openExternal("https://github.com/Shadowhusky/Tron/issues");
           },
         },
       ],

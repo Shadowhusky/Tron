@@ -2,7 +2,7 @@
   "name": "tron",
   "description": "Self-hosted AI-powered terminal. Run shells, use local or cloud LLMs (Ollama, OpenAI, Claude), and get agent-assisted commands from your desktop.",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -47,6 +47,7 @@
     "http-proxy-middleware": "^3.0.5",
     "lucide-react": "^0.564.0",
     "marked": "^17.0.2",
+    "posthog-js": "^1.352.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "ssh2": "^1.17.0",
