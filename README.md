@@ -79,6 +79,48 @@ On first launch, the setup wizard walks you through theme selection and AI provi
 
 > **Tip:** Local network addresses (e.g. `192.168.x.x`) are not reachable outside your LAN. For easy remote access on mobile, pair web mode with a mesh VPN like [Tailscale](https://tailscale.com) — it assigns a stable IP to each device so you can reach your terminal from anywhere without port forwarding.
 
+### Docker
+
+Run the web server as a persistent Docker service with auto-restart:
+
+```bash
+# Quick start
+docker compose up -d
+
+# Rebuild after pulling updates
+docker compose build && docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+The container runs on port **3888** and auto-restarts on crash or system reboot. Configuration is loaded from your `.env` file.
+
+**What's included:**
+- Full terminal access inside the container (bash, git, curl, vim)
+- Host filesystem mounted at `/host` (read-write)
+- Docker socket access for container management
+- `host.docker.internal` resolves to the host machine
+
+**Connecting to host AI providers (e.g. LM Studio, Ollama):**
+
+Use `host.docker.internal` instead of `localhost` for the base URL in Settings:
+```
+http://host.docker.internal:1234   # LM Studio
+http://host.docker.internal:11434  # Ollama
+```
+
+**Gateway mode** (SSH-only, no local terminal):
+```yaml
+# In docker-compose.yml, uncomment:
+environment:
+  - TRON_MODE=gateway
+  - TRON_SSH_ONLY=true
+```
+
 ## Features
 
 ### Terminal
