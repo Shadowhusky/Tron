@@ -1371,7 +1371,6 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 onPointerDown={(e) => e.preventDefault()}
                 onClick={() => {
                   acceptCompletion(comp);
-                  setTimeout(() => handleSend(), 0);
                 }}
               >
                 {comp.source === "history" ? (
