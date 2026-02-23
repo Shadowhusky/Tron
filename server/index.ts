@@ -44,6 +44,54 @@ const clientConfigs = new Map<string, Record<string, unknown>>();
 const app = express();
 const server = http.createServer(app);
 
+// AI CORS proxy — forwards browser AI requests to external APIs.
+// Registered before static/proxy middleware so it matches first.
+app.options("/api/ai-proxy", (_req, res) => {
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  });
+  res.sendStatus(204);
+});
+
+app.post("/api/ai-proxy", express.json({ limit: "10mb" }), async (req, res) => {
+  try {
+    const { url, method, headers, body } = req.body;
+    const apiRes = await fetch(url, {
+      method: method || "POST",
+      headers,
+      body: method === "GET" ? undefined : body,
+    });
+
+    const ct = apiRes.headers.get("content-type") || "application/json";
+    res.set({ "Content-Type": ct, "Access-Control-Allow-Origin": "*" });
+    res.status(apiRes.status);
+
+    if (!apiRes.body) {
+      const text = await apiRes.text();
+      res.send(text);
+      return;
+    }
+
+    // Stream the response
+    const reader = (apiRes.body as ReadableStream<Uint8Array>).getReader();
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+    };
+    pump().catch(() => res.end());
+  } catch (err: any) {
+    if (!res.headersSent) {
+      res.status(502).json({ error: err.message });
+    }
+  }
+});
+
 // Static files or proxy in dev
 if (isDev) {
   // In dev mode, proxy HTTP requests to Vite dev server
