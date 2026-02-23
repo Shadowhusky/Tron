@@ -11,6 +11,7 @@ import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isWindows } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
+import { classifyTerminalOutput } from "../../utils/terminalState";
 import { useAllConfiguredModels } from "../../hooks/useModels";
 
 // SVG Ring component for context usage visualization
@@ -391,6 +392,22 @@ const ContextBar: React.FC<ContextBarProps> = ({
             const selected =
               await window.electron.ipcRenderer.selectFolder(cwd);
             if (selected && sessionId) {
+              // Check if terminal has a running process — if so, Ctrl+C first
+              try {
+                const history = await window.electron.ipcRenderer.getHistory(sessionId);
+                const lastLines = (history || "").split("\n").slice(-5).join("\n");
+                const state = classifyTerminalOutput(lastLines);
+                if (state !== "idle") {
+                  // Send Ctrl+C to interrupt the running process
+                  window.electron.ipcRenderer.send("terminal.write", {
+                    id: sessionId,
+                    data: "\x03",
+                  });
+                  // Wait for the process to exit and shell prompt to appear
+                  await new Promise((r) => setTimeout(r, 500));
+                }
+              } catch { /* proceed with cd anyway */ }
+
               // Clear current input line then cd into the selected directory
               const clearChar = isWindows() ? "\x1b" : "\x15"; // Esc for Win, Ctrl+U for Unix
               window.electron.ipcRenderer.send("terminal.write", {
