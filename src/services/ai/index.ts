@@ -1818,16 +1818,26 @@ ${agentPrompt}
           throw new Error("Agent aborted by user.");
         }
         const label = CLOUD_PROVIDERS[provider]?.label || provider;
-        // "Failed to fetch" = CORS/network failure; give a more helpful message
+        // "Failed to fetch" = CORS/network failure — unrecoverable, fail immediately
         const isFetchError = e.message === "Failed to fetch" || e instanceof TypeError;
-        const detail = isFetchError
-          ? "Network error — could not reach the API. Check your internet connection and API key."
-          : e.message;
-        onUpdate("error", `${label} error: ${detail} `);
-        return {
-          success: false,
-          message: `${label}: ${detail}`,
-        };
+        if (isFetchError) {
+          const detail = "Network error — could not reach the API. Check your internet connection and API key.";
+          onUpdate("error", `${label} error: ${detail} `);
+          return { success: false, message: `${label}: ${detail}` };
+        }
+        // API/model errors (invalid format, model refusal, etc.) — silent retry up to 3 times
+        parseFailures++;
+        if (parseFailures >= 3) {
+          onUpdate("error", `${label} error: ${e.message} `);
+          return { success: false, message: `${label}: ${e.message}` };
+        }
+        // Push error context so model can adjust on retry
+        history.push({ role: "assistant", content: "(API error)" });
+        history.push({
+          role: "user",
+          content: `Error from API: ${e.message}\nPlease retry. Respond with ONLY a JSON object — no markdown, no explanation.`,
+        });
+        continue;
       }
 
       // 2. Parse Tool Call — try content first, then extract from thinking
