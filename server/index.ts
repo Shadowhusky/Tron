@@ -62,7 +62,7 @@ function isPrivateHost(hostname: string): boolean {
 
 import { Readable } from "stream";
 
-app.all("/api/ai-proxy/*", express.json({ limit: "5mb" }), express.text({ limit: "5mb", type: "text/*" }), async (req, res) => {
+app.all("/api/ai-proxy/{*path}", express.json({ limit: "5mb" }), express.text({ limit: "5mb", type: "text/*" }), async (req, res) => {
   const targetBase = req.headers["x-target-base"] as string;
   if (!targetBase) {
     res.status(400).json({ error: "Missing X-Target-Base header" });
