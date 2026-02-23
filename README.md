@@ -31,13 +31,13 @@ Most AI coding tools are chat-first — you paste context in, copy commands out,
 
 ## Demo
 
-| Terminal & Split Panes | SSH Connections | AI Agent |
+| Terminal & Split Panes | AI Agent | Themes |
 |:---:|:---:|:---:|
-| ![Terminal](screenshots/demo-terminal.gif) | ![SSH](screenshots/demo-ssh.gif) | ![Agent](screenshots/demo-agent.gif) |
+| ![Terminal](screenshots/demo-terminal.gif) | ![Agent](screenshots/demo-agent.gif) | ![Themes](screenshots/demo-themes.gif) |
 
-| Themes | Input Modes | Advice Mode |
+| Input Modes | Advice Mode | Settings |
 |:---:|:---:|:---:|
-| ![Themes](screenshots/demo-themes.gif) | ![Modes](screenshots/demo-modes.gif) | ![Advice](screenshots/demo-advice.gif) |
+| ![Modes](screenshots/demo-modes.gif) | ![Advice](screenshots/demo-advice.gif) | ![Settings](screenshots/demo-settings.gif) |
 
 ## Getting Started
 
