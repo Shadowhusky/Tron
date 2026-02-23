@@ -8,7 +8,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { Folder, X, Loader2, Trash2, Search, Settings } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
-import { abbreviateHome, isWindows } from "../../utils/platform";
+import { abbreviateHome, isWindows, isTouchDevice } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
 import { classifyTerminalOutput } from "../../utils/terminalState";
@@ -444,7 +444,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
             >
               <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
               <span className="text-[10px]">Show Agent</span>
-              <span className="text-[9px] opacity-50 ml-0.5">&#8984;.</span>
+              {!isTouchDevice() && <span className="text-[9px] opacity-50 ml-0.5">&#8984;.</span>}
             </motion.button>
           )}
         </AnimatePresence>
