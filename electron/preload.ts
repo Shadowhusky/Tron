@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-console.log("Preload script loaded!");
 
 // Channel allowlists — only these channels can be used from the renderer
 const ALLOWED_INVOKE_CHANNELS = [

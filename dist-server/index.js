@@ -57,7 +57,6 @@ else {
 const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (ws) => {
     const clientId = randomUUID();
-    console.log(`[WS] Client connected: ${clientId}`);
     // Immediately tell client which mode and restrictions we're running with
     if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "mode", mode: serverMode, sshOnly }));
@@ -91,7 +90,6 @@ wss.on("connection", (ws) => {
         }
     });
     ws.on("close", () => {
-        console.log(`[WS] Client disconnected: ${clientId}`);
         ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
         terminal.cleanupClientSessions(clientId);
         clientSessions.delete(clientId);

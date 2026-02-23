@@ -20,7 +20,6 @@ function registerConfigHandlers() {
     electron_1.ipcMain.handle("config.read", async () => {
         try {
             const configPath = getConfigPath();
-            console.log("Reading config from:", configPath);
             if (!fs_1.default.existsSync(configPath))
                 return null;
             const raw = fs_1.default.readFileSync(configPath, "utf-8");

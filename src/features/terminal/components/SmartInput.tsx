@@ -20,7 +20,7 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import { useAgent } from "../../../contexts/AgentContext";
 import { useLayout } from "../../../contexts/LayoutContext";
 import { useConfig } from "../../../contexts/ConfigContext";
-import { matchesHotkey } from "../../../hooks/useHotkey";
+import { matchesHotkey, formatHotkey } from "../../../hooks/useHotkey";
 import { slideDown, fadeScale } from "../../../utils/motion";
 
 interface SmartInputProps {
@@ -111,13 +111,16 @@ const SmartInput: React.FC<SmartInputProps> = ({
             inputRef.current.style.height = 'auto';
           }
         }
-        // Sync draft persistence whenever value changes programmatically
-        onDraftChange?.(newVal || undefined);
         return newVal;
       });
     },
-    [onDraftChange],
+    [],
   );
+
+  // Sync draft persistence outside render phase to avoid setState-during-render
+  useEffect(() => {
+    onDraftChange?.(reactValue || undefined);
+  }, [reactValue, onDraftChange]);
 
   // Mode State
   const [isAuto, setIsAuto] = useState(!defaultAgentMode);
@@ -1329,19 +1332,16 @@ const SmartInput: React.FC<SmartInputProps> = ({
           className={`flex items-center gap-0.5 shrink-0 ${theme === "light" ? "opacity-70" : "opacity-80"
             }`}
         >
-          <span>⇧⇧ next mode</span>
-          <span className="opacity-40 mx-1">·</span>
+          {hotkeys.cycleMode && <><span>{formatHotkey(hotkeys.cycleMode)} cycle</span><span className="opacity-40 mx-1">·</span></>}
           <span>⇧↵ newline</span>
           <span className="opacity-40 mx-1">·</span>
-          <span>⌘↵ agent</span>
+          <span>{formatHotkey(hotkeys.forceAgent)} agent</span>
           <span className="opacity-40 mx-1">·</span>
-          <span>⌘⇧↵ cmd</span>
+          <span>{formatHotkey(hotkeys.forceCommand)} cmd</span>
           <span className="opacity-40 mx-1">·</span>
-          <span>⌘0-3 mode</span>
+          <span>{formatHotkey(hotkeys.newTab)} tab</span>
           <span className="opacity-40 mx-1">·</span>
-          <span>⌘T tab</span>
-          <span className="opacity-40 mx-1">·</span>
-          <span>⌘D split</span>
+          <span>{formatHotkey(hotkeys.splitHorizontal)} split</span>
         </div>
       </div>
       )}

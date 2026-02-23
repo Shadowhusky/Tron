@@ -126,7 +126,6 @@ const createMenu = (win) => {
 // --- Window Creation ---
 const createWindow = () => {
     const preloadPath = path_1.default.join(__dirname, "preload.js");
-    console.log("Preload Path:", preloadPath);
     const isMacOS = process.platform === "darwin";
     mainWindow = new electron_1.BrowserWindow({
         width: 1200,
