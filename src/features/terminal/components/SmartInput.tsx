@@ -1281,8 +1281,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
         </div>
       </div>
 
-      {/* Hints bar */}
-      {aiBehavior.inputHints && (
+      {/* Hints bar — hidden on touch devices to reduce footer clutter */}
+      {aiBehavior.inputHints && !isTouchDevice() && (
       <div
         className={`flex items-center justify-between px-2 h-5 text-[10px] select-none overflow-hidden whitespace-nowrap ${theme === "light" ? "text-gray-500" : "text-gray-400"
           }`}
