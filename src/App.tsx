@@ -20,8 +20,7 @@ import { useInvalidateModels } from "./hooks/useModels";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
-import EmptyState from "./components/layout/EmptyState";
-import { isDemoMode, isSshOnly } from "./services/mode";
+import { isSshOnly } from "./services/mode";
 
 // Inner component to use contexts
 const AppContent = () => {
@@ -206,26 +205,18 @@ const AppContent = () => {
           onSelectTab={selectTab}
           onDismiss={dismissNotification}
         />
-        {/* Demo empty state when no tabs exist */}
-        {tabs.length === 0 && isDemoMode() ? (
-          <EmptyState
-            resolvedTheme={resolvedTheme}
-            onConnect={() => setShowSSHModal(true)}
-          />
-        ) : (
-          tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className="absolute inset-0"
-              style={{
-                visibility: tab.id === activeTabId ? "visible" : "hidden",
-                zIndex: tab.id === activeTabId ? 1 : 0,
-              }}
-            >
-              <SplitPane node={tab.root} />
-            </div>
-          ))
-        )}
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            className="absolute inset-0"
+            style={{
+              visibility: tab.id === activeTabId ? "visible" : "hidden",
+              zIndex: tab.id === activeTabId ? 1 : 0,
+            }}
+          >
+            <SplitPane node={tab.root} />
+          </div>
+        ))}
       </div>
 
       <AnimatePresence>

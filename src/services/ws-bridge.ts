@@ -100,15 +100,7 @@ function connect() {
     reconnectAttempts++;
     if (reconnectAttempts >= MAX_RECONNECT_BEFORE_FAIL && !connectionFailed) {
       connectionFailed = true;
-      console.warn("[WS Bridge] Server unreachable — entering demo mode.");
-      // Resolve mode as "demo" so the app can render without a server
-      setMode("demo");
-      if (!modeResolved && _modeResolve) {
-        modeResolved = true;
-        _modeResolve("demo");
-      }
-      // Install demo bridge for mock IPC
-      import("./demo-bridge").then(({ installDemoBridge }) => installDemoBridge());
+      console.warn("[WS Bridge] Server unreachable after", MAX_RECONNECT_BEFORE_FAIL, "attempts.");
       // Reject all pending invokes so the app doesn't hang
       for (const [id, pending] of pendingInvokes) {
         clearTimeout(pending.timer);
