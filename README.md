@@ -5,6 +5,13 @@
 <h1 align="center">Tron — AI-Powered Terminal</h1>
 
 <p align="center">
+  <em>Works on mobile too — access your terminal from anywhere via web mode</em>
+</p>
+<p align="center">
+  <img src="screenshots/mobile-web.png" width="280" />
+</p>
+
+<p align="center">
   A terminal where the AI operates directly in your shell — running commands, reading output, writing files, and iterating until the job is done.
 </p>
 

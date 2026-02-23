@@ -528,6 +528,9 @@ const INTERACTIVE_EXECUTABLES = new Set([
   "gdb", "lldb",
   // Multiplexers
   "tmux", "screen", "byobu",
+  // AI / TUI tools
+  "claude", "aider", "lazygit", "lazydocker", "nnn", "ranger", "mc",
+  "tig", "ncdu", "duf",
 ]);
 
 const INTERACTIVE_PREFIXES = [

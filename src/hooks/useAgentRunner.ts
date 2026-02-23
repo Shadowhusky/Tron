@@ -9,6 +9,7 @@ import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 import { isDangerousCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
+import { readScreenBuffer } from "../services/terminalBuffer";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -677,6 +678,10 @@ Task: ${prompt}
         },
         async (lines) => {
           if (!sessionId) return "No terminal session";
+          // Try xterm.js screen buffer first (gives clean TUI output)
+          const screenContent = readScreenBuffer(sessionId, lines);
+          if (screenContent) return screenContent;
+          // Fall back to raw PTY history via IPC
           try {
             const result = await window.electron.ipcRenderer.invoke(IPC.TERMINAL_READ_HISTORY, {
               sessionId,

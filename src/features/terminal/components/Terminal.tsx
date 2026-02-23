@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
+import { registerScreenBufferReader, unregisterScreenBufferReader } from "../../../services/terminalBuffer";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -78,6 +79,23 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    // Register screen buffer reader so the agent can read rendered TUI content
+    registerScreenBufferReader(sessionId, (lines: number) => {
+      const buf = term.buffer.active;
+      const totalRows = buf.length;
+      const start = Math.max(0, totalRows - lines);
+      const result: string[] = [];
+      for (let i = start; i < totalRows; i++) {
+        const line = buf.getLine(i);
+        if (line) result.push(line.translateToString(true));
+      }
+      // Trim trailing empty lines
+      while (result.length > 0 && result[result.length - 1].trim() === "") {
+        result.pop();
+      }
+      return result.join("\n");
+    });
 
     // Local-only fit (adjusts xterm cols/rows to container — no IPC to backend).
     // We must NOT send resize IPC before history is restored, because resizing
@@ -230,6 +248,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     return () => {
       mounted = false;
       clearTimeout(resizeTimeout);
+      unregisterScreenBufferReader(sessionId);
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
