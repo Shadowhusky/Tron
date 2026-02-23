@@ -54,7 +54,14 @@ export function registerConfigHandlers() {
   ipcMain.handle("sessions.write", async (_event, data: Record<string, unknown>) => {
     try {
       const sessionsPath = getSessionsPath();
-      fs.writeFileSync(sessionsPath, JSON.stringify(data, null, 2), "utf-8");
+      // Merge top-level keys (allows multiple contexts to coexist: _layout, _agent, etc.)
+      let existing: Record<string, unknown> = {};
+      try {
+        if (fs.existsSync(sessionsPath)) {
+          existing = JSON.parse(fs.readFileSync(sessionsPath, "utf-8"));
+        }
+      } catch { /* start fresh if corrupt */ }
+      fs.writeFileSync(sessionsPath, JSON.stringify({ ...existing, ...data }, null, 2), "utf-8");
       return true;
     } catch (e) {
       console.error("Failed to write sessions:", e);

@@ -1788,7 +1788,10 @@ ${agentPrompt}
           const { [toolKey]: _, ...rest } = obj;
           if (typeof val === "string") {
             // e.g. {"final_answer": "Done."} → {"tool":"final_answer","content":"Done."}
-            return { tool: toolKey, content: val, ...rest };
+            // Tools that expect a "command" property need it mapped correctly
+            const COMMAND_TOOLS = new Set(["execute_command", "run_in_terminal"]);
+            const prop = COMMAND_TOOLS.has(toolKey) ? "command" : "content";
+            return { tool: toolKey, [prop]: val, ...rest };
           }
           if (typeof val === "object" && val !== null) {
             // e.g. {"final_answer": {"content":"Done."}} → {"tool":"final_answer","content":"Done."}

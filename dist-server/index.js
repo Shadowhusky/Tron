@@ -168,10 +168,19 @@ else {
 }
 // WebSocket server
 const wss = new WebSocketServer({ server, path: "/ws" });
+// Delayed cleanup map — cancel if client reconnects within grace period
+const pendingCleanups = new Map();
 wss.on("connection", (ws, req) => {
     // Use persistent client token from URL query (survives reconnects) or fall back to random
     const parsed = url.parse(req.url || "", true);
     const clientId = parsed.query.token || randomUUID();
+    // Cancel any pending cleanup for this client (reconnected before grace period expired)
+    const pendingCleanup = pendingCleanups.get(clientId);
+    if (pendingCleanup) {
+        clearTimeout(pendingCleanup);
+        pendingCleanups.delete(clientId);
+        console.log(`[Tron Web] Client ${clientId.slice(0, 8)}… reconnected, cancelled cleanup`);
+    }
     // Immediately tell client which mode and restrictions we're running with
     if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "mode", mode: serverMode, sshOnly }));
@@ -205,9 +214,13 @@ wss.on("connection", (ws, req) => {
         }
     });
     ws.on("close", () => {
-        ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
-        terminal.cleanupClientSessions(clientId);
-        // Keep clientSessions/clientConfigs — they persist across reconnects
+        // Delay cleanup to allow page reload / reconnection within grace period
+        pendingCleanups.set(clientId, setTimeout(() => {
+            ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
+            terminal.cleanupClientSessions(clientId);
+            pendingCleanups.delete(clientId);
+            console.log(`[Tron Web] Cleaned up sessions for disconnected client ${clientId.slice(0, 8)}…`);
+        }, 30000)); // 30 second grace period
     });
 });
 // Channels completely blocked in SSH-only mode (no local PTY or filesystem)
@@ -317,10 +330,13 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return terminal.saveSessionLog(data);
         case "sessions.read":
             return clientSessions.get(clientId) || null;
-        case "sessions.write":
-            clientSessions.set(clientId, data);
+        case "sessions.write": {
+            // Merge top-level keys (allows multiple contexts to coexist: _layout, _agent, etc.)
+            const existing = (clientSessions.get(clientId) || {});
+            clientSessions.set(clientId, { ...existing, ...data });
             saveJsonMap(sessionsFile, clientSessions);
             return true;
+        }
         case "config.read":
             return clientConfigs.get(clientId) || null;
         case "config.write":

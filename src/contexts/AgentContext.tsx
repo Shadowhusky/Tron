@@ -277,7 +277,13 @@ function parsePersistedData(parsed: Record<string, PersistedSession>): Map<strin
 async function loadPersistedAgentState(): Promise<Map<string, AgentState>> {
   try {
     const saved = await window.electron?.ipcRenderer?.readSessions?.();
-    if (saved) return parsePersistedData(saved as Record<string, PersistedSession>);
+    if (saved) {
+      // Agent data is namespaced under _agent key
+      const agentData = (saved as any)._agent;
+      if (agentData) return parsePersistedData(agentData as Record<string, PersistedSession>);
+      // Backwards compatibility: try raw session keys (pre-namespace format)
+      return parsePersistedData(saved as Record<string, PersistedSession>);
+    }
   } catch (e) {
     console.warn("Failed to load persisted agent state from file:", e);
   }
@@ -326,7 +332,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       }
     }
-    window.electron?.ipcRenderer?.writeSessions?.(serializable)?.catch?.((e: unknown) => {
+    window.electron?.ipcRenderer?.writeSessions?.({ _agent: serializable })?.catch?.((e: unknown) => {
       console.warn("Failed to persist agent sessions:", e);
     });
   }, [store]);
