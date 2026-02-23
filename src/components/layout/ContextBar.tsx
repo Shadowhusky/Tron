@@ -10,7 +10,7 @@ import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isWindows, isTouchDevice } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
-import { stripAnsi, cleanContextForAI } from "../../utils/contextCleaner";
+import { stripAnsi } from "../../utils/contextCleaner";
 import { classifyTerminalOutput } from "../../utils/terminalState";
 import { useAllConfiguredModels } from "../../hooks/useModels";
 
@@ -282,17 +282,11 @@ const ContextBar: React.FC<ContextBarProps> = ({
     if (isSummarizing) return;
     setIsSummarizing(true);
     try {
-      // Get full history first
-      const history = await window.electron!.ipcRenderer.invoke(
-        IPC.TERMINAL_GET_HISTORY,
-        sessionId,
-      );
-
-      // Summarize everything we have so far
-      // Summarize everything we have so far
-      const cleanedForSummary = cleanContextForAI(history);
+      // Use the already-populated contextText (from polling) rather than re-fetching,
+      // which avoids potential issues where re-fetch or re-clean returns empty.
+      const textToSummarize = contextText || "";
       const summary = await aiService.summarizeContext(
-        cleanedForSummary.slice(-10000),
+        textToSummarize.slice(-10000),
       );
 
       // Update local view
@@ -303,7 +297,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
       // Persist to session
       updateSession(sessionId, {
         contextSummary: summary,
-        contextSummarySourceLength: cleanedForSummary.length,
+        contextSummarySourceLength: textToSummarize.length,
       });
     } catch (e) {
       console.error("Summarization failed", e);
