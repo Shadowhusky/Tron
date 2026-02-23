@@ -7,6 +7,14 @@ services:
       - "3888:3888"
     env_file:
       - .env
+    # Full host filesystem access (read-write)
+    volumes:
+      - /:/host
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Privileged for full PTY and device access
+    privileged: true
+    # Keep hostname readable in terminal prompt
+    hostname: tron
     # Uncomment for gateway/SSH-only mode (no local terminal)
     # environment:
     #   - TRON_MODE=gateway
