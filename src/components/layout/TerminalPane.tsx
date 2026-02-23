@@ -617,7 +617,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       </AnimatePresence>
 
       <div
-        className={`shrink-0 p-2 border-t relative z-20 ${themeClass(resolvedTheme, {
+        className={`shrink-0 p-2 border-t relative ${pendingCommand ? "z-0" : "z-20"} ${themeClass(resolvedTheme, {
           dark: "bg-[#0a0a0a] border-white/5",
           modern: "bg-[#060618] border-white/6",
           light: "bg-gray-50 border-gray-200",
