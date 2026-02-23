@@ -10,7 +10,7 @@ let pty: typeof import("node-pty") | null = null;
 try {
   pty = await import("node-pty");
 } catch {
-  console.log("[Terminal] node-pty not available (expected in gateway mode)");
+  // node-pty not available (expected in gateway mode)
 }
 
 type IPty = import("node-pty").IPty;

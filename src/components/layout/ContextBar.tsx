@@ -5,7 +5,7 @@ import { useLayout } from "../../contexts/LayoutContext";
 import { aiService, providerUsesBaseUrl } from "../../services/ai";
 import { STORAGE_KEYS } from "../../constants/storage";
 import { useTheme } from "../../contexts/ThemeContext";
-import { Folder, X, Loader2, Trash2, Search } from "lucide-react";
+import { Folder, X, Loader2, Trash2, Search, Settings } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isWindows } from "../../utils/platform";
@@ -71,7 +71,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   isOverlayVisible,
   onShowOverlay,
 }) => {
-  const { sessions, updateSessionConfig, updateSession } = useLayout();
+  const { sessions, updateSessionConfig, updateSession, openSettingsTab } = useLayout();
   const { resolvedTheme: theme } = useTheme();
   const { agentThread, setAgentThread } = useAgent(sessionId);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -502,7 +502,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   initial={{ opacity: 0, scale: 0.95, y: 4 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   transition={{ duration: 0.15 }}
-                  className={`fixed w-64 pb-1 pt-0 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
+                  className={`fixed w-64 pt-0 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
                     theme,
                     {
                       dark: "bg-[#1a1a1a] border border-white/10",
@@ -611,6 +611,20 @@ const ContextBar: React.FC<ContextBarProps> = ({
                       No models found
                     </div>
                   )}
+                  {/* Settings shortcut */}
+                  <div className={`sticky bottom-0 px-2 py-1.5 border-t ${themeClass(theme, {
+                    dark: "bg-[#1a1a1a] border-white/10",
+                    modern: "bg-[#12122e] border-white/8",
+                    light: "bg-gray-50 border-gray-200",
+                  })}`}>
+                    <button
+                      onClick={() => { setShowModelMenu(false); setSearchQuery(""); openSettingsTab(); }}
+                      className="w-full flex justify-center items-center gap-1.5 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors"
+                    >
+                      <Settings className="w-3 h-3" />
+                      Model Settings
+                    </button>
+                  </div>
                 </motion.div>
               </>,
               document.body,

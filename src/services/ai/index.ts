@@ -6,6 +6,7 @@ import type {
   AttachedImage,
 } from "../../types";
 import { STORAGE_KEYS } from "../../constants/storage";
+import { isDemoMode } from "../mode";
 import {
   classifyTerminalOutput,
   describeKeys as describeKeysUtil,
@@ -976,6 +977,7 @@ class AIService {
     onToken?: (token: string) => void,
     context?: { cwd?: string; terminalHistory?: string },
   ): Promise<string> {
+    if (isDemoMode()) throw new Error("AI features require the desktop app. Download Tron for full AI support.");
     const { provider, model, apiKey, baseUrl } = this.config;
 
     const contextLines = [
@@ -1067,6 +1069,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     signal?: AbortSignal,
     onToken?: (text: string) => void,
   ): Promise<string> {
+    if (isDemoMode()) return "";
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -1168,6 +1171,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     prompt: string,
     sessionConfig?: AIConfig,
   ): Promise<string> {
+    if (isDemoMode()) return "";
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -1264,6 +1268,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     signal?: AbortSignal,
     conversationHistory?: { role: "user" | "assistant"; content: string }[],
   ): Promise<string> {
+    if (isDemoMode()) throw new Error("AI features require the desktop app.");
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -1413,6 +1418,10 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     images?: AttachedImage[],
     options?: { isSSH?: boolean; sessionId?: string },
   ): Promise<AgentResult> {
+    if (isDemoMode()) {
+      onUpdate("final_answer", "AI agent is not available in demo mode. Download Tron for full AI support.");
+      return { finalAnswer: "AI agent is not available in demo mode. Download Tron for full AI support." };
+    }
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;

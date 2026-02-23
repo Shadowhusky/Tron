@@ -18,7 +18,6 @@ export function registerConfigHandlers() {
   ipcMain.handle("config.read", async () => {
     try {
       const configPath = getConfigPath();
-      console.log("Reading config from:", configPath);
       if (!fs.existsSync(configPath)) return null;
       const raw = fs.readFileSync(configPath, "utf-8");
       return JSON.parse(raw);

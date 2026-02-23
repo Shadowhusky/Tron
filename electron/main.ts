@@ -102,7 +102,6 @@ const createMenu = (win: BrowserWindow) => {
 // --- Window Creation ---
 const createWindow = () => {
   const preloadPath = path.join(__dirname, "preload.js");
-  console.log("Preload Path:", preloadPath);
 
   const isMacOS = process.platform === "darwin";
 

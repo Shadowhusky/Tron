@@ -10,7 +10,7 @@ try {
     pty = await import("node-pty");
 }
 catch {
-    console.log("[Terminal] node-pty not available (expected in gateway mode)");
+    // node-pty not available (expected in gateway mode)
 }
 /** Detect the best available shell. Avoids posix_spawnp failures on systems without /bin/zsh. */
 function detectShell() {
