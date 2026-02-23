@@ -210,9 +210,9 @@ function messagesToResponsesInput(messages: any[]): { instructions: string; inpu
 }
 
 /**
- * In web mode (WS bridge), route fetch to local/private AI providers through
- * the server's HTTP proxy, avoiding CORS and auth issues.
- * Cloud provider URLs (public IPs) and Electron mode pass through to native fetch.
+ * In web mode (WS bridge), route ALL AI fetch requests through the server's
+ * HTTP proxy to avoid CORS issues (cloud providers like Anthropic block
+ * browser-origin requests). Electron mode uses native fetch directly.
  */
 function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   // Only proxy in web mode (WS bridge exposes fetchModels, Electron preload does not)
@@ -221,13 +221,6 @@ function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
 
   try {
     const parsed = new URL(url);
-    const h = parsed.hostname;
-    const isLocal =
-      h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0.0.0.0" ||
-      /^10\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^192\.168\./.test(h) ||
-      h.endsWith(".internal") || h.endsWith(".local");
-    if (!isLocal) return fetch(url, init);
-
     const proxyPath = `/api/ai-proxy${parsed.pathname}${parsed.search}`;
     const headers = new Headers(init?.headers as HeadersInit);
     headers.set("X-Target-Base", `${parsed.protocol}//${parsed.host}`);

@@ -75,22 +75,13 @@ const app = express();
 const server = http.createServer(app);
 
 // ---------------------------------------------------------------------------
-// AI provider HTTP proxy — routes browser requests to local AI providers
-// through the server, avoiding CORS and authentication issues.
+// AI provider HTTP proxy — routes browser requests to AI providers through
+// the server, avoiding CORS issues (cloud providers like Anthropic block
+// browser-origin requests) and auth issues for local providers.
 // Client sends: POST /api/ai-proxy/v1/chat/completions
 //               Header X-Target-Base: http://127.0.0.1:1234
 // Server fetches: http://127.0.0.1:1234/v1/chat/completions and pipes back.
 // ---------------------------------------------------------------------------
-function isPrivateHost(hostname: string): boolean {
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0") return true;
-  // 10.x.x.x, 172.16-31.x.x, 192.168.x.x
-  if (/^10\./.test(hostname)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
-  if (/^192\.168\./.test(hostname)) return true;
-  // Docker internal hostnames and local network suffixes
-  if (hostname.endsWith(".internal") || hostname.endsWith(".local")) return true;
-  return false;
-}
 
 import { Readable } from "stream";
 
@@ -109,8 +100,9 @@ app.all("/api/ai-proxy/{*path}", express.json({ limit: "5mb" }), express.text({ 
     return;
   }
 
-  if (!isPrivateHost(parsedBase.hostname)) {
-    res.status(403).json({ error: "Proxy only allows local/private addresses" });
+  // Only allow http/https schemes to prevent SSRF to internal protocols
+  if (parsedBase.protocol !== "http:" && parsedBase.protocol !== "https:") {
+    res.status(403).json({ error: "Proxy only allows http/https targets" });
     return;
   }
 
