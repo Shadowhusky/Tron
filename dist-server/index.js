@@ -36,6 +36,82 @@ const clientSessions = new Map();
 const clientConfigs = new Map();
 const app = express();
 const server = http.createServer(app);
+// ---------------------------------------------------------------------------
+// AI provider HTTP proxy — routes browser requests to local AI providers
+// through the server, avoiding CORS and authentication issues.
+// Client sends: POST /api/ai-proxy/v1/chat/completions
+//               Header X-Target-Base: http://127.0.0.1:1234
+// Server fetches: http://127.0.0.1:1234/v1/chat/completions and pipes back.
+// ---------------------------------------------------------------------------
+function isPrivateHost(hostname) {
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0")
+        return true;
+    // 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+    if (/^10\./.test(hostname))
+        return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname))
+        return true;
+    if (/^192\.168\./.test(hostname))
+        return true;
+    return false;
+}
+import { Readable } from "stream";
+app.all("/api/ai-proxy/{*path}", express.json({ limit: "5mb" }), express.text({ limit: "5mb", type: "text/*" }), async (req, res) => {
+    const targetBase = req.headers["x-target-base"];
+    if (!targetBase) {
+        res.status(400).json({ error: "Missing X-Target-Base header" });
+        return;
+    }
+    let parsedBase;
+    try {
+        parsedBase = new URL(targetBase);
+    }
+    catch {
+        res.status(400).json({ error: "Invalid X-Target-Base URL" });
+        return;
+    }
+    if (!isPrivateHost(parsedBase.hostname)) {
+        res.status(403).json({ error: "Proxy only allows local/private addresses" });
+        return;
+    }
+    const proxyPath = req.path.replace(/^\/api\/ai-proxy/, "") || "/";
+    const targetUrl = `${targetBase.replace(/\/+$/, "")}${proxyPath}`;
+    try {
+        const headers = {};
+        // Forward auth and content headers
+        if (req.headers.authorization)
+            headers["Authorization"] = req.headers.authorization;
+        if (req.headers["x-api-key"])
+            headers["x-api-key"] = req.headers["x-api-key"];
+        if (req.headers["anthropic-version"])
+            headers["anthropic-version"] = req.headers["anthropic-version"];
+        if (req.headers["content-type"] && req.method !== "GET")
+            headers["Content-Type"] = req.headers["content-type"];
+        const init = { method: req.method, headers };
+        if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
+            init.body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+        }
+        const response = await fetch(targetUrl, init);
+        res.status(response.status);
+        // Forward response headers
+        for (const [key, value] of response.headers.entries()) {
+            if (key !== "transfer-encoding" && key !== "connection" && key !== "content-encoding") {
+                res.setHeader(key, value);
+            }
+        }
+        if (response.body) {
+            Readable.fromWeb(response.body).pipe(res);
+        }
+        else {
+            res.end();
+        }
+    }
+    catch (e) {
+        if (!res.headersSent) {
+            res.status(502).json({ error: e.message || "Proxy error" });
+        }
+    }
+});
 // Static files or proxy in dev
 if (isDev) {
     // In dev mode, proxy HTTP requests to Vite dev server
@@ -167,6 +243,10 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return terminal.getSystemInfo(data);
         case "ai.testConnection":
             return ai.testConnection(data);
+        case "ai.getModels":
+            return ai.getModels(data);
+        case "ai.getModelCapabilities":
+            return ai.getModelCapabilities(data);
         case "ssh.connect":
             return ssh.createSSHSession(data, clientId, pushEvent, terminal.getSessions(), terminal.getSessionHistory(), terminal.getSessionOwners());
         case "ssh.testConnection":

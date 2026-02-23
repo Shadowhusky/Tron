@@ -65,8 +65,28 @@ function trackedExec(command, options) {
         activeChildProcesses.add(child);
     });
 }
+/**
+ * Parse CWD from shell prompt in terminal history (Windows fallback).
+ * PowerShell shows "PS C:\path>" and cmd.exe shows "C:\path>".
+ */
+function parseCwdFromHistory(sessionId) {
+    const history = sessionHistory.get(sessionId);
+    if (!history)
+        return null;
+    const lines = history.split("\n").slice(-20);
+    for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        const psMatch = line.match(/^PS\s+([A-Z]:\\[^>]*?)>\s*$/i);
+        if (psMatch)
+            return psMatch[1];
+        const cmdMatch = line.match(/^([A-Z]:\\[^>]*?)>\s*$/i);
+        if (cmdMatch)
+            return cmdMatch[1];
+    }
+    return null;
+}
 /** Get CWD for a PID. Uses trackedExec for proper cleanup. */
-async function getCwdForPid(pid) {
+async function getCwdForPid(pid, sessionId) {
     try {
         if (os.platform() === "darwin") {
             const { stdout } = await trackedExec(`lsof -p ${pid} 2>/dev/null | grep ' cwd ' | awk '{print $NF}'`);
@@ -77,12 +97,10 @@ async function getCwdForPid(pid) {
             return stdout.trim() || null;
         }
         else if (os.platform() === "win32") {
-            try {
-                const { stdout } = await trackedExec(`powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p -and $p.ExecutablePath) { Split-Path $p.ExecutablePath -Parent }"`, { timeout: 5000 });
-                return stdout.trim() || null;
-            }
-            catch {
-                return null;
+            // Windows: PowerShell doesn't update the OS-level CWD on cd (Set-Location),
+            // so we parse the prompt from terminal history instead.
+            if (sessionId) {
+                return parseCwdFromHistory(sessionId);
             }
         }
         return null;
@@ -221,7 +239,7 @@ async function getSessionCwd(sessionId) {
     const session = sessions.get(sessionId);
     let cwd = os.homedir() || "/";
     if (session) {
-        const resolved = await getCwdForPid(session.pid);
+        const resolved = await getCwdForPid(session.pid, sessionId);
         if (resolved)
             cwd = resolved;
     }
@@ -281,7 +299,7 @@ export async function getCwd(sessionId) {
     const session = sessions.get(sessionId);
     if (!session)
         return null;
-    return getCwdForPid(session.pid);
+    return getCwdForPid(session.pid, sessionId);
 }
 export async function getCompletions({ prefix, cwd, sessionId }) {
     // SSH session: get completions from remote
@@ -295,7 +313,7 @@ export async function getCompletions({ prefix, cwd, sessionId }) {
     if (!cwd && sessionId) {
         const session = sessions.get(sessionId);
         if (session) {
-            const resolved = await getCwdForPid(session.pid);
+            const resolved = await getCwdForPid(session.pid, sessionId);
             if (resolved)
                 workDir = resolved;
         }
