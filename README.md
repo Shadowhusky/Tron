@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="screenshots/terminal-dark.png" width="780" />
+  <img src="screenshots/terminal-dark.png" width="820" />
 </p>
 
 <h1 align="center">Tron — AI-Powered Terminal</h1>
