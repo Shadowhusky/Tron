@@ -1,0 +1,48 @@
+appId: dev.tronai.app
+productName: Tron
+copyright: Copyright © 2025 Tron
+
+directories:
+  output: release
+
+files:
+  - dist-electron/**/*
+  - dist-react/**/*
+  - package.json
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+
+dmg:
+  sign: false
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  icon: build/icon.png
+  target:
+    - AppImage
+    - deb
+  category: Development

@@ -115,6 +115,14 @@ Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax
 
 All shortcuts are customizable in Settings.
 
+## macOS Gatekeeper Notice
+
+When opening the app for the first time on macOS, you may see a warning that the app is from an unidentified developer. To open it:
+
+**Right-click** the app → **Open** → click **Open** in the dialog.
+
+You only need to do this once — macOS remembers your choice. To build a fully signed app that skips this warning, see the [code signing guide](https://www.electron.build/code-signing).
+
 ## Development
 
 ```bash
