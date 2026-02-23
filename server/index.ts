@@ -85,7 +85,8 @@ const server = http.createServer(app);
 
 import { Readable } from "stream";
 
-app.all("/api/ai-proxy/{*path}", express.json({ limit: "5mb" }), express.text({ limit: "5mb", type: "text/*" }), async (req, res) => {
+// Use express.raw() to forward body bytes as-is — avoids JSON parse/re-serialize issues
+app.all("/api/ai-proxy/{*path}", express.raw({ type: "*/*", limit: "5mb" }), async (req, res) => {
   const targetBase = req.headers["x-target-base"] as string;
   if (!targetBase) {
     res.status(400).json({ error: "Missing X-Target-Base header" });
@@ -110,16 +111,18 @@ app.all("/api/ai-proxy/{*path}", express.json({ limit: "5mb" }), express.text({ 
   const targetUrl = `${targetBase.replace(/\/+$/, "")}${proxyPath}`;
 
   try {
+    // Forward all headers except hop-by-hop and internal proxy headers
+    const skipHeaders = new Set(["host", "connection", "keep-alive", "transfer-encoding", "x-target-base", "origin", "referer"]);
     const headers: Record<string, string> = {};
-    // Forward auth and content headers
-    if (req.headers.authorization) headers["Authorization"] = req.headers.authorization as string;
-    if (req.headers["x-api-key"]) headers["x-api-key"] = req.headers["x-api-key"] as string;
-    if (req.headers["anthropic-version"]) headers["anthropic-version"] = req.headers["anthropic-version"] as string;
-    if (req.headers["content-type"] && req.method !== "GET") headers["Content-Type"] = req.headers["content-type"] as string;
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (!skipHeaders.has(key) && typeof value === "string") {
+        headers[key] = value;
+      }
+    }
 
     const init: RequestInit = { method: req.method, headers };
-    if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
-      init.body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+    if (req.method !== "GET" && req.method !== "HEAD" && req.body && (req.body as Buffer).length > 0) {
+      init.body = (req.body as Buffer).toString();
     }
 
     const response = await fetch(targetUrl, init);

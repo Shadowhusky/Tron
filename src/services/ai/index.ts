@@ -1744,10 +1744,12 @@ ${agentPrompt}
             }),
             signal,
           });
-          if (!response.ok)
+          if (!response.ok) {
+            const errBody = await response.text().catch(() => "");
             throw new Error(
-              `${CLOUD_PROVIDERS[provider]?.label || provider} server error(${response.status})`,
+              `${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${errBody.slice(0, 300)}`,
             );
+          }
           if (!response.body) throw new Error("No response body from server");
 
           const reader = response.body.getReader();
