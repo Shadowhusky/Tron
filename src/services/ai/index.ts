@@ -161,13 +161,23 @@ function isOpenAICompatible(provider: string): boolean {
 }
 
 /**
+ * Detect models that require OpenAI's Responses API (/v1/responses).
+ * GPT-5+ codex models and standalone codex-* models are Responses-only.
+ */
+function isResponsesModel(model: string): boolean {
+  const lower = model.toLowerCase();
+  return lower.includes("codex");
+}
+
+/**
  * Detect models that need the legacy /v1/completions endpoint
  * instead of /v1/chat/completions.
- * Known patterns: codex models (e.g. "codex-mini-latest", "gpt-5.2-codex").
+ * Only matches truly legacy models (davinci, babbage).
  */
 function isCompletionsModel(model: string): boolean {
   const lower = model.toLowerCase();
-  return lower.includes("codex") || lower.includes("davinci") || lower.includes("babbage");
+  if (isResponsesModel(lower)) return false;
+  return lower.includes("davinci") || lower.includes("babbage");
 }
 
 /** Convert chat messages array into a single prompt string for the completions API. */
@@ -180,6 +190,23 @@ function messagesToPrompt(messages: any[]): string {
       return m.content;
     })
     .join("\n\n");
+}
+
+/**
+ * Convert chat messages into Responses API format.
+ * System messages → `instructions` string, everything else → `input` array.
+ */
+function messagesToResponsesInput(messages: any[]): { instructions: string; input: any[] } {
+  const systemParts: string[] = [];
+  const input: any[] = [];
+  for (const m of messages) {
+    if (m.role === "system") {
+      systemParts.push(typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+    } else {
+      input.push({ role: m.role, content: m.content });
+    }
+  }
+  return { instructions: systemParts.join("\n\n"), input };
 }
 
 /**
@@ -829,6 +856,19 @@ class AIService {
     return "/v1/completions";
   }
 
+  /** Resolve the Responses API URL for codex models. */
+  private getOpenAIResponsesUrl(provider: string, baseUrl?: string): string {
+    if (baseUrl) {
+      const url = baseUrl.replace(/\/+$/, "");
+      if (url.endsWith("/responses")) return url;
+      if (url.endsWith("/v1")) return `${url}/responses`;
+      return `${url}/v1/responses`;
+    }
+    const chatUrl = CLOUD_PROVIDERS[provider]?.chatUrl;
+    if (chatUrl) return chatUrl.replace("/v1/chat/completions", "/v1/responses");
+    return "/v1/responses";
+  }
+
   /** Non-streaming OpenAI-compatible chat completion. */
   private async openAIChatSimple(
     provider: string,
@@ -838,14 +878,27 @@ class AIService {
     maxTokens?: number,
     baseUrl?: string,
   ): Promise<string> {
-    const useCompletions = isCompletionsModel(model);
-    const url = useCompletions
-      ? this.getOpenAICompletionsUrl(provider, baseUrl)
-      : this.getOpenAIChatUrl(provider, baseUrl);
-    const body: any = useCompletions
-      ? { model, prompt: messagesToPrompt(messages), stream: false }
-      : { model, messages, stream: false };
-    if (maxTokens) body.max_tokens = maxTokens;
+    const useResponses = isResponsesModel(model);
+    const useCompletions = !useResponses && isCompletionsModel(model);
+
+    let url: string;
+    let body: any;
+
+    if (useResponses) {
+      url = this.getOpenAIResponsesUrl(provider, baseUrl);
+      const { instructions, input } = messagesToResponsesInput(messages);
+      body = { model, input, stream: false, store: false };
+      if (instructions) body.instructions = instructions;
+      if (maxTokens) body.max_output_tokens = maxTokens;
+    } else if (useCompletions) {
+      url = this.getOpenAICompletionsUrl(provider, baseUrl);
+      body = { model, prompt: messagesToPrompt(messages), stream: false };
+      if (maxTokens) body.max_tokens = maxTokens;
+    } else {
+      url = this.getOpenAIChatUrl(provider, baseUrl);
+      body = { model, messages, stream: false };
+      if (maxTokens) body.max_tokens = maxTokens;
+    }
 
     const response = await proxyFetch(url, {
       method: "POST",
@@ -859,8 +912,10 @@ class AIService {
       );
     }
     const data = await response.json();
-    // Completions API returns choices[0].text; Chat API returns choices[0].message.content
+    // Responses API returns output_text; Chat API returns choices[0].message.content; Completions returns choices[0].text
     return (
+      data.output_text?.trim() ||
+      data.output?.[0]?.content?.[0]?.text?.trim() ||
       data.choices?.[0]?.message?.content?.trim() ||
       data.choices?.[0]?.text?.trim() ||
       ""
@@ -878,16 +933,27 @@ class AIService {
     responseFormat?: string,
     baseUrl?: string,
   ): Promise<{ content: string; thinking: string }> {
-    const useCompletions = isCompletionsModel(model);
-    const url = useCompletions
-      ? this.getOpenAICompletionsUrl(provider, baseUrl)
-      : this.getOpenAIChatUrl(provider, baseUrl);
-    const body: any = useCompletions
-      ? { model, prompt: messagesToPrompt(messages), stream: true }
-      : { model, messages, stream: true };
-    // Only send response_format for cloud providers that support json_object.
-    // Local/compat providers (lmstudio, openai-compat, ollama) often reject it.
-    if (!useCompletions && responseFormat === "json" && !providerUsesBaseUrl(provider)) {
+    const useResponses = isResponsesModel(model);
+    const useCompletions = !useResponses && isCompletionsModel(model);
+
+    let url: string;
+    let body: any;
+
+    if (useResponses) {
+      url = this.getOpenAIResponsesUrl(provider, baseUrl);
+      const { instructions, input } = messagesToResponsesInput(messages);
+      body = { model, input, stream: true, store: false };
+      if (instructions) body.instructions = instructions;
+    } else if (useCompletions) {
+      url = this.getOpenAICompletionsUrl(provider, baseUrl);
+      body = { model, prompt: messagesToPrompt(messages), stream: true };
+    } else {
+      url = this.getOpenAIChatUrl(provider, baseUrl);
+      body = { model, messages, stream: true };
+    }
+
+    // Only send response_format for cloud providers that support json_object (chat completions only).
+    if (!useCompletions && !useResponses && responseFormat === "json" && !providerUsesBaseUrl(provider)) {
       body.response_format = { type: "json_object" };
     }
 
@@ -917,6 +983,11 @@ class AIService {
           thinking: "",
         };
       }
+      // Responses API non-streaming fallback
+      if (errJson.output_text || errJson.output) {
+        const text = errJson.output_text || errJson.output?.[0]?.content?.[0]?.text || "";
+        return { content: text, thinking: "" };
+      }
       throw new Error(
         `Unexpected JSON response: ${JSON.stringify(errJson).slice(0, 200)}`,
       );
@@ -925,7 +996,7 @@ class AIService {
     return this.parseOpenAIStream(response, onToken);
   }
 
-  /** Parse an SSE stream from an OpenAI-compatible API. */
+  /** Parse an SSE stream from an OpenAI-compatible API (chat completions, legacy completions, or Responses API). */
   private async parseOpenAIStream(
     response: Response,
     onToken?: (token: string, thinking?: string) => void,
@@ -937,6 +1008,7 @@ class AIService {
     let fullText = "";
     let thinkingText = "";
     let buffer = "";
+    let currentEventType = ""; // Track SSE event type for Responses API
 
     while (true) {
       const { done, value } = await reader.read();
@@ -947,7 +1019,15 @@ class AIService {
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        if (!trimmed) { currentEventType = ""; continue; }
+
+        // Track SSE event type (Responses API uses "event: <type>" lines)
+        if (trimmed.startsWith("event: ")) {
+          currentEventType = trimmed.slice(7);
+          continue;
+        }
+
+        if (!trimmed.startsWith("data: ")) continue;
         const payload = trimmed.slice(6);
         if (payload === "[DONE]") continue;
 
@@ -958,6 +1038,7 @@ class AIService {
           continue; // skip malformed SSE lines
         }
 
+        // Error handling (shared across all API formats)
         if (chunk.error) {
           const msg =
             chunk.error.message ||
@@ -972,7 +1053,21 @@ class AIService {
           );
         }
 
-        // Completions API uses choices[0].text; Chat API uses choices[0].delta
+        // Responses API format — uses event types like "response.output_text.delta"
+        if (currentEventType === "response.output_text.delta" && chunk.delta) {
+          fullText += chunk.delta;
+          if (onToken) onToken(chunk.delta);
+          continue;
+        }
+        // Responses API error events
+        if (currentEventType === "response.failed" || chunk.status === "failed") {
+          const errMsg = chunk.error?.message || chunk.incomplete_details || "Response failed";
+          throw new Error(`API Error: ${typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg)}`);
+        }
+        // Skip non-delta Responses API events (response.created, response.completed, etc.)
+        if (currentEventType.startsWith("response.")) continue;
+
+        // Chat completions / Legacy completions format
         const delta = chunk.choices?.[0]?.delta;
         const completionText = chunk.choices?.[0]?.text;
 
