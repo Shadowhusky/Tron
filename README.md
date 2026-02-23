@@ -77,6 +77,8 @@ On first launch, the setup wizard walks you through theme selection and AI provi
 
 **Web mode** lets you host your development terminal on a server and access it from anywhere — laptop, tablet, or phone. Gateway mode restricts access to SSH connections only, making it safe for multi-user cloud deployments.
 
+> **Tip:** Local network addresses (e.g. `192.168.x.x`) are not reachable outside your LAN. For easy remote access on mobile, pair web mode with a mesh VPN like [Tailscale](https://tailscale.com) — it assigns a stable IP to each device so you can reach your terminal from anywhere without port forwarding.
+
 ## Features
 
 ### Terminal
