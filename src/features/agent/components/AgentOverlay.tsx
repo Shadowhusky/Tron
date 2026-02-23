@@ -159,8 +159,8 @@ function summarizeCommand(cmd: string): string {
   }
   if (/^open\s/.test(base)) return "Opened file/URL";
 
-  // Read terminal / Checked terminal — show the summary directly
-  if (/^(Read|Checked) terminal/.test(base)) {
+  // Read terminal / Checked terminal / Checking terminal — show the summary directly
+  if (/^(Read|Check(ed|ing)) terminal/.test(base)) {
     return base.slice(0, 80);
   }
 
@@ -810,7 +810,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       const toCollapse = new Set(collapsedSteps);
       for (let i = 0; i < agentThread.length - newSteps.length; i++) {
         if (
-          agentThread[i].step === "executed" &&
+          (agentThread[i].step === "executed" || agentThread[i].step === "read_terminal") &&
           !manuallyExpandedRef.current.has(i)
         ) {
           toCollapse.add(i);
@@ -1060,7 +1060,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     if (isAgentRunning) {
       const recentSteps = panelSteps.slice(-5);
       const recentChecks = recentSteps.filter(
-        (s) => s.step === "executed" && s.output.startsWith("Checked terminal"),
+        (s) => s.step === "read_terminal" || (s.step === "executed" && s.output.startsWith("Checked terminal")),
       );
       if (recentChecks.length >= 2) {
         const lastCheck =
@@ -1315,7 +1315,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       step.step === "error" || step.step === "failed";
                     const isDone = step.step === "done";
                     const isQuestion = step.step === "question";
-                    const isExecuted = step.step === "executed";
+                    const isReadTerminal = step.step === "read_terminal";
+                    const isExecuted = step.step === "executed" || isReadTerminal;
                     const isExecuting = step.step === "executing";
                     const isThinkingStep = step.step === "thinking";
                     const isThought = step.step === "thought";

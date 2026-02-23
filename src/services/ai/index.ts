@@ -271,6 +271,39 @@ class AIService {
     return h;
   }
 
+  /**
+   * In demo mode, proxy cross-origin API requests through /api/ai-proxy
+   * to avoid CORS restrictions. Passes through to normal fetch() otherwise.
+   */
+  private async proxyFetch(
+    url: string,
+    init?: RequestInit,
+  ): Promise<Response> {
+    if (!isDemoMode()) return fetch(url, init);
+
+    // Same-origin requests don't need proxying
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (parsed.origin === window.location.origin)
+        return fetch(url, init);
+    } catch {
+      /* invalid URL — proxy it */
+    }
+
+    // Cross-origin: route through same-origin proxy
+    return fetch("/api/ai-proxy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url,
+        method: init?.method || "GET",
+        headers: init?.headers || {},
+        body: init?.body || undefined,
+      }),
+      signal: init?.signal,
+    });
+  }
+
   getConfig() {
     return this.config;
   }
@@ -290,7 +323,7 @@ class AIService {
         const headers: Record<string, string> = {};
         if (effectiveApiKey)
           headers.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/api/v1/models`, { headers });
+        const response = await this.proxyFetch(`${url}/api/v1/models`, { headers });
         if (!response.ok) return [];
         const data = await response.json();
         const allModels: any[] = data.models || data.data || [];
@@ -320,7 +353,7 @@ class AIService {
     if (provider === "ollama" || !provider) {
       const url = baseUrl || this.config.baseUrl || "http://localhost:11434";
       try {
-        const response = await fetch(`${url}/api/show`, {
+        const response = await this.proxyFetch(`${url}/api/show`, {
           method: "POST",
           headers: this.jsonHeaders(effectiveApiKey),
           body: JSON.stringify({ model: modelName }),
@@ -417,7 +450,7 @@ class AIService {
         const headers: Record<string, string> = {};
         if (effectiveApiKey)
           headers.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/api/tags`, { headers });
+        const response = await this.proxyFetch(`${url}/api/tags`, { headers });
         if (response.ok) {
           const data = await response.json();
           return (data.models || []).map((m: any) => ({
@@ -442,7 +475,7 @@ class AIService {
         const lmsHeaders: Record<string, string> = {};
         if (effectiveApiKey)
           lmsHeaders.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/api/v1/models`, {
+        const response = await this.proxyFetch(`${url}/api/v1/models`, {
           headers: lmsHeaders,
         });
         if (response.ok) {
@@ -475,7 +508,7 @@ class AIService {
         const headers: Record<string, string> = {};
         if (effectiveApiKey)
           headers.Authorization = `Bearer ${effectiveApiKey}`;
-        const response = await fetch(`${url}/v1/models`, { headers });
+        const response = await this.proxyFetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
           return (data.data || []).map((m: any) => ({
@@ -495,7 +528,7 @@ class AIService {
       try {
         const url = baseUrl.replace(/\/+$/, "");
         const headers = this.anthropicHeaders(effectiveApiKey);
-        const response = await fetch(`${url}/v1/models`, { headers });
+        const response = await this.proxyFetch(`${url}/v1/models`, { headers });
         if (response.ok) {
           const data = await response.json();
           return (data.data || []).map((m: any) => ({
@@ -596,7 +629,7 @@ class AIService {
 
     try {
       if (provider === "ollama") {
-        const response = await fetch(
+        const response = await this.proxyFetch(
           `${baseUrl || "http://localhost:11434"}/api/generate`,
           {
             method: "POST",
@@ -613,7 +646,7 @@ class AIService {
         isAnthropicProtocol(provider) &&
         (apiKey || provider === "anthropic-compat")
       ) {
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await this.proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -656,7 +689,7 @@ class AIService {
     signal?: AbortSignal,
     apiKey?: string,
   ): Promise<string> {
-    const response = await fetch(`${baseUrl}/api/generate`, {
+    const response = await this.proxyFetch(`${baseUrl}/api/generate`, {
       method: "POST",
       headers: this.jsonHeaders(apiKey),
       body: JSON.stringify({ model, prompt, stream: true }),
@@ -714,7 +747,7 @@ class AIService {
     }
 
     const headers = this.jsonHeaders(apiKey);
-    let response = await fetch(`${baseUrl}/api/chat`, {
+    let response = await this.proxyFetch(`${baseUrl}/api/chat`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -724,7 +757,7 @@ class AIService {
     // Retry without format/think if model still returns 400
     if (response.status === 400 && (body.format || body.think)) {
       const retryBody: any = { model, messages, stream: true };
-      response = await fetch(`${baseUrl}/api/chat`, {
+      response = await this.proxyFetch(`${baseUrl}/api/chat`, {
         method: "POST",
         headers,
         body: JSON.stringify(retryBody),
@@ -820,7 +853,7 @@ class AIService {
       : { model, messages, stream: false };
     if (maxTokens) body.max_tokens = maxTokens;
 
-    const response = await fetch(url, {
+    const response = await this.proxyFetch(url, {
       method: "POST",
       headers: this.jsonHeaders(apiKey || undefined),
       body: JSON.stringify(body),
@@ -864,7 +897,7 @@ class AIService {
       body.response_format = { type: "json_object" };
     }
 
-    const response = await fetch(url, {
+    const response = await this.proxyFetch(url, {
       method: "POST",
       headers: this.jsonHeaders(apiKey || undefined),
       body: JSON.stringify(body),
@@ -977,7 +1010,6 @@ class AIService {
     onToken?: (token: string) => void,
     context?: { cwd?: string; terminalHistory?: string },
   ): Promise<string> {
-    if (isDemoMode()) throw new Error("AI features require the desktop app. Download Tron for full AI support.");
     const { provider, model, apiKey, baseUrl } = this.config;
 
     const contextLines = [
@@ -1020,7 +1052,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       if (isAnthropicProtocol(provider)) {
         if (!apiKey && provider === "anthropic")
           throw new Error("Anthropic API Key required");
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await this.proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -1069,7 +1101,6 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     signal?: AbortSignal,
     onToken?: (text: string) => void,
   ): Promise<string> {
-    if (isDemoMode()) return "";
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -1088,7 +1119,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
 
     try {
       if (provider === "ollama") {
-        const response = await fetch(
+        const response = await this.proxyFetch(
           `${baseUrl || "http://localhost:11434"}/api/generate`,
           {
             method: "POST",
@@ -1111,7 +1142,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         isAnthropicProtocol(provider) &&
         (apiKey || provider === "anthropic-compat")
       ) {
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await this.proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -1171,7 +1202,6 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     prompt: string,
     sessionConfig?: AIConfig,
   ): Promise<string> {
-    if (isDemoMode()) return "";
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -1184,7 +1214,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
         try {
-          const response = await fetch(
+          const response = await this.proxyFetch(
             `${baseUrl || "http://localhost:11434"}/api/generate`,
             {
               method: "POST",
@@ -1214,7 +1244,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         isAnthropicProtocol(provider) &&
         (apiKey || provider === "anthropic-compat")
       ) {
-        const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+        const response = await this.proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
@@ -1268,7 +1298,6 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     signal?: AbortSignal,
     conversationHistory?: { role: "user" | "assistant"; content: string }[],
   ): Promise<string> {
-    if (isDemoMode()) throw new Error("AI features require the desktop app.");
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -1324,7 +1353,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         role: msg.role as "user" | "assistant",
         content: msg.content,
       }));
-      const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+      const response = await this.proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
         method: "POST",
         headers: this.anthropicHeaders(apiKey),
         body: JSON.stringify({
@@ -1418,10 +1447,6 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     images?: AttachedImage[],
     options?: { isSSH?: boolean; sessionId?: string },
   ): Promise<AgentResult> {
-    if (isDemoMode()) {
-      onUpdate("final_answer", "AI agent is not available in demo mode. Download Tron for full AI support.");
-      return { finalAnswer: "AI agent is not available in demo mode. Download Tron for full AI support." };
-    }
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
     const model = cfg.model;
@@ -1554,6 +1579,7 @@ ${agentPrompt}
     let consecutiveGuardBlocks = 0; // Global counter for ANY guard rejection — force-stops when too high
     let lastReadTerminalOutput = ""; // Track consecutive identical read_terminal results
     let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
+    let readTerminalCount = 0; // Total consecutive read_terminal calls (for UI merging + backoff)
 
     // "User ready / continue" signal from UI (e.g. Continue button in overlay)
     // Uses a global flag checked each read_terminal iteration
@@ -1624,7 +1650,7 @@ ${agentPrompt}
         ) {
           // Anthropic Messages API with streaming
           let contentAccumulated = "";
-          const response = await fetch(getAnthropicChatUrl(provider, baseUrl), {
+          const response = await this.proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
             method: "POST",
             headers: this.anthropicHeaders(apiKey),
             body: JSON.stringify({
@@ -1989,12 +2015,7 @@ ${agentPrompt}
           };
         }
 
-        // Log parse failures so they appear in the session log
-        const preview = (responseText || "").slice(0, 120).replace(/\n/g, " ");
-        onUpdate(
-          "failed",
-          `Parse error (${parseFailures}/3): ${preview || "(empty response)"}...`,
-        );
+        // Silently retry — parse errors are internal recovery, not user-facing
         // Truncate raw text in history to avoid wasting context on bad model output
         const truncatedResponse = (responseText || "(empty)").slice(0, 500);
         history.push({ role: "assistant", content: truncatedResponse });
@@ -2642,14 +2663,14 @@ ${agentPrompt}
             identicalReadCount = 0;
           }
 
-          // Smart backoff: if terminal output hasn't changed, wait longer each time
-          if (identicalReadCount >= 2) {
-            const backoffMs = Math.min(1000 * identicalReadCount, 10000);
+          // Smart backoff: exponential delay 500ms → 1s → 2s → 3s (capped at 4s)
+          if (readTerminalCount > 0) {
+            const backoffMs = Math.min(500 * Math.pow(1.5, readTerminalCount - 1), 4000);
             await new Promise((r) => setTimeout(r, backoffMs));
           }
+          readTerminalCount++;
 
-          // Show a useful preview of what was read — first line as collapsed summary
-          // Suppress duplicate UI entries: only show update on first or every 5th identical read
+          // Show a useful preview — use "read_terminal" step so UI merges consecutive reads
           const previewLines = output
             ? output
               .split("\n")
@@ -2659,17 +2680,15 @@ ${agentPrompt}
           const firstLine = previewLines[0]?.slice(0, 100) || "(No output)";
           const fullPreview =
             previewLines.join("\n").slice(0, 300) || "(No output)";
-          if (identicalReadCount <= 1 || identicalReadCount % 5 === 0) {
-            const suffix =
-              identicalReadCount > 1
-                ? ` (${identicalReadCount}x unchanged)`
-                : "";
-            onUpdate(
-              "executed",
-              `Checked terminal${suffix}: ${firstLine}\n---\n${fullPreview}`,
-              action
-            );
-          }
+          const suffix =
+            readTerminalCount > 1
+              ? ` (${readTerminalCount}x)`
+              : "";
+          onUpdate(
+            "read_terminal",
+            `Checking terminal${suffix}: ${firstLine}\n---\n${fullPreview}`,
+            action
+          );
 
           // Detect if terminal is waiting for user input
           const termState = classifyTerminalOutput(output || "");
@@ -2714,8 +2733,9 @@ ${agentPrompt}
         continue;
       }
 
-      // Reset identical-read counter when agent takes any other action —
-      // but preserve it while a server is running to avoid write→read→write loops
+      // Reset read counters when agent takes any other action —
+      // but preserve identicalReadCount while a server is running to avoid write→read→write loops
+      readTerminalCount = 0;
       if (!terminalBusy) {
         identicalReadCount = 0;
         lastReadTerminalOutput = "";

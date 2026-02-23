@@ -755,6 +755,18 @@ Task: ${prompt}
             setAgentThread((prev) => {
               const updated = [...prev];
 
+              // "read_terminal" → merge into the last read_terminal entry in current run (single collapsible row)
+              if (step === "read_terminal") {
+                for (let j = updated.length - 1; j >= 0; j--) {
+                  if (updated[j].step === "separator") break; // don't merge across runs
+                  if (updated[j].step === "read_terminal") {
+                    updated[j] = { step, output, payload };
+                    return updated;
+                  }
+                }
+                return [...updated, { step, output, payload }];
+              }
+
               // "executed"/"failed" → transform the preceding "executing" entry in-place
               if (step === "executed" || step === "failed") {
                 let lastExecIdx = -1;
