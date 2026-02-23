@@ -1,8 +1,10 @@
 import "dotenv/config";
 import express from "express";
 import http from "http";
+import fs from "fs";
 import os from "os";
 import path from "path";
+import url from "url";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
@@ -31,9 +33,41 @@ const sshOnly = (() => {
     return serverMode === "gateway";
 })();
 console.log(`[Tron Web] Mode: ${serverMode}${sshOnly ? " (SSH-only)" : ""}`);
-// In-memory persistence for web mode (per client)
-const clientSessions = new Map();
-const clientConfigs = new Map();
+// ---------------------------------------------------------------------------
+// File-backed persistence for web mode (survives server restarts & reconnects)
+// ---------------------------------------------------------------------------
+const tronDataDir = path.join(os.homedir(), ".tron");
+const sessionsFile = path.join(tronDataDir, "web-sessions.json");
+const configsFile = path.join(tronDataDir, "web-configs.json");
+function ensureDataDir() {
+    try {
+        fs.mkdirSync(tronDataDir, { recursive: true });
+    }
+    catch { /* exists */ }
+}
+function loadJsonMap(filePath) {
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const obj = JSON.parse(raw);
+        return new Map(Object.entries(obj));
+    }
+    catch {
+        return new Map();
+    }
+}
+function saveJsonMap(filePath, map) {
+    ensureDataDir();
+    const obj = {};
+    for (const [k, v] of map)
+        obj[k] = v;
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(obj), "utf-8");
+    }
+    catch { /* best effort */ }
+}
+ensureDataDir();
+const clientSessions = loadJsonMap(sessionsFile);
+const clientConfigs = loadJsonMap(configsFile);
 const app = express();
 const server = http.createServer(app);
 // ---------------------------------------------------------------------------
@@ -134,8 +168,10 @@ else {
 }
 // WebSocket server
 const wss = new WebSocketServer({ server, path: "/ws" });
-wss.on("connection", (ws) => {
-    const clientId = randomUUID();
+wss.on("connection", (ws, req) => {
+    // Use persistent client token from URL query (survives reconnects) or fall back to random
+    const parsed = url.parse(req.url || "", true);
+    const clientId = parsed.query.token || randomUUID();
     // Immediately tell client which mode and restrictions we're running with
     if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "mode", mode: serverMode, sshOnly }));
@@ -171,8 +207,7 @@ wss.on("connection", (ws) => {
     ws.on("close", () => {
         ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
         terminal.cleanupClientSessions(clientId);
-        clientSessions.delete(clientId);
-        clientConfigs.delete(clientId);
+        // Keep clientSessions/clientConfigs — they persist across reconnects
     });
 });
 // Channels completely blocked in SSH-only mode (no local PTY or filesystem)
@@ -284,11 +319,13 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return clientSessions.get(clientId) || null;
         case "sessions.write":
             clientSessions.set(clientId, data);
+            saveJsonMap(sessionsFile, clientSessions);
             return true;
         case "config.read":
             return clientConfigs.get(clientId) || null;
         case "config.write":
             clientConfigs.set(clientId, data);
+            saveJsonMap(configsFile, clientConfigs);
             return true;
         case "config.getSystemPaths": {
             const home = process.env.HOME || os.homedir();

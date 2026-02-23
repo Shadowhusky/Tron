@@ -31,9 +31,21 @@ export const modeReady: Promise<TronMode> = new Promise((resolve) => {
 });
 let modeResolved = false;
 
+/** Get or create a persistent client token so the server can identify us across reconnects. */
+function getClientToken(): string {
+  const key = "tron_client_token";
+  let token = localStorage.getItem(key);
+  if (!token) {
+    token = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try { localStorage.setItem(key, token); } catch { /* private mode */ }
+  }
+  return token;
+}
+
 function getWsUrl(): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/ws`;
+  const token = getClientToken();
+  return `${proto}//${location.host}/ws?token=${token}`;
 }
 
 function uuid(): string {
