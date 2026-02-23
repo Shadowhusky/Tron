@@ -1,7 +1,5 @@
 <p align="center">
-
-https://github.com/Shadowhusky/Tron/raw/main/screenshots/demo-hero.mp4
-
+  <img width="2032" height="1167" alt="Screenshot 2026-02-23 at 11 48 02" src="https://github.com/user-attachments/assets/8d479dd0-e2b6-45e3-bd26-e7d026b40b23" />
 </p>
 
 <h1 align="center">Tron — AI-Powered Terminal</h1>
@@ -37,6 +35,8 @@ Most AI coding tools are chat-first — you paste context in, copy commands out,
 - **Web mode** — self-host your terminal and access it from anywhere, or deploy as an SSH gateway
 - **Cross-platform** — macOS, Windows, Linux. Desktop (Electron) or browser.
 - **Safe** — dangerous command detection, permission prompts, loop detection, circuit breakers
+
+https://github.com/user-attachments/assets/1e71e424-940a-4ff5-be21-5460d6843ab1
 
 ## Demo
 
