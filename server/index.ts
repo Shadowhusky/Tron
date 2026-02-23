@@ -57,6 +57,8 @@ function isPrivateHost(hostname: string): boolean {
   if (/^10\./.test(hostname)) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
   if (/^192\.168\./.test(hostname)) return true;
+  // Docker internal hostnames and local network suffixes
+  if (hostname.endsWith(".internal") || hostname.endsWith(".local")) return true;
   return false;
 }
 

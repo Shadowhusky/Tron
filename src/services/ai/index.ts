@@ -197,7 +197,8 @@ function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
     const h = parsed.hostname;
     const isLocal =
       h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0.0.0.0" ||
-      /^10\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^192\.168\./.test(h);
+      /^10\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^192\.168\./.test(h) ||
+      h.endsWith(".internal") || h.endsWith(".local");
     if (!isLocal) return fetch(url, init);
 
     const proxyPath = `/api/ai-proxy${parsed.pathname}${parsed.search}`;
