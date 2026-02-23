@@ -728,11 +728,12 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   const [liveHeight, setLiveHeight] = useState<number | undefined>(undefined);
 
   const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (fullHeight || !isExpanded || !panelRef.current) return;
       // Only start drag from the header area (not buttons)
       if ((e.target as HTMLElement).closest("button")) return;
       e.preventDefault();
+      (e.target as Element).setPointerCapture?.(e.pointerId);
       isDragging.current = true;
       dragStartY.current = e.clientY;
       dragStartHeight.current =
@@ -744,7 +745,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   );
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+    const handlePointerMove = (e: PointerEvent) => {
       if (!isDragging.current) return;
       // Dragging UP increases height
       const delta = dragStartY.current - e.clientY;
@@ -754,7 +755,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       );
       setLiveHeight(newHeight);
     };
-    const handleMouseUp = () => {
+    const handlePointerUp = () => {
       if (!isDragging.current) return;
       isDragging.current = false;
       document.body.style.cursor = "";
@@ -764,11 +765,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       }
       setLiveHeight(undefined);
     };
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
     };
   }, [liveHeight, onResizeHeight]);
 
@@ -1162,7 +1163,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
           {/* Resize grip — only in terminal mode when expanded */}
           {!fullHeight && isExpanded && (
             <div
-              onMouseDown={handleDragStart}
+              onPointerDown={handleDragStart}
               className="flex justify-center py-0.5 cursor-ns-resize shrink-0"
             >
               <div
@@ -1173,7 +1174,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
           {/* Status Header */}
           <div
-            onMouseDown={handleDragStart}
+            onPointerDown={handleDragStart}
             className={`flex items-center justify-between gap-2 px-3 py-1.5 shrink-0 ${
               !fullHeight && isExpanded ? "cursor-ns-resize" : ""
             } ${isExpanded ? "border-b" : ""} ${

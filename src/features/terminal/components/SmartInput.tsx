@@ -1368,6 +1368,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     ? "bg-blue-600 text-white"
                     : "text-gray-400 hover:bg-white/5"
                   }`}
+                onPointerDown={(e) => e.preventDefault()}
                 onClick={() => {
                   acceptCompletion(comp);
                   setTimeout(() => handleSend(), 0);
