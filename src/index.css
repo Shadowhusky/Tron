@@ -18,7 +18,15 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  /* Safe area for notched devices (enabled by viewport-fit=cover) */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+#root {
+  height: 100%;
 }
 
 button,

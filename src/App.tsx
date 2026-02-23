@@ -177,7 +177,7 @@ const AppContent = () => {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.4 }}
-      className={`flex flex-col h-screen w-full overflow-hidden ${getTheme(resolvedTheme).appBg}`}
+      className={`flex flex-col h-full w-full overflow-hidden ${getTheme(resolvedTheme).appBg}`}
     >
       <TabBar
         tabs={tabs}

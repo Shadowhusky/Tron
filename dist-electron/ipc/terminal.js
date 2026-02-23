@@ -167,8 +167,31 @@ function trackedExec(command, options) {
 /** CWD cache — avoids spawning lsof/readlink on every IPC call (completions fire per keystroke). */
 const cwdCache = new Map();
 const CWD_CACHE_TTL = 2000; // 2 seconds
+/**
+ * Parse CWD from shell prompt in terminal history (Windows fallback).
+ * PowerShell shows "PS C:\path>" and cmd.exe shows "C:\path>".
+ */
+function parseCwdFromHistory(sessionId) {
+    const history = sessionHistory.get(sessionId);
+    if (!history)
+        return null;
+    const lines = history.split("\n").slice(-20);
+    // Scan from bottom up for the most recent prompt
+    for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        // PowerShell: "PS C:\Users\foo\project> " or "PS C:\Users\foo\project>"
+        const psMatch = line.match(/^PS\s+([A-Z]:\\[^>]*?)>\s*$/i);
+        if (psMatch)
+            return psMatch[1];
+        // cmd.exe: "C:\Users\foo\project>"
+        const cmdMatch = line.match(/^([A-Z]:\\[^>]*?)>\s*$/i);
+        if (cmdMatch)
+            return cmdMatch[1];
+    }
+    return null;
+}
 /** Get CWD for a PID. Uses cache to avoid expensive subprocess spawns. */
-async function getCwdForPid(pid) {
+async function getCwdForPid(pid, sessionId) {
     // Check cache first
     const cached = cwdCache.get(pid);
     if (cached && Date.now() - cached.ts < CWD_CACHE_TTL) {
@@ -185,12 +208,10 @@ async function getCwdForPid(pid) {
             result = stdout.trim() || null;
         }
         else if (os_1.default.platform() === "win32") {
-            try {
-                const { stdout } = await trackedExec(`powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p -and $p.ExecutablePath) { Split-Path $p.ExecutablePath -Parent }"`, { timeout: 5000 });
-                result = stdout.trim() || null;
-            }
-            catch {
-                return null;
+            // Windows: PowerShell doesn't update the OS-level CWD on cd (Set-Location),
+            // so we parse the prompt from terminal history instead.
+            if (sessionId) {
+                result = parseCwdFromHistory(sessionId);
             }
         }
         if (result) {
@@ -362,7 +383,7 @@ function registerTerminalHandlers(getMainWindow) {
         const session = sessions.get(sessionId);
         let cwd = os_1.default.homedir() || "/";
         if (session) {
-            const resolved = await getCwdForPid(session.pid);
+            const resolved = await getCwdForPid(session.pid, sessionId);
             if (resolved)
                 cwd = resolved;
         }
@@ -408,7 +429,7 @@ function registerTerminalHandlers(getMainWindow) {
         const session = sessions.get(sessionId);
         if (!session)
             return null;
-        return getCwdForPid(session.pid);
+        return getCwdForPid(session.pid, sessionId);
     });
     // Get system info (OS, shell, arch) for agent environment context
     electron_1.ipcMain.handle("terminal.getSystemInfo", async (_event, sessionId) => {
@@ -441,7 +462,7 @@ function registerTerminalHandlers(getMainWindow) {
         if (!cwd && sessionId) {
             const session = sessions.get(sessionId);
             if (session) {
-                const resolved = await getCwdForPid(session.pid);
+                const resolved = await getCwdForPid(session.pid, sessionId);
                 if (resolved)
                     workDir = resolved;
             }
