@@ -452,8 +452,6 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
       {/* Right: Context Ring + Model */}
       <div className="flex items-center gap-4 shrink-0">
-        {/* Context Ring — hidden on touch devices to save space */}
-        {!isTouchDevice() && (
         <>
         <div
           ref={ctxRingRef}
@@ -498,7 +496,6 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
         <div className="h-3 w-px bg-current opacity-20" />
         </>
-        )}
 
         {/* Model Switcher */}
         <div ref={modelBtnRef}>
