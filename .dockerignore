@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-ssr
+.env
+.env.test
+.git
+.claude
+.screenshots-*
+release
+e2e/.test-profile-*
+test-results
+playwright-report
+*.log
+.DS_Store

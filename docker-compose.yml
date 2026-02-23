@@ -1,0 +1,13 @@
+services:
+  tron-web:
+    build: .
+    container_name: tron-web
+    restart: unless-stopped
+    ports:
+      - "3888:3888"
+    env_file:
+      - .env
+    # Uncomment for gateway/SSH-only mode (no local terminal)
+    # environment:
+    #   - TRON_MODE=gateway
+    #   - TRON_SSH_ONLY=true
