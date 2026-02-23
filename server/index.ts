@@ -188,6 +188,10 @@ async function handleInvoke(
       return terminal.getSystemInfo(data);
     case "ai.testConnection":
       return ai.testConnection(data);
+    case "ai.getModels":
+      return ai.getModels(data);
+    case "ai.getModelCapabilities":
+      return ai.getModelCapabilities(data);
     case "ssh.connect":
       return ssh.createSSHSession(
         data,
