@@ -58,7 +58,15 @@ function registerConfigHandlers() {
     electron_1.ipcMain.handle("sessions.write", async (_event, data) => {
         try {
             const sessionsPath = getSessionsPath();
-            fs_1.default.writeFileSync(sessionsPath, JSON.stringify(data, null, 2), "utf-8");
+            // Merge top-level keys (allows multiple contexts to coexist: _layout, _agent, etc.)
+            let existing = {};
+            try {
+                if (fs_1.default.existsSync(sessionsPath)) {
+                    existing = JSON.parse(fs_1.default.readFileSync(sessionsPath, "utf-8"));
+                }
+            }
+            catch { /* start fresh if corrupt */ }
+            fs_1.default.writeFileSync(sessionsPath, JSON.stringify({ ...existing, ...data }, null, 2), "utf-8");
             return true;
         }
         catch (e) {

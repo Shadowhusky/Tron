@@ -22,6 +22,7 @@ import { useLayout } from "../../../contexts/LayoutContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { matchesHotkey, formatHotkey } from "../../../hooks/useHotkey";
 import { slideDown, fadeScale } from "../../../utils/motion";
+import { isTouchDevice } from "../../../utils/platform";
 
 interface SmartInputProps {
   onSend: (value: string) => void;
@@ -106,9 +107,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
             : valOrUpdater;
         if (inputRef.current && inputRef.current.value !== newVal) {
           inputRef.current.value = newVal;
-          // Reset textarea height when clearing
-          if (!newVal) {
-            inputRef.current.style.height = 'auto';
+          // Auto-resize textarea height to fit content
+          inputRef.current.style.height = 'auto';
+          if (newVal) {
+            inputRef.current.style.height = inputRef.current.scrollHeight + 'px';
           }
         }
         return newVal;
@@ -1327,7 +1329,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
           )}
         </div>
 
-        {/* Right: shortcuts */}
+        {/* Right: shortcuts (hidden on touch/mobile — not useful without keyboard) */}
+        {!isTouchDevice() && (
         <div
           className={`flex items-center gap-0.5 shrink-0 ${theme === "light" ? "opacity-70" : "opacity-80"
             }`}
@@ -1343,6 +1346,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           <span className="opacity-40 mx-1">·</span>
           <span>{formatHotkey(hotkeys.splitHorizontal)} split</span>
         </div>
+        )}
       </div>
       )}
 

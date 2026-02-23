@@ -23,6 +23,12 @@ export function isElectronApp(): boolean {
   return false;
 }
 
+/** Detect if running on a touch device (mobile/tablet). */
+export function isTouchDevice(): boolean {
+  if (typeof window === "undefined") return false;
+  return "ontouchstart" in window || navigator.maxTouchPoints > 0;
+}
+
 /** Extract filename from a path, handling both / and \ separators. */
 export function extractFilename(filePath: string): string {
   const lastSlash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));

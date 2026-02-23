@@ -211,7 +211,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         if (sessionsData && (sessionsData as any)._discardLayout) {
           // Clear stale localStorage and reset sessions file
           localStorage.removeItem(STORAGE_KEYS.LAYOUT);
-          window.electron?.ipcRenderer?.writeSessions?.({})?.catch?.(() => { });
+          window.electron?.ipcRenderer?.writeSessions?.({ _discardLayout: false, _layout: null })?.catch?.(() => { });
           // Fall through to create fresh tab
           if (isSshOnly()) { createConnectTab(); } else { createTab(); }
           return;

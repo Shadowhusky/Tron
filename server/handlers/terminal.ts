@@ -51,6 +51,8 @@ const sessions = new Map<string, IPty>();
 const sessionHistory = new Map<string, string>();
 // Track which WS client owns each session
 const sessionOwners = new Map<string, string>();
+// Current pushEvent per session — updated on reconnect so onData uses fresh WS
+const sessionPushEvents = new Map<string, EventPusher>();
 const activeChildProcesses = new Set<ChildProcess>();
 
 // Per-session display buffering — active during execInTerminal to strip sentinels cleanly
@@ -136,6 +138,7 @@ export function cleanupClientSessions(clientId: string) {
         session.kill();
         sessions.delete(sessionId);
         sessionHistory.delete(sessionId);
+        sessionPushEvents.delete(sessionId);
       }
       sessionOwners.delete(sessionId);
     }
@@ -155,6 +158,7 @@ export function cleanupAllServerSessions() {
   sessions.clear();
   sessionHistory.clear();
   sessionOwners.clear();
+  sessionPushEvents.clear();
 }
 
 export function sessionExists(sessionId: string): boolean {
@@ -174,6 +178,8 @@ export function createSession(
     const existing = sessions.get(reconnectId)!;
     try { existing.resize(cols || 80, rows || 30); } catch { }
     sessionOwners.set(reconnectId, clientId);
+    // Update pushEvent so onData sends to the new WebSocket connection
+    sessionPushEvents.set(reconnectId, pushEvent);
     return reconnectId;
   }
 
@@ -193,6 +199,7 @@ export function createSession(
 
   sessionHistory.set(sessionId, "");
   sessionOwners.set(sessionId, clientId);
+  sessionPushEvents.set(sessionId, pushEvent);
 
   ptyProcess.onData((data) => {
     const currentHistory = sessionHistory.get(sessionId) || "";
@@ -201,14 +208,18 @@ export function createSession(
     } else {
       sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
     }
-    pushSessionData(sessionId, data, pushEvent);
+    // Use dynamic pushEvent (updated on reconnect) instead of closure-captured one
+    const currentPushEvent = sessionPushEvents.get(sessionId) || pushEvent;
+    pushSessionData(sessionId, data, currentPushEvent);
   });
 
   ptyProcess.onExit(({ exitCode }) => {
-    pushEvent("terminal.exit", { id: sessionId, exitCode });
+    const currentPushEvent = sessionPushEvents.get(sessionId) || pushEvent;
+    currentPushEvent("terminal.exit", { id: sessionId, exitCode });
     sessions.delete(sessionId);
     sessionHistory.delete(sessionId);
     sessionOwners.delete(sessionId);
+    sessionPushEvents.delete(sessionId);
   });
 
   sessions.set(sessionId, ptyProcess);

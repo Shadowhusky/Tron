@@ -42,6 +42,37 @@ const TabBar: React.FC<TabBarProps> = ({
   const [localTabs, setLocalTabs] = useState(tabs);
   const isDraggingRef = useRef(false);
 
+  // Long-press for mobile context menu
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFired = useRef(false);
+
+  const handleTouchStart = (tab: Tab, e: React.TouchEvent) => {
+    if (isOnlyConnectTab(tab)) return;
+    longPressFired.current = false;
+    const touch = e.touches[0];
+    const x = touch.clientX;
+    const y = touch.clientY;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFired.current = true;
+      setContextMenu({ tabId: tab.id, x, y });
+    }, 500);
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleTouchMove = () => {
+    // Cancel long-press if finger moves (scrolling)
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
     tabId: string;
@@ -163,7 +194,13 @@ const TabBar: React.FC<TabBarProps> = ({
                 })
                 }`}
               data-testid={`tab-${tab.id}`}
-              onClick={() => onSelect(tab.id)}
+              onClick={() => {
+                if (longPressFired.current) return; // Prevent click after long-press
+                onSelect(tab.id);
+              }}
+              onTouchStart={(e) => handleTouchStart(tab, e)}
+              onTouchEnd={handleTouchEnd}
+              onTouchMove={handleTouchMove}
               onContextMenu={(e) => {
                 e.preventDefault();
                 if (isOnlyConnectTab(tab)) return; // no context menu for connect tabs
