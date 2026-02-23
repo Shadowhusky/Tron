@@ -20,6 +20,9 @@ body {
   min-width: 320px;
   height: 100vh;
   height: 100dvh;
+  /* --app-height is set by visualViewport JS when on touch devices,
+     keeping the UI above the virtual keyboard. Falls back to 100dvh. */
+  height: var(--app-height, 100dvh);
   overflow: hidden;
   /* Safe area for notched devices (enabled by viewport-fit=cover) */
   padding-bottom: env(safe-area-inset-bottom, 0px);

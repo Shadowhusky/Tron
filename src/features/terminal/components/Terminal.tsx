@@ -124,6 +124,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
       if (matches(clearCombo)) {
         term.clear();
+        window.electron?.ipcRenderer?.invoke?.(IPC.TERMINAL_CLEAR_HISTORY, sessionId)?.catch?.(() => {});
         return false;
       }
       if (matches(overlayCombo)) {
@@ -182,10 +183,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       // then resize. This order prevents:
       // 1. Duplication from listener + history race condition
       // 2. Duplicate prompts from resize-triggered shell re-renders
-      window.electron.ipcRenderer
-        .getHistory(sessionId)
-        .then((history: string) => {
-          if (!mounted) return; // Component unmounted before history arrived
+      const finishSetup = (history?: string) => {
+          if (!mounted) return;
 
           if (history && xtermRef.current) {
             term.write(history);
@@ -213,10 +212,44 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
               xtermRef.current.focus();
             }
           }, 350);
-        });
+      };
+
+      window.electron.ipcRenderer
+        .getHistory(sessionId)
+        .then((history: string) => finishSetup(history))
+        .catch(() => finishSetup());
     } else {
       term.write("\r\n\x1b[33m[Mock Mode] Electron not detected.\x1b[0m\r\n");
     }
+
+    // Touch scroll — xterm v6 has no built-in touch scroll support.
+    // The .xterm-screen canvas sits on top of .xterm-viewport (the native
+    // scroll container), so touch events never reach it. We manually
+    // translate touch-move deltas into term.scrollLines() calls.
+    let touchStartY = 0;
+    let touchAccum = 0;
+    const LINE_HEIGHT = term.options.fontSize ? term.options.fontSize * 1.2 : 17;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      touchStartY = e.touches[0].clientY;
+      touchAccum = 0;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const dy = touchStartY - e.touches[0].clientY;
+      touchStartY = e.touches[0].clientY;
+      touchAccum += dy;
+      const lines = Math.trunc(touchAccum / LINE_HEIGHT);
+      if (lines !== 0) {
+        term.scrollLines(lines);
+        touchAccum -= lines * LINE_HEIGHT;
+      }
+    };
+
+    const el = terminalRef.current;
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
 
     // ResizeObserver
     const resizeObserver = new ResizeObserver(debouncedResize);
@@ -254,6 +287,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       fitAddonRef.current = null;
       resizeObserver.disconnect();
       window.removeEventListener("resize", debouncedResize);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
@@ -266,6 +301,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId === sessionId && xtermRef.current) {
         xtermRef.current.clear();
+        // Also clear server-side history so it doesn't reappear after page refresh
+        window.electron?.ipcRenderer?.invoke?.(IPC.TERMINAL_CLEAR_HISTORY, sessionId)?.catch?.(() => {});
       }
     };
     window.addEventListener("tron:clearTerminal", handler);
