@@ -1,212 +1,101 @@
-# Tron — AI-Powered Terminal
+<p align="center">
+  <img src="screenshots/terminal-dark.png" width="800" />
+</p>
 
-A modern terminal with a built-in AI agent that can execute commands, write files, and build projects on your behalf. Connect any LLM — local (Ollama, LM Studio) or cloud (OpenAI, Anthropic, Gemini, DeepSeek, and more) — and let the agent handle complex tasks while you watch in real-time.
+<h1 align="center">Tron — AI-Powered Terminal</h1>
 
-Works as a **desktop app** (Electron) or a **web app** (Express + WebSocket) with full SSH gateway support.
+<p align="center">
+  A terminal where the AI operates directly in your shell — running commands, reading output, writing files, and iterating until the job is done.
+</p>
 
-![Terminal Dark](screenshots/terminal-dark.png)
+<p align="center">
+  <a href="https://github.com/Shadowhusky/Tron/stargazers"><img src="https://img.shields.io/github/stars/Shadowhusky/Tron?style=flat&color=yellow" alt="Stars" /></a>
+  <a href="https://github.com/Shadowhusky/Tron/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Shadowhusky/Tron?style=flat" alt="License" /></a>
+  <a href="https://discord.gg/EeTCS7A6"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://github.com/Shadowhusky/Tron/releases"><img src="https://img.shields.io/github/v/release/Shadowhusky/Tron?style=flat&color=blue" alt="Release" /></a>
+</p>
+
+---
 
 ## Why Tron?
 
-Most AI coding tools are chat-first: you paste context in, copy commands out, run them yourself. Tron flips that. It's a **terminal-first** app where the AI operates directly in your shell — running commands, reading output, writing files, and iterating until the job is done.
+Most AI coding tools are chat-first — you paste context in, copy commands out, run them yourself. Tron is **terminal-first**: the AI agent executes multi-step plans directly in your real shell with full visibility and permission controls.
 
-- **Real terminal, real shell.** Full PTY with xterm.js. Your aliases, shell config, and tools all work.
-- **SSH remote connections.** Connect to remote servers via SSH — password, private key, or SSH agent auth.
-- **Web mode.** Run Tron as a web app — self-hosted with local terminals, or as an SSH gateway for cloud deployments.
-- **Agent runs commands for you.** Describe what you want; the agent executes multi-step plans with permission controls.
-- **Any model, any provider.** Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax — or any OpenAI/Anthropic-compatible API.
-- **Safety built in.** Dangerous command detection, permission prompts, double-confirm for destructive operations, loop detection, and circuit breakers.
-- **Cross-platform.** macOS, Windows, and Linux. Native window chrome on each platform.
+- **Real terminal** — full PTY with xterm.js, your aliases and tools all work
+- **AI agent** — describe what you want, the agent executes step-by-step with live output
+- **Any model** — Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, or any compatible API
+- **SSH remote** — connect to remote servers; terminal, agent, and file ops work identically over SSH
+- **Web mode** — self-host your terminal and access it from anywhere, or deploy as an SSH gateway
+- **Cross-platform** — macOS, Windows, Linux. Desktop (Electron) or browser.
+- **Safe** — dangerous command detection, permission prompts, loop detection, circuit breakers
 
 ## Demo
 
-### Terminal — Tabs, Commands & Split Panes
+| Terminal & Split Panes | SSH Connections | AI Agent |
+|:---:|:---:|:---:|
+| ![Terminal](screenshots/demo-terminal.gif) | ![SSH](screenshots/demo-ssh.gif) | ![Agent](screenshots/demo-agent.gif) |
 
-![Terminal Demo](screenshots/demo-terminal.gif)
+| Themes | Input Modes | Advice Mode |
+|:---:|:---:|:---:|
+| ![Themes](screenshots/demo-themes.gif) | ![Modes](screenshots/demo-modes.gif) | ![Advice](screenshots/demo-advice.gif) |
 
-### SSH — Remote Server Connections
+## Getting Started
 
-![SSH Demo](screenshots/demo-ssh.gif)
+**Prerequisites:** Node.js 18+. Optionally [Ollama](https://ollama.ai) for free local AI.
 
-### Theme Switching — Dark, Light & Modern
+```bash
+git clone https://github.com/Shadowhusky/Tron.git
+cd tron && npm install
 
-![Themes Demo](screenshots/demo-themes.gif)
+# Desktop app
+npm run dev
 
-### Input Modes — Auto, Command, Advice & Agent
+# Web app (self-hosted)
+npm run dev:web
+```
 
-![Modes Demo](screenshots/demo-modes.gif)
+On first launch, the setup wizard walks you through theme selection and AI provider configuration.
 
-### Advice Mode — AI Command Suggestions
+## Deployment Modes
 
-![Advice Demo](screenshots/demo-advice.gif)
+| Mode | Command | Use Case |
+|------|---------|----------|
+| **Desktop** | `npm run dev` | Local Electron app |
+| **Web (local)** | `npm run start:web` | Self-hosted terminal, accessible from any browser |
+| **Web (gateway)** | `TRON_MODE=gateway npm run start:web` | SSH-only relay for cloud/hosted deployments |
 
-### AI Agent — Autonomous Task Execution
-
-![Agent Demo](screenshots/demo-agent.gif)
-
-### Setup Wizard & Settings
-
-![Settings Demo](screenshots/demo-settings.gif)
-
-## Screenshots
-
-<table>
-<tr>
-<td><strong>Dark Theme</strong></td>
-<td><strong>Light Theme</strong></td>
-<td><strong>Modern Theme</strong></td>
-</tr>
-<tr>
-<td><img src="screenshots/terminal-dark.png" width="300" /></td>
-<td><img src="screenshots/terminal-light.png" width="300" /></td>
-<td><img src="screenshots/terminal-modern.png" width="300" /></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td><strong>SSH Connection</strong></td>
-<td><strong>Setup Wizard</strong></td>
-<td><strong>Settings</strong></td>
-</tr>
-<tr>
-<td><img src="screenshots/ssh-connect.png" width="300" /></td>
-<td><img src="screenshots/onboarding.png" width="300" /></td>
-<td><img src="screenshots/settings.png" width="300" /></td>
-</tr>
-</table>
+**Web mode** lets you host your development terminal on a server and access it from anywhere — laptop, tablet, or phone. Gateway mode restricts access to SSH connections only, making it safe for multi-user cloud deployments.
 
 ## Features
 
 ### Terminal
-
-- **Tabbed interface** — open multiple sessions, drag to reorder, rename tabs
-- **Split panes** — vertical (`Cmd+D`) and horizontal (`Cmd+Shift+D`) splits, recursive nesting
-- **Smart input bar** — replaces the traditional prompt with a unified command/AI input at the bottom of each tab
-- **Shell completions** — Tab completion for commands, paths, and history
-- **AI ghost text** — idle suggestions appear as inline ghost text after 3 seconds of inactivity
-- **Session persistence** — agent state, draft input, and overlay height survive app restarts
-- **Three themes** — Dark, Light, Modern (frosty glass), plus system auto-detect
-
-### SSH Remote Connections
-
-Connect to remote servers directly from Tron. SSH sessions are fully transparent — the terminal, AI agent, and all features work identically whether the session is local or remote.
-
-- **Three auth methods** — password, private key (with optional passphrase), and SSH agent
-- **Saved profiles** — save connection details for quick reconnect; optionally persist credentials
-- **Status indicator** — live connection status badge (connected/disconnected/reconnecting) on each SSH tab
-- **Agent compatibility** — the AI agent can execute commands, read/write files, and inspect the remote system over SSH
-- **Tab bar dropdown** — click `+` to choose "New Terminal" or "SSH Connection"
-- **Settings management** — view, create, and delete saved SSH profiles in Settings > SSH
-
-### Web Mode
-
-Tron runs as a web application with three deployment modes:
-
-| Mode | Server | Terminal | Use Case |
-|------|--------|----------|----------|
-| **Local** | Express + WS | Local PTY + SSH | Self-hosted |
-| **Gateway** | Express + WS | SSH only | Cloud / hosted |
-| **Demo** | None (static) | Simulated | Website showcase |
-
-```bash
-npm run start:web                    # Local mode (default)
-TRON_MODE=gateway npm run start:web  # SSH gateway mode
-```
+- Tabbed interface with split panes (vertical/horizontal, recursive nesting)
+- Smart input bar with shell completions, AI ghost text, and command history
+- Three themes — Dark, Light, Modern (frosty glass) + system auto-detect
+- Session persistence across restarts
 
 ### AI Agent
-
-The agent is an autonomous loop that plans and executes tasks step-by-step:
-
-- **Tool use** — `execute_command`, `run_in_terminal`, `write_file`, `read_file`, `edit_file`, `send_text`, `read_terminal`, `ask_question`
-- **Live execution** — commands run in the real terminal with output visible in real-time
-- **Permission system** — every command requires explicit approval (Allow Once / Always Allow / Deny)
-- **Dangerous command detection** — `rm -rf`, `sudo`, `git push --force`, etc. trigger a red warning with double-confirm
-- **Auto-execute mode** — trust the agent to run safe commands automatically (toggle per session)
-- **Thinking mode** — view the model's reasoning process in real-time (for models that support it)
-- **Streaming overlay** — live progress for file writes, edits, and reads with diff previews
-- **Context management** — context ring shows usage, modal for full view, summarization, and manual clearing
-- **Loop detection** — detects repeated actions and forces the agent to change approach
-- **Session logging** — `/log` command exports the full agent thread to a structured JSON file
+- Autonomous multi-step execution with live terminal output
+- Tools: `execute_command`, `run_in_terminal`, `write_file`, `read_file`, `edit_file`, `send_text`, `read_terminal`
+- Permission system with dangerous command detection and double-confirm
+- Auto-execute mode, thinking mode, streaming overlay with diff previews
+- Context management with usage ring, summarization, and `/log` export
 
 ### Input Modes
+| Mode | Description |
+|------|-------------|
+| **Auto** | Detects command vs. natural language |
+| **Command** | Direct shell with Tab completion |
+| **Advice** | AI suggests a single command with explanation |
+| **Agent** | Multi-step autonomous execution |
 
-| Mode | Shortcut | Description |
-|------|----------|-------------|
-| **Auto** | `Cmd+0` | Automatically detects command vs. natural language |
-| **Command** | `Cmd+1` | Direct shell commands with Tab completion and history |
-| **Advice** | `Cmd+2` | Ask AI for a single command suggestion with explanation |
-| **Agent** | `Cmd+3` | Multi-step autonomous task execution |
+### SSH
+- Password, private key, and SSH agent authentication
+- Saved profiles with optional credential persistence
+- AI agent works fully over SSH (commands, file ops, system inspection)
 
-- **Double-tap Shift** to cycle through modes
-- **Cmd+Enter** forces agent mode regardless of current mode
-- **Cmd+Shift+Enter** forces command mode
-- **Shift+Enter** inserts a newline (multiline input auto-classifies as agent mode)
-
-### Supported Providers
-
-| Provider | Type | Notes |
-|----------|------|-------|
-| **Ollama** | Local | Free, runs on your machine. Supports tool calling. |
-| **LM Studio** | Local | Local inference server with OpenAI-compatible API. |
-| **OpenAI** | Cloud | GPT-5.2, GPT-4o, o1, o3-mini, Codex models. |
-| **Anthropic** | Cloud | Claude Sonnet, Claude Opus, Claude Haiku. |
-| **Gemini** | Cloud | Google's Gemini 3.x and 2.5 Pro/Flash models. |
-| **DeepSeek** | Cloud | DeepSeek Chat and Reasoner with thinking support. |
-| **Kimi** | Cloud | Moonshot AI's Kimi K2.5 models. |
-| **Qwen** | Cloud | Alibaba's Qwen 3.5 models via DashScope. |
-| **GLM** | Cloud | Zhipu AI's GLM-5 models. |
-| **MiniMax** | Cloud | MiniMax M2.5 models. |
-| **OpenAI Compatible** | Custom | Any API following the OpenAI chat/completions spec. |
-| **Anthropic Compatible** | Custom | Any API following the Anthropic messages spec. |
-
-### Additional Features
-
-- **Image attachments** — drag-and-drop, paste, or pick images for vision-capable models
-- **Smart path quoting** — automatically wraps space-containing paths in quotes
-- **Keyboard shortcuts** — fully customizable via Settings > Shortcuts, with hotkey recording
-- **Context bar** — shows current directory, model selector, and context usage ring
-- **Cross-tab notifications** — background agent completions show toast notifications
-- **Mobile-responsive** — SSH modal and settings adapt to small screen sizes
-
-## Getting Started
-
-### Prerequisites
-
-- **Node.js** 18+ and npm
-- **Ollama** (optional, for free local AI): install from [ollama.ai](https://ollama.ai), then `ollama pull llama3`
-- For cloud providers: an API key from the respective service
-
-### Install
-
-```bash
-git clone https://github.com/Shadowhusky/Tron.git
-cd tron
-npm install
-```
-
-### Run
-
-```bash
-# Desktop app (Electron + Vite hot-reload)
-npm run dev
-
-# Web app
-npm run dev:web
-
-# Production build
-npm run build
-```
-
-### First Launch
-
-On first launch, the setup wizard guides you through:
-
-1. **Appearance** — choose your theme (Dark / Light / Modern / Auto)
-2. **View Mode** — Terminal (classic + AI overlay) or Agent (chat-first)
-3. **AI Provider** — select and configure your LLM provider
-
-You can change all of these later in Settings (`Cmd+,`).
+### Providers
+Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI Compatible, Anthropic Compatible.
 
 ## Keyboard Shortcuts
 
@@ -217,74 +106,29 @@ You can change all of these later in Settings (`Cmd+,`).
 | Split vertical | `Cmd+D` | `Ctrl+D` |
 | Split horizontal | `Cmd+Shift+D` | `Ctrl+Shift+D` |
 | Settings | `Cmd+,` | `Ctrl+,` |
-| Force agent mode | `Cmd+Enter` | `Ctrl+Enter` |
-| Force command mode | `Cmd+Shift+Enter` | `Ctrl+Shift+Enter` |
-| Toggle agent panel | `Cmd+.` | `Ctrl+.` |
-| Cycle input mode | `Shift Shift` (double-tap) | `Shift Shift` |
-| Mode shortcuts | `Cmd+0-3` | `Ctrl+0-3` |
+| Force agent | `Cmd+Enter` | `Ctrl+Enter` |
+| Cycle mode | `Ctrl+Shift+M` | `Ctrl+Shift+M` |
 
-All shortcuts are customizable in Settings > Shortcuts.
-
-## Architecture
-
-```
-src/                    # React renderer (Vite + TypeScript)
-  services/ai/          # Multi-provider AI service, agent loop, streaming
-  features/             # Terminal, Agent, Settings, SSH, Onboarding
-  components/layout/    # TabBar, SplitPane, ContextBar, EmptyState
-  contexts/             # Layout, Theme, History, Agent state management
-  utils/                # Platform, theme, command classification, context cleaning
-
-electron/               # Electron main process
-  ipc/                  # PTY management, SSH sessions, file ops, config, AI test
-  preload.ts            # Secure IPC bridge with channel allowlists
-
-server/                 # Web mode (Express + WebSocket)
-  handlers/             # Terminal, SSH, AI, system handlers
-  index.ts              # HTTP server + WS bridge + mode routing
-
-e2e/                    # Playwright E2E test suite (10 spec files)
-```
+All shortcuts are customizable in Settings.
 
 ## Development
 
 ```bash
-npm run dev              # Full Electron + Vite dev
-npm run dev:react        # Vite dev server only (renderer)
-npm run dev:web          # Web mode dev (Express + WS + Vite)
-npm run build:react      # Build renderer (includes TypeScript check)
-npm run build:electron   # Build Electron main process
-npm run build:web        # Build web mode (server + client)
+npm run dev              # Electron + Vite dev
+npm run dev:web          # Web mode dev
+npm run build            # Production build
 npm run lint             # ESLint
-npm run test:e2e         # Playwright E2E tests (builds first)
-npm run test:e2e:headed  # E2E tests with visible window
+npm run test:e2e         # Playwright E2E tests
 ```
-
-### Web Mode
-
-Tron can run as a web application without Electron:
-
-```bash
-npm run dev:web          # Development with hot-reload
-npm run build:web        # Production build
-npm run start:web        # Start production server (local mode)
-```
-
-Set `TRON_MODE=gateway` for SSH-only deployments where local terminal access should be disabled.
 
 ## Tech Stack
 
-- **Electron** — desktop shell, native window chrome, PTY management
-- **React 19** — UI with JSX transform (no React import needed)
-- **TypeScript** — full type coverage across renderer and main process
-- **Vite** — fast dev server and optimized production builds
-- **xterm.js** — GPU-accelerated terminal rendering
-- **Tailwind CSS** — utility-first styling with three theme variants
-- **Framer Motion** — smooth animations and transitions
-- **TanStack Virtual** — virtualized rendering for long agent threads
-- **TanStack Query** — model fetching with smart caching
-- **ssh2** — SSH client for remote terminal sessions (password, key, agent auth)
-- **Playwright** — E2E testing with Electron launch fixture
+Electron, React 19, TypeScript, Vite, xterm.js, Tailwind CSS, Framer Motion, TanStack Virtual/Query, ssh2, Playwright.
+
+## Community
+
+- [Discord](https://discord.gg/EeTCS7A6) — questions, feedback, feature requests
+- [GitHub Issues](https://github.com/Shadowhusky/Tron/issues) — bug reports
 
 ## License
 
