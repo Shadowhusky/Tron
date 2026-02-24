@@ -677,6 +677,48 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
+    // Readline-style editing hotkeys
+    if (e.ctrlKey && !e.metaKey && !e.altKey) {
+      const ta = inputRef.current;
+      if (!ta) { /* fall through */ }
+      else if (e.key === "u") {
+        // Ctrl+U — kill line before cursor
+        e.preventDefault();
+        const pos = ta.selectionStart;
+        setValue((prev) => prev.slice(pos));
+        setTimeout(() => ta.setSelectionRange(0, 0), 0);
+        return;
+      } else if (e.key === "k") {
+        // Ctrl+K — kill line after cursor
+        e.preventDefault();
+        const pos = ta.selectionStart;
+        setValue((prev) => prev.slice(0, pos));
+        return;
+      } else if (e.key === "a") {
+        // Ctrl+A — move to start of line
+        e.preventDefault();
+        ta.setSelectionRange(0, 0);
+        return;
+      } else if (e.key === "e") {
+        // Ctrl+E — move to end of line
+        e.preventDefault();
+        const len = ta.value.length;
+        ta.setSelectionRange(len, len);
+        return;
+      } else if (e.key === "w") {
+        // Ctrl+W — delete word before cursor
+        e.preventDefault();
+        const pos = ta.selectionStart;
+        const before = ta.value.slice(0, pos);
+        // Skip trailing spaces, then delete to previous space/start
+        const trimmed = before.replace(/\s+$/, "");
+        const wordStart = Math.max(0, trimmed.lastIndexOf(" ") + 1);
+        setValue((prev) => prev.slice(0, wordStart) + prev.slice(pos));
+        setTimeout(() => ta.setSelectionRange(wordStart, wordStart), 0);
+        return;
+      }
+    }
+
     // Mode Switching Hotkeys (from config)
     if (matchesHotkey(e, hotkeys.modeCommand)) {
       e.preventDefault();
