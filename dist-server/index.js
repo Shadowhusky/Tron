@@ -71,29 +71,16 @@ const clientConfigs = loadJsonMap(configsFile);
 const app = express();
 const server = http.createServer(app);
 // ---------------------------------------------------------------------------
-// AI provider HTTP proxy — routes browser requests to local AI providers
-// through the server, avoiding CORS and authentication issues.
+// AI provider HTTP proxy — routes browser requests to AI providers through
+// the server, avoiding CORS issues (cloud providers like Anthropic block
+// browser-origin requests) and auth issues for local providers.
 // Client sends: POST /api/ai-proxy/v1/chat/completions
 //               Header X-Target-Base: http://127.0.0.1:1234
 // Server fetches: http://127.0.0.1:1234/v1/chat/completions and pipes back.
 // ---------------------------------------------------------------------------
-function isPrivateHost(hostname) {
-    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0")
-        return true;
-    // 10.x.x.x, 172.16-31.x.x, 192.168.x.x
-    if (/^10\./.test(hostname))
-        return true;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname))
-        return true;
-    if (/^192\.168\./.test(hostname))
-        return true;
-    // Docker internal hostnames and local network suffixes
-    if (hostname.endsWith(".internal") || hostname.endsWith(".local"))
-        return true;
-    return false;
-}
 import { Readable } from "stream";
-app.all("/api/ai-proxy/{*path}", express.json({ limit: "5mb" }), express.text({ limit: "5mb", type: "text/*" }), async (req, res) => {
+// Use express.raw() to forward body bytes as-is — avoids JSON parse/re-serialize issues
+app.all("/api/ai-proxy/{*path}", express.raw({ type: "*/*", limit: "5mb" }), async (req, res) => {
     const targetBase = req.headers["x-target-base"];
     if (!targetBase) {
         res.status(400).json({ error: "Missing X-Target-Base header" });
@@ -107,26 +94,25 @@ app.all("/api/ai-proxy/{*path}", express.json({ limit: "5mb" }), express.text({ 
         res.status(400).json({ error: "Invalid X-Target-Base URL" });
         return;
     }
-    if (!isPrivateHost(parsedBase.hostname)) {
-        res.status(403).json({ error: "Proxy only allows local/private addresses" });
+    // Only allow http/https schemes to prevent SSRF to internal protocols
+    if (parsedBase.protocol !== "http:" && parsedBase.protocol !== "https:") {
+        res.status(403).json({ error: "Proxy only allows http/https targets" });
         return;
     }
     const proxyPath = req.path.replace(/^\/api\/ai-proxy/, "") || "/";
     const targetUrl = `${targetBase.replace(/\/+$/, "")}${proxyPath}`;
     try {
+        // Forward all headers except hop-by-hop and internal proxy headers
+        const skipHeaders = new Set(["host", "connection", "keep-alive", "transfer-encoding", "x-target-base", "origin", "referer"]);
         const headers = {};
-        // Forward auth and content headers
-        if (req.headers.authorization)
-            headers["Authorization"] = req.headers.authorization;
-        if (req.headers["x-api-key"])
-            headers["x-api-key"] = req.headers["x-api-key"];
-        if (req.headers["anthropic-version"])
-            headers["anthropic-version"] = req.headers["anthropic-version"];
-        if (req.headers["content-type"] && req.method !== "GET")
-            headers["Content-Type"] = req.headers["content-type"];
+        for (const [key, value] of Object.entries(req.headers)) {
+            if (!skipHeaders.has(key) && typeof value === "string") {
+                headers[key] = value;
+            }
+        }
         const init = { method: req.method, headers };
-        if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
-            init.body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+        if (req.method !== "GET" && req.method !== "HEAD" && req.body && req.body.length > 0) {
+            init.body = req.body.toString();
         }
         const response = await fetch(targetUrl, init);
         res.status(response.status);

@@ -78,6 +78,7 @@ e2e/                  # Playwright E2E test suite
 - **SSH transparency**: SSH sessions implement the `PtyLike` interface (same as node-pty). Terminal handlers check `sshSessionIds.has(sessionId)` to branch between local PTY and SSH-specific logic. Renderer code works identically for both.
 - **SSH agent file ops**: For SSH sessions, `write_file`/`read_file`/`edit_file`/`list_dir`/`search_dir` tools fallback to shell commands executed over SSH instead of direct file IPC.
 - **SSH profiles**: Saved in `app.getPath("userData")/ssh-profiles/profiles.json` (Electron) or `~/.tron/ssh-profiles.json` (server mode).
+- **Terminal reconnection**: On page refresh, PTY sessions survive in the main process (Electron) or server (web mode, 30s grace). LayoutContext detects reconnection (`newId === oldId`), sets `TerminalSession.reconnected = true`. Terminal.tsx skips `getHistory`, hides with `opacity:0`, does a SIGWINCH bounce-resize (cols-1 → cols) to force TUI redraw, then reveals with CSS transition after 300ms. Outgoing data is suppressed during bounce to prevent DSR corruption. ResizeObserver resizes are deferred until settled. Backend reconnect handlers must NOT resize the PTY — the renderer controls resize timing.
 
 ## Deployment Modes
 
@@ -90,6 +91,7 @@ e2e/                  # Playwright E2E test suite
 - **Gateway mode**: Blocks `terminal.create`, `file.*`, `log.saveSessionLog` channels. Terminal channels with sessionId must be SSH sessions. SSH-only flag (`TRON_SSH_ONLY`) defaults true in gateway.
 - **Demo mode**: `ws-bridge.ts` installs `demo-bridge.ts` mock handlers on connection failure. Typewriter terminal effect with canned output.
 - Server sends `{ type: "mode", mode, sshOnly }` on WS connect. Client awaits `modeReady` before rendering.
+- **AI proxy**: `/api/ai-proxy/*` routes forward browser requests to AI providers (cloud and local) via the server, avoiding CORS and auth issues. Uses `express.raw()` to forward body bytes as-is. Only allows `http:`/`https:` schemes (SSRF prevention). No host restriction — supports both local and cloud providers.
 
 ## Agent System (`src/services/ai/index.ts`)
 

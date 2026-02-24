@@ -106,6 +106,7 @@ export interface TerminalSession {
   contextSummary?: string; // Auto-generated summary of older context
   contextSummarySourceLength?: number; // Length of the original text that was summarized
   sshProfileId?: string;  // If set, this is a remote SSH session
+  reconnected?: boolean; // true if session was reconnected to an existing PTY (page refresh)
   interactions?: {
     role: "user" | "agent";
     content: string;

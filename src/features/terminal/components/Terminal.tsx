@@ -16,6 +16,7 @@ interface TerminalProps {
   isAgentRunning?: boolean;
   stopAgent?: () => void;
   focusTarget?: "input" | "terminal";
+  isReconnected?: boolean;
 }
 
 const THEMES: Record<string, Xterm["options"]["theme"]> = {
@@ -39,7 +40,7 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive, isAgentRunning = false, stopAgent, focusTarget }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -55,12 +56,23 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
   useEffect(() => { stopAgentRef.current = stopAgent; }, [stopAgent]);
   const hotkeysRef = useRef(hotkeys);
   useEffect(() => { hotkeysRef.current = hotkeys; }, [hotkeys]);
+  // Suppress outgoing onData → PTY writes during reconnect to prevent DSR
+  // response corruption (xterm responds to stale cursor-position requests)
+  const suppressOutgoingRef = useRef(false);
 
   // ---- Main effect: create terminal (once per sessionId) ----
   useEffect(() => {
     if (!terminalRef.current) return;
+    const el = terminalRef.current;
 
     const termTheme = THEMES[resolvedTheme] || THEMES.dark;
+
+    // For reconnected sessions, hide the terminal visually until the TUI
+    // redraws cleanly via SIGWINCH. This avoids any flash of stale content.
+    const reconnecting = !!isReconnected;
+    if (reconnecting) {
+      el.style.opacity = "0";
+    }
 
     const term = new Xterm({
       cursorBlink: true,
@@ -75,7 +87,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
-    term.open(terminalRef.current);
+    term.open(el);
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -133,9 +145,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       return true;
     });
 
-    // Resize Logic — syncs xterm dimensions to backend PTY
+    // Resize Logic — syncs xterm dimensions to backend PTY.
+    // During reconnect settling, ResizeObserver resizes are deferred to avoid
+    // sending premature SIGWINCH while the bounce-resize is in progress.
+    let reconnectSettled = !reconnecting;
     const performResize = () => {
       if (!fitAddonRef.current || !xtermRef.current) return;
+      if (!reconnectSettled) return; // defer until bounce completes
       try {
         fitAddonRef.current.fit();
         const { cols, rows } = xtermRef.current;
@@ -183,14 +199,20 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       // then resize. This order prevents:
       // 1. Duplication from listener + history race condition
       // 2. Duplicate prompts from resize-triggered shell re-renders
-      const finishSetup = (history?: string) => {
+      const finishSetup = (history?: string, knownReconnect = false) => {
           if (!mounted) return;
 
-          if (history && xtermRef.current) {
-            term.write(history);
+          const isReconnect = knownReconnect || !!(history && history.length > 0);
+
+          if (isReconnect) {
+            // Suppress outgoing onData → PTY during bounce to prevent DSR
+            // response corruption from stale escape sequences.
+            suppressOutgoingRef.current = true;
           }
 
-          // Register the incoming data listener AFTER history is written
+          // Register the incoming data listener — data flows freely so xterm
+          // renders the TUI content offscreen (terminal is opacity:0 during
+          // reconnect, so no visual flicker even if content arrives early)
           removeIncomingListener = window.electron.ipcRenderer.on(
             IPC.TERMINAL_INCOMING_DATA,
             ({ id, data }: { id: string; data: string }) => {
@@ -200,13 +222,52 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
             },
           );
 
-          // NOW sync dimensions to backend — any prompt re-renders from
-          // resize go through the listener (not duplicated in history)
-          performResize();
-          setTimeout(performResize, 50);
-          setTimeout(performResize, 250);
-          // Re-focus after animation may have completed (embedded terminal in agent view)
-          // Only steal focus if user's last focus target was the terminal
+          if (isReconnect) {
+            // Fit locally to get correct dimensions
+            try { fitAddon.fit(); } catch { /* ignore */ }
+
+            // Force the running app to redraw via SIGWINCH bounce.
+            // The kernel ignores same-size resize (no SIGWINCH), so we
+            // shrink by 1 col then restore — two SIGWINCHs guaranteed.
+            // The terminal is hidden (opacity:0) so all redraws happen
+            // offscreen — the user only sees the final clean state.
+            const { cols, rows } = term;
+            if (window.electron && cols > 2) {
+              window.electron.ipcRenderer.send(IPC.TERMINAL_RESIZE, {
+                id: sessionId, cols: cols - 1, rows,
+              });
+              setTimeout(() => {
+                suppressOutgoingRef.current = false;
+                window.electron?.ipcRenderer?.send(IPC.TERMINAL_RESIZE, {
+                  id: sessionId, cols, rows,
+                });
+              }, 50);
+            } else {
+              suppressOutgoingRef.current = false;
+              reconnectSettled = true;
+              performResize();
+            }
+
+            // Reveal the terminal after the TUI has had time to redraw.
+            // 300ms is enough for the bounce-resize SIGWINCH round-trip
+            // and for most TUI apps to fully repaint their screen.
+            setTimeout(() => {
+              reconnectSettled = true;
+              if (el) {
+                el.style.transition = "opacity 80ms ease-in";
+                el.style.opacity = "1";
+              }
+              // Sync ResizeObserver dimensions now that we're settled
+              performResize();
+            }, 300);
+          } else {
+            // Fresh session — sync dimensions normally
+            performResize();
+            setTimeout(performResize, 50);
+            setTimeout(performResize, 250);
+          }
+
+          // Re-focus after reconnect settles or animation completes
           setTimeout(() => {
             if (xtermRef.current && focusTargetRef.current === "terminal") {
               xtermRef.current.focus();
@@ -214,10 +275,19 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
           }, 350);
       };
 
-      window.electron.ipcRenderer
-        .getHistory(sessionId)
-        .then((history: string) => finishSetup(history))
-        .catch(() => finishSetup());
+      if (reconnecting) {
+        // Reconnected session — skip getHistory entirely.
+        // Calling getHistory adds async delay during which ResizeObserver
+        // or other events can trigger premature SIGWINCH, causing the old
+        // TUI state to flash on screen. Instead, go straight to listener
+        // registration + bounce resize (like tmux/screen on reattach).
+        finishSetup(undefined, true);
+      } else {
+        window.electron.ipcRenderer
+          .getHistory(sessionId)
+          .then((history: string) => finishSetup(history))
+          .catch(() => finishSetup());
+      }
     } else {
       term.write("\r\n\x1b[33m[Mock Mode] Electron not detected.\x1b[0m\r\n");
     }
@@ -247,20 +317,20 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       }
     };
 
-    const el = terminalRef.current;
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
 
     // ResizeObserver
     const resizeObserver = new ResizeObserver(debouncedResize);
-    if (terminalRef.current) {
-      resizeObserver.observe(terminalRef.current);
-    }
+    resizeObserver.observe(el);
     window.addEventListener("resize", debouncedResize);
 
     // Send Input
     let activityFired = false;
     const disposableOnData = term.onData((data) => {
+      // Suppress outgoing writes during reconnect (prevents DSR corruption)
+      if (suppressOutgoingRef.current) return;
+
       if (data === "\u0003" && isAgentRunningRef.current) {
         stopAgentRef.current?.();
       }
@@ -292,6 +362,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
+      // Reset opacity in case cleanup runs before reveal
+      el.style.opacity = "";
+      el.style.transition = "";
     };
   }, [sessionId]); // Only recreate on session change — NOT on theme change
 

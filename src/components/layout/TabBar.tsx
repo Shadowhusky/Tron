@@ -543,6 +543,59 @@ const TabBar: React.FC<TabBarProps> = ({
               Duplicate Tab
             </button>
 
+            {/* Move Left / Right */}
+            {tabs.length > 1 && (() => {
+              const idx = tabs.findIndex((t) => t.id === contextMenu?.tabId);
+              const canLeft = idx > 0;
+              const canRight = idx >= 0 && idx < tabs.length - 1;
+              return (
+                <div className={`flex gap-0 ${themeClass(resolvedTheme, {
+                  dark: "border-t border-white/5",
+                  modern: "border-t border-white/10",
+                  light: "border-t border-gray-100",
+                })}`}>
+                  <button
+                    disabled={!canLeft}
+                    onClick={() => {
+                      if (canLeft) {
+                        onReorder(idx, idx - 1);
+                        setContextMenu(null);
+                      }
+                    }}
+                    className={`flex-1 text-center px-3 py-1.5 text-sm transition-colors ${!canLeft ? "opacity-30 cursor-default" : themeClass(
+                      resolvedTheme,
+                      {
+                        dark: "hover:bg-white/10",
+                        modern: "hover:bg-white/20",
+                        light: "hover:bg-gray-100",
+                      },
+                    )}`}
+                  >
+                    ← Move Left
+                  </button>
+                  <button
+                    disabled={!canRight}
+                    onClick={() => {
+                      if (canRight) {
+                        onReorder(idx, idx + 1);
+                        setContextMenu(null);
+                      }
+                    }}
+                    className={`flex-1 text-center px-3 py-1.5 text-sm transition-colors ${!canRight ? "opacity-30 cursor-default" : themeClass(
+                      resolvedTheme,
+                      {
+                        dark: "hover:bg-white/10",
+                        modern: "hover:bg-white/20",
+                        light: "hover:bg-gray-100",
+                      },
+                    )}`}
+                  >
+                    Move Right →
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* Close */}
             <button
               onClick={() => {
