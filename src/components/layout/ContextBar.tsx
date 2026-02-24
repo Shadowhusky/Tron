@@ -261,12 +261,17 @@ const ContextBar: React.FC<ContextBarProps> = ({
           handleSummarize("moderate");
         }
 
-        // Only update display text if not currently showing a summary
+        // Update display text: summary + new output, or raw context
         if (!isSummarizedRef.current) {
           setContextText(fullContext);
         } else if (session?.contextSummary) {
+          const newOutput = session.contextSummarySourceLength
+            ? fullContext.slice(session.contextSummarySourceLength).trim()
+            : "";
           setContextText(
-            session.contextSummary + "\n\n... (plus recent output)",
+            newOutput
+              ? session.contextSummary + "\n\n--- New Output Since Summary ---\n" + newOutput
+              : session.contextSummary,
           );
         }
       }
