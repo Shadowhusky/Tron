@@ -22,6 +22,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "config.getSystemPaths",
   "sessions.read",
   "sessions.write",
+  "file.saveTempImage",
   "file.writeFile",
   "file.readFile",
   "file.editFile",

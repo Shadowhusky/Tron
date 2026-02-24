@@ -316,6 +316,38 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
 
+    // Image paste — save clipboard image to temp file and paste path
+    const onPaste = async (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const blob = item.getAsFile();
+          if (!blob) return;
+          const buf = await blob.arrayBuffer();
+          const base64 = btoa(
+            new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""),
+          );
+          const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+          try {
+            const filePath = await window.electron?.ipcRenderer?.invoke(
+              "file.saveTempImage",
+              { base64, ext },
+            );
+            if (filePath && window.electron) {
+              window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+                id: sessionId,
+                data: filePath,
+              });
+            }
+          } catch { /* ignore — temp save not supported */ }
+          return;
+        }
+      }
+    };
+    el.addEventListener("paste", onPaste);
+
     // ResizeObserver
     const resizeObserver = new ResizeObserver(debouncedResize);
     resizeObserver.observe(el);
@@ -355,6 +387,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       window.removeEventListener("resize", debouncedResize);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("paste", onPaste);
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
@@ -396,7 +429,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       <div ref={terminalRef} className="absolute inset-0" />
       {/* Loading overlay — retro bash-style spinner */}
       <div
-        className={`absolute inset-0 z-10 flex items-end p-5 transition-opacity duration-300 ease-out ${
+        className={`absolute inset-0 z-10 flex items-start p-5 transition-opacity duration-300 ease-out ${
           loading ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
         style={{ backgroundColor: theme?.background }}

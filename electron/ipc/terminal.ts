@@ -695,6 +695,21 @@ export function registerTerminalHandlers(
     },
   );
 
+  // Save a clipboard image to a temp file and return the path.
+  // Used when pasting images into the terminal (e.g. for Claude CLI).
+  ipcMain.handle(
+    "file.saveTempImage",
+    async (_event, { base64, ext }: { base64: string; ext: string }) => {
+      const os = require("os");
+      const tmpDir = path.join(os.tmpdir(), "tron-images");
+      if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+      const name = `paste-${Date.now()}.${ext}`;
+      const filePath = path.join(tmpDir, name);
+      fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+      return filePath;
+    },
+  );
+
   // Write a file directly via Node.js fs (bypasses terminal/PTY).
   // This avoids heredoc corruption for large files.
   ipcMain.handle(
