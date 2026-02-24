@@ -180,7 +180,7 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
 
 const SettingsPane = () => {
   const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
-  const { sessions, updateSessionConfig } = useLayout();
+  const { sessions, updateSessionConfig, pendingSettingsSection, clearPendingSettingsSection } = useLayout();
   const { hotkeys, updateHotkey, resetHotkeys, aiBehavior, updateAIBehavior } = useConfig();
   const t = getTheme(resolvedTheme);
   const [config, setConfig] = useState<AIConfig>(aiService.getConfig());
@@ -199,6 +199,17 @@ const SettingsPane = () => {
 
   // Sidebar active section tracking (page-based — each section is a page)
   const [activeSection, setActiveSection] = useState<string>("ai");
+
+  // Navigate to a specific section when requested externally (e.g. model click → AI page)
+  const prevSectionRef = useRef(pendingSettingsSection);
+  useEffect(() => {
+    // Only act when pendingSettingsSection *changes* to a non-null value
+    if (pendingSettingsSection && pendingSettingsSection !== prevSectionRef.current) {
+      setActiveSection(pendingSettingsSection);
+    }
+    prevSectionRef.current = pendingSettingsSection;
+    if (pendingSettingsSection) clearPendingSettingsSection();
+  }, [pendingSettingsSection, clearPendingSettingsSection]);
 
   // Listen for keydown when recording a hotkey
   useEffect(() => {

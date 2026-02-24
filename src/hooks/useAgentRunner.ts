@@ -735,7 +735,7 @@ Task: ${prompt}
             if (!aiBehavior.aiTabTitles) return;
             const isUnknown = output.toLowerCase().includes("unknown") || output.toLowerCase().includes("unclear");
             if (
-              (titleSourceRef.current === "none" || titleSourceRef.current === "terminal") &&
+              titleSourceRef.current !== "user" &&
               sessionId &&
               !isUnknown
             ) {

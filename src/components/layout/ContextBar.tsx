@@ -636,7 +636,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                     light: "bg-gray-50 border-gray-200",
                   })}`}>
                     <button
-                      onClick={() => { setShowModelMenu(false); setSearchQuery(""); openSettingsTab(); }}
+                      onClick={() => { setShowModelMenu(false); setSearchQuery(""); openSettingsTab("ai"); }}
                       className="w-full flex justify-center items-center gap-1.5 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors"
                     >
                       <Settings className="w-3 h-3" />

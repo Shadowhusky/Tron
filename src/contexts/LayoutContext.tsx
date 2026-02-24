@@ -40,7 +40,10 @@ interface LayoutContextType {
   clearInteractions: (sessionId: string) => void;
   markSessionDirty: (sessionId: string) => void;
   updateSplitSizes: (path: number[], sizes: number[]) => void;
-  openSettingsTab: () => void;
+  openSettingsTab: (section?: string) => void;
+  /** Which settings section to show when settings tab opens. */
+  pendingSettingsSection: string | null;
+  clearPendingSettingsSection: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
   renameTab: (sessionId: string, title: string) => void;
@@ -441,15 +444,23 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId(newTabId);
   };
 
-  const openSettingsTab = () => {
+  const [pendingSettingsSection, setPendingSettingsSection] = useState<string | null>(null);
+  const clearPendingSettingsSection = () => setPendingSettingsSection(null);
+
+  const openSettingsTab = (section?: string) => {
     // Check if open
     const existing = tabs.find(
       (t) => t.root.type === "leaf" && t.root.contentType === "settings",
     );
     if (existing) {
+      // Only navigate to a specific section if explicitly requested
+      if (section) setPendingSettingsSection(section);
       setActiveTabId(existing.id);
       return;
     }
+
+    // New settings tab — default to "ai" section unless another was requested
+    setPendingSettingsSection(section || "ai");
 
     const newTabId = uuid();
     const newTab: Tab = {
@@ -964,6 +975,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         markSessionDirty,
         updateSplitSizes,
         openSettingsTab,
+        pendingSettingsSection,
+        clearPendingSettingsSection,
         reorderTabs,
         focusSession,
         renameTab,

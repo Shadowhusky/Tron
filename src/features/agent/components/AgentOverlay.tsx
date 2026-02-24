@@ -170,6 +170,26 @@ function summarizeCommand(cmd: string): string {
   return `Ran ${firstWord}`;
 }
 
+/** Handle link clicks — open in Electron shell or new browser tab */
+const handleLinkClick = (e: React.MouseEvent) => {
+  const target = e.target as HTMLElement;
+  const anchor = target.closest("a");
+  if (!anchor) return;
+  const href = anchor.getAttribute("href");
+  if (!href) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (href.startsWith("file://")) {
+    window.electron?.ipcRenderer?.invoke("shell.openPath", decodeURI(href.slice(7)));
+  } else if (href.startsWith("http://") || href.startsWith("https://")) {
+    if (window.electron?.ipcRenderer) {
+      window.electron.ipcRenderer.invoke("shell.openExternal", href);
+    } else {
+      window.open(href, "_blank", "noopener,noreferrer");
+    }
+  }
+};
+
 /** Renders markdown string as HTML. Memoized to avoid re-parsing identical content. */
 const MarkdownContent: React.FC<{ content: string; className?: string }> = ({
   content,
@@ -187,6 +207,7 @@ const MarkdownContent: React.FC<{ content: string; className?: string }> = ({
     <div
       className={`markdown-content ${className || ""}`}
       dangerouslySetInnerHTML={{ __html: html }}
+      onClick={handleLinkClick}
     />
   );
 };
@@ -266,27 +287,11 @@ const LinkifiedDoneContent: React.FC<{
     }
   }, [content]);
 
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    const anchor = target.closest("a");
-    if (!anchor) return;
-    const href = anchor.getAttribute("href");
-    if (!href) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (href.startsWith("file://")) {
-      const filePath = decodeURI(href.slice(7)); // strip "file://" and decode %20 etc.
-      window.electron.ipcRenderer.invoke("shell.openPath", filePath);
-    } else if (href.startsWith("http://") || href.startsWith("https://")) {
-      window.electron.ipcRenderer.invoke("shell.openExternal", href);
-    }
-  }, []);
-
   return (
     <div
       className={`markdown-content linkified-content ${className || ""}`}
       dangerouslySetInnerHTML={{ __html: html }}
-      onClick={handleClick}
+      onClick={handleLinkClick}
     />
   );
 };
