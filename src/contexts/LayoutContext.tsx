@@ -79,22 +79,47 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     new Map(),
   );
 
-  // Helper: Create a new PTY and return its ID
+  // Helper: Create a new PTY and return its ID (with retry for flaky mobile connections)
   const createPTY = async (
     cwd?: string,
     reconnectId?: string,
   ): Promise<string> => {
-    try {
-      return await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
-        cols: 80,
-        rows: 30,
-        cwd,
-        reconnectId,
-      });
-    } catch {
-      // Fallback for when WebSocket server isn't reachable
-      return `mock-${uuid()}`;
+    const MAX_RETRIES = 3;
+    const DELAYS = [0, 1000, 2000]; // exponential-ish backoff
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        console.warn(`[Layout] createPTY retry ${attempt}/${MAX_RETRIES - 1} (reconnectId=${reconnectId?.slice(0, 8) ?? "none"})`);
+        await new Promise(r => setTimeout(r, DELAYS[attempt]));
+      }
+      try {
+        return await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
+          cols: 80,
+          rows: 30,
+          cwd,
+          reconnectId,
+        });
+      } catch (err) {
+        console.warn(`[Layout] createPTY attempt ${attempt + 1} failed:`, err);
+      }
     }
+
+    // All retries with reconnectId failed — try once without it (fresh PTY)
+    if (reconnectId) {
+      try {
+        console.warn("[Layout] createPTY falling back to fresh PTY (no reconnectId)");
+        return await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
+          cols: 80,
+          rows: 30,
+          cwd,
+        });
+      } catch (err) {
+        console.warn("[Layout] createPTY fresh fallback also failed:", err);
+      }
+    }
+
+    // Absolute last resort — mock session so the app doesn't crash
+    return `mock-${uuid()}`;
   };
 
   // Flag to disable auto-save when user chose "Exit Without Saving"

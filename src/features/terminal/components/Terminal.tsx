@@ -358,6 +358,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
           .then((history: string) => finishSetup(history))
           .catch(() => finishSetup());
       }
+    } else if (sessionId.startsWith("mock-")) {
+      term.write("\r\n\x1b[31m[Error] Failed to connect to terminal server.\x1b[0m\r\n");
+      term.write("\x1b[33mPlease reload the page to try again.\x1b[0m\r\n");
     } else {
       term.write("\r\n\x1b[33m[Mock Mode] Electron not detected.\x1b[0m\r\n");
     }

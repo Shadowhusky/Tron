@@ -204,6 +204,43 @@ export function initWebSocketBridge() {
   console.log("[WS Bridge] No Electron detected, installing WebSocket shim");
   connect();
 
+  // bfcache restoration — mobile browsers freeze/unfreeze pages, leaving a dead WS
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+      console.log("[WS Bridge] Page restored from bfcache, reconnecting...");
+      connected = false;
+      connectionFailed = false;
+      reconnectAttempts = 0;
+      // Null out stale WS handlers to prevent its onclose from scheduling a duplicate reconnect
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        try { ws.close(); } catch { /* already dead */ }
+      }
+      connect();
+    }
+  });
+
+  // Visibility change — handle sleep/wake on mobile (WS dies while screen is off)
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && (!ws || ws.readyState !== WebSocket.OPEN)) {
+      console.log("[WS Bridge] Tab became visible with dead WS, reconnecting...");
+      connectionFailed = false;
+      reconnectAttempts = 0;
+      // Null out stale WS handlers before reconnecting
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        try { ws.close(); } catch { /* already dead */ }
+      }
+      connect();
+    }
+  });
+
   (window as any).electron = {
     ipcRenderer: {
       invoke,
