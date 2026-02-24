@@ -389,23 +389,39 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     }
   }, [isActive, focusTarget]);
 
-  const bg = (THEMES[resolvedTheme] || THEMES.dark)?.background;
-  const cursorColor = (THEMES[resolvedTheme] || THEMES.dark)?.cursor;
+  const theme = THEMES[resolvedTheme] || THEMES.dark;
 
   return (
     <div className={`relative overflow-hidden ${className || ""}`}>
       <div ref={terminalRef} className="absolute inset-0" />
       {/* Loading overlay — masks flicker during history replay / TUI redraw */}
       <div
-        className={`absolute inset-0 z-10 flex items-end p-5 transition-opacity duration-500 ease-out ${
+        className={`absolute inset-0 z-10 flex flex-col items-start justify-end p-5 gap-3 transition-opacity duration-500 ease-out ${
           loading ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
-        style={{ backgroundColor: bg }}
+        style={{ backgroundColor: theme?.background }}
       >
-        <span
-          className="inline-block w-[9px] h-[18px] rounded-[1px] animate-pulse"
-          style={{ backgroundColor: cursorColor }}
-        />
+        {/* Skeleton lines — simulate terminal output loading */}
+        <div className="w-full flex flex-col gap-2 opacity-[0.04]">
+          <div className="h-[14px] rounded-sm w-[70%]" style={{ backgroundColor: theme?.foreground }} />
+          <div className="h-[14px] rounded-sm w-[45%]" style={{ backgroundColor: theme?.foreground }} />
+          <div className="h-[14px] rounded-sm w-[60%]" style={{ backgroundColor: theme?.foreground }} />
+        </div>
+        {/* Prompt line with blinking cursor */}
+        <div className="flex items-center gap-1.5">
+          <span
+            className="text-[13px] font-mono opacity-20"
+            style={{ color: theme?.foreground }}
+          >$</span>
+          <span
+            className="inline-block w-[8px] h-[16px] rounded-[1px]"
+            style={{
+              backgroundColor: theme?.cursor,
+              animation: "termBlink 1s step-end infinite",
+            }}
+          />
+        </div>
+        <style>{`@keyframes termBlink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
       </div>
     </div>
   );

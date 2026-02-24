@@ -245,11 +245,12 @@ const ContextBar: React.FC<ContextBarProps> = ({
           sessionId,
         );
 
-        // Combine terminal history + agent thread
+        // Combine cwd + terminal history + agent thread
         const terminalText = stripAnsi(history);
-        const fullContext = agentContextText
+        const cwdHeader = `[cwd: ${cwd}]\n`;
+        const fullContext = cwdHeader + (agentContextText
           ? terminalText + "\n\n--- Agent Activity ---\n" + agentContextText
-          : terminalText;
+          : terminalText);
 
         setContextLength(fullContext.length);
 
