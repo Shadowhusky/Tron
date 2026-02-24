@@ -548,7 +548,7 @@ const TabBar: React.FC<TabBarProps> = ({
               const idx = tabs.findIndex((t) => t.id === contextMenu?.tabId);
               const canLeft = idx > 0;
               const canRight = idx >= 0 && idx < tabs.length - 1;
-              const btnBase = "px-2 py-1.5 text-sm transition-colors";
+              const btnBase = "px-4 py-2 text-sm transition-colors min-w-[44px] text-center";
               const disabledCls = "opacity-30 cursor-default";
               const hoverCls = themeClass(resolvedTheme, {
                 dark: "hover:bg-white/10",
