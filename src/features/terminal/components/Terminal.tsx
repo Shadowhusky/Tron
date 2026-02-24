@@ -47,13 +47,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
   const { resolvedTheme } = useTheme();
   const { hotkeys } = useConfig();
 
-  // Loading overlay — covers the terminal for a fixed duration to mask
-  // any flicker from history replay / TUI redraw on reconnect.
-  // Reconnected sessions need longer (bounce-resize + TUI redraw round-trip).
-  const [loading, setLoading] = useState(true);
+  // Loading overlay — only for reconnected sessions to mask flicker
+  // from history replay / TUI redraw via SIGWINCH bounce.
+  const [loading, setLoading] = useState(!!isReconnected);
   useEffect(() => {
-    const delay = isReconnected ? 1500 : 800;
-    const timer = setTimeout(() => setLoading(false), delay);
+    if (!isReconnected) return;
+    const timer = setTimeout(() => setLoading(false), 1500);
     return () => clearTimeout(timer);
   }, [sessionId]);
 
