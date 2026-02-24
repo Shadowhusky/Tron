@@ -131,6 +131,7 @@ export interface Tab {
   color?: string; // Optional color tag for the tab
   root: LayoutNode;
   activeSessionId: string | null; // Which session is active in this tab
+  savedTabId?: string; // If loaded from a saved tab, the saved tab's ID
 }
 
 export interface TerminalState {
