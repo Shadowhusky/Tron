@@ -48,10 +48,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
   const { hotkeys } = useConfig();
 
   // Loading overlay — covers the terminal for a fixed duration to mask
-  // any flicker from history replay / TUI redraw on reconnect
+  // any flicker from history replay / TUI redraw on reconnect.
+  // Reconnected sessions need longer (bounce-resize + TUI redraw round-trip).
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 1000);
+    const delay = isReconnected ? 1500 : 800;
+    const timer = setTimeout(() => setLoading(false), delay);
     return () => clearTimeout(timer);
   }, [sessionId]);
 
@@ -325,21 +327,23 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
         new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""),
       );
       const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
-      try {
-        const filePath = await window.electron?.ipcRenderer?.invoke(
-          "file.saveTempImage",
-          { base64, ext },
-        );
-        if (filePath && window.electron) {
-          window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-            id: sessionId,
-            data: filePath,
-          });
-        }
-      } catch { /* temp save not supported */ }
+      const filePath = await window.electron?.ipcRenderer?.invoke(
+        "file.saveTempImage",
+        { base64, ext },
+      );
+      if (filePath && window.electron) {
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+          id: sessionId,
+          data: filePath,
+        });
+      }
     };
 
+    // Listen on document (capture phase) — xterm's internal textarea swallows
+    // paste events, so we intercept at the document level and check if the
+    // terminal element is focused.
     const onPaste = (e: Event) => {
+      if (!el.contains(document.activeElement)) return;
       const items = (e as ClipboardEvent).clipboardData?.items;
       if (!items) return;
       for (const item of Array.from(items)) {
@@ -352,11 +356,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
         }
       }
     };
-
-    // xterm creates its own hidden textarea for input — attach paste listener
-    // there so it fires before xterm's internal handler.
-    const xtermTextarea = el.querySelector("textarea.xterm-helper-textarea") as HTMLTextAreaElement | null;
-    (xtermTextarea || el).addEventListener("paste", onPaste, true);
+    document.addEventListener("paste", onPaste, true);
 
     // Drag-and-drop image onto terminal
     const onDragOver = (e: DragEvent) => {
@@ -417,7 +417,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       window.removeEventListener("resize", debouncedResize);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
-      (xtermTextarea || el).removeEventListener("paste", onPaste, true);
+      document.removeEventListener("paste", onPaste, true);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       if (removeIncomingListener) removeIncomingListener();
