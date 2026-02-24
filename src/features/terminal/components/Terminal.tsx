@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -47,6 +47,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
   const { resolvedTheme } = useTheme();
   const { hotkeys } = useConfig();
 
+  // Loading overlay — covers the terminal for a fixed duration to mask
+  // any flicker from history replay / TUI redraw on reconnect
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const timer = setTimeout(() => setLoading(false), 1000);
+    return () => clearTimeout(timer);
+  }, [sessionId]);
+
   // Refs for values accessed inside stable closures
   const isAgentRunningRef = useRef(isAgentRunning);
   useEffect(() => { isAgentRunningRef.current = isAgentRunning; }, [isAgentRunning]);
@@ -67,12 +75,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
     const termTheme = THEMES[resolvedTheme] || THEMES.dark;
 
-    // For reconnected sessions, hide the terminal visually until the TUI
-    // redraws cleanly via SIGWINCH. This avoids any flash of stale content.
     const reconnecting = !!isReconnected;
-    if (reconnecting) {
-      el.style.opacity = "0";
-    }
 
     const term = new Xterm({
       cursorBlink: true,
@@ -211,8 +214,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
           }
 
           // Register the incoming data listener — data flows freely so xterm
-          // renders the TUI content offscreen (terminal is opacity:0 during
-          // reconnect, so no visual flicker even if content arrives early)
+          // renders content behind the loading overlay (no visual flicker)
           removeIncomingListener = window.electron.ipcRenderer.on(
             IPC.TERMINAL_INCOMING_DATA,
             ({ id, data }: { id: string; data: string }) => {
@@ -229,8 +231,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
             // Force the running app to redraw via SIGWINCH bounce.
             // The kernel ignores same-size resize (no SIGWINCH), so we
             // shrink by 1 col then restore — two SIGWINCHs guaranteed.
-            // The terminal is hidden (opacity:0) so all redraws happen
-            // offscreen — the user only sees the final clean state.
+            // The loading overlay hides the terminal, so all redraws happen
+            // behind it — the user only sees the final clean state.
             const { cols, rows } = term;
             if (window.electron && cols > 2) {
               window.electron.ipcRenderer.send(IPC.TERMINAL_RESIZE, {
@@ -248,16 +250,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
               performResize();
             }
 
-            // Reveal the terminal after the TUI has had time to redraw.
-            // 300ms is enough for the bounce-resize SIGWINCH round-trip
-            // and for most TUI apps to fully repaint their screen.
+            // Allow ResizeObserver resizes after bounce settles (300ms).
+            // The loading overlay handles visual hiding — no opacity manipulation needed.
             setTimeout(() => {
               reconnectSettled = true;
-              if (el) {
-                el.style.transition = "opacity 80ms ease-in";
-                el.style.opacity = "1";
-              }
-              // Sync ResizeObserver dimensions now that we're settled
               performResize();
             }, 300);
           } else {
@@ -362,9 +358,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
-      // Reset opacity in case cleanup runs before reveal
-      el.style.opacity = "";
-      el.style.transition = "";
     };
   }, [sessionId]); // Only recreate on session change — NOT on theme change
 
@@ -396,7 +389,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     }
   }, [isActive, focusTarget]);
 
-  return <div className={className} ref={terminalRef} />;
+  const bg = (THEMES[resolvedTheme] || THEMES.dark)?.background;
+  const cursorColor = (THEMES[resolvedTheme] || THEMES.dark)?.cursor;
+
+  return (
+    <div className={`relative overflow-hidden ${className || ""}`}>
+      <div ref={terminalRef} className="absolute inset-0" />
+      {/* Loading overlay — masks flicker during history replay / TUI redraw */}
+      <div
+        className={`absolute inset-0 z-10 flex items-end p-5 transition-opacity duration-500 ease-out ${
+          loading ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+        style={{ backgroundColor: bg }}
+      >
+        <span
+          className="inline-block w-[9px] h-[18px] rounded-[1px] animate-pulse"
+          style={{ backgroundColor: cursorColor }}
+        />
+      </div>
+    </div>
+  );
 };
 
 export default React.memo(Terminal);
