@@ -243,7 +243,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       terminal.cleanupClientSessions(clientId);
       pendingCleanups.delete(clientId);
       console.log(`[Tron Web] Cleaned up sessions for disconnected client ${clientId.slice(0, 8)}…`);
-    }, 30_000)); // 30 second grace period
+    }, 300_000)); // 5 minute grace period (mobile browsers kill pages aggressively)
   });
 });
 

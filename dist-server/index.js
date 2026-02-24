@@ -219,7 +219,7 @@ wss.on("connection", (ws, req) => {
             terminal.cleanupClientSessions(clientId);
             pendingCleanups.delete(clientId);
             console.log(`[Tron Web] Cleaned up sessions for disconnected client ${clientId.slice(0, 8)}…`);
-        }, 30000)); // 30 second grace period
+        }, 300000)); // 5 minute grace period (mobile browsers kill pages aggressively)
     });
 });
 // Channels completely blocked in SSH-only mode (no local PTY or filesystem)

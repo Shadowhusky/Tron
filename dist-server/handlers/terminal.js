@@ -242,7 +242,7 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         sessionOwners.set(reconnectId, clientId);
         // Update pushEvent so onData sends to the new WebSocket connection
         sessionPushEvents.set(reconnectId, pushEvent);
-        return reconnectId;
+        return { sessionId: reconnectId, reconnected: true };
     }
     const { shell, args: shellArgs } = detectShell();
     // Reuse old session ID when reconnecting after server restart (matches Electron behavior)
@@ -293,7 +293,7 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         removePersistedHistory(sessionId);
     });
     sessions.set(sessionId, ptyProcess);
-    return sessionId;
+    return { sessionId, reconnected: false };
 }
 export function writeToSession(id, data) {
     const session = sessions.get(id);

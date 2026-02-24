@@ -240,7 +240,7 @@ export function createSession(
   { cols, rows, cwd, reconnectId }: { cols?: number; rows?: number; cwd?: string; reconnectId?: string },
   clientId: string,
   pushEvent: EventPusher
-): string {
+): { sessionId: string; reconnected: boolean } {
   if (!pty) {
     throw new Error("Local terminals not available (node-pty not loaded)");
   }
@@ -253,7 +253,7 @@ export function createSession(
     sessionOwners.set(reconnectId, clientId);
     // Update pushEvent so onData sends to the new WebSocket connection
     sessionPushEvents.set(reconnectId, pushEvent);
-    return reconnectId;
+    return { sessionId: reconnectId, reconnected: true };
   }
 
   const { shell, args: shellArgs } = detectShell();
@@ -310,7 +310,7 @@ export function createSession(
   });
 
   sessions.set(sessionId, ptyProcess);
-  return sessionId;
+  return { sessionId, reconnected: false };
 }
 
 export function writeToSession(id: string, data: string) {

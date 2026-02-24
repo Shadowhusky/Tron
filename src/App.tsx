@@ -21,6 +21,7 @@ import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import SavedTabsModal from "./components/layout/SavedTabsModal";
+import Modal from "./components/ui/Modal";
 import { isSshOnly } from "./services/mode";
 import { isTouchDevice } from "./utils/platform";
 
@@ -75,6 +76,7 @@ const AppContent = () => {
     saveTab,
     loadSavedTab,
     deleteSavedTab,
+    setConfirmHandler,
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession, getSessionPersistable, restoreAgentSession } = useAgentContext();
@@ -87,6 +89,13 @@ const AppContent = () => {
   const [showSavedTabs, setShowSavedTabs] = useState(false);
   const [savedTabCloseConfirm, setSavedTabCloseConfirm] = useState<{ tabId: string; savedTabId: string } | null>(null);
   const [sshToast, setSshToast] = useState("");
+
+  // Generic confirm modal — replaces window.confirm for styled modals
+  const [confirmModal, setConfirmModal] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
+  const confirmHandler = useCallback((message: string): Promise<boolean> => {
+    return new Promise((resolve) => setConfirmModal({ message, resolve }));
+  }, []);
+  useEffect(() => { setConfirmHandler(confirmHandler); }, [setConfirmHandler, confirmHandler]);
 
   useEffect(() => {
     // Allow embedding pages to skip onboarding via URL param
@@ -101,7 +110,7 @@ const AppContent = () => {
     if (!hasConfigured) {
       setShowOnboarding(true);
       // Clear server-side SSH profiles so fresh setup starts clean
-      window.electron?.ipcRenderer?.invoke?.("ssh.profiles.write", [])?.catch?.(() => {});
+      window.electron?.ipcRenderer?.invoke?.("ssh.profiles.write", [])?.catch?.(() => { });
     }
   }, []);
 
@@ -272,6 +281,7 @@ const AppContent = () => {
         onReorder={reorderTabs}
         onOpenSettings={openSettingsTab}
         isTabDirty={isTabDirty}
+        onConfirmClose={confirmHandler}
         onRenameTab={renameTab}
         onUpdateTabColor={updateTabColor}
         onDuplicateTab={handleDuplicateTab}
@@ -361,79 +371,30 @@ const AppContent = () => {
       />
 
       {/* Saved tab close confirmation */}
-      <AnimatePresence>
-        {savedTabCloseConfirm && (
-          <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => handleSavedTabCloseAction("cancel")}
-          >
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              onClick={(e) => e.stopPropagation()}
-              className={`relative w-full max-w-sm mx-4 rounded-lg shadow-2xl overflow-hidden ${
-                resolvedTheme === "light"
-                  ? "bg-white border border-gray-200"
-                  : resolvedTheme === "modern"
-                    ? "bg-[#12121a]/95 backdrop-blur-2xl border border-white/[0.08]"
-                    : "bg-[#141414] border border-white/[0.06]"
-              }`}
-            >
-              <div className="px-5 pt-5 pb-3">
-                <h3 className={`text-sm font-semibold mb-1.5 ${
-                  resolvedTheme === "light" ? "text-gray-800" : "text-gray-200"
-                }`}>
-                  Close saved tab?
-                </h3>
-                <p className={`text-[13px] leading-relaxed ${
-                  resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"
-                }`}>
-                  This tab was loaded from your saved tabs. Would you like to keep it saved for later, or remove it everywhere?
-                </p>
-              </div>
-              <div className={`flex gap-2 px-5 py-3 border-t ${
-                resolvedTheme === "light" ? "border-gray-100" : "border-white/5"
-              }`}>
-                <button
-                  onClick={() => handleSavedTabCloseAction("cancel")}
-                  className={`flex-1 px-3 py-1.5 rounded text-[13px] font-medium transition-colors ${
-                    resolvedTheme === "light"
-                      ? "hover:bg-gray-100 text-gray-600"
-                      : "hover:bg-white/10 text-gray-400"
-                  }`}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => handleSavedTabCloseAction("close")}
-                  className={`flex-1 px-3 py-1.5 rounded text-[13px] font-medium transition-colors ${
-                    resolvedTheme === "light"
-                      ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
-                      : "bg-white/[0.06] hover:bg-white/[0.12] text-gray-300"
-                  }`}
-                >
-                  Close tab
-                </button>
-                <button
-                  onClick={() => handleSavedTabCloseAction("remove")}
-                  className={`flex-1 px-3 py-1.5 rounded text-[13px] font-medium transition-colors ${
-                    resolvedTheme === "light"
-                      ? "bg-red-50 hover:bg-red-100 text-red-600"
-                      : "bg-red-500/10 hover:bg-red-500/20 text-red-400"
-                  }`}
-                >
-                  Remove from saved
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Modal
+        show={!!savedTabCloseConfirm}
+        resolvedTheme={resolvedTheme}
+        onClose={() => handleSavedTabCloseAction("cancel")}
+        title="Close saved tab?"
+        description="Keep it saved for later, or remove it everywhere?"
+        buttons={[
+          { label: "Cancel", type: "ghost", onClick: () => handleSavedTabCloseAction("cancel") },
+          { label: "Close tab", type: "default", onClick: () => handleSavedTabCloseAction("close") },
+          { label: "Remove saved", type: "danger", onClick: () => handleSavedTabCloseAction("remove") },
+        ]}
+      />
+
+      {/* Generic confirm modal (replaces window.confirm for tab close etc.) */}
+      <Modal
+        show={!!confirmModal}
+        resolvedTheme={resolvedTheme}
+        onClose={() => { confirmModal?.resolve(false); setConfirmModal(null); }}
+        title={confirmModal?.message ?? ""}
+        buttons={[
+          { label: "Cancel", type: "ghost", onClick: () => { confirmModal?.resolve(false); setConfirmModal(null); } },
+          { label: "Confirm", type: "primary", onClick: () => { confirmModal?.resolve(true); setConfirmModal(null); } },
+        ]}
+      />
 
       {/* SSH-only toast */}
       <AnimatePresence>
@@ -442,11 +403,10 @@ const AppContent = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-[9999] px-4 py-2 rounded-lg text-xs font-medium shadow-lg backdrop-blur-md ${
-              resolvedTheme === "light"
-                ? "bg-white/95 text-gray-700 border border-gray-200"
-                : "bg-gray-800/95 text-gray-200 border border-gray-600"
-            }`}
+            className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-[9999] px-4 py-2 rounded-lg text-xs font-medium shadow-lg backdrop-blur-md ${resolvedTheme === "light"
+              ? "bg-white/95 text-gray-700 border border-gray-200"
+              : "bg-gray-800/95 text-gray-200 border border-gray-600"
+              }`}
           >
             {sshToast}
           </motion.div>

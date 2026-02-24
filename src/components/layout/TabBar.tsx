@@ -18,6 +18,8 @@ interface TabBarProps {
   onReorder: (fromIndex: number, toIndex: number) => void;
   onOpenSettings: () => void;
   isTabDirty?: (tabId: string) => boolean;
+  /** Show a styled confirm modal. Resolves true if user confirms. */
+  onConfirmClose?: (message: string) => Promise<boolean>;
   onRenameTab?: (sessionId: string, title: string) => void;
   onUpdateTabColor?: (tabId: string, color?: string) => void;
   onDuplicateTab?: (tabId: string) => Promise<void>;
@@ -36,15 +38,21 @@ const TabBar: React.FC<TabBarProps> = ({
   onReorder,
   onOpenSettings,
   isTabDirty,
+  onConfirmClose,
   onRenameTab,
   onUpdateTabColor,
   onDuplicateTab,
   onSaveTab,
   onLoadSavedTab,
 }) => {
+  // Confirm helper — uses styled modal if available, falls back to window.confirm
+  const confirm = async (msg: string) =>
+    onConfirmClose ? onConfirmClose(msg) : window.confirm(msg);
+
   // Local visual order — avoids propagating every drag frame to parent
   const [localTabs, setLocalTabs] = useState(tabs);
   const isDraggingRef = useRef(false);
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
 
   // Long-press for mobile context menu
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -119,6 +127,7 @@ const TabBar: React.FC<TabBarProps> = ({
 
   const commitReorder = () => {
     isDraggingRef.current = false;
+    setDraggingTabId(null);
     const oldIds = tabs.map((t) => t.id);
     const newIds = localTabs.map((t) => t.id);
     for (let i = 0; i < oldIds.length; i++) {
@@ -170,141 +179,139 @@ const TabBar: React.FC<TabBarProps> = ({
               light: "border-black/[0.08]",
             });
             return (
-            <Reorder.Item
-              key={tab.id}
-              value={tab}
-              drag={isTouchDevice() ? false : "x"}
-              dragConstraints={{ top: 0, bottom: 0 }}
-              dragElastic={0.1}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0, width: 0, overflow: "hidden" }}
-              transition={{ duration: 0.12, ease: "easeOut" }}
-              onDragEnd={commitReorder}
-              whileDrag={{
-                zIndex: 50,
-                cursor: "grabbing",
-                boxShadow:
-                  resolvedTheme === "light"
-                    ? "0 2px 12px rgba(0,0,0,0.15)"
-                    : "0 2px 16px rgba(0,0,0,0.6)",
-                background:
-                  resolvedTheme === "light"
-                    ? "rgba(255,255,255,1)"
-                    : resolvedTheme === "modern"
-                      ? "rgba(18,18,24,1)"
-                      : "rgba(21,21,21,1)",
-              }}
-              style={{ WebkitAppRegion: "no-drag" } as any}
-              className={`group relative flex items-center gap-2 px-3 text-xs cursor-grab active:cursor-grabbing transition-colors duration-150 max-w-[200px] min-w-[100px] border-r ${isFirst ? "border-l" : ""} ${borderCls} ${isActive
-                ? themeClass(resolvedTheme, {
-                  dark: "bg-[#151515] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_3px_10px_-2px_rgba(255,255,255,0.15)]",
-                  modern:
-                    "bg-white/[0.04] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_3px_10px_-2px_rgba(168,85,247,0.2)] backdrop-blur-xl",
-                  light: "bg-white text-gray-900 shadow-[inset_0_0_6px_rgba(0,0,0,0.03),0_3px_10px_-2px_rgba(0,0,0,0.1)]",
-                })
-                : themeClass(resolvedTheme, {
-                  dark: "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
-                  modern:
-                    "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
-                  light:
-                    "text-gray-400 hover:text-gray-600 hover:bg-white/40",
-                })
-                }`}
-              data-testid={`tab-${tab.id}`}
-              onClick={() => {
-                if (longPressFired.current) return; // Prevent click after long-press
-                onSelect(tab.id);
-              }}
-              onTouchStart={(e) => handleTouchStart(tab, e)}
-              onTouchEnd={handleTouchEnd}
-              onTouchMove={handleTouchMove}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                if (isOnlyConnectTab(tab)) return; // no context menu for connect tabs
-                setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
-              }}
-            >
-              {tab.color && (
-                <div
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: tab.color }}
-                />
-              )}
-              {renamingTabId === tab.id ? (
-                <input
-                  autoFocus
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    e.stopPropagation();
-                    if (e.key === "Enter") {
+              <Reorder.Item
+                key={tab.id}
+                value={tab}
+                drag={isTouchDevice() ? false : "x"}
+                dragConstraints={{ top: 0, bottom: 0 }}
+                dragElastic={0.1}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, width: 0, overflow: "hidden" }}
+                transition={{ duration: 0.12, ease: "easeOut" }}
+                onDragStart={() => setDraggingTabId(tab.id)}
+                onDragEnd={commitReorder}
+                whileDrag={{
+                  zIndex: 50,
+                  cursor: "grabbing",
+                  boxShadow:
+                    resolvedTheme === "light"
+                      ? "0 2px 12px rgba(0,0,0,0.15)"
+                      : "0 2px 16px rgba(0,0,0,0.6)",
+                }}
+                style={{ WebkitAppRegion: "no-drag" } as any}
+                className={`group relative flex items-center gap-2 px-3 text-xs cursor-grab active:cursor-grabbing transition-colors duration-150 max-w-[200px] min-w-[100px] border-r ${isFirst ? "border-l" : ""} ${borderCls} ${draggingTabId === tab.id
+                  ? themeClass(resolvedTheme, {
+                    dark: "!bg-[#151515]",
+                    modern: "!bg-[#12121a]",
+                    light: "!bg-white",
+                  })
+                  : ""} ${isActive
+                  ? themeClass(resolvedTheme, {
+                    dark: "bg-[#151515] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_3px_10px_-2px_rgba(255,255,255,0.15)]",
+                    modern:
+                      "bg-white/[0.04] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_3px_10px_-2px_rgba(168,85,247,0.2)] backdrop-blur-xl",
+                    light: "bg-white text-gray-900 shadow-[inset_0_0_6px_rgba(0,0,0,0.03),0_3px_10px_-2px_rgba(0,0,0,0.1)]",
+                  })
+                  : themeClass(resolvedTheme, {
+                    dark: "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
+                    modern:
+                      "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
+                    light:
+                      "text-gray-400 hover:text-gray-600 hover:bg-white/40",
+                  })
+                  }`}
+                data-testid={`tab-${tab.id}`}
+                onClick={() => {
+                  if (longPressFired.current) return; // Prevent click after long-press
+                  onSelect(tab.id);
+                }}
+                onTouchStart={(e) => handleTouchStart(tab, e)}
+                onTouchEnd={handleTouchEnd}
+                onTouchMove={handleTouchMove}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  if (isOnlyConnectTab(tab)) return; // no context menu for connect tabs
+                  setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
+                }}
+              >
+                {tab.color && (
+                  <div
+                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: tab.color }}
+                  />
+                )}
+                {renamingTabId === tab.id ? (
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") {
+                        if (renameValue.trim() && tab.activeSessionId && onRenameTab && renameValue.trim() !== tab.title) {
+                          onRenameTab(tab.activeSessionId, renameValue.trim());
+                        }
+                        setRenamingTabId(null);
+                      } else if (e.key === "Escape") {
+                        setRenamingTabId(null);
+                      }
+                    }}
+                    onBlur={() => {
                       if (renameValue.trim() && tab.activeSessionId && onRenameTab && renameValue.trim() !== tab.title) {
                         onRenameTab(tab.activeSessionId, renameValue.trim());
                       }
                       setRenamingTabId(null);
-                    } else if (e.key === "Escape") {
-                      setRenamingTabId(null);
-                    }
-                  }}
-                  onBlur={() => {
-                    if (renameValue.trim() && tab.activeSessionId && onRenameTab && renameValue.trim() !== tab.title) {
-                      onRenameTab(tab.activeSessionId, renameValue.trim());
-                    }
-                    setRenamingTabId(null);
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  onContextMenu={(e) => e.stopPropagation()}
-                  className={`flex-1 min-w-[50px] bg-transparent outline-none ring-1 ring-blue-500/50 rounded-sm px-1 -mx-1 ${themeClass(
-                    resolvedTheme,
-                    { dark: "text-white", modern: "text-white", light: "text-gray-900" },
-                  )}`}
-                />
-              ) : (
-                <span className="truncate flex-1 select-none">{tab.title}</span>
-              )}
-              {renamingTabId !== tab.id && !isOnlyConnectTab(tab) && (
-                <button
-                  data-testid={`tab-close-${tab.id}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const dirty = isTabDirty?.(tab.id) ?? false;
-                    // Skip confirm in sandboxed iframes where confirm() is blocked
-                    const canConfirm = !window.frameElement;
-                    if (
-                      tab.title === "Settings" ||
-                      !dirty ||
-                      !canConfirm ||
-                      window.confirm("Close this terminal session?")
-                    ) {
-                      onClose(tab.id);
-                    }
-                  }}
-                  className={`opacity-0 group-hover:opacity-100 p-1.5 -mr-1 rounded transition-opacity ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
-                    resolvedTheme,
-                    {
-                      dark: "hover:bg-white/20",
-                      modern: "hover:bg-white/20",
-                      light: "hover:bg-black/10",
-                    },
-                  )}`}
-                >
-                  <svg
-                    className="w-3 h-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => e.stopPropagation()}
+                    className={`flex-1 min-w-[50px] bg-transparent outline-none ring-1 ring-blue-500/50 rounded-sm px-1 -mx-1 ${themeClass(
+                      resolvedTheme,
+                      { dark: "text-white", modern: "text-white", light: "text-gray-900" },
+                    )}`}
+                  />
+                ) : (
+                  <span className="truncate flex-1 select-none">{tab.title}</span>
+                )}
+                {renamingTabId !== tab.id && !isOnlyConnectTab(tab) && (
+                  <button
+                    data-testid={`tab-close-${tab.id}`}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const dirty = isTabDirty?.(tab.id) ?? false;
+                      if (
+                        tab.title === "Settings" ||
+                        !dirty ||
+                        await confirm("Close this terminal session?")
+                      ) {
+                        onClose(tab.id);
+                      }
+                    }}
+                    className={`opacity-0 group-hover:opacity-100 p-1.5 -mr-1 rounded transition-opacity ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
+                      resolvedTheme,
+                      {
+                        dark: "hover:bg-white/20",
+                        modern: "hover:bg-white/20",
+                        light: "hover:bg-black/10",
+                      },
+                    )}`}
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              )}
-            </Reorder.Item>
+                    <svg
+                      className="w-3 h-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                )}
+              </Reorder.Item>
             );
           })}
         </AnimatePresence>
@@ -452,7 +459,7 @@ const TabBar: React.FC<TabBarProps> = ({
       {/* Settings Button */}
       <button
         data-testid="tab-settings"
-        onClick={onOpenSettings}
+        onClick={() => onOpenSettings()}
         className={`px-2.5 flex items-center transition-colors ${themeClass(
           resolvedTheme,
           {
@@ -649,18 +656,16 @@ const TabBar: React.FC<TabBarProps> = ({
 
             {/* Close */}
             <button
-              onClick={() => {
+              onClick={async () => {
                 const tabId = contextMenu?.tabId;
                 setContextMenu(null);
                 const tab = tabs.find((t) => t.id === tabId);
                 const dirty = tabId ? (isTabDirty?.(tabId) ?? false) : false;
-                const canConfirm = !window.frameElement;
                 if (
                   tab && tabId &&
                   (tab.title === "Settings" ||
                     !dirty ||
-                    !canConfirm ||
-                    window.confirm("Close this terminal session?"))
+                    await confirm("Close this terminal session?"))
                 ) {
                   onClose(tabId);
                 }
@@ -680,10 +685,9 @@ const TabBar: React.FC<TabBarProps> = ({
             {/* Close All Tabs */}
             {tabs.length > 1 && (
               <button
-                onClick={() => {
+                onClick={async () => {
                   setContextMenu(null);
-                  if (window.confirm(`Close all ${tabs.length} tabs?`)) {
-                    // Close all tabs except the last one (which triggers a new tab)
+                  if (await confirm(`Close all ${tabs.length} tabs?`)) {
                     const tabIds = tabs.map((t) => t.id);
                     for (const id of tabIds) {
                       onClose(id);
