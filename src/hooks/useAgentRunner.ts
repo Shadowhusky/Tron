@@ -122,7 +122,7 @@ export function useAgentRunner(
         session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
       aiService.getModelCapabilities(model, baseUrl, provider).then(setModelCapabilities);
     } else if (model) {
-      // Cloud providers — infer thinking from model name
+      // Cloud providers — infer capabilities from model name / provider
       const m = model.toLowerCase();
       const caps: string[] = [];
       // Known thinking/reasoning models
@@ -132,6 +132,15 @@ export function useAgentRunner(
         /\bgemini.*\b/.test(m)                                        // Gemini models support thinking
       ) {
         caps.push("thinking");
+      }
+      // Vision support — most modern cloud models support it
+      if (
+        provider === "anthropic" || provider === "anthropic-compat" || // Claude 3+ all support vision
+        provider === "openai" ||                                       // GPT-4o, GPT-4V, etc.
+        provider === "gemini" ||                                       // Gemini models
+        /\b(claude-3|gpt-4|gemini|pixtral|llava)\b/.test(m)
+      ) {
+        caps.push("vision");
       }
       setModelCapabilities(caps);
     } else {
