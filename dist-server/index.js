@@ -65,6 +65,7 @@ function saveJsonMap(filePath, map) {
     }
     catch { /* best effort */ }
 }
+const savedTabsFile = path.join(tronDataDir, "saved-tabs.json");
 ensureDataDir();
 const clientSessions = loadJsonMap(sessionsFile);
 const clientConfigs = loadJsonMap(configsFile);
@@ -306,6 +307,24 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return ssh.readProfiles();
         case "ssh.profiles.write":
             return ssh.writeProfiles(data);
+        case "savedTabs.read":
+            try {
+                if (!fs.existsSync(savedTabsFile))
+                    return [];
+                return JSON.parse(fs.readFileSync(savedTabsFile, "utf-8"));
+            }
+            catch {
+                return [];
+            }
+        case "savedTabs.write":
+            try {
+                ensureDataDir();
+                fs.writeFileSync(savedTabsFile, JSON.stringify(data, null, 2), "utf-8");
+                return true;
+            }
+            catch {
+                return false;
+            }
         case "terminal.readHistory":
             return terminal.readHistory(data?.sessionId || data, data?.lines);
         case "terminal.clearHistory":
@@ -314,6 +333,15 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return terminal.execInTerminal(data.sessionId, data.command, pushEvent);
         case "terminal.scanCommands":
             return terminal.scanCommands();
+        case "file.saveTempImage": {
+            const tmpDir = path.join(os.tmpdir(), "tron-images");
+            if (!fs.existsSync(tmpDir))
+                fs.mkdirSync(tmpDir, { recursive: true });
+            const name = `paste-${Date.now()}.${data.ext || "png"}`;
+            const filePath = path.join(tmpDir, name);
+            fs.writeFileSync(filePath, Buffer.from(data.base64, "base64"));
+            return filePath;
+        }
         case "file.writeFile":
             return terminal.writeFile(data.filePath, data.content);
         case "file.readFile":

@@ -138,3 +138,31 @@ export interface TerminalState {
   activeTabId: string;
   sessions: Map<string, TerminalSession>;
 }
+
+/** A self-contained snapshot of a tab's state, saved for cross-device restore. */
+export interface SavedTab {
+  id: string;
+  name: string;
+  savedAt: number;
+  tab: {
+    title: string;
+    color?: string;
+    root: LayoutNode;
+  };
+  sessions: Record<string, {
+    title: string;
+    cwd?: string;
+    aiConfig?: AIConfig;
+    interactions?: { role: "user" | "agent"; content: string; timestamp: number }[];
+    contextSummary?: string;
+    contextSummarySourceLength?: number;
+    sshProfileId?: string;
+  }>;
+  agentState: Record<string, {
+    agentThread: AgentStep[];
+    overlayHeight?: number;
+    draftInput?: string;
+    thinkingEnabled?: boolean;
+    scrollPosition?: number;
+  }>;
+}

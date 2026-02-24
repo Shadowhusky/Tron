@@ -22,6 +22,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "config.getSystemPaths",
     "sessions.read",
     "sessions.write",
+    "file.saveTempImage",
     "file.writeFile",
     "file.readFile",
     "file.editFile",
@@ -37,6 +38,8 @@ const ALLOWED_INVOKE_CHANNELS = [
     "ssh.disconnect",
     "ssh.profiles.read",
     "ssh.profiles.write",
+    "savedTabs.read",
+    "savedTabs.write",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -120,6 +123,9 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         disconnectSSH: (sessionId) => electron_1.ipcRenderer.invoke("ssh.disconnect", sessionId),
         readSSHProfiles: () => electron_1.ipcRenderer.invoke("ssh.profiles.read"),
         writeSSHProfiles: (profiles) => electron_1.ipcRenderer.invoke("ssh.profiles.write", profiles),
+        // Saved Tabs
+        readSavedTabs: () => electron_1.ipcRenderer.invoke("savedTabs.read"),
+        writeSavedTabs: (tabs) => electron_1.ipcRenderer.invoke("savedTabs.write", tabs),
     },
 });
 //# sourceMappingURL=preload.js.map
