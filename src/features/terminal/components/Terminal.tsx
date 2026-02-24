@@ -121,6 +121,45 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
     term.focus();
 
+    // Image save helper — converts blob to base64, saves to temp file via IPC,
+    // and writes the file path into the terminal PTY.
+    const saveImageAndType = async (blob: Blob) => {
+      const buf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
+      const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+      const filePath = await window.electron?.ipcRenderer?.invoke(
+        "file.saveTempImage",
+        { base64, ext },
+      );
+      if (filePath && window.electron) {
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+          id: sessionId,
+          data: filePath,
+        });
+      }
+    };
+
+    // Clipboard image check — uses the async Clipboard API to read image data.
+    const checkClipboardForImage = async () => {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find(t => t.startsWith("image/"));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            await saveImageAndType(blob);
+            return true;
+          }
+        }
+      } catch {
+        // Clipboard API not available or permission denied
+      }
+      return false;
+    };
+
     // Custom key handling — intercept configurable hotkeys before xterm
     term.attachCustomKeyEventHandler((e) => {
       // Parse the clearTerminal hotkey to check dynamically
@@ -145,6 +184,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       }
       if (matches(overlayCombo)) {
         return false;
+      }
+      // Cmd/Ctrl+V — check if clipboard has an image; if so, save to temp
+      // and paste the file path instead of letting xterm handle it.
+      if (e.key === "v" && (e.metaKey || e.ctrlKey) && e.type === "keydown") {
+        checkClipboardForImage(); // async — if no image, xterm handles text paste normally
       }
       return true;
     });
@@ -317,46 +361,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
 
-    // Image paste/drop — save to temp file and write path to PTY.
-    // Supports pasting screenshots and dragging image files onto the terminal
-    // (e.g. for Claude CLI image input).
-    const saveBlobAndPaste = async (blob: Blob) => {
-      const buf = await blob.arrayBuffer();
-      const base64 = btoa(
-        new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""),
-      );
-      const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
-      const filePath = await window.electron?.ipcRenderer?.invoke(
-        "file.saveTempImage",
-        { base64, ext },
-      );
-      if (filePath && window.electron) {
-        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-          id: sessionId,
-          data: filePath,
-        });
-      }
-    };
-
-    // Listen on document (capture phase) — xterm's internal textarea swallows
-    // paste events, so we intercept at the document level and check if the
-    // terminal element is focused.
-    const onPaste = (e: Event) => {
-      if (!el.contains(document.activeElement)) return;
-      const items = (e as ClipboardEvent).clipboardData?.items;
-      if (!items) return;
-      for (const item of Array.from(items)) {
-        if (item.type.startsWith("image/")) {
-          e.preventDefault();
-          e.stopPropagation();
-          const blob = item.getAsFile();
-          if (blob) saveBlobAndPaste(blob);
-          return;
-        }
-      }
-    };
-    document.addEventListener("paste", onPaste, true);
-
     // Drag-and-drop image onto terminal
     const onDragOver = (e: DragEvent) => {
       if (e.dataTransfer?.types.includes("Files")) {
@@ -371,7 +375,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       if (imageFile) {
         e.preventDefault();
         e.stopPropagation();
-        saveBlobAndPaste(imageFile);
+        saveImageAndType(imageFile);
       }
     };
     el.addEventListener("dragover", onDragOver);
@@ -416,7 +420,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       window.removeEventListener("resize", debouncedResize);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
-      document.removeEventListener("paste", onPaste, true);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       if (removeIncomingListener) removeIncomingListener();
