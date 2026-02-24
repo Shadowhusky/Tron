@@ -287,6 +287,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
             suppressOutgoingRef.current = true;
           }
 
+          // Write history to xterm BEFORE registering the incoming data listener.
+          // On page reload (mobile OS kill, manual refresh), xterm is brand new
+          // with an empty buffer — this restores previous terminal output.
+          if (history) {
+            term.write(history);
+          }
+
           // Register the incoming data listener — data flows freely so xterm
           // renders content behind the loading overlay (no visual flicker)
           removeIncomingListener = window.electron.ipcRenderer.on(
@@ -345,19 +352,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
           }, 350);
       };
 
-      if (reconnecting) {
-        // Reconnected session — skip getHistory entirely.
-        // Calling getHistory adds async delay during which ResizeObserver
-        // or other events can trigger premature SIGWINCH, causing the old
-        // TUI state to flash on screen. Instead, go straight to listener
-        // registration + bounce resize (like tmux/screen on reattach).
-        finishSetup(undefined, true);
-      } else {
-        window.electron.ipcRenderer
-          .getHistory(sessionId)
-          .then((history: string) => finishSetup(history))
-          .catch(() => finishSetup());
-      }
+      // Always fetch history — on page reload (mobile OS kill, manual refresh),
+      // xterm starts with an empty buffer. Even for reconnected sessions, we
+      // need history to restore previous output before doing the bounce-resize.
+      window.electron.ipcRenderer
+        .getHistory(sessionId)
+        .then((history: string) => finishSetup(history, reconnecting))
+        .catch(() => finishSetup(undefined, reconnecting));
     } else if (sessionId.startsWith("mock-")) {
       term.write("\r\n\x1b[31m[Error] Failed to connect to terminal server.\x1b[0m\r\n");
       term.write("\x1b[33mPlease reload the page to try again.\x1b[0m\r\n");

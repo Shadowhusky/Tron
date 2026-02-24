@@ -85,7 +85,7 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
   const refreshProfiles = useCallback(() => {
     const ipc = window.electron?.ipcRenderer;
     if (ipc?.readSSHProfiles) {
-      ipc.readSSHProfiles().then(setProfiles).catch(() => {});
+      ipc.readSSHProfiles().then(setProfiles).catch(() => { });
     }
   }, []);
   useEffect(() => {
@@ -153,11 +153,10 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
               <div className="flex items-center gap-1.5 ml-2">
                 <button
                   onClick={() => toggleCredentials(p.id)}
-                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
-                    p.saveCredentials
+                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${p.saveCredentials
                       ? "border-green-500/50 text-green-400 bg-green-500/10"
                       : `${t.border} ${t.textMuted} ${t.surfaceHover}`
-                  }`}
+                    }`}
                   title={p.saveCredentials ? "Credentials saved" : "Credentials not saved"}
                 >
                   {p.saveCredentials ? "Creds saved" : "No creds"}
@@ -201,14 +200,11 @@ const SettingsPane = () => {
   const [activeSection, setActiveSection] = useState<string>("ai");
 
   // Navigate to a specific section when requested externally (e.g. model click → AI page)
-  const prevSectionRef = useRef(pendingSettingsSection);
   useEffect(() => {
-    // Only act when pendingSettingsSection *changes* to a non-null value
-    if (pendingSettingsSection && pendingSettingsSection !== prevSectionRef.current) {
+    if (pendingSettingsSection) {
       setActiveSection(pendingSettingsSection);
+      clearPendingSettingsSection();
     }
-    prevSectionRef.current = pendingSettingsSection;
-    if (pendingSettingsSection) clearPendingSettingsSection();
   }, [pendingSettingsSection, clearPendingSettingsSection]);
 
   // Listen for keydown when recording a hotkey
@@ -976,10 +972,10 @@ const SettingsPane = () => {
                         aria-checked={aiBehavior[key]}
                         onClick={() => updateAIBehavior({ [key]: !aiBehavior[key] })}
                         className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${aiBehavior[key]
-                            ? "bg-purple-500"
-                            : resolvedTheme === "light"
-                              ? "bg-gray-300"
-                              : "bg-white/15"
+                          ? "bg-purple-500"
+                          : resolvedTheme === "light"
+                            ? "bg-gray-300"
+                            : "bg-white/15"
                           }`}
                       >
                         <span

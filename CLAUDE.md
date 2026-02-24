@@ -27,7 +27,7 @@ src/
   contexts/           # React contexts (Layout, Theme, History, Agent)
   components/
     layout/           # TabBar, SplitPane (recursive), TerminalPane, ContextBar, CloseConfirmModal, EmptyState
-    ui/               # FeatureIcon
+    ui/               # Modal, FeatureIcon
   features/
     terminal/         # Terminal.tsx (xterm.js), SmartInput.tsx
     agent/            # AgentOverlay.tsx, TokenHeatBar.tsx
@@ -80,6 +80,8 @@ e2e/                  # Playwright E2E test suite
 - **SSH profiles**: Saved in `app.getPath("userData")/ssh-profiles/profiles.json` (Electron) or `~/.tron/ssh-profiles.json` (server mode).
 - **Terminal reconnection**: On page refresh, PTY sessions survive in the main process (Electron) or server (web mode, 30s grace). LayoutContext detects reconnection (`newId === oldId`), sets `TerminalSession.reconnected = true`. Terminal.tsx skips `getHistory`, shows a loading overlay (skeleton lines + blinking cursor) for 1s, does a SIGWINCH bounce-resize (cols-1 → cols) to force TUI redraw behind the overlay, then fades out with 500ms ease-out transition. Outgoing data is suppressed during bounce to prevent DSR corruption. ResizeObserver resizes are deferred until settled. Backend reconnect handlers must NOT resize the PTY — the renderer controls resize timing.
 - **Terminal loading overlay**: All terminal mounts show a themed loading overlay (skeleton lines + `$` prompt + blinking cursor) for 1s to mask flicker from history replay and initial rendering. Uses `@keyframes termBlink` for cursor animation. Overlay fades out via `transition-opacity duration-500 ease-out`.
+- **No backdrop-blur on overlays**: Never use `backdrop-blur` on modal/overlay backdrops — it causes visible lag on Electron and low-end devices. Use opaque or semi-transparent backgrounds (`bg-black/50`) instead. `backdrop-blur` is acceptable on persistent UI elements (e.g. tab bar, context bar) but not on transient overlays.
+- **Modal component**: Use `<Modal>` from `src/components/ui/Modal.tsx` for all modal dialogs. Provides consistent theming (`bg-black/70` backdrop, `rounded-2xl` panel, theme-aware borders), `fadeScale`/`overlay` animation, and `onClose` backdrop click. Accepts `maxWidth`, `zIndex`, `testId` props. Pass content as children.
 
 ## Deployment Modes
 

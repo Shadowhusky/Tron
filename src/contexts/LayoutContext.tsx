@@ -60,6 +60,8 @@ interface LayoutContextType {
   /** Delete a saved tab snapshot from persistent storage. */
   deleteSavedTab: (savedTabId: string) => Promise<void>;
   isHydrated: boolean;
+  /** Register a styled confirm dialog (replaces window.confirm for tab close). */
+  setConfirmHandler: (handler: (message: string) => Promise<boolean>) => void;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -79,6 +81,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     new Map(),
   );
 
+  // Track which sessions were live-PTY reconnects (PTY survived in server memory).
+  // Used to set the `reconnected` flag accurately — avoids false positives when
+  // a fresh PTY is created with the same session ID after grace period expiry.
+  const livePtyReconnectsRef = useRef(new Set<string>());
+
   // Helper: Create a new PTY and return its ID (with retry for flaky mobile connections)
   const createPTY = async (
     cwd?: string,
@@ -87,18 +94,28 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     const MAX_RETRIES = 3;
     const DELAYS = [0, 1000, 2000]; // exponential-ish backoff
 
+    /** Parse createSession result — handles both old string and new object format. */
+    const parseResult = (result: any): string => {
+      if (typeof result === "object" && result?.sessionId) {
+        if (result.reconnected) livePtyReconnectsRef.current.add(result.sessionId);
+        return result.sessionId;
+      }
+      return result as string;
+    };
+
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         console.warn(`[Layout] createPTY retry ${attempt}/${MAX_RETRIES - 1} (reconnectId=${reconnectId?.slice(0, 8) ?? "none"})`);
         await new Promise(r => setTimeout(r, DELAYS[attempt]));
       }
       try {
-        return await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
+        const result = await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
           cols: 80,
           rows: 30,
           cwd,
           reconnectId,
         });
+        return parseResult(result);
       } catch (err) {
         console.warn(`[Layout] createPTY attempt ${attempt + 1} failed:`, err);
       }
@@ -108,11 +125,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     if (reconnectId) {
       try {
         console.warn("[Layout] createPTY falling back to fresh PTY (no reconnectId)");
-        return await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
+        const result = await window.electron!.ipcRenderer.invoke(IPC.TERMINAL_CREATE, {
           cols: 80,
           rows: 30,
           cwd,
         });
+        return parseResult(result);
       } catch (err) {
         console.warn("[Layout] createPTY fresh fallback also failed:", err);
       }
@@ -345,10 +363,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                   contextSummarySourceLength: summaryConstant?.sourceLength,
                   dirty: wasDirty,
                   sshProfileId,
-                  // Mark as reconnected if we reattached to an existing local PTY.
-                  // Terminal component uses this to skip history fetch and do a
-                  // SIGWINCH bounce-resize with opacity transition instead.
-                  reconnected: !sshProfileId && newId === oldId,
+                  // Mark as reconnected only if we reattached to a live PTY
+                  // (server confirmed the PTY was still alive). This avoids false
+                  // positives when a fresh PTY is created with the same session ID
+                  // after the grace period expired (e.g. mobile OS killed the page).
+                  reconnected: !sshProfileId && livePtyReconnectsRef.current.has(newId),
                 });
                 return { ...node, sessionId: newId };
               } else {
@@ -507,8 +526,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const [pendingSettingsSection, setPendingSettingsSection] = useState<string | null>(null);
   const clearPendingSettingsSection = () => setPendingSettingsSection(null);
 
+  const pendingSettingsTabIdRef = useRef<string | null>(null);
+
   const openSettingsTab = (section?: string) => {
-    // Check if open
+    // Check if settings tab already exists in current state
     const existing = tabs.find(
       (t) => t.root.type === "leaf" && t.root.contentType === "settings",
     );
@@ -519,10 +540,19 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       return;
     }
 
+    // Guard against double-click: ref is set synchronously so the second
+    // click sees it even before React re-renders with the updated tabs.
+    if (pendingSettingsTabIdRef.current) {
+      if (section) setPendingSettingsSection(section);
+      setActiveTabId(pendingSettingsTabIdRef.current);
+      return;
+    }
+
     // New settings tab — default to "ai" section unless another was requested
     setPendingSettingsSection(section || "ai");
 
     const newTabId = uuid();
+    pendingSettingsTabIdRef.current = newTabId;
     const newTab: Tab = {
       id: newTabId,
       title: "Settings",
@@ -539,6 +569,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     // Find tab to close
     const tab = tabs.find((t) => t.id === tabId);
     if (tab) {
+      // Clear settings tab guard if closing a settings tab
+      if (tab.root.type === "leaf" && tab.root.contentType === "settings") {
+        pendingSettingsTabIdRef.current = null;
+      }
       // Clean up all sessions in this tab
       const closeNodeSessions = (node: LayoutNode) => {
         if (node.type === "leaf") {
@@ -1096,8 +1130,14 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => clearInterval(interval);
   }, [activeSessionId]);
 
+  // Styled confirm handler — App.tsx registers a modal-based one via setConfirmHandler
+  const confirmHandlerRef = useRef<((message: string) => Promise<boolean>) | null>(null);
+  const setConfirmHandler = useCallback((handler: (message: string) => Promise<boolean>) => {
+    confirmHandlerRef.current = handler;
+  }, []);
+
   // Close pane with confirmation — skips confirm for settings or new (non-dirty) sessions
-  const closeActivePaneWithConfirm = () => {
+  const closeActivePaneWithConfirm = async () => {
     const tab = tabs.find((t) => t.id === activeTabId);
     if (!tab) return;
     if (tab.root.type === "leaf" && tab.root.contentType === "settings") {
@@ -1105,8 +1145,14 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       return;
     }
     const session = sessions.get(tab.activeSessionId || "");
-    const canConfirm = !window.frameElement;
-    if (!session?.dirty || !canConfirm || window.confirm("Close this terminal session?")) {
+    if (!session?.dirty) {
+      closeActivePane();
+      return;
+    }
+    const confirmed = confirmHandlerRef.current
+      ? await confirmHandlerRef.current("Close this terminal session?")
+      : window.confirm("Close this terminal session?");
+    if (confirmed) {
       closeActivePane();
     }
   };
@@ -1192,6 +1238,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         loadSavedTab,
         deleteSavedTab,
         isHydrated,
+        setConfirmHandler,
       }}
     >
       {children}

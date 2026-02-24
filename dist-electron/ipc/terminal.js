@@ -260,7 +260,7 @@ function registerTerminalHandlers(getMainWindow) {
         // Resizing now would trigger SIGWINCH → TUI redraw before the renderer
         // can capture the output, causing stale data in the history buffer.
         if (reconnectId && sessions.has(reconnectId)) {
-            return reconnectId;
+            return { sessionId: reconnectId, reconnected: true };
         }
         const { shell, args: shellArgs } = detectShell();
         const sessionId = reconnectId || (0, crypto_1.randomUUID)();
@@ -316,7 +316,7 @@ function registerTerminalHandlers(getMainWindow) {
                 sessionHistory.delete(sessionId);
             });
             sessions.set(sessionId, ptyProcess);
-            return sessionId;
+            return { sessionId, reconnected: false };
         }
         catch (e) {
             console.error("Failed to create PTY session:", e);
