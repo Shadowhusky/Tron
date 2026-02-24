@@ -316,37 +316,67 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
 
-    // Image paste — save clipboard image to temp file and paste path
-    const onPaste = async (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
+    // Image paste/drop — save to temp file and write path to PTY.
+    // Supports pasting screenshots and dragging image files onto the terminal
+    // (e.g. for Claude CLI image input).
+    const saveBlobAndPaste = async (blob: Blob) => {
+      const buf = await blob.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""),
+      );
+      const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+      try {
+        const filePath = await window.electron?.ipcRenderer?.invoke(
+          "file.saveTempImage",
+          { base64, ext },
+        );
+        if (filePath && window.electron) {
+          window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+            id: sessionId,
+            data: filePath,
+          });
+        }
+      } catch { /* temp save not supported */ }
+    };
+
+    const onPaste = (e: Event) => {
+      const items = (e as ClipboardEvent).clipboardData?.items;
       if (!items) return;
       for (const item of Array.from(items)) {
         if (item.type.startsWith("image/")) {
           e.preventDefault();
+          e.stopPropagation();
           const blob = item.getAsFile();
-          if (!blob) return;
-          const buf = await blob.arrayBuffer();
-          const base64 = btoa(
-            new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""),
-          );
-          const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
-          try {
-            const filePath = await window.electron?.ipcRenderer?.invoke(
-              "file.saveTempImage",
-              { base64, ext },
-            );
-            if (filePath && window.electron) {
-              window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
-                id: sessionId,
-                data: filePath,
-              });
-            }
-          } catch { /* ignore — temp save not supported */ }
+          if (blob) saveBlobAndPaste(blob);
           return;
         }
       }
     };
-    el.addEventListener("paste", onPaste);
+
+    // xterm creates its own hidden textarea for input — attach paste listener
+    // there so it fires before xterm's internal handler.
+    const xtermTextarea = el.querySelector("textarea.xterm-helper-textarea") as HTMLTextAreaElement | null;
+    (xtermTextarea || el).addEventListener("paste", onPaste, true);
+
+    // Drag-and-drop image onto terminal
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    const onDrop = (e: DragEvent) => {
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      const imageFile = Array.from(files).find(f => f.type.startsWith("image/"));
+      if (imageFile) {
+        e.preventDefault();
+        e.stopPropagation();
+        saveBlobAndPaste(imageFile);
+      }
+    };
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("drop", onDrop);
 
     // ResizeObserver
     const resizeObserver = new ResizeObserver(debouncedResize);
@@ -387,7 +417,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       window.removeEventListener("resize", debouncedResize);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("paste", onPaste);
+      (xtermTextarea || el).removeEventListener("paste", onPaste, true);
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("drop", onDrop);
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
@@ -435,8 +467,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
         style={{ backgroundColor: theme?.background }}
       >
         <span
-          className="font-mono text-[13px] opacity-40"
-          style={{ color: theme?.foreground }}
+          className="font-mono text-2xl"
+          style={{ color: theme?.cursor, opacity: 0.6 }}
         >
           <span className="termSpinner" />
         </span>
