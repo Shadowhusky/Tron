@@ -57,6 +57,8 @@ interface LayoutContextType {
   discardPersistedLayout: () => void;
   saveTab: (tabId: string, getAgentState: (sessionId: string) => { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number } | null) => Promise<void>;
   loadSavedTab: (saved: SavedTab, restoreAgent: (sessionId: string, data: { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number }) => void) => Promise<void>;
+  /** Delete a saved tab snapshot from persistent storage. */
+  deleteSavedTab: (savedTabId: string) => Promise<void>;
   isHydrated: boolean;
 }
 
@@ -1022,8 +1024,21 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       color: saved.tab.color,
       root: newRoot,
       activeSessionId: findFirstSession(newRoot),
+      savedTabId: saved.id,
     }]);
     setActiveTabId(newTabId);
+  };
+
+  /** Delete a saved tab snapshot from persistent storage. */
+  const deleteSavedTab = async (savedTabId: string) => {
+    const ipc = window.electron?.ipcRenderer;
+    const readFn = (ipc as any)?.readSavedTabs || (() => ipc?.invoke("savedTabs.read"));
+    const writeFn = (ipc as any)?.writeSavedTabs || ((d: any) => ipc?.invoke("savedTabs.write", d));
+    try {
+      const existing: SavedTab[] = (await readFn()) || [];
+      const updated = existing.filter(t => t.id !== savedTabId);
+      await writeFn(updated);
+    } catch { /* best effort */ }
   };
 
   const activeSessionId = getActiveTab()?.activeSessionId || null;
@@ -1150,6 +1165,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         discardPersistedLayout,
         saveTab,
         loadSavedTab,
+        deleteSavedTab,
         isHydrated,
       }}
     >

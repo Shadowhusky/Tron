@@ -74,6 +74,7 @@ const AppContent = () => {
     createSSHTab,
     saveTab,
     loadSavedTab,
+    deleteSavedTab,
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession, getSessionPersistable, restoreAgentSession } = useAgentContext();
@@ -84,6 +85,7 @@ const AppContent = () => {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [showSavedTabs, setShowSavedTabs] = useState(false);
+  const [savedTabCloseConfirm, setSavedTabCloseConfirm] = useState<{ tabId: string; savedTabId: string } | null>(null);
   const [sshToast, setSshToast] = useState("");
 
   useEffect(() => {
@@ -209,6 +211,33 @@ const AppContent = () => {
     [saveTab, getSessionPersistable]
   );
 
+  /** Intercept tab close: if the tab was loaded from saved tabs, prompt the user. */
+  const handleCloseTab = useCallback(
+    (tabId: string) => {
+      const tab = tabs.find(t => t.id === tabId);
+      if (tab?.savedTabId) {
+        setSavedTabCloseConfirm({ tabId, savedTabId: tab.savedTabId });
+        return;
+      }
+      closeTab(tabId);
+    },
+    [tabs, closeTab],
+  );
+
+  const handleSavedTabCloseAction = useCallback(
+    async (action: "close" | "remove" | "cancel") => {
+      if (!savedTabCloseConfirm) return;
+      const { tabId, savedTabId } = savedTabCloseConfirm;
+      setSavedTabCloseConfirm(null);
+      if (action === "cancel") return;
+      closeTab(tabId);
+      if (action === "remove") {
+        await deleteSavedTab(savedTabId);
+      }
+    },
+    [savedTabCloseConfirm, closeTab, deleteSavedTab],
+  );
+
   const handleLoadSavedTab = useCallback(
     async (saved: any) => {
       await loadSavedTab(saved, restoreAgentSession);
@@ -237,7 +266,7 @@ const AppContent = () => {
         activeTabId={activeTabId}
         resolvedTheme={resolvedTheme}
         onSelect={selectTab}
-        onClose={closeTab}
+        onClose={handleCloseTab}
         onCreate={createTab}
         onCreateSSH={() => setShowSSHModal(true)}
         onReorder={reorderTabs}
@@ -330,6 +359,81 @@ const AppContent = () => {
         onLoad={handleLoadSavedTab}
         onClose={() => setShowSavedTabs(false)}
       />
+
+      {/* Saved tab close confirmation */}
+      <AnimatePresence>
+        {savedTabCloseConfirm && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => handleSavedTabCloseAction("cancel")}
+          >
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
+              className={`relative w-full max-w-sm mx-4 rounded-lg shadow-2xl overflow-hidden ${
+                resolvedTheme === "light"
+                  ? "bg-white border border-gray-200"
+                  : resolvedTheme === "modern"
+                    ? "bg-[#12121a]/95 backdrop-blur-2xl border border-white/[0.08]"
+                    : "bg-[#141414] border border-white/[0.06]"
+              }`}
+            >
+              <div className="px-5 pt-5 pb-3">
+                <h3 className={`text-sm font-semibold mb-1.5 ${
+                  resolvedTheme === "light" ? "text-gray-800" : "text-gray-200"
+                }`}>
+                  Close saved tab?
+                </h3>
+                <p className={`text-[13px] leading-relaxed ${
+                  resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"
+                }`}>
+                  This tab was loaded from your saved tabs. Would you like to keep it saved for later, or remove it everywhere?
+                </p>
+              </div>
+              <div className={`flex gap-2 px-5 py-3 border-t ${
+                resolvedTheme === "light" ? "border-gray-100" : "border-white/5"
+              }`}>
+                <button
+                  onClick={() => handleSavedTabCloseAction("cancel")}
+                  className={`flex-1 px-3 py-1.5 rounded text-[13px] font-medium transition-colors ${
+                    resolvedTheme === "light"
+                      ? "hover:bg-gray-100 text-gray-600"
+                      : "hover:bg-white/10 text-gray-400"
+                  }`}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleSavedTabCloseAction("close")}
+                  className={`flex-1 px-3 py-1.5 rounded text-[13px] font-medium transition-colors ${
+                    resolvedTheme === "light"
+                      ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                      : "bg-white/[0.06] hover:bg-white/[0.12] text-gray-300"
+                  }`}
+                >
+                  Close tab
+                </button>
+                <button
+                  onClick={() => handleSavedTabCloseAction("remove")}
+                  className={`flex-1 px-3 py-1.5 rounded text-[13px] font-medium transition-colors ${
+                    resolvedTheme === "light"
+                      ? "bg-red-50 hover:bg-red-100 text-red-600"
+                      : "bg-red-500/10 hover:bg-red-500/20 text-red-400"
+                  }`}
+                >
+                  Remove from saved
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* SSH-only toast */}
       <AnimatePresence>
