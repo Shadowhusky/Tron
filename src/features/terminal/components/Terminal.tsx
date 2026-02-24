@@ -121,15 +121,17 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
     term.focus();
 
-    // Image save helper — converts blob to base64, saves to temp file via IPC,
-    // and writes the file path into the terminal PTY.
-    const saveImageAndType = async (blob: Blob) => {
+    // Save a file blob to temp via IPC and write the path to the terminal PTY.
+    const saveFileAndType = async (blob: Blob, filename?: string) => {
       const buf = await blob.arrayBuffer();
       const bytes = new Uint8Array(buf);
       let binary = "";
       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
       const base64 = btoa(binary);
-      const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+      // Derive extension from filename or MIME type
+      const ext = filename
+        ? (filename.split(".").pop() || "bin")
+        : (blob.type.split("/")[1]?.replace("jpeg", "jpg") || "bin");
       const filePath = await window.electron?.ipcRenderer?.invoke(
         "file.saveTempImage",
         { base64, ext },
@@ -142,22 +144,47 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       }
     };
 
-    // Clipboard image check — uses the async Clipboard API to read image data.
-    const checkClipboardForImage = async () => {
+    // Take full control of Cmd/Ctrl+V: read clipboard ourselves, handle
+    // both file/image content (save to temp → paste path) and plain text.
+    // This bypasses xterm's internal paste which can't handle non-text.
+    const handlePaste = async () => {
       try {
+        // Try the full Clipboard API first (supports images + text)
         const items = await navigator.clipboard.read();
         for (const item of items) {
-          const imageType = item.types.find(t => t.startsWith("image/"));
-          if (imageType) {
-            const blob = await item.getType(imageType);
-            await saveImageAndType(blob);
-            return true;
+          const fileType = item.types.find(t => t.startsWith("image/") || !t.startsWith("text/"));
+          if (fileType && !fileType.startsWith("text/")) {
+            const blob = await item.getType(fileType);
+            await saveFileAndType(blob);
+            return;
+          }
+        }
+        // No file content — paste as text
+        for (const item of items) {
+          if (item.types.includes("text/plain")) {
+            const blob = await item.getType("text/plain");
+            const text = await blob.text();
+            if (text) {
+              window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, {
+                id: sessionId,
+                data: text,
+              });
+            }
+            return;
           }
         }
       } catch {
-        // Clipboard API not available or permission denied
+        // clipboard.read() failed (permissions/http) — fallback to readText
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text) {
+            window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, {
+              id: sessionId,
+              data: text,
+            });
+          }
+        } catch { /* clipboard completely unavailable */ }
       }
-      return false;
     };
 
     // Custom key handling — intercept configurable hotkeys before xterm
@@ -185,10 +212,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       if (matches(overlayCombo)) {
         return false;
       }
-      // Cmd/Ctrl+V — check if clipboard has an image; if so, save to temp
-      // and paste the file path instead of letting xterm handle it.
+      // Cmd/Ctrl+V — take full control of paste so we can handle images/files.
+      // Block xterm (return false) and handle everything in handlePaste().
       if (e.key === "v" && (e.metaKey || e.ctrlKey) && e.type === "keydown") {
-        checkClipboardForImage(); // async — if no image, xterm handles text paste normally
+        handlePaste();
+        return false;
       }
       return true;
     });
@@ -361,7 +389,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
 
-    // Drag-and-drop image onto terminal
+    // Drag-and-drop any file onto terminal — saves to temp and pastes path
     const onDragOver = (e: DragEvent) => {
       if (e.dataTransfer?.types.includes("Files")) {
         e.preventDefault();
@@ -371,11 +399,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     const onDrop = (e: DragEvent) => {
       const files = e.dataTransfer?.files;
       if (!files || files.length === 0) return;
-      const imageFile = Array.from(files).find(f => f.type.startsWith("image/"));
-      if (imageFile) {
-        e.preventDefault();
-        e.stopPropagation();
-        saveImageAndType(imageFile);
+      e.preventDefault();
+      e.stopPropagation();
+      // Save each dropped file
+      for (const file of Array.from(files)) {
+        saveFileAndType(file, file.name);
       }
     };
     el.addEventListener("dragover", onDragOver);
