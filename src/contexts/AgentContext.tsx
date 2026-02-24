@@ -224,6 +224,47 @@ class AgentStore {
     this.notify(toSessionId);
   }
 
+  /** Extract persistable agent state for saving a tab snapshot. */
+  getSessionPersistable = (sessionId: string): {
+    agentThread: AgentStep[];
+    overlayHeight?: number;
+    draftInput?: string;
+    thinkingEnabled?: boolean;
+    scrollPosition?: number;
+  } | null => {
+    const state = this.states.get(sessionId);
+    if (!state || state.agentThread.length === 0) return null;
+    return {
+      agentThread: state.agentThread.filter(s => s.step !== "thinking"),
+      overlayHeight: state.overlayHeight,
+      draftInput: state.draftInput,
+      thinkingEnabled: state.thinkingEnabled,
+      scrollPosition: state.scrollPosition,
+    };
+  }
+
+  /** Restore agent state into a new session (from a saved tab). */
+  restoreSession = (sessionId: string, data: {
+    agentThread: AgentStep[];
+    overlayHeight?: number;
+    draftInput?: string;
+    thinkingEnabled?: boolean;
+    scrollPosition?: number;
+  }) => {
+    const nextStates = new Map(this.states);
+    nextStates.set(sessionId, {
+      ...defaultState,
+      agentThread: data.agentThread,
+      isOverlayVisible: data.agentThread.length > 0,
+      overlayHeight: data.overlayHeight,
+      draftInput: data.draftInput,
+      thinkingEnabled: data.thinkingEnabled ?? defaultState.thinkingEnabled,
+      scrollPosition: data.scrollPosition,
+    });
+    this.states = nextStates;
+    this.notify(sessionId);
+  }
+
   dismissNotification = (id: number) => {
     this.notifications = this.notifications.filter((n) => n.id !== id);
     this.notifyNotifications();
@@ -404,6 +445,8 @@ export const useAgentContext = () => {
     dismissNotification,
     setActiveSessionForNotifications,
     duplicateAgentSession: store.duplicateSession,
+    getSessionPersistable: store.getSessionPersistable,
+    restoreAgentSession: store.restoreSession,
   };
 };
 

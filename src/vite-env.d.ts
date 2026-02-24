@@ -60,6 +60,9 @@ interface Window {
       disconnectSSH: (sessionId: string) => Promise<boolean>;
       readSSHProfiles: () => Promise<any[]>;
       writeSSHProfiles: (profiles: any[]) => Promise<boolean>;
+      // Saved Tabs
+      readSavedTabs: () => Promise<any[]>;
+      writeSavedTabs: (tabs: any[]) => Promise<boolean>;
     };
   };
 }

@@ -68,6 +68,28 @@ export function registerConfigHandlers() {
       return false;
     }
   });
+  // --- Saved Tabs (cross-device snapshots) ---
+  const getSavedTabsPath = (): string => {
+    const dir = path.join(app.getPath("userData"), "saved-tabs");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, "saved-tabs.json");
+  };
+
+  ipcMain.handle("savedTabs.read", async () => {
+    try {
+      const filePath = getSavedTabsPath();
+      if (!fs.existsSync(filePath)) return [];
+      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch { return []; }
+  });
+
+  ipcMain.handle("savedTabs.write", async (_event, data: any[]) => {
+    try {
+      fs.writeFileSync(getSavedTabsPath(), JSON.stringify(data, null, 2), "utf-8");
+      return true;
+    } catch { return false; }
+  });
+
   // --- System Paths ---
   ipcMain.handle("config.getSystemPaths", async () => {
     return {

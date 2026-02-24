@@ -254,13 +254,12 @@ function registerTerminalHandlers(getMainWindow) {
     });
     // Create Session (or reconnect to existing one)
     electron_1.ipcMain.handle("terminal.create", (_event, { cols, rows, cwd, reconnectId }) => {
-        // If reconnectId is provided and a PTY with that ID exists, reuse it
+        // If reconnectId is provided and a PTY with that ID exists, reuse it.
+        // Do NOT resize here — the renderer's Terminal component will send the
+        // correct dimensions after mounting and registering its data listener.
+        // Resizing now would trigger SIGWINCH → TUI redraw before the renderer
+        // can capture the output, causing stale data in the history buffer.
         if (reconnectId && sessions.has(reconnectId)) {
-            const existing = sessions.get(reconnectId);
-            try {
-                existing.resize(cols || 80, rows || 30);
-            }
-            catch { }
             return reconnectId;
         }
         const { shell, args: shellArgs } = detectShell();
@@ -666,6 +665,18 @@ function registerTerminalHandlers(getMainWindow) {
                 }
             }, 30000);
         });
+    });
+    // Save a clipboard image to a temp file and return the path.
+    // Used when pasting images into the terminal (e.g. for Claude CLI).
+    electron_1.ipcMain.handle("file.saveTempImage", async (_event, { base64, ext }) => {
+        const os = require("os");
+        const tmpDir = path_1.default.join(os.tmpdir(), "tron-images");
+        if (!fs_1.default.existsSync(tmpDir))
+            fs_1.default.mkdirSync(tmpDir, { recursive: true });
+        const name = `paste-${Date.now()}.${ext}`;
+        const filePath = path_1.default.join(tmpDir, name);
+        fs_1.default.writeFileSync(filePath, Buffer.from(base64, "base64"));
+        return filePath;
     });
     // Write a file directly via Node.js fs (bypasses terminal/PTY).
     // This avoids heredoc corruption for large files.

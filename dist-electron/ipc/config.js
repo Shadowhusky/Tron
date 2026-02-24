@@ -74,6 +74,33 @@ function registerConfigHandlers() {
             return false;
         }
     });
+    // --- Saved Tabs (cross-device snapshots) ---
+    const getSavedTabsPath = () => {
+        const dir = path_1.default.join(electron_1.app.getPath("userData"), "saved-tabs");
+        if (!fs_1.default.existsSync(dir))
+            fs_1.default.mkdirSync(dir, { recursive: true });
+        return path_1.default.join(dir, "saved-tabs.json");
+    };
+    electron_1.ipcMain.handle("savedTabs.read", async () => {
+        try {
+            const filePath = getSavedTabsPath();
+            if (!fs_1.default.existsSync(filePath))
+                return [];
+            return JSON.parse(fs_1.default.readFileSync(filePath, "utf-8"));
+        }
+        catch {
+            return [];
+        }
+    });
+    electron_1.ipcMain.handle("savedTabs.write", async (_event, data) => {
+        try {
+            fs_1.default.writeFileSync(getSavedTabsPath(), JSON.stringify(data, null, 2), "utf-8");
+            return true;
+        }
+        catch {
+            return false;
+        }
+    });
     // --- System Paths ---
     electron_1.ipcMain.handle("config.getSystemPaths", async () => {
         return {

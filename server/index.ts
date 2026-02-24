@@ -67,6 +67,8 @@ function saveJsonMap(filePath: string, map: Map<string, Record<string, unknown>>
   try { fs.writeFileSync(filePath, JSON.stringify(obj), "utf-8"); } catch { /* best effort */ }
 }
 
+const savedTabsFile = path.join(tronDataDir, "saved-tabs.json");
+
 ensureDataDir();
 const clientSessions = loadJsonMap(sessionsFile);
 const clientConfigs = loadJsonMap(configsFile);
@@ -343,6 +345,17 @@ async function handleInvoke(
       return ssh.readProfiles();
     case "ssh.profiles.write":
       return ssh.writeProfiles(data);
+    case "savedTabs.read":
+      try {
+        if (!fs.existsSync(savedTabsFile)) return [];
+        return JSON.parse(fs.readFileSync(savedTabsFile, "utf-8"));
+      } catch { return []; }
+    case "savedTabs.write":
+      try {
+        ensureDataDir();
+        fs.writeFileSync(savedTabsFile, JSON.stringify(data, null, 2), "utf-8");
+        return true;
+      } catch { return false; }
     case "terminal.readHistory":
       return terminal.readHistory(data?.sessionId || data, data?.lines);
     case "terminal.clearHistory":

@@ -54,6 +54,67 @@ const activeChildProcesses = new Set();
 // Per-session display buffering — active during execInTerminal to strip sentinels cleanly
 const displayBuffers = new Map();
 const execActiveSessions = new Set(); // Sessions currently running execInTerminal
+// ---------------------------------------------------------------------------
+// Terminal history persistence — survives server restarts
+// ---------------------------------------------------------------------------
+const historyDir = path.join(os.homedir(), ".tron", "terminal-history");
+const historyDirtySet = new Set(); // Sessions with unsaved history changes
+let historyFlushTimer = null;
+function ensureHistoryDir() {
+    try {
+        fs.mkdirSync(historyDir, { recursive: true });
+    }
+    catch { /* exists */ }
+}
+function persistSessionHistory(sessionId) {
+    ensureHistoryDir();
+    const history = sessionHistory.get(sessionId);
+    if (history === undefined)
+        return;
+    try {
+        fs.writeFileSync(path.join(historyDir, `${sessionId}.txt`), history, "utf-8");
+    }
+    catch { /* best effort */ }
+}
+function loadPersistedHistory(sessionId) {
+    try {
+        return fs.readFileSync(path.join(historyDir, `${sessionId}.txt`), "utf-8");
+    }
+    catch {
+        return "";
+    }
+}
+function removePersistedHistory(sessionId) {
+    try {
+        fs.unlinkSync(path.join(historyDir, `${sessionId}.txt`));
+    }
+    catch { /* ok */ }
+}
+/** Mark a session's history as dirty; batched flush runs every 5s. */
+function markHistoryDirty(sessionId) {
+    historyDirtySet.add(sessionId);
+    if (!historyFlushTimer) {
+        historyFlushTimer = setTimeout(flushDirtyHistory, 5000);
+    }
+}
+function flushDirtyHistory() {
+    historyFlushTimer = null;
+    for (const sid of historyDirtySet) {
+        persistSessionHistory(sid);
+    }
+    historyDirtySet.clear();
+}
+/** Persist all session history to disk (called on shutdown). */
+export function persistAllHistory() {
+    if (historyFlushTimer) {
+        clearTimeout(historyFlushTimer);
+        historyFlushTimer = null;
+    }
+    for (const [sid] of sessionHistory) {
+        persistSessionHistory(sid);
+    }
+    historyDirtySet.clear();
+}
 /** Spawn a child process and track it for cleanup. */
 function trackedExec(command, options) {
     return new Promise((resolve, reject) => {
@@ -133,6 +194,8 @@ export function cleanupClientSessions(clientId) {
         if (owner === clientId) {
             const session = sessions.get(sessionId);
             if (session) {
+                // Persist history before killing so it survives for potential future reconnect
+                persistSessionHistory(sessionId);
                 session.kill();
                 sessions.delete(sessionId);
                 sessionHistory.delete(sessionId);
@@ -142,8 +205,10 @@ export function cleanupClientSessions(clientId) {
         }
     }
 }
-/** Kill all tracked child processes and PTY sessions. */
+/** Kill all tracked child processes and PTY sessions. Persists history to disk first. */
 export function cleanupAllServerSessions() {
+    // Persist all terminal history so sessions can be restored after restart
+    persistAllHistory();
     for (const child of activeChildProcesses) {
         try {
             child.kill();
@@ -180,7 +245,15 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         return reconnectId;
     }
     const { shell, args: shellArgs } = detectShell();
-    const sessionId = randomUUID();
+    // Reuse old session ID when reconnecting after server restart (matches Electron behavior)
+    const sessionId = reconnectId || randomUUID();
+    // Load persisted history from a previous server run so getHistory/readHistory work
+    if (reconnectId) {
+        const persisted = loadPersistedHistory(reconnectId);
+        if (persisted) {
+            sessionHistory.set(sessionId, persisted);
+        }
+    }
     const ptyProcess = pty.spawn(shell, shellArgs, {
         name: "xterm-256color",
         cols: cols || 80,
@@ -191,7 +264,10 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
             ...(os.platform() !== "win32" ? { PROMPT_EOL_MARK: "" } : {}),
         },
     });
-    sessionHistory.set(sessionId, "");
+    // Preserve persisted history (loaded above) or start fresh
+    if (!sessionHistory.has(sessionId)) {
+        sessionHistory.set(sessionId, "");
+    }
     sessionOwners.set(sessionId, clientId);
     sessionPushEvents.set(sessionId, pushEvent);
     ptyProcess.onData((data) => {
@@ -202,6 +278,7 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         else {
             sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
         }
+        markHistoryDirty(sessionId);
         // Use dynamic pushEvent (updated on reconnect) instead of closure-captured one
         const currentPushEvent = sessionPushEvents.get(sessionId) || pushEvent;
         pushSessionData(sessionId, data, currentPushEvent);
@@ -213,6 +290,7 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         sessionHistory.delete(sessionId);
         sessionOwners.delete(sessionId);
         sessionPushEvents.delete(sessionId);
+        removePersistedHistory(sessionId);
     });
     sessions.set(sessionId, ptyProcess);
     return sessionId;
@@ -234,6 +312,7 @@ export function closeSession(id) {
         sessions.delete(id);
         sessionHistory.delete(id);
         sessionOwners.delete(id);
+        removePersistedHistory(id);
     }
 }
 export async function checkCommand(command, sessionId) {

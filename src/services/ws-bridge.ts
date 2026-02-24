@@ -24,6 +24,11 @@ const pendingInvokes = new Map<string, PendingInvoke>();
 const eventListeners = new Map<string, Set<Listener>>();
 const messageQueue: string[] = [];
 
+// Server reconnection callback — fires when WS reconnects after server restart
+let _onServerReconnect: (() => void) | null = null;
+/** Register a callback that fires when the server reconnects after being down. */
+export function onServerReconnect(cb: () => void) { _onServerReconnect = cb; }
+
 // Promise that resolves once we know the deployment mode
 let _modeResolve: ((mode: TronMode) => void) | null = null;
 export const modeReady: Promise<TronMode> = new Promise((resolve) => {
@@ -82,6 +87,10 @@ function connect() {
       if (!modeResolved && _modeResolve) {
         modeResolved = true;
         _modeResolve(mode);
+      } else if (modeResolved && _onServerReconnect) {
+        // Server reconnected after being down — re-attach sessions
+        console.log("[WS Bridge] Server reconnected, triggering session re-attach");
+        _onServerReconnect();
       }
       return;
     }
@@ -280,6 +289,11 @@ export function initWebSocketBridge() {
         invoke("ssh.profiles.read") as Promise<any[]>,
       writeSSHProfiles: (profiles: any[]) =>
         invoke("ssh.profiles.write", profiles) as Promise<boolean>,
+      // Saved Tabs
+      readSavedTabs: () =>
+        invoke("savedTabs.read") as Promise<any[]>,
+      writeSavedTabs: (tabs: any[]) =>
+        invoke("savedTabs.write", tabs) as Promise<boolean>,
     },
   };
 }

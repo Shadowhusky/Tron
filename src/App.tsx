@@ -20,6 +20,7 @@ import { useInvalidateModels } from "./hooks/useModels";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
+import SavedTabsModal from "./components/layout/SavedTabsModal";
 import { isSshOnly } from "./services/mode";
 import { isTouchDevice } from "./utils/platform";
 
@@ -71,15 +72,18 @@ const AppContent = () => {
     updateTabColor,
     duplicateTab,
     createSSHTab,
+    saveTab,
+    loadSavedTab,
   } = useLayout();
   const { resolvedTheme } = useTheme();
-  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession } = useAgentContext();
+  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession, getSessionPersistable, restoreAgentSession } = useAgentContext();
   const invalidateModels = useInvalidateModels();
   useVisualViewportHeight();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showSSHModal, setShowSSHModal] = useState(false);
+  const [showSavedTabs, setShowSavedTabs] = useState(false);
   const [sshToast, setSshToast] = useState("");
 
   useEffect(() => {
@@ -196,6 +200,23 @@ const AppContent = () => {
     [duplicateTab, duplicateAgentSession]
   );
 
+  const handleSaveTab = useCallback(
+    async (tabId: string) => {
+      await saveTab(tabId, getSessionPersistable);
+      setSshToast("Tab saved");
+      setTimeout(() => setSshToast(""), 3000);
+    },
+    [saveTab, getSessionPersistable]
+  );
+
+  const handleLoadSavedTab = useCallback(
+    async (saved: any) => {
+      await loadSavedTab(saved, restoreAgentSession);
+      setShowSavedTabs(false);
+    },
+    [loadSavedTab, restoreAgentSession]
+  );
+
   // Prevent initial flash/blink by waiting for hydration
   if (!isHydrated) return null;
 
@@ -225,6 +246,8 @@ const AppContent = () => {
         onRenameTab={renameTab}
         onUpdateTabColor={updateTabColor}
         onDuplicateTab={handleDuplicateTab}
+        onSaveTab={handleSaveTab}
+        onLoadSavedTab={() => setShowSavedTabs(true)}
       />
 
       {/* Main Workspace — all tabs stay mounted to preserve terminal state */}
@@ -299,6 +322,13 @@ const AppContent = () => {
         }}
         onClose={() => setShowSSHModal(false)}
         preventClose={false}
+      />
+
+      <SavedTabsModal
+        show={showSavedTabs}
+        resolvedTheme={resolvedTheme}
+        onLoad={handleLoadSavedTab}
+        onClose={() => setShowSavedTabs(false)}
       />
 
       {/* SSH-only toast */}

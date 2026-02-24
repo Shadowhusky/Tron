@@ -21,6 +21,8 @@ interface TabBarProps {
   onRenameTab?: (sessionId: string, title: string) => void;
   onUpdateTabColor?: (tabId: string, color?: string) => void;
   onDuplicateTab?: (tabId: string) => Promise<void>;
+  onSaveTab?: (tabId: string) => Promise<void>;
+  onLoadSavedTab?: () => void;
 }
 
 const TabBar: React.FC<TabBarProps> = ({
@@ -37,6 +39,8 @@ const TabBar: React.FC<TabBarProps> = ({
   onRenameTab,
   onUpdateTabColor,
   onDuplicateTab,
+  onSaveTab,
+  onLoadSavedTab,
 }) => {
   // Local visual order — avoids propagating every drag frame to parent
   const [localTabs, setLocalTabs] = useState(tabs);
@@ -411,6 +415,34 @@ const TabBar: React.FC<TabBarProps> = ({
                     SSH Connection
                   </button>
                 </Popover.Close>
+                {onLoadSavedTab && (
+                  <>
+                    <div className={`my-1 ${themeClass(resolvedTheme, {
+                      dark: "border-t border-white/5",
+                      modern: "border-t border-white/10",
+                      light: "border-t border-gray-100",
+                    })}`} />
+                    <Popover.Close asChild>
+                      <button
+                        data-testid="tab-load-saved"
+                        onClick={onLoadSavedTab}
+                        className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+                          resolvedTheme,
+                          {
+                            dark: "hover:bg-white/10",
+                            modern: "hover:bg-white/20",
+                            light: "hover:bg-gray-100",
+                          },
+                        )}`}
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Load Saved Tab
+                      </button>
+                    </Popover.Close>
+                  </>
+                )}
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
@@ -556,6 +588,30 @@ const TabBar: React.FC<TabBarProps> = ({
               )}`}
             >
               Duplicate Tab
+            </button>
+
+            {/* Save Tab */}
+            <button
+              onClick={async () => {
+                const tabId = contextMenu?.tabId;
+                setContextMenu(null);
+                if (onSaveTab && tabId) {
+                  await onSaveTab(tabId);
+                }
+              }}
+              className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+                resolvedTheme,
+                {
+                  dark: "hover:bg-white/10",
+                  modern: "hover:bg-white/20",
+                  light: "hover:bg-gray-100",
+                },
+              )}`}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+              Save Tab
             </button>
 
             {/* Move Left / Right — inline on single row */}

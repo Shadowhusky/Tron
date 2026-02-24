@@ -38,6 +38,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   "ssh.disconnect",
   "ssh.profiles.read",
   "ssh.profiles.write",
+  "savedTabs.read",
+  "savedTabs.write",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -183,5 +185,10 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("ssh.profiles.read") as Promise<any[]>,
     writeSSHProfiles: (profiles: any[]) =>
       ipcRenderer.invoke("ssh.profiles.write", profiles) as Promise<boolean>,
+    // Saved Tabs
+    readSavedTabs: () =>
+      ipcRenderer.invoke("savedTabs.read") as Promise<any[]>,
+    writeSavedTabs: (tabs: any[]) =>
+      ipcRenderer.invoke("savedTabs.write", tabs) as Promise<boolean>,
   },
 });

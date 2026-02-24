@@ -61,6 +61,10 @@ export const IPC = {
   CONFIG_WRITE: "config.write",
   CONFIG_GET_SYSTEM_PATHS: "config.getSystemPaths",
 
+  // Saved Tabs — invoke
+  SAVED_TABS_READ: "savedTabs.read",
+  SAVED_TABS_WRITE: "savedTabs.write",
+
   // Window — main→renderer events
   WINDOW_CONFIRM_CLOSE: "window.confirmClose",
   // Window — renderer→main (send)

@@ -6,11 +6,14 @@ import type {
   SplitDirection,
   AIConfig,
   SSHConnectionConfig,
+  SavedTab,
+  AgentStep,
 } from "../types";
 import { aiService } from "../services/ai";
 import { STORAGE_KEYS } from "../constants/storage";
 import { IPC } from "../constants/ipc";
 import { isSshOnly } from "../services/mode";
+import { onServerReconnect } from "../services/ws-bridge";
 import { matchesHotkey } from "../hooks/useHotkey";
 import { useConfig } from "./ConfigContext";
 
@@ -52,6 +55,8 @@ interface LayoutContextType {
   createSSHTab: (config: SSHConnectionConfig) => Promise<void>;
   /** Stop auto-saving layout and clear persisted data. Call before window close without saving. */
   discardPersistedLayout: () => void;
+  saveTab: (tabId: string, getAgentState: (sessionId: string) => { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number } | null) => Promise<void>;
+  loadSavedTab: (saved: SavedTab, restoreAgent: (sessionId: string, data: { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number }) => void) => Promise<void>;
   isHydrated: boolean;
 }
 
@@ -368,6 +373,34 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const [isHydrated, setIsHydrated] = useState(false);
+
+  // Re-attach terminal sessions when the server reconnects after a restart.
+  // xterm instances keep their rendered content; we just need new PTYs behind them.
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  useEffect(() => {
+    onServerReconnect(async () => {
+      const currentSessions = sessionsRef.current;
+      for (const [sessionId, session] of currentSessions) {
+        if (sessionId === "settings" || sessionId.startsWith("ssh-connect")) continue;
+
+        if (session.sshProfileId) {
+          // SSH sessions need full reconnect via profile — skip for now
+          // (SSH reconnect is handled separately and may need credentials)
+          continue;
+        }
+
+        try {
+          const newId = await createPTY(session.cwd, sessionId);
+          if (newId === sessionId) {
+            console.log(`[Layout] Re-attached session after server restart: ${sessionId.slice(0, 8)}…`);
+          }
+        } catch (err) {
+          console.warn(`[Layout] Failed to re-attach session ${sessionId.slice(0, 8)}…:`, err);
+        }
+      }
+    });
+  }, []);
 
   const createTab = async () => {
     // In SSH-only mode, create a connect tab instead of a local PTY
@@ -864,6 +897,135 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId(newTabId); // Focus the duplicated tab immediately
   };
 
+  /** Save a tab's complete state (sessions + agent thread) for cross-device restore. */
+  const saveTab = async (
+    tabId: string,
+    getAgentState: (sessionId: string) => { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number } | null,
+  ) => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    // Collect all sessionIds from the layout tree
+    const collectSessionIds = (node: LayoutNode): string[] => {
+      if (node.type === "leaf") return [node.sessionId];
+      return node.children.flatMap(collectSessionIds);
+    };
+    const sessionIds = collectSessionIds(tab.root);
+
+    const sessionData: SavedTab["sessions"] = {};
+    const agentData: SavedTab["agentState"] = {};
+
+    for (const sid of sessionIds) {
+      const session = sessions.get(sid);
+      if (session) {
+        sessionData[sid] = {
+          title: session.title,
+          cwd: session.cwd,
+          aiConfig: session.aiConfig,
+          interactions: session.interactions,
+          contextSummary: session.contextSummary,
+          contextSummarySourceLength: session.contextSummarySourceLength,
+          sshProfileId: session.sshProfileId,
+        };
+      }
+      const agent = getAgentState(sid);
+      if (agent) agentData[sid] = agent;
+    }
+
+    const savedTab: SavedTab = {
+      id: uuid(),
+      name: tab.title,
+      savedAt: Date.now(),
+      tab: { title: tab.title, color: tab.color, root: tab.root },
+      sessions: sessionData,
+      agentState: agentData,
+    };
+
+    const ipc = window.electron?.ipcRenderer;
+    const existing: SavedTab[] = (await ipc?.readSavedTabs?.()) || [];
+    await ipc?.writeSavedTabs?.([...existing, savedTab]);
+  };
+
+  /** Load a saved tab snapshot, creating fresh PTY sessions with restored conversation state. */
+  const loadSavedTab = async (
+    saved: SavedTab,
+    restoreAgent: (sessionId: string, data: { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number }) => void,
+  ) => {
+    const recreateNode = async (node: LayoutNode): Promise<LayoutNode | null> => {
+      if (node.type === "leaf") {
+        if (node.contentType === "settings") return node;
+
+        const oldId = node.sessionId;
+        const sessionInfo = saved.sessions[oldId];
+        const cwd = sessionInfo?.cwd;
+        let newId: string;
+
+        if (sessionInfo?.sshProfileId) {
+          try {
+            const ipc = window.electron?.ipcRenderer;
+            const readFn = (ipc as any)?.readSSHProfiles || (() => ipc?.invoke("ssh.profiles.read"));
+            const profiles = await readFn() || [];
+            const profile = profiles.find((p: any) => p.id === sessionInfo.sshProfileId);
+            if (!profile) return null;
+            const connectFn = (ipc as any)?.connectSSH || ((c: any) => ipc?.invoke("ssh.connect", c));
+            const result = await connectFn({
+              ...profile,
+              password: profile.savedPassword,
+              passphrase: profile.savedPassphrase,
+              cols: 80, rows: 30,
+            });
+            newId = result.sessionId;
+          } catch { return null; }
+        } else if (isSshOnly()) {
+          return null;
+        } else {
+          newId = await createPTY(cwd);
+        }
+
+        const config = sessionInfo?.aiConfig || aiService.getConfig();
+        setSessions(prev => new Map(prev).set(newId, {
+          id: newId,
+          title: sessionInfo?.title || "Terminal",
+          cwd,
+          aiConfig: config,
+          interactions: sessionInfo?.interactions || [],
+          contextSummary: sessionInfo?.contextSummary,
+          contextSummarySourceLength: sessionInfo?.contextSummarySourceLength,
+          sshProfileId: sessionInfo?.sshProfileId,
+        }));
+
+        const agentSnapshot = saved.agentState[oldId];
+        if (agentSnapshot) restoreAgent(newId, agentSnapshot);
+
+        return { ...node, sessionId: newId };
+      } else {
+        const newChildren = (await Promise.all(
+          node.children.map(c => recreateNode(c)),
+        )).filter((c): c is LayoutNode => c !== null);
+        if (newChildren.length === 0) return null;
+        return { ...node, children: newChildren };
+      }
+    };
+
+    const newRoot = await recreateNode(saved.tab.root);
+    if (!newRoot) return;
+
+    const findFirstSession = (n: LayoutNode): string => {
+      if (n.type === "leaf") return n.sessionId;
+      return findFirstSession(n.children[0]);
+    };
+
+    const newTabId = uuid();
+    setTabs(prev => [...prev, {
+      id: newTabId,
+      title: saved.tab.title,
+      color: saved.tab.color,
+      root: newRoot,
+      activeSessionId: findFirstSession(newRoot),
+    }]);
+    setActiveTabId(newTabId);
+  };
+
   const activeSessionId = getActiveTab()?.activeSessionId || null;
 
   // Poll CWD for the active session every 3 seconds (with in-flight guard)
@@ -986,6 +1148,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         addInteraction,
         clearInteractions,
         discardPersistedLayout,
+        saveTab,
+        loadSavedTab,
         isHydrated,
       }}
     >
