@@ -419,7 +419,7 @@ export function isScannedCommand(word: string): boolean {
 }
 
 export function isKnownExecutable(word: string): boolean {
-  return UNAMBIGUOUS_COMMANDS.has(word);
+  return UNAMBIGUOUS_COMMANDS.has(word.toLowerCase());
 }
 
 /** Return commands matching a prefix from the static list + scanned cache. */
@@ -473,7 +473,7 @@ export function isCommand(input: string): boolean {
     // e.g. "find ollama", "check status", "search for file"
     const AMBIGUOUS_VERBS = new Set(["find", "check", "search"]);
 
-    if (AMBIGUOUS_VERBS.has(firstWord)) {
+    if (AMBIGUOUS_VERBS.has(firstWord.toLowerCase())) {
       // If ambiguous verb, ONLY treat as command if it has clear shell syntax (flags or paths)
       // Otherwise assume it's a natural language query for the agent
       const hasFlags = words.some((w) => w.startsWith("-"));
