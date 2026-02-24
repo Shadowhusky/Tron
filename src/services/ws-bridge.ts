@@ -223,22 +223,36 @@ export function initWebSocketBridge() {
     }
   });
 
-  // Visibility change — handle sleep/wake on mobile (WS dies while screen is off)
+  // Visibility change — handle tab switch + sleep/wake on mobile.
+  // Mobile browsers freeze JS when a tab is backgrounded. The WS dies but
+  // readyState still reports OPEN because the close frame was never processed.
+  // We track how long the page was hidden and force-reconnect if >2s.
+  let hiddenSince = 0;
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && (!ws || ws.readyState !== WebSocket.OPEN)) {
-      console.log("[WS Bridge] Tab became visible with dead WS, reconnecting...");
-      connectionFailed = false;
-      reconnectAttempts = 0;
-      // Null out stale WS handlers before reconnecting
-      if (ws) {
-        ws.onopen = null;
-        ws.onmessage = null;
-        ws.onclose = null;
-        ws.onerror = null;
-        try { ws.close(); } catch { /* already dead */ }
-      }
-      connect();
+    if (document.visibilityState === "hidden") {
+      hiddenSince = Date.now();
+      return;
     }
+    // visible
+    const elapsed = hiddenSince ? Date.now() - hiddenSince : 0;
+    hiddenSince = 0;
+
+    // Short tab switches (< 2s) with WS still open — likely fine, skip
+    if (elapsed < 2000 && ws?.readyState === WebSocket.OPEN) return;
+
+    // Force reconnect — WS may appear open but is dead after mobile freeze
+    console.log(`[WS Bridge] Tab visible after ${Math.round(elapsed / 1000)}s, forcing reconnect...`);
+    connected = false;
+    connectionFailed = false;
+    reconnectAttempts = 0;
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try { ws.close(); } catch { /* already dead */ }
+    }
+    connect();
   });
 
   (window as any).electron = {
