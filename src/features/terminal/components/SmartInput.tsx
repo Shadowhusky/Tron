@@ -884,19 +884,29 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return;
       }
 
-      // Execute based on active mode
+      // Execute based on active mode.
+      // Re-classify synchronously to prevent stale mode from async PATH checks.
+      // The useEffect that sets mode runs after paint, so if the user types fast
+      // (e.g. "l" → 150ms → PATH check sets "agent" → "s" + Enter before effect
+      // re-classifies to "command"), the mode state can be stale.
+      const effectiveMode = isAuto
+        ? (isDefinitelyNaturalLanguage(finalVal) ? "agent"
+          : isCommand(finalVal) ? "command"
+          : mode)
+        : mode;
+
       // When awaiting an agent answer (continuation), force agent mode regardless of classifier
-      if (awaitingAnswer || mode === "agent") {
+      if (awaitingAnswer || effectiveMode === "agent") {
         if (noModelConfigured) { onNoModel?.(); return; }
         setFeedbackMsg("Agent Started");
         addToHistory(finalVal);
         onRunAgent(finalVal, hasImages ? attachedImages : undefined);
         if (hasImages) setAttachedImages([]);
-      } else if (mode === "command") {
+      } else if (effectiveMode === "command") {
         setFeedbackMsg("");
         trackCommand(finalVal);
         onSend(finalVal);
-      } else if (mode === "advice") {
+      } else if (effectiveMode === "advice") {
         if (noModelConfigured) { onNoModel?.(); return; }
         setIsLoading(true);
         setFeedbackMsg("Asking AI...");
