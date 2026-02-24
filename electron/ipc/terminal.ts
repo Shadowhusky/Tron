@@ -232,12 +232,12 @@ export function registerTerminalHandlers(
   ipcMain.handle(
     "terminal.create",
     (_event, { cols, rows, cwd, reconnectId }) => {
-      // If reconnectId is provided and a PTY with that ID exists, reuse it
+      // If reconnectId is provided and a PTY with that ID exists, reuse it.
+      // Do NOT resize here — the renderer's Terminal component will send the
+      // correct dimensions after mounting and registering its data listener.
+      // Resizing now would trigger SIGWINCH → TUI redraw before the renderer
+      // can capture the output, causing stale data in the history buffer.
       if (reconnectId && sessions.has(reconnectId)) {
-        const existing = sessions.get(reconnectId)!;
-        try {
-          existing.resize(cols || 80, rows || 30);
-        } catch { }
         return reconnectId;
       }
 

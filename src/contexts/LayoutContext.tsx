@@ -294,8 +294,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 } else {
                   // Local PTY — try to reconnect to existing PTY, else create new
                   newId = await createPTY(cwd, oldId);
-                  const reconnected = newId === oldId;
-                  if (reconnected) {
+                  if (newId === oldId) {
                     console.log(`Reconnected to PTY session: ${oldId}`);
                   }
                 }
@@ -311,6 +310,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                   contextSummarySourceLength: summaryConstant?.sourceLength,
                   dirty: wasDirty,
                   sshProfileId,
+                  // Mark as reconnected if we reattached to an existing local PTY.
+                  // Terminal component uses this to skip history fetch and do a
+                  // SIGWINCH bounce-resize with opacity transition instead.
+                  reconnected: !sshProfileId && newId === oldId,
                 });
                 return { ...node, sessionId: newId };
               } else {

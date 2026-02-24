@@ -183,9 +183,11 @@ export function createSession(
     throw new Error("Local terminals not available (node-pty not loaded)");
   }
 
+  // Reconnect to existing PTY — do NOT resize here. The renderer's Terminal
+  // component will send the correct dimensions after mounting and registering
+  // its data listener. Resizing now would trigger SIGWINCH → TUI redraw
+  // before the renderer can capture the output.
   if (reconnectId && sessions.has(reconnectId)) {
-    const existing = sessions.get(reconnectId)!;
-    try { existing.resize(cols || 80, rows || 30); } catch { }
     sessionOwners.set(reconnectId, clientId);
     // Update pushEvent so onData sends to the new WebSocket connection
     sessionPushEvents.set(reconnectId, pushEvent);

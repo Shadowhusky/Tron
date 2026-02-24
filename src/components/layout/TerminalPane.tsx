@@ -446,6 +446,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   isAgentRunning={isAgentRunning}
                   stopAgent={stableStopAgent}
                   focusTarget={focusTarget}
+                  isReconnected={session?.reconnected}
                 />
               </motion.div>
             )}
@@ -504,6 +505,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 isAgentRunning={isAgentRunning}
                 stopAgent={stableStopAgent}
                 focusTarget={focusTarget}
+                isReconnected={session?.reconnected}
               />
             )}
           </div>
