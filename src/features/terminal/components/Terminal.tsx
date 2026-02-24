@@ -458,7 +458,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
 
   return (
     <div className={`relative overflow-hidden ${className || ""}`}>
-      <div ref={terminalRef} className="absolute inset-0" />
+      <div
+        ref={terminalRef}
+        className="absolute inset-0 transition-opacity duration-300 ease-in"
+        style={{ opacity: loading ? 0 : 1 }}
+      />
       {/* Loading overlay — retro bash-style spinner */}
       <div
         className={`absolute inset-0 z-10 flex items-start p-5 transition-opacity duration-300 ease-out ${
