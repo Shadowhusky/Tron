@@ -1589,7 +1589,7 @@ RULES:
 10. PROBLEM SOLVING: If a command fails or results are unexpected, do NOT just give up or retry blindly. ANALYZE the error message to find the root cause (missing file, permission denied, wrong path, dependency needed). PROACTIVELY FIX the issue (create the missing file, chmod, npm install, correct the path) and then retry. You have permission to fix environment issues to achieve the goal.
 10. CONTEXT AWARENESS: The [PROJECT FILES] section shows existing files. Do NOT recreate files that already exist — use read_file or edit_file to modify them. Do NOT scaffold a new project if one already exists. Always check the project structure before creating files.
 11. IMAGES: If the user mentions images or screenshots, they were already analyzed in a prior step. Use the description provided — do NOT try to access image files with read_file, execute_command, or ls.
-12. TAB TITLE: If this is your FIRST response to a new task, you MUST include a "_tab_title": "short 2-5 word title" property at the root of your JSON response. This will automatically set the terminal tab name. If the user's task is unclear or you are asking for clarification, do NOT include this property.
+12. TAB TITLE: Always include "_tab_title": "short 2-5 word title" at the root of your JSON response. This sets the terminal tab name and should reflect the current task. Update it as the task evolves. If asking for clarification, omit it.
 ${agentPrompt}
 `,
         },

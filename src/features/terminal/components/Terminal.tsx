@@ -228,6 +228,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     const performResize = () => {
       if (!fitAddonRef.current || !xtermRef.current) return;
       if (!reconnectSettled) return; // defer until bounce completes
+
       try {
         fitAddonRef.current.fit();
         const { cols, rows } = xtermRef.current;
@@ -250,7 +251,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
     let resizeTimeout: ReturnType<typeof setTimeout>;
     const debouncedResize = () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(performResize, 100);
+      resizeTimeout = setTimeout(performResize, 50);
     };
 
     // NOTE: No performResize() calls here! We defer until after history +

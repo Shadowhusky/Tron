@@ -131,18 +131,18 @@ const TabBar: React.FC<TabBarProps> = ({
     <div
       data-tutorial="tab-bar"
       data-testid="tab-bar"
-      className={`flex items-center h-10 px-2 gap-2 border-b select-none shrink-0 ${themeClass(
+      className={`flex items-stretch h-10 select-none shrink-0 ${themeClass(
         resolvedTheme,
         {
-          dark: "bg-[#111111] border-white/5",
-          modern: "bg-white/[0.02] border-white/[0.06] backdrop-blur-2xl",
-          light: "bg-gray-100 border-gray-200",
+          dark: "bg-[#0e0e0e]",
+          modern: "bg-white/[0.015] backdrop-blur-2xl",
+          light: "bg-gray-100/80",
         },
       )}`}
       style={{ WebkitAppRegion: "drag" } as any}
     >
       {/* Traffic Lights Spacer (macOS Electron only) */}
-      {isElectronApp() && !isWindows() && <div className="w-16" />}
+      {isElectronApp() && !isWindows() && <div className="w-16 shrink-0" />}
 
       {/* Tabs */}
       <Reorder.Group
@@ -153,44 +153,58 @@ const TabBar: React.FC<TabBarProps> = ({
           isDraggingRef.current = true;
           setLocalTabs(newTabs);
         }}
-        className="flex items-center gap-1 flex-1 overflow-x-auto no-scrollbar"
+        className="flex items-stretch flex-1 overflow-x-auto no-scrollbar"
         style={{ WebkitAppRegion: "drag" } as any}
       >
         <AnimatePresence initial={false}>
-          {localTabs.map((tab) => (
+          {localTabs.map((tab, index) => {
+            const isFirst = index === 0;
+            const isActive = tab.id === activeTabId;
+            const borderCls = themeClass(resolvedTheme, {
+              dark: "border-white/[0.06]",
+              modern: "border-white/[0.06]",
+              light: "border-black/[0.08]",
+            });
+            return (
             <Reorder.Item
               key={tab.id}
               value={tab}
               drag={isTouchDevice() ? false : "x"}
               dragConstraints={{ top: 0, bottom: 0 }}
-              initial={{ opacity: 0, scale: 0.9, width: 0 }}
-              animate={{ opacity: 1, scale: 1, width: "auto" }}
-              exit={{ opacity: 0, scale: 0.9, width: 0 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
+              dragElastic={0.1}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0, width: 0, overflow: "hidden" }}
+              transition={{ duration: 0.12, ease: "easeOut" }}
               onDragEnd={commitReorder}
               whileDrag={{
-                scale: 1.03,
-                boxShadow:
-                  resolvedTheme === "light"
-                    ? "0 4px 16px rgba(0,0,0,0.12)"
-                    : "0 4px 16px rgba(0,0,0,0.4)",
                 zIndex: 50,
                 cursor: "grabbing",
+                boxShadow:
+                  resolvedTheme === "light"
+                    ? "0 2px 12px rgba(0,0,0,0.15)"
+                    : "0 2px 16px rgba(0,0,0,0.6)",
+                background:
+                  resolvedTheme === "light"
+                    ? "rgba(255,255,255,1)"
+                    : resolvedTheme === "modern"
+                      ? "rgba(18,18,24,1)"
+                      : "rgba(21,21,21,1)",
               }}
               style={{ WebkitAppRegion: "no-drag" } as any}
-              className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-grab active:cursor-grabbing transition-colors border max-w-[200px] min-w-[100px] ${tab.id === activeTabId
+              className={`group relative flex items-center gap-2 px-3 text-xs cursor-grab active:cursor-grabbing transition-colors duration-150 max-w-[200px] min-w-[100px] border-r ${isFirst ? "border-l" : ""} ${borderCls} ${isActive
                 ? themeClass(resolvedTheme, {
-                  dark: "bg-[#1e1e1e] text-white border-white/10",
+                  dark: "bg-[#151515] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_3px_10px_-2px_rgba(255,255,255,0.15)]",
                   modern:
-                    "bg-white/[0.06] text-white border-white/[0.1] backdrop-blur-xl",
-                  light: "bg-white text-gray-900 border-gray-300 shadow-sm",
+                    "bg-white/[0.04] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_3px_10px_-2px_rgba(168,85,247,0.2)] backdrop-blur-xl",
+                  light: "bg-white text-gray-900 shadow-[inset_0_0_6px_rgba(0,0,0,0.03),0_3px_10px_-2px_rgba(0,0,0,0.1)]",
                 })
                 : themeClass(resolvedTheme, {
-                  dark: "bg-[#161616] border-white/5 hover:bg-[#1a1a1a] text-gray-500 hover:text-gray-300",
+                  dark: "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
                   modern:
-                    "border-transparent hover:bg-white/5 text-gray-500 hover:text-gray-300",
+                    "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
                   light:
-                    "bg-gray-100/80 border-gray-200/60 text-gray-500 hover:bg-gray-200/60 hover:text-gray-700",
+                    "text-gray-400 hover:text-gray-600 hover:bg-white/40",
                 })
                 }`}
               data-testid={`tab-${tab.id}`}
@@ -262,7 +276,7 @@ const TabBar: React.FC<TabBarProps> = ({
                       onClose(tab.id);
                     }
                   }}
-                  className={`opacity-0 group-hover:opacity-100 p-0.5 rounded-sm transition-opacity ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
+                  className={`opacity-0 group-hover:opacity-100 p-1.5 -mr-1 rounded transition-opacity ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
                     resolvedTheme,
                     {
                       dark: "hover:bg-white/20",
@@ -287,7 +301,8 @@ const TabBar: React.FC<TabBarProps> = ({
                 </button>
               )}
             </Reorder.Item>
-          ))}
+            );
+          })}
         </AnimatePresence>
         {/* New Tab button */}
         <motion.button
@@ -296,12 +311,12 @@ const TabBar: React.FC<TabBarProps> = ({
           whileTap={{ scale: 0.9 }}
           onClick={isSshOnly() && onCreateSSH ? onCreateSSH : onCreate}
           style={{ WebkitAppRegion: "no-drag" } as any}
-          className={`ml-1 p-1 rounded-md transition-colors ${themeClass(
+          className={`ml-1 px-2.5 flex items-center transition-colors ${themeClass(
             resolvedTheme,
             {
-              dark: "hover:bg-white/10 text-gray-500",
-              modern: "hover:bg-white/10 text-gray-500",
-              light: "hover:bg-gray-200 text-gray-500",
+              dark: "hover:bg-white/[0.06] text-gray-500",
+              modern: "hover:bg-white/[0.06] text-gray-500",
+              light: "hover:bg-black/[0.04] text-gray-400",
             },
           )}`}
           title={isSshOnly() ? "New SSH Connection" : "New Terminal"}
@@ -328,17 +343,17 @@ const TabBar: React.FC<TabBarProps> = ({
               <button
                 data-testid="tab-create-dropdown"
                 style={{ WebkitAppRegion: "no-drag" } as any}
-                className={`p-1 -ml-1 rounded-md transition-colors ${themeClass(
+                className={`px-2.5 flex items-center transition-colors ${themeClass(
                   resolvedTheme,
                   {
-                    dark: "hover:bg-white/10 text-gray-500",
-                    modern: "hover:bg-white/10 text-gray-500",
-                    light: "hover:bg-gray-200 text-gray-500",
+                    dark: "hover:bg-white/[0.06] text-gray-500",
+                    modern: "hover:bg-white/[0.06] text-gray-500",
+                    light: "hover:bg-black/[0.04] text-gray-400",
                   },
                 )}`}
                 title="More tab options"
               >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-3 h-3 -translate-x-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
@@ -406,13 +421,13 @@ const TabBar: React.FC<TabBarProps> = ({
       <button
         data-testid="tab-settings"
         onClick={onOpenSettings}
-        className={`p-1 rounded-md transition-colors ${themeClass(
+        className={`px-2.5 flex items-center transition-colors ${themeClass(
           resolvedTheme,
           {
-            dark: "hover:bg-white/10 text-gray-500",
+            dark: "hover:bg-white/[0.06] text-gray-500",
             modern:
-              "hover:bg-white/[0.08] text-purple-300/70 hover:text-purple-200",
-            light: "hover:bg-gray-100 text-gray-500",
+              "hover:bg-white/[0.04] text-purple-300/60 hover:text-purple-200",
+            light: "hover:bg-black/[0.04] text-gray-400",
           },
         )}`}
         title="Settings (Cmd+,)"
