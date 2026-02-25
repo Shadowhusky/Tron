@@ -219,7 +219,7 @@ wss.on("connection", (ws, req) => {
             terminal.cleanupClientSessions(clientId);
             pendingCleanups.delete(clientId);
             console.log(`[Tron Web] Cleaned up sessions for disconnected client ${clientId.slice(0, 8)}…`);
-        }, 300000)); // 5 minute grace period (mobile browsers kill pages aggressively)
+        }, 86400000)); // 24 hour grace period — keeps PTY alive for overnight disconnects
     });
 });
 // Channels completely blocked in SSH-only mode (no local PTY or filesystem)
@@ -326,6 +326,10 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             catch {
                 return false;
             }
+        case "terminal.history.getStats":
+            return terminal.getPersistedHistoryStats();
+        case "terminal.history.clearAll":
+            return terminal.clearAllPersistedHistory();
         case "terminal.readHistory":
             return terminal.readHistory(data?.sessionId || data, data?.lines);
         case "terminal.clearHistory":

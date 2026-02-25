@@ -340,6 +340,11 @@ export function initWebSocketBridge() {
         invoke("ssh.profiles.read") as Promise<any[]>,
       writeSSHProfiles: (profiles: any[]) =>
         invoke("ssh.profiles.write", profiles) as Promise<boolean>,
+      // Terminal history stats
+      getPersistedHistoryStats: () =>
+        invoke("terminal.history.getStats") as Promise<{ fileCount: number; totalBytes: number }>,
+      clearAllPersistedHistory: () =>
+        invoke("terminal.history.clearAll") as Promise<{ deletedCount: number }>,
       // Sync Tabs
       readSyncTabs: () =>
         invoke("savedTabs.read") as Promise<any[]>,

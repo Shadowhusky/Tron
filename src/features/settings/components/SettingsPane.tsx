@@ -34,7 +34,10 @@ import {
   Copy,
   ExternalLink,
   Download,
+  HardDrive,
 } from "lucide-react";
+import Modal from "../../../components/ui/Modal";
+import type { ResolvedTheme } from "../../../contexts/ThemeContext";
 
 
 // Per-provider saved configs (model, apiKey, baseUrl)
@@ -67,13 +70,15 @@ const NAV_SECTIONS_BASE = [
   { id: "web-server", label: "Web Server", icon: Wifi },
   { id: "updates", label: "Updates", icon: Download },
   { id: "ssh", label: "SSH", icon: Globe },
+  { id: "storage", label: "Storage", icon: HardDrive },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 ] as const;
 
-// Web Server + Updates sections only shown in Electron mode
+// Web Server + Updates are Electron-only; Storage is web-only
 const ELECTRON_ONLY_SECTIONS = new Set(["web-server", "updates"]);
+const WEB_ONLY_SECTIONS = new Set(["storage"]);
 const NAV_SECTIONS = window.electron
-  ? NAV_SECTIONS_BASE
+  ? NAV_SECTIONS_BASE.filter((s) => !WEB_ONLY_SECTIONS.has(s.id))
   : NAV_SECTIONS_BASE.filter((s) => !ELECTRON_ONLY_SECTIONS.has(s.id));
 
 // --- SSH Profiles Sub-component ---
@@ -174,6 +179,96 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// --- Storage Sub-component (Web mode only) ---
+function StorageSection({ cardClass, t, resolvedTheme }: {
+  cardClass: string;
+  t: any;
+  resolvedTheme: string;
+}) {
+  const [stats, setStats] = useState<{ fileCount: number; totalBytes: number }>({ fileCount: 0, totalBytes: 0 });
+  const [loading, setLoading] = useState(true);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  const refreshStats = useCallback(() => {
+    const ipc = window.electron?.ipcRenderer;
+    if (ipc?.getPersistedHistoryStats) {
+      setLoading(true);
+      ipc.getPersistedHistoryStats().then((s) => {
+        setStats(s);
+        setLoading(false);
+      }).catch(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refreshStats(); }, [refreshStats]);
+
+  const handleClearAll = async () => {
+    setClearing(true);
+    const ipc = window.electron?.ipcRenderer;
+    if (ipc?.clearAllPersistedHistory) {
+      await ipc.clearAllPersistedHistory().catch(() => {});
+    }
+    setClearing(false);
+    setShowConfirm(false);
+    refreshStats();
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className="space-y-3">
+      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+        <HardDrive className="w-3.5 h-3.5" />
+        Terminal History
+      </h3>
+
+      <div className={cardClass}>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className={`text-xs ${t.text}`}>
+              {loading ? "Loading..." : stats.fileCount === 0
+                ? "No saved sessions"
+                : `${stats.fileCount} saved session${stats.fileCount !== 1 ? "s" : ""} (${formatSize(stats.totalBytes)})`}
+            </p>
+            <p className={`text-[10px] ${t.textFaint} mt-0.5`}>
+              Terminal history files persisted to disk
+            </p>
+          </div>
+          {stats.fileCount > 0 && (
+            <button
+              onClick={() => setShowConfirm(true)}
+              className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border transition-colors border-red-500/30 text-red-400 hover:bg-red-500/10"
+            >
+              <Trash2 className="w-3 h-3" />
+              Clear All
+            </button>
+          )}
+        </div>
+      </div>
+
+      <Modal
+        show={showConfirm}
+        resolvedTheme={resolvedTheme as ResolvedTheme}
+        onClose={() => setShowConfirm(false)}
+        title="Clear Saved Sessions?"
+        description="This will permanently delete all saved terminal history files. Active sessions are not affected."
+        maxWidth="max-w-sm"
+        buttons={[
+          { label: "Cancel", type: "ghost", onClick: () => setShowConfirm(false) },
+          { label: clearing ? "Clearing..." : "Clear All", type: "danger", onClick: handleClearAll },
+        ]}
+      />
     </div>
   );
 }
@@ -1566,6 +1661,15 @@ const SettingsPane = () => {
             {/* SSH Profiles */}
             {activeSection === "ssh" && (
               <SSHProfilesSection
+                cardClass={cardClass}
+                t={t}
+                resolvedTheme={resolvedTheme}
+              />
+            )}
+
+            {/* Storage (web mode only) */}
+            {activeSection === "storage" && (
+              <StorageSection
                 cardClass={cardClass}
                 t={t}
                 resolvedTheme={resolvedTheme}

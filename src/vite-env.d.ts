@@ -63,6 +63,9 @@ interface Window {
       // Sync Tabs
       readSyncTabs: () => Promise<any[]>;
       writeSyncTabs: (tabs: any[]) => Promise<boolean>;
+      // Terminal history stats
+      getPersistedHistoryStats: () => Promise<{ fileCount: number; totalBytes: number }>;
+      clearAllPersistedHistory: () => Promise<{ deletedCount: number }>;
       // Web Server
       startWebServer: (port: number) => Promise<{ success: boolean; port?: number; error?: string }>;
       stopWebServer: () => Promise<{ success: boolean }>;

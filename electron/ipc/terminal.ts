@@ -233,6 +233,10 @@ export function cleanupAllSessions() {
 export function registerTerminalHandlers(
   getMainWindow: () => BrowserWindow | null,
 ) {
+  // Terminal history stats — no-op in Electron (history isn't persisted to disk)
+  ipcMain.handle("terminal.history.getStats", () => ({ fileCount: 0, totalBytes: 0 }));
+  ipcMain.handle("terminal.history.clearAll", () => ({ deletedCount: 0 }));
+
   // Check if a PTY session is still alive (for reconnection after renderer refresh)
   ipcMain.handle("terminal.sessionExists", (_event, sessionId: string) => {
     return sessions.has(sessionId);

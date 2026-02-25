@@ -41,6 +41,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   "ssh.profiles.write",
   "savedTabs.read",
   "savedTabs.write",
+  "terminal.history.getStats",
+  "terminal.history.clearAll",
   "webServer.start",
   "webServer.stop",
   "webServer.status",
@@ -202,6 +204,11 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("savedTabs.read") as Promise<any[]>,
     writeSyncTabs: (tabs: any[]) =>
       ipcRenderer.invoke("savedTabs.write", tabs) as Promise<boolean>,
+    // Terminal history stats (web mode only — Electron stubs return empty)
+    getPersistedHistoryStats: () =>
+      ipcRenderer.invoke("terminal.history.getStats") as Promise<{ fileCount: number; totalBytes: number }>,
+    clearAllPersistedHistory: () =>
+      ipcRenderer.invoke("terminal.history.clearAll") as Promise<{ deletedCount: number }>,
     // Web Server
     startWebServer: (port: number) =>
       ipcRenderer.invoke("webServer.start", port) as Promise<{ success: boolean; port?: number; error?: string }>,
