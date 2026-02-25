@@ -32,7 +32,8 @@ Most AI coding tools are chat-first — you paste context in, copy commands out,
 - **AI agent** — describe what you want, the agent executes step-by-step with live output
 - **Any model** — Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, or any compatible API
 - **SSH remote** — connect to remote servers; terminal, agent, and file ops work identically over SSH
-- **Web mode** — self-host your terminal and access it from anywhere, or deploy as an SSH gateway
+- **Built-in web server** — toggle it on in Settings and access your terminal from any browser on the network
+- **Auto-updates** — check for and install updates directly from the app
 - **Cross-platform** — macOS, Windows, Linux. Desktop (Electron) or browser.
 - **Safe** — dangerous command detection, permission prompts, loop detection, circuit breakers
 
@@ -44,13 +45,13 @@ https://github.com/user-attachments/assets/1e71e424-940a-4ff5-be21-5460d6843ab1
 |:---:|:---:|
 | ![Terminal](screenshots/demo-terminal.gif) | ![Agent](screenshots/demo-agent.gif) |
 
-| Input Modes | Advice Mode |
+| Agent View | Input Modes |
 |:---:|:---:|
-| ![Modes](screenshots/demo-modes.gif) | ![Advice](screenshots/demo-advice.gif) |
+| ![Agent View](screenshots/demo-agent-view.gif) | ![Modes](screenshots/demo-modes.gif) |
 
-| Themes | Settings |
+| Themes | SSH |
 |:---:|:---:|
-| ![Themes](screenshots/demo-themes.gif) | ![Settings](screenshots/demo-settings.gif) |
+| ![Themes](screenshots/demo-themes.gif) | ![SSH](screenshots/demo-ssh.gif) |
 
 ## Getting Started
 
@@ -71,15 +72,16 @@ On first launch, the setup wizard walks you through theme selection and AI provi
 
 ## Deployment Modes
 
-| Mode | Command | Use Case |
-|------|---------|----------|
+| Mode | How | Use Case |
+|------|-----|----------|
 | **Desktop** | `npm run dev` | Local Electron app |
-| **Web (local)** | `npm run start:web` | Self-hosted terminal, accessible from any browser |
-| **Web (gateway)** | `TRON_MODE=gateway npm run start:web` | SSH-only relay for cloud/hosted deployments |
+| **Built-in web server** | Settings > Web Server | Access from any browser on your network |
+| **Standalone web** | `npm run start:web` | Headless server deployment |
+| **Gateway** | `TRON_MODE=gateway npm run start:web` | SSH-only relay for cloud |
 
-**Web mode** lets you host your development terminal on a server and access it from anywhere — laptop, tablet, or phone. Gateway mode restricts access to SSH connections only, making it safe for multi-user cloud deployments.
+The **built-in web server** is the easiest way to access Tron from another device — toggle it on in Settings, and it shows your local IPs and port. For headless servers without a desktop, use the standalone web mode. Gateway mode restricts access to SSH connections only, making it safe for multi-user cloud deployments.
 
-> **Tip:** Local network addresses (e.g. `192.168.x.x`) are not reachable outside your LAN. For easy remote access on mobile, pair web mode with a mesh VPN like [Tailscale](https://tailscale.com) — it assigns a stable IP to each device so you can reach your terminal from anywhere without port forwarding.
+> **Tip:** Local network addresses (e.g. `192.168.x.x`) are not reachable outside your LAN. For easy remote access on mobile, pair the web server with a mesh VPN like [Tailscale](https://tailscale.com) — it assigns a stable IP to each device so you can reach your terminal from anywhere without port forwarding.
 
 ### Docker
 
@@ -129,10 +131,11 @@ environment:
 - Tabbed interface with split panes (vertical/horizontal, recursive nesting)
 - Smart input bar with shell completions, AI ghost text, and command history
 - Three themes — Dark, Light, Modern (frosty glass) + system auto-detect
-- Session persistence across restarts
+- Persistent history — terminal output survives app restarts
 
 ### AI Agent
 - Autonomous multi-step execution with live terminal output
+- **Agent View** — full-height, chat-focused AI-first interface
 - Tools: `execute_command`, `run_in_terminal`, `write_file`, `read_file`, `edit_file`, `send_text`, `read_terminal`
 - Permission system with dangerous command detection and double-confirm
 - Auto-execute mode, thinking mode, streaming overlay with diff previews
@@ -150,6 +153,16 @@ environment:
 - Password, private key, and SSH agent authentication
 - Saved profiles with optional credential persistence
 - AI agent works fully over SSH (commands, file ops, system inspection)
+
+### Built-in Web Server
+- Toggle on in Settings > Web Server — no separate server process needed
+- Shows local IP addresses and configurable port
+- Access your full terminal from any browser on the network
+- Pair with [Tailscale](https://tailscale.com) for secure remote access
+
+### Auto-Updates
+- Check for, download, and install updates directly from Settings > Updates
+- No need to manually download releases
 
 ### Providers
 Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI Compatible, Anthropic Compatible.
