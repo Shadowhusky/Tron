@@ -8,7 +8,20 @@ directories:
 files:
   - dist-electron/**/*
   - dist-react/**/*
+  - dist-server/**/*
   - package.json
+
+asarUnpack:
+  - dist-server/**/*
+  - node_modules/express/**
+  - node_modules/ws/**
+  - node_modules/dotenv/**
+  - node_modules/http-proxy-middleware/**
+  - node_modules/ssh2/**
+
+extraResources:
+  - from: dist-server
+    to: dist-server
 
 mac:
   category: public.app-category.developer-tools

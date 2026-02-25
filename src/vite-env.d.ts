@@ -63,6 +63,11 @@ interface Window {
       // Saved Tabs
       readSavedTabs: () => Promise<any[]>;
       writeSavedTabs: (tabs: any[]) => Promise<boolean>;
+      // Web Server
+      startWebServer: (port: number) => Promise<{ success: boolean; port?: number; error?: string }>;
+      stopWebServer: () => Promise<{ success: boolean }>;
+      getWebServerStatus: () => Promise<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>;
+      checkPort: (port: number) => Promise<{ available: boolean }>;
     };
   };
 }

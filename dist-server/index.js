@@ -14,9 +14,9 @@ import * as ai from "./handlers/ai.js";
 import * as ssh from "./handlers/ssh.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PORT = 3888;
+const PORT = Number(process.env.TRON_PORT) || 3888;
 const DEV_VITE_PORT = Number(process.env.PORT) || 5173;
-const isDev = process.argv.includes("--dev");
+const isDev = process.argv.includes("--dev") || process.env.TRON_DEV === "true";
 const serverMode = process.env.TRON_MODE ||
     (process.argv.includes("--gateway") ? "gateway" : "local");
 // SSH-only restriction: blocks local terminal, file ops, server shell access.
@@ -416,6 +416,10 @@ server.listen(PORT, "0.0.0.0", () => {
     console.log(`[Tron Web] Server running on http://0.0.0.0:${PORT}`);
     if (isDev) {
         console.log(`[Tron Web] Proxying to Vite at http://localhost:${DEV_VITE_PORT}`);
+    }
+    // Notify parent process (Electron fork) that we're ready
+    if (typeof process.send === "function") {
+        process.send({ type: "ready", port: PORT });
     }
 });
 // Cleanup on server shutdown
