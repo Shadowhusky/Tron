@@ -68,6 +68,17 @@ interface Window {
       stopWebServer: () => Promise<{ success: boolean }>;
       getWebServerStatus: () => Promise<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>;
       checkPort: (port: number) => Promise<{ available: boolean }>;
+      // Updater
+      checkForUpdates: () => Promise<void>;
+      downloadUpdate: () => Promise<void>;
+      quitAndInstall: () => Promise<void>;
+      getUpdateStatus: () => Promise<{
+        status: string;
+        updateInfo: { version: string; releaseNotes?: string } | null;
+        downloadProgress: { percent: number; bytesPerSecond: number; transferred: number; total: number } | null;
+        lastError: string | null;
+      }>;
+      getAppVersion: () => Promise<string>;
     };
   };
 }

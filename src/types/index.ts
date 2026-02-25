@@ -78,6 +78,7 @@ export interface TronConfig {
   hotkeys?: HotkeyMap;
   aiBehavior?: AIBehavior;
   webServer?: WebServerConfig;
+  autoUpdate?: boolean;
 }
 
 // --- SSH Types ---

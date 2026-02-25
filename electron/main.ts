@@ -12,6 +12,7 @@ import { registerAIHandlers } from "./ipc/ai";
 import { registerConfigHandlers } from "./ipc/config";
 import { registerSSHHandlers, cleanupAllSSHSessions } from "./ipc/ssh";
 import { registerWebServerHandlers, startWebServer, stopWebServer, readWebServerConfig } from "./ipc/web-server";
+import { registerUpdaterHandlers, autoCheckForUpdates } from "./ipc/updater";
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -198,6 +199,7 @@ registerSystemHandlers();
 registerAIHandlers();
 registerConfigHandlers();
 registerWebServerHandlers();
+registerUpdaterHandlers(() => mainWindow);
 
 // --- Window close response from renderer ---
 ipcMain.on("window.closeConfirmed", () => {
@@ -225,6 +227,20 @@ app.whenReady().then(async () => {
     if (!result.success) {
       console.error(`[Tron] Failed to start web server: ${result.error}`);
     }
+  }
+
+  // Auto-check for updates (reads config to determine auto-download)
+  try {
+    const fs = require("fs");
+    const configPath = path.join(app.getPath("userData"), "tron.config.json");
+    let autoUpdate = true;
+    if (fs.existsSync(configPath)) {
+      const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (raw?.autoUpdate === false) autoUpdate = false;
+    }
+    autoCheckForUpdates(autoUpdate);
+  } catch {
+    autoCheckForUpdates(true);
   }
 });
 
