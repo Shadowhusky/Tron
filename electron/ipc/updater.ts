@@ -1,5 +1,4 @@
 import { ipcMain, app, BrowserWindow } from "electron";
-import { autoUpdater, UpdateInfo } from "electron-updater";
 
 type UpdateStatus =
   | "idle"
@@ -17,10 +16,42 @@ interface DownloadProgress {
   total: number;
 }
 
+interface UpdateInfoLite {
+  version: string;
+  releaseNotes?: string;
+}
+
 let updateStatus: UpdateStatus = "idle";
-let updateInfo: UpdateInfo | null = null;
+let updateInfo: UpdateInfoLite | null = null;
 let downloadProgress: DownloadProgress | null = null;
 let lastError: string | null = null;
+
+// Lazy-loaded autoUpdater — avoids blocking app startup with the heavy
+// electron-updater module. Resolved on first use (IPC call or auto-check).
+let _autoUpdater: typeof import("electron-updater").autoUpdater | null = null;
+let _initPromise: Promise<typeof import("electron-updater").autoUpdater> | null = null;
+
+function getAutoUpdater(
+  getMainWindow?: () => BrowserWindow | null,
+): Promise<typeof import("electron-updater").autoUpdater> {
+  if (_autoUpdater) return Promise.resolve(_autoUpdater);
+  if (_initPromise) return _initPromise;
+
+  _initPromise = import("electron-updater").then(({ autoUpdater }) => {
+    _autoUpdater = autoUpdater;
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    // Wire events (only once)
+    if (getMainWindow) {
+      wireEvents(autoUpdater, getMainWindow);
+    }
+
+    return autoUpdater;
+  });
+
+  return _initPromise;
+}
 
 function sendToRenderer(
   getMainWindow: () => BrowserWindow | null,
@@ -33,25 +64,21 @@ function sendToRenderer(
   }
 }
 
-export function registerUpdaterHandlers(
+function wireEvents(
+  autoUpdater: typeof import("electron-updater").autoUpdater,
   getMainWindow: () => BrowserWindow | null,
 ) {
-  // Configure autoUpdater
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
-
-  // --- Event wiring ---
   autoUpdater.on("checking-for-update", () => {
     updateStatus = "checking";
     sendToRenderer(getMainWindow, "updater.status", { status: updateStatus });
   });
 
-  autoUpdater.on("update-available", (info: UpdateInfo) => {
+  autoUpdater.on("update-available", (info) => {
     updateStatus = "available";
-    updateInfo = info;
+    updateInfo = { version: info.version, releaseNotes: info.releaseNotes as string | undefined };
     sendToRenderer(getMainWindow, "updater.status", {
       status: updateStatus,
-      updateInfo: { version: info.version, releaseNotes: info.releaseNotes },
+      updateInfo,
     });
   });
 
@@ -84,33 +111,38 @@ export function registerUpdaterHandlers(
     });
   });
 
-  autoUpdater.on("update-downloaded", (info: UpdateInfo) => {
+  autoUpdater.on("update-downloaded", (info) => {
     updateStatus = "downloaded";
-    updateInfo = info;
+    updateInfo = { version: info.version, releaseNotes: info.releaseNotes as string | undefined };
     sendToRenderer(getMainWindow, "updater.status", {
       status: updateStatus,
-      updateInfo: { version: info.version, releaseNotes: info.releaseNotes },
+      updateInfo,
     });
   });
+}
 
-  // --- IPC handlers ---
+export function registerUpdaterHandlers(
+  getMainWindow: () => BrowserWindow | null,
+) {
+  // IPC handlers — lazy-load electron-updater on first call
   ipcMain.handle("updater.checkForUpdates", async () => {
-    await autoUpdater.checkForUpdates();
+    const au = await getAutoUpdater(getMainWindow);
+    await au.checkForUpdates();
   });
 
   ipcMain.handle("updater.downloadUpdate", async () => {
-    await autoUpdater.downloadUpdate();
+    const au = await getAutoUpdater(getMainWindow);
+    await au.downloadUpdate();
   });
 
-  ipcMain.handle("updater.quitAndInstall", () => {
-    autoUpdater.quitAndInstall();
+  ipcMain.handle("updater.quitAndInstall", async () => {
+    const au = await getAutoUpdater(getMainWindow);
+    au.quitAndInstall();
   });
 
   ipcMain.handle("updater.getStatus", () => ({
     status: updateStatus,
-    updateInfo: updateInfo
-      ? { version: updateInfo.version, releaseNotes: updateInfo.releaseNotes }
-      : null,
+    updateInfo,
     downloadProgress,
     lastError,
   }));
@@ -118,15 +150,21 @@ export function registerUpdaterHandlers(
   ipcMain.handle("updater.getVersion", () => app.getVersion());
 }
 
-/** Check for updates on startup (delayed 5s). Only runs when packaged. */
-export function autoCheckForUpdates(autoDownload: boolean) {
+/** Check for updates after app is idle. Only runs when packaged. */
+export function autoCheckForUpdates(
+  autoDownload: boolean,
+  getMainWindow: () => BrowserWindow | null,
+) {
   if (!app.isPackaged) return;
 
-  autoUpdater.autoDownload = autoDownload;
-
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {
+  // Defer both the module load and the network check until the app is idle
+  setTimeout(async () => {
+    try {
+      const au = await getAutoUpdater(getMainWindow);
+      au.autoDownload = autoDownload;
+      await au.checkForUpdates();
+    } catch {
       // Silently ignore startup check errors (e.g. no internet)
-    });
-  }, 5000);
+    }
+  }, 10_000);
 }
