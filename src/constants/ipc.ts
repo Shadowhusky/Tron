@@ -65,6 +65,12 @@ export const IPC = {
   SAVED_TABS_READ: "savedTabs.read",
   SAVED_TABS_WRITE: "savedTabs.write",
 
+  // Web Server — invoke
+  WEB_SERVER_START: "webServer.start",
+  WEB_SERVER_STOP: "webServer.stop",
+  WEB_SERVER_STATUS: "webServer.status",
+  WEB_SERVER_CHECK_PORT: "webServer.checkPort",
+
   // Window — main→renderer events
   WINDOW_CONFIRM_CLOSE: "window.confirmClose",
   // Window — renderer→main (send)
