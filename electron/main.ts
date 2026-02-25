@@ -229,18 +229,18 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Auto-check for updates (reads config to determine auto-download)
-  try {
-    const fs = require("fs");
-    const configPath = path.join(app.getPath("userData"), "tron.config.json");
+  // Auto-check for updates (deferred — does not block launch)
+  {
     let autoUpdate = true;
-    if (fs.existsSync(configPath)) {
-      const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (raw?.autoUpdate === false) autoUpdate = false;
-    }
-    autoCheckForUpdates(autoUpdate);
-  } catch {
-    autoCheckForUpdates(true);
+    try {
+      const fs = require("fs");
+      const cfgPath = path.join(app.getPath("userData"), "tron.config.json");
+      if (fs.existsSync(cfgPath)) {
+        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        if (raw?.autoUpdate === false) autoUpdate = false;
+      }
+    } catch { /* use default */ }
+    autoCheckForUpdates(autoUpdate, () => mainWindow);
   }
 });
 
