@@ -14,49 +14,19 @@ const PROFILE_DIR = path.resolve(__dirname, `../.screenshots-profile-${Date.now(
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function dismissOnboarding(page) {
+  // Set localStorage first, then reload with skip-setup param
   await page.evaluate(() => {
     localStorage.setItem('tron_configured', 'true');
     localStorage.setItem('tron_tutorial_completed', 'true');
     localStorage.setItem('tron_theme', 'dark');
     localStorage.setItem('tron_view_mode', 'terminal');
   });
-  await page.reload();
+
+  // Use ?skip-setup=true URL param to bypass onboarding wizard entirely
+  const url = page.url().split('?')[0];
+  await page.goto(`${url}?skip-setup=true`);
   await page.waitForSelector('[data-testid="tab-bar"]', { timeout: 15000 });
   await sleep(2000);
-
-  // Force-remove the wizard if it persists (config file race condition)
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const wizardVisible = await page.locator('[data-testid="onboarding-wizard"]')
-      .isVisible({ timeout: 1000 }).catch(() => false);
-    if (!wizardVisible) break;
-
-    console.log(`  Dismissing onboarding wizard (attempt ${attempt + 1})...`);
-    await page.evaluate(() => {
-      localStorage.setItem('tron_configured', 'true');
-      localStorage.setItem('tron_tutorial_completed', 'true');
-      const wiz = document.querySelector('[data-testid="onboarding-wizard"]');
-      if (wiz) wiz.remove();
-    });
-    await sleep(500);
-  }
-
-  // If config file wrote over our values, also try IPC write
-  const wizardStillVisible = await page.locator('[data-testid="onboarding-wizard"]')
-    .isVisible({ timeout: 500 }).catch(() => false);
-  if (wizardStillVisible) {
-    console.log('  Attempting IPC config write...');
-    await page.evaluate(async () => {
-      await window.electron?.ipcRenderer?.writeConfig?.({
-        configured: true,
-        tutorialCompleted: true,
-        theme: 'dark',
-        viewMode: 'terminal',
-      });
-    });
-    await page.reload();
-    await page.waitForSelector('[data-testid="tab-bar"]', { timeout: 15000 });
-    await sleep(2000);
-  }
 }
 
 async function main() {
