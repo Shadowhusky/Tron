@@ -70,6 +70,22 @@ export const test = base.extend<AppFixture>({
     // Wait for the main UI to be ready
     await page.waitForSelector('[data-testid="tab-bar"]', { timeout: 15_000 });
 
+    // If onboarding wizard is still visible (config file race — ConfigContext's initial
+    // writeConfig may overwrite localStorage migration on first load), fix via IPC and reload
+    const wizard = page.locator('[data-testid="onboarding-wizard"]');
+    if (await wizard.isVisible().catch(() => false)) {
+      await page.evaluate(async () => {
+        await (window as any).electron?.ipcRenderer?.writeConfig?.({
+          configured: true,
+          tutorialCompleted: true,
+          theme: "dark",
+          viewMode: "terminal",
+        });
+      });
+      await page.reload();
+      await page.waitForSelector('[data-testid="tab-bar"]', { timeout: 15_000 });
+    }
+
     await use(page);
   },
 });
