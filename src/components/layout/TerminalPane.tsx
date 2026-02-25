@@ -26,7 +26,7 @@ interface TerminalPaneProps {
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions, createSSHTab, openSettingsTab } =
+  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions, createSSHTab, openSettingsTab, refreshCwd } =
     useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
@@ -253,7 +253,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     } else {
       handleCommand(fixed, queueCallback);
     }
-  }, [isAgentMode, markSessionDirty, sessionId, handleCommand, handleCommandInOverlay]);
+    // Eagerly refresh CWD after directory-changing commands
+    if (/^\s*(cd|pushd|popd|z|j)\s/i.test(fixed) || /^\s*(cd)\s*$/i.test(fixed)) {
+      setTimeout(() => refreshCwd(sessionId), 500);
+    }
+  }, [isAgentMode, markSessionDirty, sessionId, handleCommand, handleCommandInOverlay, refreshCwd]);
 
   const wrappedHandleAgentRun = useCallback(async (prompt: string, queueCallback?: any, images?: AttachedImage[]) => {
     markSessionDirty(sessionId);
