@@ -125,7 +125,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   }, [reactValue, onDraftChange]);
 
   // Mode State
-  const [isAuto, setIsAuto] = useState(!defaultAgentMode);
+  const [isAuto, setIsAuto] = useState(true);
   const [mode, setMode] = useState<"command" | "advice" | "agent">(
     defaultAgentMode ? "agent" : "command",
   );

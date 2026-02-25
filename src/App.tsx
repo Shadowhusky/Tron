@@ -274,9 +274,10 @@ const AppContent = () => {
 
       {/* Main Workspace — all tabs stay mounted to preserve terminal state */}
       <div className="flex-1 relative overflow-hidden">
-        {/* Cross-tab agent notifications */}
+        {/* Cross-tab agent notifications — filter out the active session at display time
+            to avoid timing races where the creation-time check in AgentContext misses */}
         <NotificationOverlay
-          notifications={crossTabNotifications}
+          notifications={crossTabNotifications.filter(n => n.sessionId !== activeSessionId)}
           tabs={tabs}
           resolvedTheme={resolvedTheme}
           onSelectTab={selectTab}
