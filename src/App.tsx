@@ -241,10 +241,18 @@ const AppContent = () => {
   // Prevent initial flash/blink by waiting for hydration
   if (!isHydrated) return null;
 
-  // Sync active session ID for cross-tab notification filtering
+  // Collect ALL session IDs in the active tab's layout tree for notification filtering.
+  // This covers split panes — the agent may be running in a non-focused pane.
   const activeTab = tabs.find((t) => t.id === activeTabId);
-  const activeSessionId = activeTab?.activeSessionId || null;
-  setActiveSessionForNotifications(activeSessionId);
+  const activeTabSessionIds = new Set<string>();
+  if (activeTab) {
+    const collect = (node: LayoutNode): void => {
+      if (node.type === "leaf") { activeTabSessionIds.add(node.sessionId); return; }
+      node.children.forEach(collect);
+    };
+    collect(activeTab.root);
+  }
+  setActiveSessionForNotifications(activeTabSessionIds);
 
   return (
     <motion.div
@@ -274,10 +282,10 @@ const AppContent = () => {
 
       {/* Main Workspace — all tabs stay mounted to preserve terminal state */}
       <div className="flex-1 relative overflow-hidden">
-        {/* Cross-tab agent notifications — filter out the active session at display time
-            to avoid timing races where the creation-time check in AgentContext misses */}
+        {/* Cross-tab agent notifications — filter out ALL sessions in the active tab
+            to avoid toasts for the tab the user is currently looking at */}
         <NotificationOverlay
-          notifications={crossTabNotifications.filter(n => n.sessionId !== activeSessionId)}
+          notifications={crossTabNotifications.filter(n => !activeTabSessionIds.has(n.sessionId))}
           tabs={tabs}
           resolvedTheme={resolvedTheme}
           onSelectTab={selectTab}
