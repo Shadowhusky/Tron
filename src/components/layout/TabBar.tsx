@@ -4,7 +4,7 @@ import * as Popover from "@radix-ui/react-popover";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
-import { isWindows, isElectronApp, isTouchDevice } from "../../utils/platform";
+import { isWindows, isMacOS, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { isSshOnly } from "../../services/mode";
 
 interface TabBarProps {
@@ -98,16 +98,24 @@ const TabBar: React.FC<TabBarProps> = ({
 
   // Check if a tab is the sole connect placeholder (no close, no context menu)
   const isOnlyConnectTab = (tab: Tab) =>
-    tab.root.type === "leaf" && tab.root.contentType === "ssh-connect" && tabs.length <= 1;
+    tab.root.type === "leaf" &&
+    tab.root.contentType === "ssh-connect" &&
+    tabs.length <= 1;
 
   // Stable ref for Radix Popover virtual anchor (avoids infinite re-render loop)
   const anchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
-    getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
+    getBoundingClientRect: () =>
+      DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
   });
   if (contextMenu) {
     anchorRef.current = {
       getBoundingClientRect: () =>
-        DOMRect.fromRect({ width: 0, height: 0, x: contextMenu.x, y: contextMenu.y }),
+        DOMRect.fromRect({
+          width: 0,
+          height: 0,
+          x: contextMenu.x,
+          y: contextMenu.y,
+        }),
     };
   }
 
@@ -124,6 +132,21 @@ const TabBar: React.FC<TabBarProps> = ({
       setLocalTabs(tabs);
     }
   }, [tabs]);
+
+  // Auto-scroll to end when a new tab is created
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevTabCountRef = useRef(tabs.length);
+  useEffect(() => {
+    if (tabs.length > prevTabCountRef.current && scrollRef.current) {
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({
+          left: scrollRef.current.scrollWidth,
+          behavior: "smooth",
+        });
+      });
+    }
+    prevTabCountRef.current = tabs.length;
+  }, [tabs.length]);
 
   const commitReorder = () => {
     isDraggingRef.current = false;
@@ -144,7 +167,7 @@ const TabBar: React.FC<TabBarProps> = ({
     <div
       data-tutorial="tab-bar"
       data-testid="tab-bar"
-      className={`flex items-stretch h-10 select-none shrink-0 ${themeClass(
+      className={`flex h-10 shrink-0 items-stretch select-none ${themeClass(
         resolvedTheme,
         {
           dark: "bg-[#0e0e0e]",
@@ -160,14 +183,15 @@ const TabBar: React.FC<TabBarProps> = ({
       {/* Tabs */}
       <Reorder.Group
         as="div"
+        ref={scrollRef}
         axis="x"
         values={localTabs}
         onReorder={(newTabs) => {
           isDraggingRef.current = true;
           setLocalTabs(newTabs);
         }}
-        className="flex items-stretch flex-1 overflow-x-auto no-scrollbar"
-        style={{ WebkitAppRegion: "drag" } as any}
+        className={`no-scrollbar flex flex-1 items-stretch overflow-x-auto ${isMacOS() ? "pl-3" : ""}`}
+        style={{ WebkitAppRegion: "drag", touchAction: "pan-x", overscrollBehaviorY: "none" } as any}
       >
         <AnimatePresence initial={false}>
           {localTabs.map((tab, index) => {
@@ -200,27 +224,31 @@ const TabBar: React.FC<TabBarProps> = ({
                       : "0 2px 16px rgba(0,0,0,0.6)",
                 }}
                 style={{ WebkitAppRegion: "no-drag" } as any}
-                className={`group relative flex items-center gap-2 px-3 text-xs cursor-grab active:cursor-grabbing transition-colors duration-150 max-w-[200px] min-w-[100px] border-r ${isFirst ? "border-l" : ""} ${borderCls} ${draggingTabId === tab.id
-                  ? themeClass(resolvedTheme, {
-                    dark: "!bg-[#151515]",
-                    modern: "!bg-[#12121a]",
-                    light: "!bg-white",
-                  })
-                  : ""} ${isActive
-                  ? themeClass(resolvedTheme, {
-                    dark: "bg-[#151515] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_3px_10px_-2px_rgba(255,255,255,0.15)]",
-                    modern:
-                      "bg-white/[0.04] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_3px_10px_-2px_rgba(168,85,247,0.2)] backdrop-blur-xl",
-                    light: "bg-white text-gray-900 shadow-[inset_0_0_6px_rgba(0,0,0,0.03),0_3px_10px_-2px_rgba(0,0,0,0.1)]",
-                  })
-                  : themeClass(resolvedTheme, {
-                    dark: "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
-                    modern:
-                      "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]",
-                    light:
-                      "text-gray-400 hover:text-gray-600 hover:bg-white/40",
-                  })
-                  }`}
+                className={`group relative flex max-w-[200px] min-w-[100px] cursor-grab items-center gap-2 border-r px-3 text-xs transition-colors duration-150 active:cursor-grabbing ${isFirst ? "border-l" : ""} ${borderCls} ${
+                  draggingTabId === tab.id
+                    ? themeClass(resolvedTheme, {
+                        dark: "!bg-[#151515]",
+                        modern: "!bg-[#12121a]",
+                        light: "!bg-white",
+                      })
+                    : ""
+                } ${
+                  isActive
+                    ? themeClass(resolvedTheme, {
+                        dark: "bg-[#151515] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_3px_10px_-2px_rgba(255,255,255,0.15)]",
+                        modern:
+                          "bg-white/[0.04] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_3px_10px_-2px_rgba(168,85,247,0.2)] backdrop-blur-xl",
+                        light:
+                          "bg-white text-gray-900 shadow-[inset_0_0_6px_rgba(0,0,0,0.03),0_3px_10px_-2px_rgba(0,0,0,0.1)]",
+                      })
+                    : themeClass(resolvedTheme, {
+                        dark: "text-gray-500 hover:bg-white/[0.03] hover:text-gray-300",
+                        modern:
+                          "text-gray-500 hover:bg-white/[0.03] hover:text-gray-300",
+                        light:
+                          "text-gray-400 hover:bg-white/40 hover:text-gray-600",
+                      })
+                }`}
                 data-testid={`tab-${tab.id}`}
                 onClick={() => {
                   if (longPressFired.current) return; // Prevent click after long-press
@@ -237,7 +265,7 @@ const TabBar: React.FC<TabBarProps> = ({
               >
                 {tab.color && (
                   <div
-                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    className="h-2 w-2 flex-shrink-0 rounded-full"
                     style={{ backgroundColor: tab.color }}
                   />
                 )}
@@ -249,7 +277,12 @@ const TabBar: React.FC<TabBarProps> = ({
                     onKeyDown={(e) => {
                       e.stopPropagation();
                       if (e.key === "Enter") {
-                        if (renameValue.trim() && tab.activeSessionId && onRenameTab && renameValue.trim() !== tab.title) {
+                        if (
+                          renameValue.trim() &&
+                          tab.activeSessionId &&
+                          onRenameTab &&
+                          renameValue.trim() !== tab.title
+                        ) {
                           onRenameTab(tab.activeSessionId, renameValue.trim());
                         }
                         setRenamingTabId(null);
@@ -258,20 +291,31 @@ const TabBar: React.FC<TabBarProps> = ({
                       }
                     }}
                     onBlur={() => {
-                      if (renameValue.trim() && tab.activeSessionId && onRenameTab && renameValue.trim() !== tab.title) {
+                      if (
+                        renameValue.trim() &&
+                        tab.activeSessionId &&
+                        onRenameTab &&
+                        renameValue.trim() !== tab.title
+                      ) {
                         onRenameTab(tab.activeSessionId, renameValue.trim());
                       }
                       setRenamingTabId(null);
                     }}
                     onClick={(e) => e.stopPropagation()}
                     onContextMenu={(e) => e.stopPropagation()}
-                    className={`flex-1 min-w-[50px] bg-transparent outline-none ring-1 ring-blue-500/50 rounded-sm px-1 -mx-1 ${themeClass(
+                    className={`-mx-1 min-w-[50px] flex-1 rounded-sm bg-transparent px-1 ring-1 ring-blue-500/50 outline-none ${themeClass(
                       resolvedTheme,
-                      { dark: "text-white", modern: "text-white", light: "text-gray-900" },
+                      {
+                        dark: "text-white",
+                        modern: "text-white",
+                        light: "text-gray-900",
+                      },
                     )}`}
                   />
                 ) : (
-                  <span className="truncate flex-1 select-none">{tab.title}</span>
+                  <span className="flex-1 truncate select-none">
+                    {tab.title}
+                  </span>
                 )}
                 {renamingTabId !== tab.id && !isOnlyConnectTab(tab) && (
                   <button
@@ -282,12 +326,12 @@ const TabBar: React.FC<TabBarProps> = ({
                       if (
                         tab.title === "Settings" ||
                         !dirty ||
-                        await confirm("Close this terminal session?")
+                        (await confirm("Close this terminal session?"))
                       ) {
                         onClose(tab.id);
                       }
                     }}
-                    className={`opacity-0 group-hover:opacity-100 p-1.5 -mr-1 rounded transition-opacity ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
+                    className={`-mr-1 rounded p-1.5 opacity-0 transition-opacity group-hover:opacity-100 ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
                       resolvedTheme,
                       {
                         dark: "hover:bg-white/20",
@@ -297,7 +341,7 @@ const TabBar: React.FC<TabBarProps> = ({
                     )}`}
                   >
                     <svg
-                      className="w-3 h-3"
+                      className="h-3 w-3"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -315,25 +359,36 @@ const TabBar: React.FC<TabBarProps> = ({
             );
           })}
         </AnimatePresence>
-        {/* New Tab button */}
+
+        {/* New Tab + Dropdown — sticky: sits after last tab, pins to right edge on overflow */}
+        <div
+          className={`flex items-stretch shrink-0 sticky right-0 z-10 ${themeClass(
+            resolvedTheme,
+            {
+              dark: "bg-[#0e0e0e]",
+              modern: "bg-[#0c0c14]",
+              light: "bg-gray-100/80",
+            },
+          )}`}
+          style={{ WebkitAppRegion: "no-drag" } as any}
+        >
         <motion.button
           data-testid="tab-create"
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
           onClick={isSshOnly() && onCreateSSH ? onCreateSSH : onCreate}
-          style={{ WebkitAppRegion: "no-drag" } as any}
-          className={`ml-1 px-2.5 flex items-center transition-colors ${themeClass(
+          className={`flex items-center px-2.5 transition-colors ${themeClass(
             resolvedTheme,
             {
-              dark: "hover:bg-white/[0.06] text-gray-500",
-              modern: "hover:bg-white/[0.06] text-gray-500",
-              light: "hover:bg-black/[0.04] text-gray-400",
+              dark: "text-gray-500 hover:bg-white/[0.06]",
+              modern: "text-gray-500 hover:bg-white/[0.06]",
+              light: "text-gray-400 hover:bg-black/[0.04]",
             },
           )}`}
           title={isSshOnly() ? "New SSH Connection" : "New Terminal"}
         >
           <svg
-            className="w-4 h-4"
+            className="h-4 w-4"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -353,19 +408,28 @@ const TabBar: React.FC<TabBarProps> = ({
             <Popover.Trigger asChild>
               <button
                 data-testid="tab-create-dropdown"
-                style={{ WebkitAppRegion: "no-drag" } as any}
-                className={`px-2.5 flex items-center transition-colors ${themeClass(
+                className={`flex items-center px-2.5 transition-colors ${themeClass(
                   resolvedTheme,
                   {
-                    dark: "hover:bg-white/[0.06] text-gray-500",
-                    modern: "hover:bg-white/[0.06] text-gray-500",
-                    light: "hover:bg-black/[0.04] text-gray-400",
+                    dark: "text-gray-500 hover:bg-white/[0.06]",
+                    modern: "text-gray-500 hover:bg-white/[0.06]",
+                    light: "text-gray-400 hover:bg-black/[0.04]",
                   },
                 )}`}
                 title="More tab options"
               >
-                <svg className="w-3 h-3 -translate-x-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <svg
+                  className="h-3 w-3 -translate-x-1.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
                 </svg>
               </button>
             </Popover.Trigger>
@@ -374,13 +438,13 @@ const TabBar: React.FC<TabBarProps> = ({
                 side="bottom"
                 align="start"
                 sideOffset={4}
-                className={`w-48 py-1 rounded-md shadow-xl border overflow-hidden z-[100] ${themeClass(
+                className={`z-[100] w-48 overflow-hidden rounded-md border py-1 shadow-xl ${themeClass(
                   resolvedTheme,
                   {
-                    dark: "bg-[#1e1e1e] border-white/10 text-gray-200",
+                    dark: "border-white/10 bg-[#1e1e1e] text-gray-200",
                     modern:
-                      "bg-white/[0.08] backdrop-blur-3xl border-white/[0.15] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-                    light: "bg-white border-gray-200 text-gray-800 shadow-xl",
+                      "border-white/[0.15] bg-white/[0.08] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-3xl",
+                    light: "border-gray-200 bg-white text-gray-800 shadow-xl",
                   },
                 )}`}
               >
@@ -388,7 +452,7 @@ const TabBar: React.FC<TabBarProps> = ({
                   <button
                     data-testid="tab-create-terminal"
                     onClick={onCreate}
-                    className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
                       resolvedTheme,
                       {
                         dark: "hover:bg-white/10",
@@ -397,8 +461,18 @@ const TabBar: React.FC<TabBarProps> = ({
                       },
                     )}`}
                   >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      />
                     </svg>
                     New Terminal
                   </button>
@@ -407,7 +481,7 @@ const TabBar: React.FC<TabBarProps> = ({
                   <button
                     data-testid="tab-create-ssh"
                     onClick={onCreateSSH}
-                    className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
                       resolvedTheme,
                       {
                         dark: "hover:bg-white/10",
@@ -416,24 +490,36 @@ const TabBar: React.FC<TabBarProps> = ({
                       },
                     )}`}
                   >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"
+                      />
                     </svg>
                     SSH Connection
                   </button>
                 </Popover.Close>
                 {onLoadSavedTab && (
                   <>
-                    <div className={`my-1 ${themeClass(resolvedTheme, {
-                      dark: "border-t border-white/5",
-                      modern: "border-t border-white/10",
-                      light: "border-t border-gray-100",
-                    })}`} />
+                    <div
+                      className={`my-1 ${themeClass(resolvedTheme, {
+                        dark: "border-t border-white/5",
+                        modern: "border-t border-white/10",
+                        light: "border-t border-gray-100",
+                      })}`}
+                    />
                     <Popover.Close asChild>
                       <button
                         data-testid="tab-load-saved"
                         onClick={onLoadSavedTab}
-                        className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
                           resolvedTheme,
                           {
                             dark: "hover:bg-white/10",
@@ -442,8 +528,18 @@ const TabBar: React.FC<TabBarProps> = ({
                           },
                         )}`}
                       >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        <svg
+                          className="h-4 w-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                          />
                         </svg>
                         Load Saved Tab
                       </button>
@@ -454,26 +550,27 @@ const TabBar: React.FC<TabBarProps> = ({
             </Popover.Portal>
           </Popover.Root>
         )}
+      </div>
       </Reorder.Group>
 
       {/* Settings Button */}
       <button
         data-testid="tab-settings"
         onClick={() => onOpenSettings()}
-        className={`px-2.5 flex items-center transition-colors ${themeClass(
+        className={`flex items-center px-2.5 transition-colors ${themeClass(
           resolvedTheme,
           {
-            dark: "hover:bg-white/[0.06] text-gray-500",
+            dark: "text-gray-500 hover:bg-white/[0.06]",
             modern:
-              "hover:bg-white/[0.04] text-purple-300/60 hover:text-purple-200",
-            light: "hover:bg-black/[0.04] text-gray-400",
+              "text-purple-300/60 hover:bg-white/[0.04] hover:text-purple-200",
+            light: "text-gray-400 hover:bg-black/[0.04]",
           },
         )}`}
         title="Settings (Cmd+,)"
         style={{ WebkitAppRegion: "no-drag" } as any}
       >
         <svg
-          className="w-5 h-5"
+          className="h-5 w-5"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -497,24 +594,25 @@ const TabBar: React.FC<TabBarProps> = ({
       {isElectronApp() && isWindows() && <div className="w-36 shrink-0" />}
 
       {/* Context Menu managed by Radix Popover */}
-      <Popover.Root open={!!contextMenu} onOpenChange={(open) => {
-        if (!open) setContextMenu(null);
-      }}>
-        <Popover.Anchor
-          virtualRef={anchorRef as any}
-        />
+      <Popover.Root
+        open={!!contextMenu}
+        onOpenChange={(open) => {
+          if (!open) setContextMenu(null);
+        }}
+      >
+        <Popover.Anchor virtualRef={anchorRef as any} />
         <Popover.Portal>
           <Popover.Content
             side="bottom"
             align="start"
             sideOffset={4}
-            className={`w-48 py-1 rounded-md shadow-xl border overflow-hidden z-[100] ${themeClass(
+            className={`z-[100] w-48 overflow-hidden rounded-md border py-1 shadow-xl ${themeClass(
               resolvedTheme,
               {
-                dark: "bg-[#1e1e1e] border-white/10 text-gray-200",
+                dark: "border-white/10 bg-[#1e1e1e] text-gray-200",
                 modern:
-                  "bg-white/[0.08] backdrop-blur-3xl border-white/[0.15] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-                light: "bg-white border-gray-200 text-gray-800 shadow-xl",
+                  "border-white/[0.15] bg-white/[0.08] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-3xl",
+                light: "border-gray-200 bg-white text-gray-800 shadow-xl",
               },
             )}`}
             onContextMenu={(e) => {
@@ -532,7 +630,7 @@ const TabBar: React.FC<TabBarProps> = ({
                 setRenamingTabId(tab.id);
                 setRenameValue(tab.title);
               }}
-              className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${themeClass(
+              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
@@ -545,11 +643,12 @@ const TabBar: React.FC<TabBarProps> = ({
             </button>
 
             {/* Colors */}
-            <div className={`px-3 py-1.5 flex gap-1 ${themeClass(resolvedTheme, {
-              dark: "border-b border-t border-white/5",
-              modern: "border-b border-t border-white/10",
-              light: "border-b border-t border-gray-100",
-            })}`}
+            <div
+              className={`flex gap-1 px-3 py-1.5 ${themeClass(resolvedTheme, {
+                dark: "border-t border-b border-white/5",
+                modern: "border-t border-b border-white/10",
+                light: "border-t border-b border-gray-100",
+              })}`}
             >
               {[
                 { c: undefined, bg: "transparent" },
@@ -562,8 +661,12 @@ const TabBar: React.FC<TabBarProps> = ({
               ].map((clr, i) => (
                 <button
                   key={i}
-                  className={`w-4 h-4 rounded-full border border-gray-500/30 hover:scale-110 transition-transform ${clr.c === tabs.find(t => t.id === contextMenu?.tabId)?.color ? "ring-2 ring-offset-1 ring-gray-400" : ""
-                    }`}
+                  className={`h-4 w-4 rounded-full border border-gray-500/30 transition-transform hover:scale-110 ${
+                    clr.c ===
+                    tabs.find((t) => t.id === contextMenu?.tabId)?.color
+                      ? "ring-2 ring-gray-400 ring-offset-1"
+                      : ""
+                  }`}
                   style={{ backgroundColor: clr.bg }}
                   onClick={() => {
                     if (onUpdateTabColor && contextMenu) {
@@ -576,6 +679,62 @@ const TabBar: React.FC<TabBarProps> = ({
               ))}
             </div>
 
+            {/* Move Left / Right — inline on single row */}
+            {tabs.length > 1 &&
+              (() => {
+                const idx = tabs.findIndex((t) => t.id === contextMenu?.tabId);
+                const canLeft = idx > 0;
+                const canRight = idx >= 0 && idx < tabs.length - 1;
+                const btnBase =
+                  "px-4 py-2 text-sm transition-colors min-w-[44px] text-center";
+                const disabledCls = "opacity-30 cursor-default";
+                const hoverCls = themeClass(resolvedTheme, {
+                  dark: "hover:bg-white/10",
+                  modern: "hover:bg-white/20",
+                  light: "hover:bg-gray-100",
+                });
+                return (
+                  <div
+                    className={`flex items-center px-1 ${themeClass(
+                      resolvedTheme,
+                      {
+                        dark: "border-t border-white/5",
+                        modern: "border-t border-white/10",
+                        light: "border-t border-gray-100",
+                      },
+                    )}`}
+                  >
+                    <button
+                      disabled={!canLeft}
+                      onClick={() => {
+                        if (canLeft) {
+                          onReorder(idx, idx - 1);
+                          setContextMenu(null);
+                        }
+                      }}
+                      className={`${btnBase} rounded ${!canLeft ? disabledCls : hoverCls}`}
+                    >
+                      ←
+                    </button>
+                    <span className="flex-1 text-center text-xs opacity-50">
+                      Move
+                    </span>
+                    <button
+                      disabled={!canRight}
+                      onClick={() => {
+                        if (canRight) {
+                          onReorder(idx, idx + 1);
+                          setContextMenu(null);
+                        }
+                      }}
+                      className={`${btnBase} rounded ${!canRight ? disabledCls : hoverCls}`}
+                    >
+                      →
+                    </button>
+                  </div>
+                );
+              })()}
+
             {/* Duplicate */}
             <button
               onClick={async () => {
@@ -585,7 +744,7 @@ const TabBar: React.FC<TabBarProps> = ({
                   await onDuplicateTab(tabId);
                 }
               }}
-              className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${themeClass(
+              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
@@ -597,8 +756,9 @@ const TabBar: React.FC<TabBarProps> = ({
               Duplicate Tab
             </button>
 
-            {/* Save Tab */}
+            {/* Save to Remote */}
             <button
+              data-testid="tab-save-remote"
               onClick={async () => {
                 const tabId = contextMenu?.tabId;
                 setContextMenu(null);
@@ -606,7 +766,7 @@ const TabBar: React.FC<TabBarProps> = ({
                   await onSaveTab(tabId);
                 }
               }}
-              className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-2 ${themeClass(
+              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
@@ -615,44 +775,8 @@ const TabBar: React.FC<TabBarProps> = ({
                 },
               )}`}
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-              </svg>
-              Save Tab
+              Save to Remote
             </button>
-
-            {/* Move Left / Right — inline on single row */}
-            {tabs.length > 1 && (() => {
-              const idx = tabs.findIndex((t) => t.id === contextMenu?.tabId);
-              const canLeft = idx > 0;
-              const canRight = idx >= 0 && idx < tabs.length - 1;
-              const btnBase = "px-4 py-2 text-sm transition-colors min-w-[44px] text-center";
-              const disabledCls = "opacity-30 cursor-default";
-              const hoverCls = themeClass(resolvedTheme, {
-                dark: "hover:bg-white/10",
-                modern: "hover:bg-white/20",
-                light: "hover:bg-gray-100",
-              });
-              return (
-                <div className={`flex items-center px-1 ${themeClass(resolvedTheme, {
-                  dark: "border-t border-white/5",
-                  modern: "border-t border-white/10",
-                  light: "border-t border-gray-100",
-                })}`}>
-                  <button
-                    disabled={!canLeft}
-                    onClick={() => { if (canLeft) { onReorder(idx, idx - 1); setContextMenu(null); } }}
-                    className={`${btnBase} rounded ${!canLeft ? disabledCls : hoverCls}`}
-                  >←</button>
-                  <span className="flex-1 text-center text-xs opacity-50">Move</span>
-                  <button
-                    disabled={!canRight}
-                    onClick={() => { if (canRight) { onReorder(idx, idx + 1); setContextMenu(null); } }}
-                    className={`${btnBase} rounded ${!canRight ? disabledCls : hoverCls}`}
-                  >→</button>
-                </div>
-              );
-            })()}
 
             {/* Close */}
             <button
@@ -662,15 +786,16 @@ const TabBar: React.FC<TabBarProps> = ({
                 const tab = tabs.find((t) => t.id === tabId);
                 const dirty = tabId ? (isTabDirty?.(tabId) ?? false) : false;
                 if (
-                  tab && tabId &&
+                  tab &&
+                  tabId &&
                   (tab.title === "Settings" ||
                     !dirty ||
-                    await confirm("Close this terminal session?"))
+                    (await confirm("Close this terminal session?")))
                 ) {
                   onClose(tabId);
                 }
               }}
-              className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${themeClass(
+              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
@@ -694,7 +819,7 @@ const TabBar: React.FC<TabBarProps> = ({
                     }
                   }
                 }}
-                className={`w-full text-left px-3 py-1.5 text-sm transition-colors text-red-500 ${themeClass(
+                className={`w-full px-3 py-1.5 text-left text-sm text-red-500 transition-colors ${themeClass(
                   resolvedTheme,
                   {
                     dark: "hover:bg-white/10",

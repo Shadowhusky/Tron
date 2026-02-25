@@ -13,21 +13,35 @@ import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
 import logoSvg from "../../assets/logo.svg";
 import { useHotkey } from "../../hooks/useHotkey";
-import { isInteractiveCommand, smartQuotePaths } from "../../utils/commandClassifier";
+import {
+  isInteractiveCommand,
+  smartQuotePaths,
+} from "../../utils/commandClassifier";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isTouchDevice } from "../../utils/platform";
 import type { AttachedImage, SSHConnectionStatus } from "../../types";
 import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
 import TuiKeyToolbar from "../../features/terminal/components/TuiKeyToolbar";
 import { useAllConfiguredModels } from "../../hooks/useModels";
+import { readScreenBuffer } from "../../services/terminalBuffer";
 
 interface TerminalPaneProps {
   sessionId: string;
 }
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
-  const { activeSessionId, sessions, markSessionDirty, focusSession, clearInteractions, createSSHTab, openSettingsTab, refreshCwd } =
-    useLayout();
+  const {
+    tabs,
+    activeSessionId,
+    sessions,
+    markSessionDirty,
+    focusSession,
+    clearInteractions,
+    createSSHTab,
+    openSettingsTab,
+    renameTab,
+    refreshCwd,
+  } = useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
   const isActive = sessionId === activeSessionId;
@@ -60,7 +74,19 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     awaitingAnswer,
   } = useAgentRunner(sessionId, session);
 
-  const { stopAgent: stopAgentRaw, resetSession, overlayHeight, setOverlayHeight, draftInput, setDraftInput, setAgentThread, focusTarget, setFocusTarget, scrollPosition, setScrollPosition } = useAgent(sessionId);
+  const {
+    stopAgent: stopAgentRaw,
+    resetSession,
+    overlayHeight,
+    setOverlayHeight,
+    draftInput,
+    setDraftInput,
+    setAgentThread,
+    focusTarget,
+    setFocusTarget,
+    scrollPosition,
+    setScrollPosition,
+  } = useAgent(sessionId);
 
   // Stable refs for SmartInput memo
   const stopAgentRef = useRef(stopAgentRaw);
@@ -69,19 +95,41 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
   const setThinkingEnabledRef = useRef(setThinkingEnabled);
   setThinkingEnabledRef.current = setThinkingEnabled;
-  const stableSetThinkingEnabled = useCallback((v: boolean) => setThinkingEnabledRef.current(v), []);
+  const stableSetThinkingEnabled = useCallback(
+    (v: boolean) => setThinkingEnabledRef.current(v),
+    [],
+  );
 
   const setDraftInputRef = useRef(setDraftInput);
   setDraftInputRef.current = setDraftInput;
-  const stableSetDraftInput = useCallback((v: string | undefined) => setDraftInputRef.current(v), []);
+  const stableSetDraftInput = useCallback(
+    (v: string | undefined) => setDraftInputRef.current(v),
+    [],
+  );
 
   // Stable callback refs for SmartInput memo (assigned after functions are defined below)
-  const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => { });
-  const wrappedHandleAgentRunRef = useRef<(prompt: string, queueCallback?: any, images?: AttachedImage[]) => void>(() => { });
-  const handleSlashCommandRef = useRef<(cmd: string) => void>(() => { });
-  const stableOnSend = useCallback((cmd: string) => wrappedHandleCommandRef.current(cmd), []);
-  const stableOnRunAgent = useCallback(async (prompt: string, images?: AttachedImage[]) => wrappedHandleAgentRunRef.current(prompt, (item: any) => queueItemRef.current(item), images), []);
-  const stableSlashCommand = useCallback((cmd: string) => handleSlashCommandRef.current(cmd), []);
+  const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => {});
+  const wrappedHandleAgentRunRef = useRef<
+    (prompt: string, queueCallback?: any, images?: AttachedImage[]) => void
+  >(() => {});
+  const handleSlashCommandRef = useRef<(cmd: string) => void>(() => {});
+  const stableOnSend = useCallback(
+    (cmd: string) => wrappedHandleCommandRef.current(cmd),
+    [],
+  );
+  const stableOnRunAgent = useCallback(
+    async (prompt: string, images?: AttachedImage[]) =>
+      wrappedHandleAgentRunRef.current(
+        prompt,
+        (item: any) => queueItemRef.current(item),
+        images,
+      ),
+    [],
+  );
+  const stableSlashCommand = useCallback(
+    (cmd: string) => handleSlashCommandRef.current(cmd),
+    [],
+  );
 
   // No-model toast handler
   const openSettingsTabRef = useRef(openSettingsTab);
@@ -95,7 +143,45 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   // Stable callback for Terminal memo
   const markSessionDirtyRef = useRef(markSessionDirty);
   markSessionDirtyRef.current = markSessionDirty;
-  const stableOnActivity = useCallback(() => markSessionDirtyRef.current(sessionId), [sessionId]);
+  const stableOnActivity = useCallback(
+    () => markSessionDirtyRef.current(sessionId),
+    [sessionId],
+  );
+
+  // Rename tab on first direct terminal Enter (when tab title is still "Terminal")
+  const renameTabRef = useRef(renameTab);
+  renameTabRef.current = renameTab;
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const firstCommandFired = useRef(false);
+  useEffect(() => {
+    firstCommandFired.current = false;
+  }, [sessionId]);
+  const stableOnFirstCommand = useCallback(() => {
+    if (firstCommandFired.current) return;
+    firstCommandFired.current = true;
+    // Only rename if tab title is still the default
+    const currentTab = tabsRef.current.find(
+      (t) => t.activeSessionId === sessionId,
+    );
+    if (currentTab && currentTab.title !== "Terminal") return;
+    // Read from xterm screen buffer after a short delay to let PTY echo
+    setTimeout(() => {
+      const buf = readScreenBuffer(sessionId, 5);
+      if (!buf) return;
+      const lines = buf.split("\n").filter((l: string) => l.trim());
+      const lastLine = lines[lines.length - 1]?.trim();
+      if (!lastLine) return;
+      // Strip common prompt prefixes ($ % # > PS path>)
+      const cmd = lastLine
+        .replace(/^(?:\$|%|#|>|PS [^>]*>|[A-Z]:\\[^>]*>)\s*/, "")
+        .trim();
+      if (cmd) {
+        const title = cmd.length > 20 ? cmd.substring(0, 20) + "..." : cmd;
+        renameTabRef.current(sessionId, title);
+      }
+    }, 200);
+  }, [sessionId]);
 
   // Input Queue
   const [inputQueue, setInputQueue] = useState<
@@ -103,11 +189,15 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   >([]);
 
   // Stable ref for queueItem so stableOnRunAgent can use it
-  const queueItemRef = useRef<(item: { type: "command" | "agent"; content: string }) => void>(() => { });
+  const queueItemRef = useRef<
+    (item: { type: "command" | "agent"; content: string }) => void
+  >(() => {});
 
   // SSH status tracking
   const isSSH = !!session?.sshProfileId;
-  const [sshStatus, setSshStatus] = useState<SSHConnectionStatus>(isSSH ? "connected" : "disconnected");
+  const [sshStatus, setSshStatus] = useState<SSHConnectionStatus>(
+    isSSH ? "connected" : "disconnected",
+  );
 
   useEffect(() => {
     if (!isSSH) return;
@@ -123,7 +213,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
   // In agent view: show embedded terminal when user runs a command
   const [showEmbeddedTerminal, setShowEmbeddedTerminal] = useState(false);
-  const showTuiToolbar = isTouchDevice() && !isConnectPane && (isAgentMode ? showEmbeddedTerminal : focusTarget === "terminal");
+  const showTuiToolbar =
+    isTouchDevice() &&
+    !isConnectPane &&
+    (isAgentMode ? showEmbeddedTerminal : focusTarget === "terminal");
 
   // Toggle agent panel (no-op in agent view mode — overlay is always visible)
   useHotkey(
@@ -225,7 +318,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const closeEmbeddedTerminal = useCallback(() => {
     if (window.electron) {
       const write = (data: string) =>
-        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data });
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+          id: sessionId,
+          data,
+        });
       // 1. Escape + :q! — exit vi/vim/nvim (Escape exits insert mode, :q! force quits)
       write("\x1B\x1B:q!\r");
       // 2. After brief delay, Ctrl+C x2 + Ctrl+D — exit processes / REPLs
@@ -238,97 +334,132 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     setTimeout(() => setShowEmbeddedTerminal(false), 350);
   }, [sessionId]);
 
-  const wrappedHandleCommand = useCallback((cmd: string, queueCallback?: any) => {
-    const fixed = smartQuotePaths(cmd);
-    markSessionDirty(sessionId);
-    if (isAgentMode) {
-      if (isInteractiveCommand(fixed)) {
-        // Interactive command → show embedded terminal for TUI / REPL interaction
-        setShowEmbeddedTerminal(true);
-        handleCommand(fixed, queueCallback);
-      } else {
-        // Non-interactive → run via sentinel exec, output in agent overlay
-        handleCommandInOverlay(fixed, queueCallback);
-      }
-    } else {
-      handleCommand(fixed, queueCallback);
-    }
-    // Eagerly refresh CWD after directory-changing commands
-    if (/^\s*(cd|pushd|popd|z|j)\s/i.test(fixed) || /^\s*(cd)\s*$/i.test(fixed)) {
-      setTimeout(() => refreshCwd(sessionId), 500);
-    }
-  }, [isAgentMode, markSessionDirty, sessionId, handleCommand, handleCommandInOverlay, refreshCwd]);
-
-  const wrappedHandleAgentRun = useCallback(async (prompt: string, queueCallback?: any, images?: AttachedImage[]) => {
-    markSessionDirty(sessionId);
-    await handleAgentRun(prompt, queueCallback, images);
-  }, [markSessionDirty, sessionId, handleAgentRun]);
-
-  const handleSlashCommand = useCallback(async (command: string) => {
-    if (command === "/clear") {
-      resetSession();
-      clearInteractions(sessionId);
-      window.dispatchEvent(
-        new CustomEvent("tron:clearTerminal", { detail: { sessionId } }),
-      );
-      if (!isOverlayVisible) setIsOverlayVisible(true);
-      return;
-    }
-
-    if (command === "/log") {
-      try {
-        // Assemble session metadata (strip secrets)
-        const meta: Record<string, unknown> = {
-          id: sessionId,
-          title: session?.title || "Terminal",
-          cwd: session?.cwd,
-          provider: session?.aiConfig?.provider,
-          model: session?.aiConfig?.model,
-        };
-
-        const result = await window.electron.ipcRenderer.saveSessionLog({
-          sessionId,
-          session: meta,
-          interactions: session?.interactions || [],
-          agentThread: agentThread.map((s) => ({ step: s.step, output: s.output, payload: s.payload })),
-          contextSummary: session?.contextSummary,
-        });
-
-        if (result.success && result.filePath && result.logId) {
-          // Copy file path to clipboard
-          try {
-            await navigator.clipboard.writeText(result.filePath);
-          } catch {
-            // Clipboard may not be available
-          }
-
-          // Push system step to agent thread
-          setAgentThread((prev) => [
-            ...prev,
-            {
-              step: "system",
-              output: `Session log saved: **${result.logId}**\n\n${result.filePath}\n\nPath copied to clipboard.`,
-            },
-          ]);
-
-          // Show overlay if hidden
-          if (!isOverlayVisible) setIsOverlayVisible(true);
+  const wrappedHandleCommand = useCallback(
+    async (cmd: string, queueCallback?: any) => {
+      const fixed = smartQuotePaths(cmd);
+      markSessionDirty(sessionId);
+      if (isAgentMode) {
+        if (isInteractiveCommand(fixed)) {
+          setShowEmbeddedTerminal(true);
+          handleCommand(fixed, queueCallback);
         } else {
+          handleCommandInOverlay(fixed, queueCallback);
+        }
+      } else {
+        handleCommand(fixed, queueCallback);
+      }
+      // Eagerly refresh CWD after directory-changing commands
+      if (
+        /^\s*(cd|pushd|popd|z|j)\s/i.test(fixed) ||
+        /^\s*(cd)\s*$/i.test(fixed)
+      ) {
+        setTimeout(() => refreshCwd(sessionId), 500);
+      }
+    },
+    [
+      isAgentMode,
+      markSessionDirty,
+      sessionId,
+      handleCommand,
+      handleCommandInOverlay,
+      refreshCwd,
+    ],
+  );
+
+  const wrappedHandleAgentRun = useCallback(
+    async (prompt: string, queueCallback?: any, images?: AttachedImage[]) => {
+      markSessionDirty(sessionId);
+      await handleAgentRun(prompt, queueCallback, images);
+    },
+    [
+      markSessionDirty,
+      sessionId,
+      handleAgentRun,
+    ],
+  );
+
+  const handleSlashCommand = useCallback(
+    async (command: string) => {
+      if (command === "/clear") {
+        resetSession();
+        clearInteractions(sessionId);
+        window.dispatchEvent(
+          new CustomEvent("tron:clearTerminal", { detail: { sessionId } }),
+        );
+        if (!isOverlayVisible) setIsOverlayVisible(true);
+        return;
+      }
+
+      if (command === "/log") {
+        try {
+          // Assemble session metadata (strip secrets)
+          const meta: Record<string, unknown> = {
+            id: sessionId,
+            title: session?.title || "Terminal",
+            cwd: session?.cwd,
+            provider: session?.aiConfig?.provider,
+            model: session?.aiConfig?.model,
+          };
+
+          const result = await window.electron.ipcRenderer.saveSessionLog({
+            sessionId,
+            session: meta,
+            interactions: session?.interactions || [],
+            agentThread: agentThread.map((s) => ({
+              step: s.step,
+              output: s.output,
+              payload: s.payload,
+            })),
+            contextSummary: session?.contextSummary,
+          });
+
+          if (result.success && result.filePath && result.logId) {
+            // Copy file path to clipboard
+            try {
+              await navigator.clipboard.writeText(result.filePath);
+            } catch {
+              // Clipboard may not be available
+            }
+
+            // Push system step to agent thread
+            setAgentThread((prev) => [
+              ...prev,
+              {
+                step: "system",
+                output: `Session log saved: **${result.logId}**\n\n${result.filePath}\n\nPath copied to clipboard.`,
+              },
+            ]);
+
+            // Show overlay if hidden
+            if (!isOverlayVisible) setIsOverlayVisible(true);
+          } else {
+            setAgentThread((prev) => [
+              ...prev,
+              {
+                step: "system",
+                output: `Failed to save log: ${result.error || "Unknown error"}`,
+              },
+            ]);
+            if (!isOverlayVisible) setIsOverlayVisible(true);
+          }
+        } catch (err: any) {
           setAgentThread((prev) => [
             ...prev,
-            { step: "system", output: `Failed to save log: ${result.error || "Unknown error"}` },
+            { step: "system", output: `Error saving log: ${err.message}` },
           ]);
           if (!isOverlayVisible) setIsOverlayVisible(true);
         }
-      } catch (err: any) {
-        setAgentThread((prev) => [
-          ...prev,
-          { step: "system", output: `Error saving log: ${err.message}` },
-        ]);
-        if (!isOverlayVisible) setIsOverlayVisible(true);
       }
-    }
-  }, [sessionId, session, agentThread, setAgentThread, isOverlayVisible, setIsOverlayVisible]);
+    },
+    [
+      sessionId,
+      session,
+      agentThread,
+      setAgentThread,
+      isOverlayVisible,
+      setIsOverlayVisible,
+    ],
+  );
   // Update refs after function definitions so stable callbacks always call the latest version
   const showConnectToast = useCallback(() => {
     setConnectToast(true);
@@ -352,18 +483,18 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   return (
     <div
       onMouseDown={handlePaneFocus}
-      className={`w-full h-full relative flex flex-col border border-transparent ${isActive ? "ring-1 ring-purple-500/50 z-10" : "opacity-80 hover:opacity-100"}`}
+      className={`relative flex h-full w-full flex-col border border-transparent ${isActive ? "z-10 ring-1 ring-purple-500/50" : "opacity-80 hover:opacity-100"}`}
     >
       {isAgentMode ? (
         <>
           {/* Agent View Mode: info header + full-height overlay */}
           <div
-            className={`flex items-center gap-2 px-3 py-1.5 border-b shrink-0 ${themeClass(
+            className={`flex shrink-0 items-center gap-2 border-b px-3 py-1.5 ${themeClass(
               resolvedTheme,
               {
-                dark: "bg-[#0a0a0a] border-white/5",
-                modern: "bg-white/[0.02] border-white/6 backdrop-blur-2xl",
-                light: "bg-gray-50 border-gray-200",
+                dark: "border-white/5 bg-[#0a0a0a]",
+                modern: "border-white/6 bg-white/[0.02] backdrop-blur-2xl",
+                light: "border-gray-200 bg-gray-50",
               },
             )}`}
           >
@@ -376,13 +507,15 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             )}
             {!isSSH && (
               <Folder
-                className={`w-3 h-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}
+                className={`h-3 w-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}
               />
             )}
             <span
-              className={`text-[11px] font-mono truncate ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}
+              className={`truncate font-mono text-[11px] ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}
             >
-              {isSSH ? (session?.cwd || "~") : abbreviateHome(session?.cwd || "~")}
+              {isSSH
+                ? session?.cwd || "~"
+                : abbreviateHome(session?.cwd || "~")}
             </span>
           </div>
 
@@ -398,11 +531,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             }
             thinkingEnabled={thinkingEnabled}
             onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
-            onClose={() => { }}
+            onClose={() => {}}
             onClear={() => resetSession()}
             onPermission={handlePermission}
             isExpanded={true}
-            onExpand={() => { }}
+            onExpand={() => {}}
             onRunAgent={(prompt, images) =>
               wrappedHandleAgentRun(prompt, queueItem as any, images)
             }
@@ -420,11 +553,14 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 animate={{ height: "40%", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.2 }}
-                className={`relative border-t shrink-0 ${themeClass(resolvedTheme, {
-                  dark: "border-white/10",
-                  modern: "border-white/10",
-                  light: "border-gray-300",
-                })}`}
+                className={`relative shrink-0 border-t ${themeClass(
+                  resolvedTheme,
+                  {
+                    dark: "border-white/10",
+                    modern: "border-white/10",
+                    light: "border-gray-300",
+                  },
+                )}`}
               >
                 {/* Header bar with close button */}
                 <div
@@ -432,25 +568,32 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 >
                   <button
                     onClick={closeEmbeddedTerminal}
-                    className={`p-1 rounded transition-colors ${themeClass(resolvedTheme, {
-                      dark: "hover:bg-white/10 text-gray-400 hover:text-white",
-                      modern: "hover:bg-white/10 text-gray-400 hover:text-white",
-                      light: "hover:bg-gray-200 text-gray-500 hover:text-gray-800",
-                    })}`}
+                    className={`rounded p-1 transition-colors ${themeClass(
+                      resolvedTheme,
+                      {
+                        dark: "text-gray-400 hover:bg-white/10 hover:text-white",
+                        modern:
+                          "text-gray-400 hover:bg-white/10 hover:text-white",
+                        light:
+                          "text-gray-500 hover:bg-gray-200 hover:text-gray-800",
+                      },
+                    )}`}
                     title="Close terminal (sends Ctrl+C)"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
                 <Terminal
-                  className="w-full h-full"
+                  className="h-full w-full"
                   sessionId={sessionId}
                   onActivity={stableOnActivity}
+                  onFirstCommand={stableOnFirstCommand}
                   isActive={isActive}
                   isAgentRunning={isAgentRunning}
                   stopAgent={stableStopAgent}
                   focusTarget={focusTarget}
                   isReconnected={session?.reconnected}
+                  pendingHistory={session?.pendingHistory}
                 />
               </motion.div>
             )}
@@ -463,22 +606,37 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         </>
       ) : (
         /* Terminal View Mode: terminal + overlay share remaining space above input */
-        <div className="flex-1 min-h-0 flex flex-col">
-          <div className="flex-1 min-h-0 relative" onMouseDown={() => setFocusTarget("terminal")}>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div
+            className="relative min-h-0 flex-1"
+            onMouseDown={() => setFocusTarget("terminal")}
+          >
             {isConnectPane ? (
-              <div className={`w-full h-full flex flex-col items-center justify-center gap-5 ${themeClass(resolvedTheme, {
-                dark: "bg-[#0d0d0d]",
-                modern: "bg-[#08081a]",
-                light: "bg-white",
-              })}`}>
-                <img src={logoSvg} alt="Tron" className="w-12 h-12 opacity-50" />
+              <div
+                className={`flex h-full w-full flex-col items-center justify-center gap-5 ${themeClass(
+                  resolvedTheme,
+                  {
+                    dark: "bg-[#0d0d0d]",
+                    modern: "bg-[#08081a]",
+                    light: "bg-white",
+                  },
+                )}`}
+              >
+                <img
+                  src={logoSvg}
+                  alt="Tron"
+                  className="h-12 w-12 opacity-50"
+                />
                 <button
                   onClick={() => setShowSSHModal(true)}
-                  className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${themeClass(resolvedTheme, {
-                    dark: "bg-purple-600/80 hover:bg-purple-600 text-white",
-                    modern: "bg-purple-500/70 hover:bg-purple-500 text-white",
-                    light: "bg-purple-600 hover:bg-purple-500 text-white",
-                  })}`}
+                  className={`cursor-pointer rounded-lg px-5 py-2.5 text-sm font-medium transition-colors ${themeClass(
+                    resolvedTheme,
+                    {
+                      dark: "bg-purple-600/80 text-white hover:bg-purple-600",
+                      modern: "bg-purple-500/70 text-white hover:bg-purple-500",
+                      light: "bg-purple-600 text-white hover:bg-purple-500",
+                    },
+                  )}`}
                 >
                   New Connection
                 </button>
@@ -489,11 +647,14 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -4 }}
-                      className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-xs font-medium shadow-lg ${themeClass(resolvedTheme, {
-                        dark: "bg-yellow-500/90 text-black",
-                        modern: "bg-yellow-500/90 text-black",
-                        light: "bg-yellow-500 text-black",
-                      })}`}
+                      className={`absolute top-4 left-1/2 -translate-x-1/2 rounded-lg px-4 py-2 text-xs font-medium shadow-lg ${themeClass(
+                        resolvedTheme,
+                        {
+                          dark: "bg-yellow-500/90 text-black",
+                          modern: "bg-yellow-500/90 text-black",
+                          light: "bg-yellow-500 text-black",
+                        },
+                      )}`}
                     >
                       Connect to a server first
                     </motion.div>
@@ -502,9 +663,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               </div>
             ) : (
               <Terminal
-                className="w-full h-full"
+                className="h-full w-full"
                 sessionId={sessionId}
                 onActivity={stableOnActivity}
+                onFirstCommand={stableOnFirstCommand}
                 isActive={isActive}
                 isAgentRunning={isAgentRunning}
                 stopAgent={stableStopAgent}
@@ -561,45 +723,55 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.15 }}
             className={`overflow-hidden border-t ${themeClass(resolvedTheme, {
-              dark: "bg-[#0e0e0e] border-white/5",
-              modern: "bg-white/[0.03] border-white/6",
-              light: "bg-amber-50/50 border-gray-200",
+              dark: "border-white/5 bg-[#0e0e0e]",
+              modern: "border-white/6 bg-white/[0.03]",
+              light: "border-gray-200 bg-amber-50/50",
             })}`}
           >
-            <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap">
+            <div className="flex flex-wrap items-center gap-2 px-3 py-1.5">
               <span
-                className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${resolvedTheme === "light"
-                  ? "text-amber-600"
-                  : "text-amber-400/70"
-                  }`}
+                className={`shrink-0 text-[10px] font-semibold tracking-wider uppercase ${
+                  resolvedTheme === "light"
+                    ? "text-amber-600"
+                    : "text-amber-400/70"
+                }`}
               >
                 Queue ({inputQueue.length})
               </span>
               {inputQueue.map((item, i) => (
                 <div
                   key={i}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono max-w-[200px] ${resolvedTheme === "light"
-                    ? item.type === "agent"
-                      ? "bg-purple-100 text-purple-700 border border-purple-200"
-                      : "bg-gray-100 text-gray-700 border border-gray-200"
-                    : item.type === "agent"
-                      ? "bg-purple-500/10 text-purple-300 border border-purple-500/20"
-                      : "bg-white/5 text-gray-400 border border-white/10"
-                    }`}
+                  className={`flex max-w-[200px] items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] ${
+                    resolvedTheme === "light"
+                      ? item.type === "agent"
+                        ? "border border-purple-200 bg-purple-100 text-purple-700"
+                        : "border border-gray-200 bg-gray-100 text-gray-700"
+                      : item.type === "agent"
+                        ? "border border-purple-500/20 bg-purple-500/10 text-purple-300"
+                        : "border border-white/10 bg-white/5 text-gray-400"
+                  }`}
                 >
                   {item.type === "agent" ? (
-                    <Bot className="w-3 h-3 shrink-0 opacity-60" />
+                    <Bot className="h-3 w-3 shrink-0 opacity-60" />
                   ) : (
-                    <ChevronRight className="w-3 h-3 shrink-0 opacity-60" />
+                    <ChevronRight className="h-3 w-3 shrink-0 opacity-60" />
                   )}
                   <span
-                    className="truncate cursor-pointer hover:underline"
+                    className="cursor-pointer truncate hover:underline"
                     onClick={() => {
                       // Pop item from queue into SmartInput for editing
-                      setInputQueue((prev) => prev.filter((_, idx) => idx !== i));
-                      window.dispatchEvent(new CustomEvent("tron:editQueueItem", {
-                        detail: { sessionId, text: item.content, type: item.type },
-                      }));
+                      setInputQueue((prev) =>
+                        prev.filter((_, idx) => idx !== i),
+                      );
+                      window.dispatchEvent(
+                        new CustomEvent("tron:editQueueItem", {
+                          detail: {
+                            sessionId,
+                            text: item.content,
+                            type: item.type,
+                          },
+                        }),
+                      );
                     }}
                     title="Click to edit"
                   >
@@ -611,9 +783,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                         prev.filter((_, idx) => idx !== i),
                       )
                     }
-                    className="shrink-0 opacity-40 hover:opacity-100 transition-opacity"
+                    className="shrink-0 opacity-40 transition-opacity hover:opacity-100"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="h-3 w-3" />
                   </button>
                 </div>
               ))}
@@ -623,11 +795,14 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       </AnimatePresence>
 
       <div
-        className={`shrink-0 p-2 border-t relative ${pendingCommand ? "z-0" : "z-20"} ${themeClass(resolvedTheme, {
-          dark: "bg-[#0a0a0a] border-white/5",
-          modern: "bg-[#060618] border-white/6",
-          light: "bg-gray-50 border-gray-200",
-        })}`}
+        className={`relative shrink-0 border-t p-2 ${pendingCommand ? "z-0" : "z-20"} ${themeClass(
+          resolvedTheme,
+          {
+            dark: "border-white/5 bg-[#0a0a0a]",
+            modern: "border-white/6 bg-[#060618]",
+            light: "border-gray-200 bg-gray-50",
+          },
+        )}`}
       >
         <SmartInput
           onSend={stableOnSend}
@@ -652,7 +827,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           onNoModel={stableHandleNoModel}
         />
       </div>
-      <div className="shrink-0 relative z-30">
+      <div className="relative z-30 shrink-0">
         <ContextBar
           sessionId={sessionId}
           hasAgentThread={agentThread.length > 0}
@@ -680,15 +855,18 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
-            className={`absolute bottom-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg text-xs font-medium shadow-lg ${themeClass(resolvedTheme, {
-              dark: "bg-gray-800/95 text-gray-200 border border-gray-600",
-              modern: "bg-[#1a1a3e]/95 text-gray-200 border border-white/10",
-              light: "bg-white/95 text-gray-700 border border-gray-200",
-            })}`}
+            className={`absolute bottom-16 left-1/2 z-50 -translate-x-1/2 rounded-lg px-4 py-2 text-xs font-medium shadow-lg ${themeClass(
+              resolvedTheme,
+              {
+                dark: "border border-gray-600 bg-gray-800/95 text-gray-200",
+                modern: "border border-white/10 bg-[#1a1a3e]/95 text-gray-200",
+                light: "border border-gray-200 bg-white/95 text-gray-700",
+              },
+            )}`}
           >
             No AI model configured.{" "}
             <button
-              className="underline font-semibold hover:opacity-80 cursor-pointer"
+              className="cursor-pointer font-semibold underline hover:opacity-80"
               onClick={() => {
                 setModelToast(false);
                 openSettingsTabRef.current();

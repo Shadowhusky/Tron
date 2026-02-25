@@ -1,5 +1,6 @@
 import { ipcMain, app } from "electron";
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 const CONFIG_FILE = "tron.config.json";
@@ -69,8 +70,9 @@ export function registerConfigHandlers() {
     }
   });
   // --- Saved Tabs (cross-device snapshots) ---
+  // Use ~/.tron/ (same path as web server) so Electron and web mode share the same file.
   const getSavedTabsPath = (): string => {
-    const dir = path.join(app.getPath("userData"), "saved-tabs");
+    const dir = path.join(os.homedir(), ".tron");
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     return path.join(dir, "saved-tabs.json");
   };

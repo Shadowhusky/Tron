@@ -15,6 +15,17 @@ export function isWindows(): boolean {
   return false;
 }
 
+/** Detect if running on macOS. */
+export function isMacOS(): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = globalThis as any;
+  if (g.process?.platform) return g.process.platform === "darwin";
+  if (typeof navigator !== "undefined") {
+    return /Mac/.test(navigator.platform ?? "");
+  }
+  return false;
+}
+
 /** Detect if running inside Electron (vs. plain browser / web mode). */
 export function isElectronApp(): boolean {
   if (typeof navigator !== "undefined") {

@@ -791,6 +791,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
   // Collapsible executed steps: track which step indices are collapsed
   const [collapsedSteps, setCollapsedSteps] = useState<Set<number>>(new Set());
+  // Collapsible run groups (previous agent runs): track by runIdx
+  const [collapsedRuns, setCollapsedRuns] = useState<Set<number>>(new Set());
   // Steps the user has manually toggled open — these are never auto-collapsed
   const manuallyExpandedRef = useRef<Set<number>>(new Set());
 
@@ -800,6 +802,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     if (agentThread.length <= prevAutoCollapseLen.current) {
       if (agentThread.length === 0) {
         setCollapsedSteps(new Set());
+        setCollapsedRuns(new Set());
         manuallyExpandedRef.current = new Set();
       }
       prevAutoCollapseLen.current = agentThread.length;
@@ -838,6 +841,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
         next.add(idx);
         manuallyExpandedRef.current.delete(idx);
       }
+      return next;
+    });
+  }, []);
+
+  const toggleRunCollapse = useCallback((runIdx: number) => {
+    setCollapsedRuns((prev) => {
+      const next = new Set(prev);
+      if (next.has(runIdx)) next.delete(runIdx);
+      else next.add(runIdx);
       return next;
     });
   }, []);
@@ -1878,10 +1890,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             ? "text-gray-400"
                             : "text-gray-500";
 
+                    const isRunCollapsed = collapsedRuns.has(item.runIdx);
+
                     return (
-                      <details className="group/run">
-                        <summary className="flex items-center gap-1.5 py-1 cursor-pointer select-none list-none">
-                          <span className="text-[9px] opacity-50 group-open/run:rotate-90 transition-transform">
+                      <div>
+                        <div
+                          className="flex items-center gap-1.5 py-1 cursor-pointer select-none"
+                          onClick={() => toggleRunCollapse(item.runIdx)}
+                        >
+                          <span className={`text-[9px] opacity-50 transition-transform ${isRunCollapsed ? "" : "rotate-90"}`}>
                             ▶
                           </span>
                           <span
@@ -1894,18 +1911,22 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           >
                             {displayTitle}
                           </span>
-                        </summary>
-                        {imageThumbs}
-                        <div className="space-y-1.5 pb-1">
-                          {item.steps.map((s, si) =>
-                            renderStep(
-                              s.step,
-                              `${item.runIdx}-${si}`,
-                              s.globalIdx,
-                            ),
-                          )}
                         </div>
-                      </details>
+                        {!isRunCollapsed && (
+                          <>
+                            {imageThumbs}
+                            <div className="space-y-1.5 pb-1">
+                              {item.steps.map((s, si) =>
+                                renderStep(
+                                  s.step,
+                                  `${item.runIdx}-${si}`,
+                                  s.globalIdx,
+                                ),
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
                     );
                   };
 

@@ -105,7 +105,8 @@ e2e/                  # Playwright E2E test suite
 
 ## Tab Management (`src/components/layout/TabBar.tsx`)
 
-- **Context menu**: Right-click or long-press. Rename, color dot, duplicate, compact move (← Move →), close, close all tabs.
+- **Context menu**: Right-click or long-press. Rename, color dot, duplicate, save to remote, compact move (← Move →), close, close all tabs.
+- **Save/Load tabs**: "Save to Remote" (context menu) saves full tab state (terminal history, agent thread, config) to disk as a one-shot snapshot. "Load Saved Tab" opens the `SavedTabsModal` to browse and restore saved tabs. No live sync — save is explicit, load creates a fresh tab. Duplicate names get `(1)`, `(2)` suffixes automatically.
 - **Close All Tabs**: Requires `window.confirm` dialog. Closes all tabs sequentially.
 - **Reorder**: Drag-and-drop via `framer-motion` `Reorder.Group`. Touch devices use long-press context menu instead.
 
@@ -186,7 +187,7 @@ npm run test:e2e         # Playwright E2E tests
 
 - Playwright with Electron launch fixture (`e2e/fixtures/app.ts`)
 - Test isolation via unique `TRON_TEST_PROFILE` directories
-- 10 spec files: app-launch, tabs, terminal, smart-input, settings, onboarding, context-bar, agent, theme, keyboard
+- 12 spec files: app-launch, tabs, terminal, smart-input, settings, onboarding, context-bar, agent, theme, model-favorites, keyboard, saved-tabs, web-mode
 - Serial execution (`workers: 1`)
 
 ## Workflow

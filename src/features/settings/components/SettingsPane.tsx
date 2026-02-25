@@ -8,7 +8,6 @@ import { useLayout } from "../../../contexts/LayoutContext";
 import { useModelsWithCaps, useInvalidateModels, useInvalidateProviderModels } from "../../../hooks/useModels";
 import { useConfig, DEFAULT_HOTKEYS } from "../../../contexts/ConfigContext";
 import { formatHotkey, eventToCombo } from "../../../hooks/useHotkey";
-import { STORAGE_KEYS } from "../../../constants/storage";
 import {
   Gem,
   Laptop,
@@ -39,17 +38,6 @@ import {
 
 // Per-provider saved configs (model, apiKey, baseUrl)
 type ProviderCache = Record<string, { model?: string; apiKey?: string; baseUrl?: string }>;
-
-function loadProviderCache(): ProviderCache {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
-}
-
-function saveProviderCache(cache: ProviderCache) {
-  localStorage.setItem(STORAGE_KEYS.PROVIDER_CONFIGS, JSON.stringify(cache));
-}
 
 const HOTKEY_LABELS: Record<string, string> = {
   newTab: "New Tab",
@@ -417,7 +405,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
 const SettingsPane = () => {
   const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
   const { sessions, updateSessionConfig, pendingSettingsSection, clearPendingSettingsSection } = useLayout();
-  const { hotkeys, updateHotkey, resetHotkeys, aiBehavior, updateAIBehavior } = useConfig();
+  const { config: appConfig, hotkeys, updateHotkey, resetHotkeys, aiBehavior, updateAIBehavior, updateConfig: updateAppConfig } = useConfig();
   const t = getTheme(resolvedTheme);
   const [config, setConfig] = useState<AIConfig>(aiService.getConfig());
   const [initialConfig, setInitialConfig] = useState<string>(
@@ -428,7 +416,7 @@ const SettingsPane = () => {
   >("idle");
   const [testError, setTestError] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
-  const providerCacheRef = useRef<ProviderCache>(loadProviderCache());
+  const providerCacheRef = useRef<ProviderCache>({ ...appConfig.providerConfigs });
 
   // Hotkey recording state
   const [recordingAction, setRecordingAction] = useState<string | null>(null);
@@ -523,7 +511,7 @@ const SettingsPane = () => {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
     };
-    saveProviderCache(cache);
+    updateAppConfig({ providerConfigs: { ...cache } });
 
     // Load cached config for new provider (or defaults)
     const cached = cache[newProvider];
@@ -583,7 +571,7 @@ const SettingsPane = () => {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
     };
-    saveProviderCache(cache);
+    updateAppConfig({ providerConfigs: { ...cache } });
 
     // For non-baseUrl providers, explicitly clear baseUrl so it doesn't leak
     const configToSave = { ...config };
@@ -591,8 +579,9 @@ const SettingsPane = () => {
       configToSave.baseUrl = undefined;
     }
 
-    // Save globally
+    // Save globally — in-memory + localStorage cache + file-based config
     aiService.saveConfig(configToSave);
+    updateAppConfig({ ai: configToSave });
     setInitialConfig(JSON.stringify(config));
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 2000);
@@ -1031,7 +1020,7 @@ const SettingsPane = () => {
                         // Clear this provider from cache
                         const cache = providerCacheRef.current;
                         delete cache[config.provider];
-                        saveProviderCache(cache);
+                        updateAppConfig({ providerConfigs: { ...cache } });
 
                         // Find first usable provider from remaining cache
                         let nextProvider = "ollama";

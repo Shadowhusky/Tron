@@ -478,6 +478,12 @@ export function getHistory(sessionId: string): string {
   return sessionHistory.get(sessionId) || "";
 }
 
+export function setHistory(sessionId: string, history: string): void {
+  if (sessions.has(sessionId) || sshSessionIds.has(sessionId)) {
+    sessionHistory.set(sessionId, history);
+  }
+}
+
 export async function getSystemInfo(sessionId?: string): Promise<{ platform: string; arch: string; shell: string; release: string }> {
   // SSH session: get remote system info
   if (sessionId && sshSessionIds.has(sessionId)) {

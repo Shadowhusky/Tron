@@ -75,6 +75,7 @@ export interface TronConfig {
   theme?: string;
   viewMode?: string;
   configured?: boolean;
+  tutorialCompleted?: boolean;
   hotkeys?: HotkeyMap;
   aiBehavior?: AIBehavior;
   webServer?: WebServerConfig;
@@ -113,6 +114,8 @@ export interface TerminalSession {
   contextSummarySourceLength?: number; // Length of the original text that was summarized
   sshProfileId?: string;  // If set, this is a remote SSH session
   reconnected?: boolean; // true if session was reconnected to an existing PTY (page refresh)
+  /** Saved terminal history to restore when loading a saved tab. Written to xterm on mount. */
+  pendingHistory?: string;
   interactions?: {
     role: "user" | "agent";
     content: string;
@@ -137,7 +140,6 @@ export interface Tab {
   color?: string; // Optional color tag for the tab
   root: LayoutNode;
   activeSessionId: string | null; // Which session is active in this tab
-  savedTabId?: string; // If loaded from a saved tab, the saved tab's ID
 }
 
 export interface TerminalState {
@@ -147,7 +149,7 @@ export interface TerminalState {
 }
 
 /** A self-contained snapshot of a tab's state, saved for cross-device restore. */
-export interface SavedTab {
+export interface SyncTab {
   id: string;
   name: string;
   savedAt: number;
@@ -164,6 +166,7 @@ export interface SavedTab {
     contextSummary?: string;
     contextSummarySourceLength?: number;
     sshProfileId?: string;
+    terminalHistory?: string;
   }>;
   agentState: Record<string, {
     agentThread: AgentStep[];

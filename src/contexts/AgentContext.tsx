@@ -243,7 +243,7 @@ class AgentStore {
     };
   }
 
-  /** Restore agent state into a new session (from a saved tab). */
+  /** Restore agent state into a new session (from a sync tab). */
   restoreSession = (sessionId: string, data: {
     agentThread: AgentStep[];
     overlayHeight?: number;

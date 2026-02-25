@@ -60,6 +60,8 @@ function migrateFromLocalStorage(): TronConfig {
     if (viewMode) config.viewMode = viewMode;
     const configured = localStorage.getItem(STORAGE_KEYS.CONFIGURED);
     if (configured) config.configured = configured === "true";
+    const tutorialDone = localStorage.getItem(STORAGE_KEYS.TUTORIAL_COMPLETED);
+    if (tutorialDone) config.tutorialCompleted = tutorialDone === "true";
   } catch (e) {
     console.warn("Config migration from localStorage failed:", e);
   }

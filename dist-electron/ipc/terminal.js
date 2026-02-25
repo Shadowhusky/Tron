@@ -511,6 +511,12 @@ function registerTerminalHandlers(getMainWindow) {
         const raw = sessionHistory.get(sessionId) || "";
         return stripSentinels(raw);
     });
+    // Inject saved terminal history into a session (used when loading sync tabs)
+    electron_1.ipcMain.handle("terminal.setHistory", (_event, { sessionId, history }) => {
+        if (sessions.has(sessionId)) {
+            sessionHistory.set(sessionId, history);
+        }
+    });
     // Scan all available commands on the system (for auto-mode classification)
     // Two-phase: fast non-interactive scan first, then interactive scan for shell
     // functions (nvm, pyenv, rvm) that are only loaded in interactive shells.

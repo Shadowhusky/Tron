@@ -13,6 +13,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "terminal.getHistory",
     "terminal.readHistory",
     "terminal.clearHistory",
+    "terminal.setHistory",
     "terminal.scanCommands",
     "terminal.getSystemInfo",
     "ai.testConnection",
@@ -127,9 +128,9 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         disconnectSSH: (sessionId) => electron_1.ipcRenderer.invoke("ssh.disconnect", sessionId),
         readSSHProfiles: () => electron_1.ipcRenderer.invoke("ssh.profiles.read"),
         writeSSHProfiles: (profiles) => electron_1.ipcRenderer.invoke("ssh.profiles.write", profiles),
-        // Saved Tabs
-        readSavedTabs: () => electron_1.ipcRenderer.invoke("savedTabs.read"),
-        writeSavedTabs: (tabs) => electron_1.ipcRenderer.invoke("savedTabs.write", tabs),
+        // Sync Tabs
+        readSyncTabs: () => electron_1.ipcRenderer.invoke("savedTabs.read"),
+        writeSyncTabs: (tabs) => electron_1.ipcRenderer.invoke("savedTabs.write", tabs),
         // Web Server
         startWebServer: (port) => electron_1.ipcRenderer.invoke("webServer.start", port),
         stopWebServer: () => electron_1.ipcRenderer.invoke("webServer.stop"),

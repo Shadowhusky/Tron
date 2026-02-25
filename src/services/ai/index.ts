@@ -298,7 +298,9 @@ class AIService {
 
   saveConfig(config: Partial<AIConfig>) {
     this.config = { ...this.config, ...config };
+    // Keep localStorage as fast cache for synchronous init on next load
     localStorage.setItem(STORAGE_KEYS.AI_CONFIG, JSON.stringify(this.config));
+    // File-based persistence handled by the caller via ConfigContext.updateConfig()
   }
 
   /** Build JSON headers for OpenAI-compatible APIs, optionally including Bearer auth. */
@@ -574,15 +576,20 @@ class AIService {
    * Fetch models from ALL configured providers (for ContextBar popover).
    * Delegates to getModels() per provider to avoid duplicating fetch logic.
    */
-  async getAllConfiguredModels(): Promise<AIModel[]> {
+  async getAllConfiguredModels(
+    externalProviderConfigs?: Record<string, { model?: string; apiKey?: string; baseUrl?: string }>,
+  ): Promise<AIModel[]> {
     let providerConfigs: Record<
       string,
       { model?: string; apiKey?: string; baseUrl?: string }
-    > = {};
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
-      if (raw) providerConfigs = JSON.parse(raw);
-    } catch { }
+    > = externalProviderConfigs ?? {};
+    if (!externalProviderConfigs) {
+      // Fallback to localStorage cache if no external configs provided
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
+        if (raw) providerConfigs = JSON.parse(raw);
+      } catch { }
+    }
 
     // Only include providers that are properly configured
     const activeProvider = this.config.provider;
@@ -1590,6 +1597,7 @@ RULES:
 10. CONTEXT AWARENESS: The [PROJECT FILES] section shows existing files. Do NOT recreate files that already exist — use read_file or edit_file to modify them. Do NOT scaffold a new project if one already exists. Always check the project structure before creating files.
 11. IMAGES: If the user mentions images or screenshots, they were already analyzed in a prior step. Use the description provided — do NOT try to access image files with read_file, execute_command, or ls.
 12. TAB TITLE: Always include "_tab_title": "short 2-5 word title" at the root of your JSON response. This sets the terminal tab name and should reflect the current task. Update it as the task evolves. If asking for clarification, omit it.
+13. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation and terminal history are context for reference — do NOT re-execute or repeat actions from previous turns.
 ${agentPrompt}
 `,
         },

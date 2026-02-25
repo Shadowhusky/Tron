@@ -361,9 +361,13 @@ export function useAgentRunner(
       : prompt;
     setAgentThread((prev) => [...prev, { step: "separator", output: separatorOutput }]);
 
-    // Note: Tab title generation for Agent prompts has been shifted.
-    // The Agent is now instructed to stream a `_tab_title` parameter inside its
-    // first JSON response. We handle this in the `onUpdate` callback below.
+    // Set fallback tab title from agent prompt (agent may override via _tab_title later)
+    if (titleSourceRef.current === "none" && sessionId && prompt.trim()) {
+      titleSourceRef.current = "terminal";
+      const title = prompt.trim().length > 20 ? prompt.trim().substring(0, 20) + "..." : prompt.trim();
+      renameTab(sessionId, title);
+    }
+
     // --- Image analysis shortcut: bypass agent loop entirely ---
     if (images && images.length > 0) {
       // Build conversation history from recent interactions so model has context
@@ -539,7 +543,7 @@ System Paths:
 
         // Always include history section so the agent sees prior prompts + responses
         const interactionContext = priorInteractions
-          ? `\n[PRIOR CONVERSATION]\n${priorInteractions}\n`
+          ? `\n[PRIOR CONVERSATION — reference only, do NOT re-execute previous tasks]\n${priorInteractions}\n`
           : "";
 
         if (images && images.length > 0) {
@@ -562,9 +566,8 @@ ${projectFiles ? `\n[PROJECT FILES]\n${projectFiles}\n` : ""}
 [TERMINAL OUTPUT]
 ${sessionHistory}
 ${interactionContext}
-User: ${prompt}
-
-Task: ${prompt}
+[CURRENT TASK — focus ONLY on this]
+${prompt}
 `;
         }
       } // end else (new run — not continuing from question)
