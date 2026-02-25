@@ -61,9 +61,9 @@ export const IPC = {
   CONFIG_WRITE: "config.write",
   CONFIG_GET_SYSTEM_PATHS: "config.getSystemPaths",
 
-  // Saved Tabs — invoke
-  SAVED_TABS_READ: "savedTabs.read",
-  SAVED_TABS_WRITE: "savedTabs.write",
+  // Sync Tabs — invoke
+  SYNC_TABS_READ: "savedTabs.read",
+  SYNC_TABS_WRITE: "savedTabs.write",
 
   // Web Server — invoke
   WEB_SERVER_START: "webServer.start",

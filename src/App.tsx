@@ -1,16 +1,15 @@
-import { useState, useEffect, useCallback, useLayoutEffect } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { LayoutProvider, useLayout } from "./contexts/LayoutContext";
 import type { LayoutNode } from "./types";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { HistoryProvider } from "./contexts/HistoryContext";
 import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
-import { ConfigProvider } from "./contexts/ConfigContext";
+import { ConfigProvider, useConfig } from "./contexts/ConfigContext";
 import OnboardingWizard from "./features/onboarding/components/OnboardingWizard";
 import TutorialOverlay from "./features/onboarding/components/TutorialOverlay";
 import SplitPane from "./components/layout/SplitPane";
 import TabBar from "./components/layout/TabBar";
-import { STORAGE_KEYS } from "./constants/storage";
 import { IPC } from "./constants/ipc";
 import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
@@ -75,11 +74,11 @@ const AppContent = () => {
     createSSHTab,
     saveTab,
     loadSavedTab,
-    deleteSavedTab,
     setConfirmHandler,
   } = useLayout();
   const { resolvedTheme } = useTheme();
-  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, duplicateAgentSession, getSessionPersistable, restoreAgentSession } = useAgentContext();
+  const { config, updateConfig, isLoaded: configLoaded } = useConfig();
+  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, getSessionPersistable, restoreAgentSession } = useAgentContext();
   const invalidateModels = useInvalidateModels();
   useVisualViewportHeight();
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -87,7 +86,6 @@ const AppContent = () => {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [showSavedTabs, setShowSavedTabs] = useState(false);
-  const [savedTabCloseConfirm, setSavedTabCloseConfirm] = useState<{ tabId: string; savedTabId: string } | null>(null);
   const [sshToast, setSshToast] = useState("");
 
   // Generic confirm modal — replaces window.confirm for styled modals
@@ -98,24 +96,25 @@ const AppContent = () => {
   useEffect(() => { setConfirmHandler(confirmHandler); }, [setConfirmHandler, confirmHandler]);
 
   useEffect(() => {
+    if (!configLoaded) return; // Wait for file-based config before deciding
+
     // Allow embedding pages to skip onboarding via URL param
     const params = new URLSearchParams(window.location.search);
     if (params.get("skip-setup") === "true") {
-      localStorage.setItem(STORAGE_KEYS.CONFIGURED, "true");
-      localStorage.setItem(STORAGE_KEYS.TUTORIAL_COMPLETED, "true");
+      updateConfig({ configured: true, tutorialCompleted: true });
       return;
     }
 
-    const hasConfigured = localStorage.getItem(STORAGE_KEYS.CONFIGURED);
-    if (!hasConfigured) {
+    if (!config.configured) {
       setShowOnboarding(true);
       // Clear server-side SSH profiles so fresh setup starts clean
       window.electron?.ipcRenderer?.invoke?.("ssh.profiles.write", [])?.catch?.(() => { });
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configLoaded]);
 
   const handleOnboardingComplete = () => {
-    localStorage.setItem(STORAGE_KEYS.CONFIGURED, "true");
+    updateConfig({ configured: true });
     setShowOnboarding(false);
     // Apply the newly saved config to all existing sessions
     const newConfig = aiService.getConfig();
@@ -127,14 +126,13 @@ const AppContent = () => {
     // Refresh model list so ContextBar picks up the newly configured models
     invalidateModels();
     // Show tutorial if not previously completed
-    const tutorialDone = localStorage.getItem(STORAGE_KEYS.TUTORIAL_COMPLETED);
-    if (!tutorialDone) {
+    if (!config.tutorialCompleted) {
       setShowTutorial(true);
     }
   };
 
   const handleTutorialComplete = () => {
-    localStorage.setItem(STORAGE_KEYS.TUTORIAL_COMPLETED, "true");
+    updateConfig({ tutorialCompleted: true });
     setShowTutorial(false);
   };
 
@@ -206,9 +204,9 @@ const AppContent = () => {
 
   const handleDuplicateTab = useCallback(
     async (tabId: string) => {
-      await duplicateTab(tabId, duplicateAgentSession);
+      await duplicateTab(tabId);
     },
-    [duplicateTab, duplicateAgentSession]
+    [duplicateTab]
   );
 
   const handleSaveTab = useCallback(
@@ -220,37 +218,22 @@ const AppContent = () => {
     [saveTab, getSessionPersistable]
   );
 
-  /** Intercept tab close: if the tab was loaded from saved tabs, prompt the user. */
   const handleCloseTab = useCallback(
-    (tabId: string) => {
-      const tab = tabs.find(t => t.id === tabId);
-      if (tab?.savedTabId) {
-        setSavedTabCloseConfirm({ tabId, savedTabId: tab.savedTabId });
-        return;
-      }
-      closeTab(tabId);
-    },
-    [tabs, closeTab],
+    (tabId: string) => closeTab(tabId),
+    [closeTab],
   );
 
-  const handleSavedTabCloseAction = useCallback(
-    async (action: "close" | "remove" | "cancel") => {
-      if (!savedTabCloseConfirm) return;
-      const { tabId, savedTabId } = savedTabCloseConfirm;
-      setSavedTabCloseConfirm(null);
-      if (action === "cancel") return;
-      closeTab(tabId);
-      if (action === "remove") {
-        await deleteSavedTab(savedTabId);
-      }
-    },
-    [savedTabCloseConfirm, closeTab, deleteSavedTab],
-  );
-
+  const loadingSavedRef = useRef(false);
   const handleLoadSavedTab = useCallback(
     async (saved: any) => {
-      await loadSavedTab(saved, restoreAgentSession);
-      setShowSavedTabs(false);
+      if (loadingSavedRef.current) return;
+      loadingSavedRef.current = true;
+      try {
+        await loadSavedTab(saved, restoreAgentSession);
+        setShowSavedTabs(false);
+      } finally {
+        loadingSavedRef.current = false;
+      }
     },
     [loadSavedTab, restoreAgentSession]
   );
@@ -370,20 +353,6 @@ const AppContent = () => {
         onClose={() => setShowSavedTabs(false)}
       />
 
-      {/* Saved tab close confirmation */}
-      <Modal
-        show={!!savedTabCloseConfirm}
-        resolvedTheme={resolvedTheme}
-        onClose={() => handleSavedTabCloseAction("cancel")}
-        title="Close saved tab?"
-        description="Keep it saved for later, or remove it everywhere?"
-        buttons={[
-          { label: "Cancel", type: "ghost", onClick: () => handleSavedTabCloseAction("cancel") },
-          { label: "Close tab", type: "default", onClick: () => handleSavedTabCloseAction("close") },
-          { label: "Remove saved", type: "danger", onClick: () => handleSavedTabCloseAction("remove") },
-        ]}
-      />
-
       {/* Generic confirm modal (replaces window.confirm for tab close etc.) */}
       <Modal
         show={!!confirmModal}
@@ -419,8 +388,8 @@ const AppContent = () => {
 
 const App = () => {
   return (
-    <ThemeProvider>
-      <ConfigProvider>
+    <ConfigProvider>
+      <ThemeProvider>
         <HistoryProvider>
           <AgentProvider>
             <LayoutProvider>
@@ -428,8 +397,8 @@ const App = () => {
             </LayoutProvider>
           </AgentProvider>
         </HistoryProvider>
-      </ConfigProvider>
-    </ThemeProvider>
+      </ThemeProvider>
+    </ConfigProvider>
   );
 };
 

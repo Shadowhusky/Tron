@@ -38,24 +38,33 @@ const panelTheme = (t: ResolvedTheme) =>
       : "bg-[#0e0e0e] text-gray-200 border border-white/[0.06]";
 
 const btnStyle = (t: ResolvedTheme, type: ModalButtonType) => {
-  const base = "flex-1 px-3 py-3 text-xs font-medium transition-colors whitespace-nowrap";
+  const base =
+    "flex-1 px-3 py-3 text-xs font-medium transition-colors whitespace-nowrap";
   switch (type) {
     case "primary":
-      return `${base} ${t === "light"
-        ? "bg-white text-gray-900 hover:bg-gray-50"
-        : "bg-white/[0.06] text-gray-200 hover:bg-white/[0.1]"}`;
+      return `${base} ${
+        t === "light"
+          ? "bg-white text-gray-900 hover:bg-gray-50"
+          : "bg-white/[0.06] text-gray-200 hover:bg-white/[0.1]"
+      }`;
     case "danger":
-      return `${base} ${t === "light"
-        ? "text-red-600 hover:bg-red-50"
-        : "text-red-400 hover:bg-red-500/10"}`;
+      return `${base} ${
+        t === "light"
+          ? "text-red-600 hover:bg-red-50"
+          : "text-red-400 hover:bg-red-500/10"
+      }`;
     case "ghost":
-      return `${base} ${t === "light"
-        ? "text-gray-400 hover:text-gray-600 hover:bg-black/[0.03]"
-        : "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]"}`;
+      return `${base} ${
+        t === "light"
+          ? "text-gray-400 hover:text-gray-600 hover:bg-black/[0.03]"
+          : "text-gray-500 hover:text-gray-300 hover:bg-white/[0.03]"
+      }`;
     default:
-      return `${base} ${t === "light"
-        ? "text-gray-600 hover:bg-white/60"
-        : "text-gray-400 hover:bg-white/[0.04]"}`;
+      return `${base} ${
+        t === "light"
+          ? "text-gray-600 hover:bg-white/60"
+          : "text-gray-400 hover:bg-white/[0.04]"
+      }`;
   }
 };
 
@@ -90,16 +99,20 @@ const Modal: React.FC<ModalProps> = ({
           <motion.div
             data-testid={testId}
             initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0, transition: { duration: 0.15, ease: "easeOut" } }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              transition: { duration: 0.15, ease: "easeOut" },
+            }}
             exit={{ opacity: 0, y: 6, transition: { duration: 0.1 } }}
             onClick={(e) => e.stopPropagation()}
             className={`w-full ${maxWidth} mx-4 overflow-hidden ${panelTheme(resolvedTheme)}`}
           >
             {/* Header */}
-            <div className="px-4 py-5">
+            <div className="px-4 py-4 gap-2 flex flex-col">
               <h3 className="text-sm flex font-semibold">{title}</h3>
               {description && (
-                <p className="text-sm mt-1 text-gray-500">{description}</p>
+                <p className="text-sm text-gray-500">{description}</p>
               )}
             </div>
 
@@ -114,8 +127,9 @@ const Modal: React.FC<ModalProps> = ({
                     key={i}
                     data-testid={btn.testId}
                     onClick={btn.onClick}
-                    className={`${btnStyle(resolvedTheme, btn.type ?? "default")} ${i < buttons.length - 1 ? `border-r ${divider}` : ""
-                      }`}
+                    className={`${btnStyle(resolvedTheme, btn.type ?? "default")} ${
+                      i < buttons.length - 1 ? `border-r ${divider}` : ""
+                    }`}
                   >
                     {btn.label}
                   </button>

@@ -268,6 +268,7 @@ const SSH_ONLY_SESSION_CHANNELS = new Set([
   "terminal.getSystemInfo",
   "terminal.readHistory",
   "terminal.clearHistory",
+  "terminal.setHistory",
   "terminal.execInTerminal",
   "terminal.sessionExists",
   "terminal.checkCommand",
@@ -360,6 +361,8 @@ async function handleInvoke(
       return terminal.readHistory(data?.sessionId || data, data?.lines);
     case "terminal.clearHistory":
       return terminal.clearHistory(typeof data === "string" ? data : data?.sessionId);
+    case "terminal.setHistory":
+      return terminal.setHistory(data?.sessionId, data?.history);
     case "terminal.execInTerminal":
       return terminal.execInTerminal(data.sessionId, data.command, pushEvent);
     case "terminal.scanCommands":

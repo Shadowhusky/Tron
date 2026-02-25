@@ -1207,19 +1207,36 @@ const SmartInput: React.FC<SmartInputProps> = ({
           </div>
 
           <div className="relative flex-1 flex items-center">
-            {/* Ghost Text Overlay */}
-            {(value.length > 0 || (!value && aiPlaceholder)) && (
-              <div className="absolute inset-0 pointer-events-none font-mono text-sm whitespace-pre-wrap break-words overflow-hidden">
-                <span className="invisible">{value}</span>
-                <span className="text-gray-500 opacity-50">
-                  {ghostText ||
-                    (!value && aiPlaceholder ? aiPlaceholder : "") ||
-                    (currentCompletion && currentCompletion.startsWith(value.split('\n').pop() || "")
-                      ? currentCompletion.slice((value.split('\n').pop() || "").length)
-                      : "")}
-                </span>
-              </div>
-            )}
+            {/* Ghost Text Overlay — tappable on touch devices to accept suggestion */}
+            {(value.length > 0 || (!value && aiPlaceholder)) && (() => {
+              const displayedGhost = ghostText ||
+                (!value && aiPlaceholder ? aiPlaceholder : "") ||
+                (currentCompletion && currentCompletion.startsWith(value.split('\n').pop() || "")
+                  ? currentCompletion.slice((value.split('\n').pop() || "").length)
+                  : "");
+              if (!displayedGhost) return null;
+              const isTouch = isTouchDevice();
+              return (
+                <div
+                  className={`absolute inset-0 font-mono text-sm whitespace-pre-wrap break-words overflow-hidden ${isTouch ? "" : "pointer-events-none"}`}
+                  onClick={isTouch ? () => {
+                    if (ghostText) {
+                      setValue((prev) => prev + ghostText);
+                      setGhostText("");
+                    } else if (aiPlaceholder && !value) {
+                      setValue(aiPlaceholder);
+                      setAiPlaceholder("");
+                    }
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                  } : undefined}
+                >
+                  <span className="invisible">{value}</span>
+                  <span className="text-gray-500 opacity-50">
+                    {displayedGhost}
+                  </span>
+                </div>
+              );
+            })()}
 
             <textarea
               ref={inputRef}

@@ -6,17 +6,22 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import { registerScreenBufferReader, unregisterScreenBufferReader } from "../../../services/terminalBuffer";
+import { isElectronApp } from "../../../utils/platform";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
   className?: string;
   sessionId: string;
   onActivity?: () => void;
+  /** Called once when the user presses Enter in the terminal for the first time. */
+  onFirstCommand?: () => void;
   isActive?: boolean;
   isAgentRunning?: boolean;
   stopAgent?: () => void;
   focusTarget?: "input" | "terminal";
   isReconnected?: boolean;
+  /** Saved terminal history to write directly to xterm on mount (loaded sync tabs). */
+  pendingHistory?: string;
 }
 
 const THEMES: Record<string, Xterm["options"]["theme"]> = {
@@ -40,18 +45,19 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
   const { hotkeys } = useConfig();
 
-  // Loading overlay — only for reconnected sessions to mask flicker
-  // from history replay / TUI redraw via SIGWINCH bounce.
-  const [loading, setLoading] = useState(!!isReconnected);
+  // Loading overlay — for web mode reconnected/restored sessions to mask
+  // flicker from history replay / TUI redraw. Electron restores instantly.
+  const showLoadingOverlay = (!!isReconnected || !!pendingHistory) && !!isActive && !isElectronApp();
+  const [loading, setLoading] = useState(showLoadingOverlay);
   useEffect(() => {
-    if (!isReconnected) return;
+    if (!showLoadingOverlay) return;
     const timer = setTimeout(() => setLoading(false), 1500);
     return () => clearTimeout(timer);
   }, [sessionId]);
@@ -279,7 +285,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
       const finishSetup = (history?: string, knownReconnect = false) => {
           if (!mounted) return;
 
-          const isReconnect = knownReconnect || !!(history && history.length > 0);
+          // Prefer saved history from loaded tabs (pendingHistory) over server
+          // getHistory. In web mode, the fresh PTY outputs a shell prompt before
+          // getHistory responds, making it non-empty and masking the saved content.
+          const effectiveHistory = pendingHistory || ((history && history.length > 0) ? history : undefined);
+          const isReconnect = knownReconnect || !!effectiveHistory;
 
           if (isReconnect) {
             // Suppress outgoing onData → PTY during bounce to prevent DSR
@@ -290,8 +300,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
           // Write history to xterm BEFORE registering the incoming data listener.
           // On page reload (mobile OS kill, manual refresh), xterm is brand new
           // with an empty buffer — this restores previous terminal output.
-          if (history) {
-            term.write(history);
+          if (effectiveHistory) {
+            term.write(effectiveHistory);
           }
 
           // Register the incoming data listener — data flows freely so xterm
@@ -429,9 +439,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, i
         stopAgentRef.current?.();
       }
 
-      if (!activityFired && data === "\r" && onActivity) {
+      if (!activityFired && data === "\r") {
         activityFired = true;
-        onActivity();
+        onActivity?.();
+        onFirstCommand?.();
       }
 
       if (window.electron) {

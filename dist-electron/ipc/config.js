@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerConfigHandlers = registerConfigHandlers;
 const electron_1 = require("electron");
 const fs_1 = __importDefault(require("fs"));
+const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
 const CONFIG_FILE = "tron.config.json";
 const SESSIONS_FILE = "tron.sessions.json";
@@ -75,8 +76,9 @@ function registerConfigHandlers() {
         }
     });
     // --- Saved Tabs (cross-device snapshots) ---
+    // Use ~/.tron/ (same path as web server) so Electron and web mode share the same file.
     const getSavedTabsPath = () => {
-        const dir = path_1.default.join(electron_1.app.getPath("userData"), "saved-tabs");
+        const dir = path_1.default.join(os_1.default.homedir(), ".tron");
         if (!fs_1.default.existsSync(dir))
             fs_1.default.mkdirSync(dir, { recursive: true });
         return path_1.default.join(dir, "saved-tabs.json");

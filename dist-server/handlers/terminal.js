@@ -455,6 +455,11 @@ export async function getCompletions({ prefix, cwd, sessionId }) {
 export function getHistory(sessionId) {
     return sessionHistory.get(sessionId) || "";
 }
+export function setHistory(sessionId, history) {
+    if (sessions.has(sessionId) || sshSessionIds.has(sessionId)) {
+        sessionHistory.set(sessionId, history);
+    }
+}
 export async function getSystemInfo(sessionId) {
     // SSH session: get remote system info
     if (sessionId && sshSessionIds.has(sessionId)) {

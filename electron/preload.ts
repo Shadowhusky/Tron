@@ -13,6 +13,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "terminal.getHistory",
   "terminal.readHistory",
   "terminal.clearHistory",
+  "terminal.setHistory",
   "terminal.scanCommands",
   "terminal.getSystemInfo",
   "ai.testConnection",
@@ -189,10 +190,10 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("ssh.profiles.read") as Promise<any[]>,
     writeSSHProfiles: (profiles: any[]) =>
       ipcRenderer.invoke("ssh.profiles.write", profiles) as Promise<boolean>,
-    // Saved Tabs
-    readSavedTabs: () =>
+    // Sync Tabs
+    readSyncTabs: () =>
       ipcRenderer.invoke("savedTabs.read") as Promise<any[]>,
-    writeSavedTabs: (tabs: any[]) =>
+    writeSyncTabs: (tabs: any[]) =>
       ipcRenderer.invoke("savedTabs.write", tabs) as Promise<boolean>,
     // Web Server
     startWebServer: (port: number) =>

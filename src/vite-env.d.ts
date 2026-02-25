@@ -60,9 +60,9 @@ interface Window {
       disconnectSSH: (sessionId: string) => Promise<boolean>;
       readSSHProfiles: () => Promise<any[]>;
       writeSSHProfiles: (profiles: any[]) => Promise<boolean>;
-      // Saved Tabs
-      readSavedTabs: () => Promise<any[]>;
-      writeSavedTabs: (tabs: any[]) => Promise<boolean>;
+      // Sync Tabs
+      readSyncTabs: () => Promise<any[]>;
+      writeSyncTabs: (tabs: any[]) => Promise<boolean>;
       // Web Server
       startWebServer: (port: number) => Promise<{ success: boolean; port?: number; error?: string }>;
       stopWebServer: () => Promise<{ success: boolean }>;

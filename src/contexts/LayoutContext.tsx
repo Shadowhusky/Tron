@@ -6,7 +6,7 @@ import type {
   SplitDirection,
   AIConfig,
   SSHConnectionConfig,
-  SavedTab,
+  SyncTab,
   AgentStep,
 } from "../types";
 import { aiService } from "../services/ai";
@@ -51,12 +51,14 @@ interface LayoutContextType {
   focusSession: (sessionId: string) => void;
   renameTab: (sessionId: string, title: string) => void;
   updateTabColor: (tabId: string, color?: string) => void;
-  duplicateTab: (tabId: string, onNewSession?: (oldId: string, newId: string) => void) => Promise<void>;
+  duplicateTab: (tabId: string) => Promise<void>;
   createSSHTab: (config: SSHConnectionConfig) => Promise<void>;
   /** Stop auto-saving layout and clear persisted data. Call before window close without saving. */
   discardPersistedLayout: () => void;
+  /** Save a tab's complete state to remote storage (one-shot, no sync tracking). */
   saveTab: (tabId: string, getAgentState: (sessionId: string) => { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number } | null) => Promise<void>;
-  loadSavedTab: (saved: SavedTab, restoreAgent: (sessionId: string, data: { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number }) => void) => Promise<void>;
+  /** Load a saved tab snapshot, creating fresh PTY sessions with restored state. */
+  loadSavedTab: (saved: SyncTab, restoreAgent: (sessionId: string, data: { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number }) => void) => Promise<void>;
   /** Delete a saved tab snapshot from persistent storage. */
   deleteSavedTab: (savedTabId: string) => Promise<void>;
   isHydrated: boolean;
@@ -82,6 +84,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const [sessions, setSessions] = useState<Map<string, TerminalSession>>(
     new Map(),
   );
+
+  // Ref tracking latest tabs for use in closures
+  const tabsRef = useRef(tabs);
+  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
 
   // Track which sessions were live-PTY reconnects (PTY survived in server memory).
   // Used to set the `reconnected` flag accurately — avoids false positives when
@@ -569,7 +575,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const creatingTabRef = useRef(false); // Guard against double-create in StrictMode
   const closeTab = (tabId: string) => {
     // Find tab to close
-    const tab = tabs.find((t) => t.id === tabId);
+    const tab = tabsRef.current.find((t) => t.id === tabId);
     if (tab) {
       // Clear settings tab guard if closing a settings tab
       if (tab.root.type === "leaf" && tab.root.contentType === "settings") {
@@ -585,6 +591,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       closeNodeSessions(tab.root);
     }
+
+    // Synchronously update tabsRef so checkAllTabs doesn't see ghost tabs
+    tabsRef.current = tabsRef.current.filter(t => t.id !== tabId);
 
     setTabs((prev) => {
       const newTabs = prev.filter((t) => t.id !== tabId);
@@ -892,8 +901,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
-  /** Duplicate an existing tab */
-  const duplicateTab = async (tabId: string, onNewSession?: (oldId: string, newId: string) => void) => {
+  /** Duplicate an existing tab (copies configs + tab name, not history) */
+  const duplicateTab = async (tabId: string) => {
     const tabToDuplicate = tabs.find((t) => t.id === tabId);
     if (!tabToDuplicate) return;
 
@@ -911,22 +920,15 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         const cwd = oldSession?.cwd;
         const newSessionId = await createPTY(cwd);
 
-        // Copy the configs and contexts over
+        // Copy configs only — not terminal/agent history
         setSessions((prev) =>
           new Map(prev).set(newSessionId, {
             id: newSessionId,
             title: oldSession?.title || "Terminal",
             cwd,
             aiConfig: oldSession?.aiConfig || aiService.getConfig(),
-            interactions: oldSession?.interactions ? [...oldSession.interactions] : [],
-            contextSummary: oldSession?.contextSummary,
-            contextSummarySourceLength: oldSession?.contextSummarySourceLength,
-            dirty: oldSession?.dirty,
           }),
         );
-        if (onNewSession) {
-          onNewSession(oldSessionId, newSessionId);
-        }
         return { ...node, sessionId: newSessionId };
       } else {
         const newChildren = await Promise.all(node.children.map(cloneNode));
@@ -960,12 +962,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId(newTabId); // Focus the duplicated tab immediately
   };
 
-  /** Save a tab's complete state (sessions + agent thread) for cross-device restore. */
+  /** Save a tab's complete state to remote storage (one-shot, no sync tracking). */
   const saveTab = async (
     tabId: string,
     getAgentState: (sessionId: string) => { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number } | null,
   ) => {
-    const tab = tabs.find(t => t.id === tabId);
+    const tab = tabsRef.current.find(t => t.id === tabId);
     if (!tab) return;
 
     // Collect all sessionIds from the layout tree
@@ -975,12 +977,21 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     };
     const sessionIds = collectSessionIds(tab.root);
 
-    const sessionData: SavedTab["sessions"] = {};
-    const agentData: SavedTab["agentState"] = {};
+    const sessionData: SyncTab["sessions"] = {};
+    const agentData: SyncTab["agentState"] = {};
+
+    const ipc = window.electron?.ipcRenderer;
+    const readFn = (ipc as any)?.readSyncTabs || (() => ipc?.invoke("savedTabs.read"));
+    const writeFn = (ipc as any)?.writeSyncTabs || ((d: any) => ipc?.invoke("savedTabs.write", d));
 
     for (const sid of sessionIds) {
       const session = sessions.get(sid);
       if (session) {
+        let terminalHistory: string | undefined;
+        try {
+          terminalHistory = await ipc?.getHistory?.(sid) || undefined;
+        } catch { /* best effort */ }
+
         sessionData[sid] = {
           title: session.title,
           cwd: session.cwd,
@@ -989,29 +1000,39 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           contextSummary: session.contextSummary,
           contextSummarySourceLength: session.contextSummarySourceLength,
           sshProfileId: session.sshProfileId,
+          terminalHistory,
         };
       }
       const agent = getAgentState(sid);
       if (agent) agentData[sid] = agent;
     }
 
-    const savedTab: SavedTab = {
-      id: uuid(),
-      name: tab.title,
+    const existing: SyncTab[] = (await readFn()) || [];
+
+    // Deduplicate name: if a saved tab with the same name exists, append (1), (2), etc.
+    let saveName = tab.title;
+    const existingNames = new Set(existing.map(e => e.name));
+    if (existingNames.has(saveName)) {
+      let idx = 1;
+      while (existingNames.has(`${tab.title} (${idx})`)) idx++;
+      saveName = `${tab.title} (${idx})`;
+    }
+
+    const newId = uuid();
+    const entry: SyncTab = {
+      id: newId,
+      name: saveName,
       savedAt: Date.now(),
       tab: { title: tab.title, color: tab.color, root: tab.root },
       sessions: sessionData,
       agentState: agentData,
     };
-
-    const ipc = window.electron?.ipcRenderer;
-    const existing: SavedTab[] = (await ipc?.readSavedTabs?.()) || [];
-    await ipc?.writeSavedTabs?.([...existing, savedTab]);
+    await writeFn([...existing, entry]);
   };
 
-  /** Load a saved tab snapshot, creating fresh PTY sessions with restored conversation state. */
+  /** Load a saved tab snapshot, creating fresh PTY sessions with restored state. */
   const loadSavedTab = async (
-    saved: SavedTab,
+    saved: SyncTab,
     restoreAgent: (sessionId: string, data: { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number }) => void,
   ) => {
     const recreateNode = async (node: LayoutNode): Promise<LayoutNode | null> => {
@@ -1045,6 +1066,14 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           newId = await createPTY(cwd);
         }
 
+        // Inject history into the server-side buffer for agent read_terminal
+        if (sessionInfo?.terminalHistory) {
+          try {
+            const ipc = window.electron?.ipcRenderer;
+            await ipc?.invoke?.("terminal.setHistory", { sessionId: newId, history: sessionInfo.terminalHistory });
+          } catch { /* best effort */ }
+        }
+
         const config = sessionInfo?.aiConfig || aiService.getConfig();
         setSessions(prev => new Map(prev).set(newId, {
           id: newId,
@@ -1055,6 +1084,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           contextSummary: sessionInfo?.contextSummary,
           contextSummarySourceLength: sessionInfo?.contextSummarySourceLength,
           sshProfileId: sessionInfo?.sshProfileId,
+          pendingHistory: sessionInfo?.terminalHistory,
         }));
 
         const agentSnapshot = saved.agentState[oldId];
@@ -1079,24 +1109,24 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     };
 
     const newTabId = uuid();
-    setTabs(prev => [...prev, {
+    const newTab: Tab = {
       id: newTabId,
       title: saved.tab.title,
       color: saved.tab.color,
       root: newRoot,
       activeSessionId: findFirstSession(newRoot),
-      savedTabId: saved.id,
-    }]);
+    };
+    setTabs(prev => [...prev, newTab]);
     setActiveTabId(newTabId);
   };
 
   /** Delete a saved tab snapshot from persistent storage. */
   const deleteSavedTab = async (savedTabId: string) => {
     const ipc = window.electron?.ipcRenderer;
-    const readFn = (ipc as any)?.readSavedTabs || (() => ipc?.invoke("savedTabs.read"));
-    const writeFn = (ipc as any)?.writeSavedTabs || ((d: any) => ipc?.invoke("savedTabs.write", d));
+    const readFn = (ipc as any)?.readSyncTabs || (() => ipc?.invoke("savedTabs.read"));
+    const writeFn = (ipc as any)?.writeSyncTabs || ((d: any) => ipc?.invoke("savedTabs.write", d));
     try {
-      const existing: SavedTab[] = (await readFn()) || [];
+      const existing: SyncTab[] = (await readFn()) || [];
       const updated = existing.filter(t => t.id !== savedTabId);
       await writeFn(updated);
     } catch { /* best effort */ }

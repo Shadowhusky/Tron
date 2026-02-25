@@ -74,4 +74,10 @@ export const sel = {
   tabCreateDropdown: '[data-testid="tab-create-dropdown"]',
   tabCreateTerminal: '[data-testid="tab-create-terminal"]',
   tabCreateSSH: '[data-testid="tab-create-ssh"]',
+
+  // Saved Tabs
+  tabSaveRemote: '[data-testid="tab-save-remote"]',
+  tabLoadSaved: '[data-testid="tab-load-saved"]',
+  savedTabsModal: '[data-testid="saved-tabs-modal"]',
+  savedTabLoad: (id: string) => `[data-testid="saved-tab-load-${id}"]`,
 };

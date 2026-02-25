@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLayout } from "../../contexts/LayoutContext";
 import { aiService, providerUsesBaseUrl } from "../../services/ai";
-import { STORAGE_KEYS } from "../../constants/storage";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useConfig } from "../../contexts/ConfigContext";
 import { Folder, X, Loader2, Trash2, Search, Settings } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
@@ -74,6 +74,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
 }) => {
   const { sessions, updateSessionConfig, updateSession, openSettingsTab, refreshCwd } = useLayout();
   const { resolvedTheme: theme } = useTheme();
+  const { config: appConfig } = useConfig();
   const { agentThread, setAgentThread } = useAgent(sessionId);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
@@ -166,15 +167,11 @@ const ContextBar: React.FC<ContextBarProps> = ({
       // 1. Try to find the user's saved preferred model from provider cache
       let target = availableModels[0];
       try {
-        const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
-        if (raw) {
-          const cache = JSON.parse(raw);
-          // Check each available model — prefer one that matches a cached provider's saved model
-          for (const m of availableModels) {
-            if (cache[m.provider]?.model === m.name) {
-              target = m;
-              break;
-            }
+        const cache = appConfig.providerConfigs || {};
+        for (const m of availableModels) {
+          if (cache[m.provider]?.model === m.name) {
+            target = m;
+            break;
           }
         }
       } catch { }
@@ -187,8 +184,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
       let providerCfg: { apiKey?: string; baseUrl?: string } | undefined;
       try {
-        const raw = localStorage.getItem(STORAGE_KEYS.PROVIDER_CONFIGS);
-        if (raw) providerCfg = JSON.parse(raw)[target.provider];
+        providerCfg = (appConfig.providerConfigs || {} as any)[target.provider];
       } catch { }
       const apiKey =
         providerCfg?.apiKey ||
@@ -581,10 +577,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                               | { apiKey?: string; baseUrl?: string }
                               | undefined;
                             try {
-                              const raw = localStorage.getItem(
-                                "tron_provider_configs",
-                              );
-                              if (raw) providerCfg = JSON.parse(raw)[m.provider];
+                              providerCfg = (appConfig.providerConfigs || {} as any)[m.provider];
                             } catch { }
                             const apiKey =
                               providerCfg?.apiKey ||

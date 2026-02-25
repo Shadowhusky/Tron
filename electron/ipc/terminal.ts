@@ -522,6 +522,13 @@ export function registerTerminalHandlers(
     return stripSentinels(raw);
   });
 
+  // Inject saved terminal history into a session (used when loading sync tabs)
+  ipcMain.handle("terminal.setHistory", (_event, { sessionId, history }: { sessionId: string; history: string }) => {
+    if (sessions.has(sessionId)) {
+      sessionHistory.set(sessionId, history);
+    }
+  });
+
   // Scan all available commands on the system (for auto-mode classification)
   // Two-phase: fast non-interactive scan first, then interactive scan for shell
   // functions (nvm, pyenv, rvm) that are only loaded in interactive shells.

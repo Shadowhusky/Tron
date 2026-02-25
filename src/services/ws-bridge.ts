@@ -340,10 +340,10 @@ export function initWebSocketBridge() {
         invoke("ssh.profiles.read") as Promise<any[]>,
       writeSSHProfiles: (profiles: any[]) =>
         invoke("ssh.profiles.write", profiles) as Promise<boolean>,
-      // Saved Tabs
-      readSavedTabs: () =>
+      // Sync Tabs
+      readSyncTabs: () =>
         invoke("savedTabs.read") as Promise<any[]>,
-      writeSavedTabs: (tabs: any[]) =>
+      writeSyncTabs: (tabs: any[]) =>
         invoke("savedTabs.write", tabs) as Promise<boolean>,
     },
   };

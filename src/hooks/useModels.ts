@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AIModel } from "../types";
 import { aiService } from "../services/ai";
+import { useConfig } from "../contexts/ConfigContext";
 
 /** Fetch the model list from a single provider. */
 export function useModels(baseUrl?: string, provider?: string, apiKey?: string) {
@@ -55,13 +56,14 @@ export function useModelsWithCaps(baseUrl?: string, enabled: boolean = true, pro
 
 /**
  * Fetch models from ALL configured providers (for ContextBar model popover).
- * Reads provider configs from localStorage to find all set-up providers.
+ * Reads provider configs from ConfigContext (persisted in config.json).
  * Only refetches on explicit invalidateModels() (e.g. Settings Save).
  */
 export function useAllConfiguredModels() {
+  const { config } = useConfig();
   return useQuery<AIModel[]>({
     queryKey: ["allConfiguredModels"],
-    queryFn: () => aiService.getAllConfiguredModels(),
+    queryFn: () => aiService.getAllConfiguredModels(config.providerConfigs),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     retry: 0,
