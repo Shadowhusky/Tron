@@ -29,7 +29,7 @@ Most AI coding tools are chat-first — you paste context in, copy commands out,
 - **Any model** — Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, or any compatible API
 - **SSH remote** — connect to remote servers; terminal, agent, and file ops work identically over SSH
 - **Built-in web server** — toggle it on in Settings and access your terminal from any browser on the network
-- **Auto-updates** — check for and install updates directly from the app
+- **Session persistence** — save tabs, restore sessions across restarts; use your favorite coding agent (Claude Code, etc.) and pick up right where you left off
 - **Cross-platform** — macOS, Windows, Linux. Desktop (Electron) or browser.
 - **Safe** — dangerous command detection, permission prompts, loop detection, circuit breakers
 
@@ -156,9 +156,11 @@ environment:
 - Access your full terminal from any browser on the network
 - Pair with [Tailscale](https://tailscale.com) for secure remote access
 
-### Auto-Updates
-- Check for, download, and install updates directly from Settings > Updates
-- No need to manually download releases
+### Session Persistence
+- Terminal output survives app restarts — reopen and see your full history
+- Save tabs to disk and restore them anytime (right-click tab → Save)
+- Use your preferred coding agent (Claude Code, Aider, etc.) inside Tron and resume seamlessly even if the page closes
+- Agent threads, overlay state, and scroll position are all preserved
 
 ### Providers
 Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI Compatible, Anthropic Compatible.

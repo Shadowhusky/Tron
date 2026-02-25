@@ -219,8 +219,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         return false;
       }
       // Cmd/Ctrl+V — take full control of paste so we can handle images/files.
-      // Block xterm (return false) and handle everything in handlePaste().
+      // preventDefault stops the browser from also firing a native 'paste' event
+      // (which xterm.js would handle via onData, causing double-paste).
       if (e.key === "v" && (e.metaKey || e.ctrlKey) && e.type === "keydown") {
+        e.preventDefault();
         handlePaste();
         return false;
       }
