@@ -40,6 +40,10 @@ const ALLOWED_INVOKE_CHANNELS = [
   "ssh.profiles.write",
   "savedTabs.read",
   "savedTabs.write",
+  "webServer.start",
+  "webServer.stop",
+  "webServer.status",
+  "webServer.checkPort",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -190,5 +194,14 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("savedTabs.read") as Promise<any[]>,
     writeSavedTabs: (tabs: any[]) =>
       ipcRenderer.invoke("savedTabs.write", tabs) as Promise<boolean>,
+    // Web Server
+    startWebServer: (port: number) =>
+      ipcRenderer.invoke("webServer.start", port) as Promise<{ success: boolean; port?: number; error?: string }>,
+    stopWebServer: () =>
+      ipcRenderer.invoke("webServer.stop") as Promise<{ success: boolean }>,
+    getWebServerStatus: () =>
+      ipcRenderer.invoke("webServer.status") as Promise<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>,
+    checkPort: (port: number) =>
+      ipcRenderer.invoke("webServer.checkPort", port) as Promise<{ available: boolean }>,
   },
 });

@@ -43,6 +43,7 @@ const system_1 = require("./ipc/system");
 const ai_1 = require("./ipc/ai");
 const config_1 = require("./ipc/config");
 const ssh_1 = require("./ipc/ssh");
+const web_server_1 = require("./ipc/web-server");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
@@ -214,6 +215,7 @@ const createWindow = () => {
 (0, system_1.registerSystemHandlers)();
 (0, ai_1.registerAIHandlers)();
 (0, config_1.registerConfigHandlers)();
+(0, web_server_1.registerWebServerHandlers)();
 // --- Window close response from renderer ---
 electron_1.ipcMain.on("window.closeConfirmed", () => {
     forceQuit = true;
@@ -225,15 +227,24 @@ electron_1.ipcMain.on("window.closeCancelled", () => {
     // No-op — renderer dismissed the modal
 });
 // --- App lifecycle ---
-electron_1.app.whenReady().then(() => {
+electron_1.app.whenReady().then(async () => {
     createWindow();
     electron_1.app.on("activate", () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0)
             createWindow();
     });
+    // Auto-start integrated web server
+    const wsConfig = (0, web_server_1.readWebServerConfig)();
+    if (wsConfig.enabled) {
+        const result = await (0, web_server_1.startWebServer)(wsConfig.port);
+        if (!result.success) {
+            console.error(`[Tron] Failed to start web server: ${result.error}`);
+        }
+    }
 });
 electron_1.app.on("window-all-closed", () => {
     (0, terminal_1.cleanupAllSessions)();
+    (0, web_server_1.stopWebServer)();
     if (process.platform !== "darwin")
         electron_1.app.quit();
 });
@@ -241,5 +252,6 @@ electron_1.app.on("before-quit", () => {
     forceQuit = true;
     (0, ssh_1.cleanupAllSSHSessions)();
     (0, terminal_1.cleanupAllSessions)();
+    (0, web_server_1.stopWebServer)();
 });
 //# sourceMappingURL=main.js.map
