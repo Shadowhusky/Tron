@@ -62,6 +62,8 @@ interface LayoutContextType {
   isHydrated: boolean;
   /** Register a styled confirm dialog (replaces window.confirm for tab close). */
   setConfirmHandler: (handler: (message: string) => Promise<boolean>) => void;
+  /** Trigger an immediate CWD refresh for a session (or the active session). */
+  refreshCwd: (sessionId?: string) => Promise<void>;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -1103,32 +1105,33 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const activeSessionId = getActiveTab()?.activeSessionId || null;
 
   // Poll CWD for the active session every 3 seconds (with in-flight guard)
-  // Also derives the tab title from the active session's CWD
+  const cwdInFlightRef = useRef(false);
+
+  const refreshCwd = useCallback(async (sessionId?: string) => {
+    const sid = sessionId || activeSessionId;
+    if (!sid || sid === "settings" || !window.electron) return;
+    if (cwdInFlightRef.current) return;
+    cwdInFlightRef.current = true;
+    try {
+      const cwd = await window.electron.ipcRenderer.getCwd(sid);
+      if (cwd) {
+        updateSessionCwd(sid, cwd);
+      }
+    } catch (e) {
+      console.warn("Error polling CWD:", e);
+    } finally {
+      cwdInFlightRef.current = false;
+    }
+  }, [activeSessionId]);
+
   useEffect(() => {
     if (!activeSessionId || activeSessionId === "settings" || !window.electron)
       return;
 
-    let inFlight = false;
-
-    const pollCwd = async () => {
-      if (inFlight) return; // skip if previous poll still pending
-      inFlight = true;
-      try {
-        const cwd = await window.electron.ipcRenderer.getCwd(activeSessionId);
-        if (cwd) {
-          updateSessionCwd(activeSessionId, cwd);
-        }
-      } catch (e) {
-        console.warn("Error polling CWD:", e);
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    pollCwd();
-    const interval = setInterval(pollCwd, 3000);
+    refreshCwd();
+    const interval = setInterval(refreshCwd, 3000);
     return () => clearInterval(interval);
-  }, [activeSessionId]);
+  }, [activeSessionId, refreshCwd]);
 
   // Styled confirm handler — App.tsx registers a modal-based one via setConfirmHandler
   const confirmHandlerRef = useRef<((message: string) => Promise<boolean>) | null>(null);
@@ -1239,6 +1242,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         deleteSavedTab,
         isHydrated,
         setConfirmHandler,
+        refreshCwd,
       }}
     >
       {children}

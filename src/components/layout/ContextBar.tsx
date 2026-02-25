@@ -72,7 +72,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   isOverlayVisible,
   onShowOverlay,
 }) => {
-  const { sessions, updateSessionConfig, updateSession, openSettingsTab } = useLayout();
+  const { sessions, updateSessionConfig, updateSession, openSettingsTab, refreshCwd } = useLayout();
   const { resolvedTheme: theme } = useTheme();
   const { agentThread, setAgentThread } = useAgent(sessionId);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -420,6 +420,9 @@ const ContextBar: React.FC<ContextBarProps> = ({
                 id: sessionId,
                 data: `cd ${JSON.stringify(selected)}\r`,
               });
+
+              // Refresh CWD after cd completes (wait for shell to process)
+              setTimeout(() => refreshCwd(sessionId), 500);
             }
           }}
         >

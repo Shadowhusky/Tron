@@ -167,9 +167,18 @@ function trackedExec(command, options) {
 /** CWD cache — avoids spawning lsof/readlink on every IPC call (completions fire per keystroke). */
 const cwdCache = new Map();
 const CWD_CACHE_TTL = 2000; // 2 seconds
+/** Strip ANSI escape sequences (CSI, OSC, simple escapes) from a string. */
+function stripAnsiCodes(text) {
+    return text
+        .replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "") // CSI sequences (e.g. \x1b[32m)
+        .replace(/\x1B\][^\x07]*\x07/g, "") // OSC sequences (e.g. \x1b]0;title\x07)
+        .replace(/\x1B\][^\x1B]*\x1B\\/g, "") // OSC with ST terminator
+        .replace(/\x1B[^[\]]/g, ""); // Other simple escape sequences
+}
 /**
  * Parse CWD from shell prompt in terminal history (Windows fallback).
  * PowerShell shows "PS C:\path>" and cmd.exe shows "C:\path>".
+ * History contains raw ANSI codes, so we strip them before matching.
  */
 function parseCwdFromHistory(sessionId) {
     const history = sessionHistory.get(sessionId);
@@ -178,7 +187,7 @@ function parseCwdFromHistory(sessionId) {
     const lines = history.split("\n").slice(-20);
     // Scan from bottom up for the most recent prompt
     for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i].trim();
+        const line = stripAnsiCodes(lines[i]).trim();
         // PowerShell: "PS C:\Users\foo\project> " or "PS C:\Users\foo\project>"
         const psMatch = line.match(/^PS\s+([A-Z]:\\[^>]*?)>\s*$/i);
         if (psMatch)
