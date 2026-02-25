@@ -54,6 +54,8 @@ const sessionOwners = new Map<string, string>();
 // Current pushEvent per session — updated on reconnect so onData uses fresh WS
 const sessionPushEvents = new Map<string, EventPusher>();
 const activeChildProcesses = new Set<ChildProcess>();
+// Sessions being cleaned up by grace-period expiry — onExit should preserve history files
+const cleanedUpSessions = new Set<string>();
 
 // Per-session display buffering — active during execInTerminal to strip sentinels cleanly
 const displayBuffers = new Map<string, { data: string; timer: ReturnType<typeof setTimeout> | null; pushEvent: EventPusher }>();
@@ -69,6 +71,25 @@ let historyFlushTimer: ReturnType<typeof setTimeout> | null = null;
 function ensureHistoryDir() {
   try { fs.mkdirSync(historyDir, { recursive: true }); } catch { /* exists */ }
 }
+
+/** Remove history files older than 7 days to prevent disk bloat from abandoned sessions. */
+function cleanupStaleHistoryFiles() {
+  ensureHistoryDir();
+  const now = Date.now();
+  const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+  try {
+    for (const file of fs.readdirSync(historyDir)) {
+      const filePath = path.join(historyDir, file);
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs > MAX_AGE) {
+        fs.unlinkSync(filePath);
+      }
+    }
+  } catch { /* best effort */ }
+}
+
+// Clean up stale history files on startup
+cleanupStaleHistoryFiles();
 
 function persistSessionHistory(sessionId: string) {
   ensureHistoryDir();
@@ -213,6 +234,8 @@ export function cleanupClientSessions(clientId: string) {
       if (session) {
         // Persist history before killing so it survives for potential future reconnect
         persistSessionHistory(sessionId);
+        // Mark as cleaned-up so onExit preserves the history file we just wrote
+        cleanedUpSessions.add(sessionId);
         session.kill();
         sessions.delete(sessionId);
         sessionHistory.delete(sessionId);
@@ -316,7 +339,12 @@ export function createSession(
     sessionHistory.delete(sessionId);
     sessionOwners.delete(sessionId);
     sessionPushEvents.delete(sessionId);
-    removePersistedHistory(sessionId);
+    // Only delete history file on normal exit (user/process closed terminal).
+    // When cleanup killed the PTY (grace period expiry), preserve the file for reconnect.
+    if (!cleanedUpSessions.has(sessionId)) {
+      removePersistedHistory(sessionId);
+    }
+    cleanedUpSessions.delete(sessionId);
   });
 
   sessions.set(sessionId, ptyProcess);
@@ -801,6 +829,31 @@ export function searchDir(dirPath: string, query: string): { success: boolean; r
   } catch (err: any) {
     return { success: false, error: err.message };
   }
+}
+
+export function getPersistedHistoryStats(): { fileCount: number; totalBytes: number } {
+  ensureHistoryDir();
+  let fileCount = 0, totalBytes = 0;
+  try {
+    for (const file of fs.readdirSync(historyDir)) {
+      const stat = fs.statSync(path.join(historyDir, file));
+      fileCount++;
+      totalBytes += stat.size;
+    }
+  } catch { /* best effort */ }
+  return { fileCount, totalBytes };
+}
+
+export function clearAllPersistedHistory(): { deletedCount: number } {
+  ensureHistoryDir();
+  let deletedCount = 0;
+  try {
+    for (const file of fs.readdirSync(historyDir)) {
+      fs.unlinkSync(path.join(historyDir, file));
+      deletedCount++;
+    }
+  } catch { /* best effort */ }
+  return { deletedCount };
 }
 
 export function saveSessionLog(data: {

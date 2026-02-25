@@ -243,7 +243,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       terminal.cleanupClientSessions(clientId);
       pendingCleanups.delete(clientId);
       console.log(`[Tron Web] Cleaned up sessions for disconnected client ${clientId.slice(0, 8)}…`);
-    }, 300_000)); // 5 minute grace period (mobile browsers kill pages aggressively)
+    }, 86_400_000)); // 24 hour grace period — keeps PTY alive for overnight disconnects
   });
 });
 
@@ -357,6 +357,10 @@ async function handleInvoke(
         fs.writeFileSync(savedTabsFile, JSON.stringify(data, null, 2), "utf-8");
         return true;
       } catch { return false; }
+    case "terminal.history.getStats":
+      return terminal.getPersistedHistoryStats();
+    case "terminal.history.clearAll":
+      return terminal.clearAllPersistedHistory();
     case "terminal.readHistory":
       return terminal.readHistory(data?.sessionId || data, data?.lines);
     case "terminal.clearHistory":
