@@ -32,7 +32,7 @@ interface ModalProps {
 
 const panelTheme = (t: ResolvedTheme) =>
   t === "light"
-    ? "bg-gray-100/80 text-gray-900 border border-black/[0.08]"
+    ? "bg-gray-100 text-gray-900 border border-black/[0.08]"
     : t === "modern"
       ? "bg-[#0e0e14] text-gray-200 border border-white/[0.06]"
       : "bg-[#0e0e0e] text-gray-200 border border-white/[0.06]";
