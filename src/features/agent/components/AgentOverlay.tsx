@@ -877,23 +877,26 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     const newSteps = agentThread.slice(prevLenRef.current);
     prevLenRef.current = agentThread.length;
 
-    for (const s of newSteps) {
-      if (s.step === "executing") {
-        const id = ++toastIdRef.current;
-        setToasts((prev) => [...prev, { id, message: s.output, type: "info" }]);
-      } else if (s.step === "executed") {
-        const id = ++toastIdRef.current;
-        // Extract command from "command\n---\noutput" format
-        const toastMsg = s.output.includes("\n---\n")
-          ? s.output.slice(0, s.output.indexOf("\n---\n"))
-          : s.output;
-        setToasts((prev) => [
-          ...prev,
-          { id, message: `Done: ${toastMsg}`, type: "success" },
-        ]);
+    // In agent view mode (fullHeight), steps are fully visible in the panel —
+    // skip redundant toasts so they don't obscure the content.
+    if (!fullHeight) {
+      for (const s of newSteps) {
+        if (s.step === "executing") {
+          const id = ++toastIdRef.current;
+          setToasts((prev) => [...prev, { id, message: s.output, type: "info" }]);
+        } else if (s.step === "executed") {
+          const id = ++toastIdRef.current;
+          const toastMsg = s.output.includes("\n---\n")
+            ? s.output.slice(0, s.output.indexOf("\n---\n"))
+            : s.output;
+          setToasts((prev) => [
+            ...prev,
+            { id, message: `Done: ${toastMsg}`, type: "success" },
+          ]);
+        }
       }
     }
-  }, [agentThread.length]);
+  }, [agentThread.length, fullHeight]);
 
   // Auto-scroll: only if user hasn't manually scrolled up
   const [userScrolledUp, setUserScrolledUp] = useState(false);
