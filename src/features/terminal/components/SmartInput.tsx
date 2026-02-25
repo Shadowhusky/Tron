@@ -1216,24 +1216,32 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   : "");
               if (!displayedGhost) return null;
               const isTouch = isTouchDevice();
+              const acceptGhost = () => {
+                if (ghostText) {
+                  setValue((prev) => prev + ghostText);
+                  setGhostText("");
+                } else if (aiPlaceholder && !value) {
+                  setValue(aiPlaceholder);
+                  setAiPlaceholder("");
+                }
+                setTimeout(() => inputRef.current?.focus(), 0);
+              };
               return (
                 <div
-                  className={`absolute inset-0 font-mono text-sm whitespace-pre-wrap break-words overflow-hidden ${isTouch ? "" : "pointer-events-none"}`}
-                  onClick={isTouch ? () => {
-                    if (ghostText) {
-                      setValue((prev) => prev + ghostText);
-                      setGhostText("");
-                    } else if (aiPlaceholder && !value) {
-                      setValue(aiPlaceholder);
-                      setAiPlaceholder("");
-                    }
-                    setTimeout(() => inputRef.current?.focus(), 0);
-                  } : undefined}
+                  className="absolute inset-0 font-mono text-sm whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
                 >
                   <span className="invisible">{value}</span>
                   <span className="text-gray-500 opacity-50">
                     {displayedGhost}
                   </span>
+                  {isTouch && (
+                    <span
+                      className="pointer-events-auto inline-flex items-center ml-1.5 px-1.5 py-0 rounded text-[10px] font-medium align-middle cursor-pointer bg-gray-500/20 text-gray-400 active:bg-gray-500/40"
+                      onClick={(e) => { e.stopPropagation(); acceptGhost(); }}
+                    >
+                      Tab ↹
+                    </span>
+                  )}
                 </div>
               );
             })()}
