@@ -149,6 +149,28 @@ const TabBar: React.FC<TabBarProps> = ({
     prevTabCountRef.current = tabs.length;
   }, [tabs.length]);
 
+  // Scroll active tab fully into view on mount
+  const didInitialScroll = useRef(false);
+  useEffect(() => {
+    if (didInitialScroll.current) return;
+    didInitialScroll.current = true;
+    requestAnimationFrame(() => {
+      const container = scrollRef.current;
+      if (!container) return;
+      const activeEl = container.querySelector(`[data-testid="tab-${activeTabId}"]`) as HTMLElement | null;
+      if (!activeEl) return;
+      const cRect = container.getBoundingClientRect();
+      const tRect = activeEl.getBoundingClientRect();
+      // Account for the sticky "New Tab" button (~60px) that overlaps the scroll area
+      const rightPad = 60;
+      if (tRect.left < cRect.left) {
+        container.scrollLeft += tRect.left - cRect.left;
+      } else if (tRect.right > cRect.right - rightPad) {
+        container.scrollLeft += tRect.right - (cRect.right - rightPad);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const commitReorder = () => {
     isDraggingRef.current = false;
     setDraggingTabId(null);
