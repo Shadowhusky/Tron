@@ -16,6 +16,7 @@ const os_1 = __importDefault(require("os"));
 const fs_1 = __importDefault(require("fs"));
 let serverProcess = null;
 let currentPort = null;
+let lastError = null;
 const CONFIG_FILE = "tron.config.json";
 /** Read webServer config from the persisted tron.config.json. */
 function readWebServerConfig() {
@@ -57,13 +58,16 @@ async function startWebServer(port) {
     if (serverProcess) {
         return { success: false, error: "Server is already running" };
     }
+    lastError = null;
     const serverPath = getServerPath();
     if (!fs_1.default.existsSync(serverPath)) {
-        return { success: false, error: `Server not found at ${serverPath}` };
+        lastError = `Server not found at ${serverPath}`;
+        return { success: false, error: lastError };
     }
     const available = await isPortAvailable(port);
     if (!available) {
-        return { success: false, error: `Port ${port} is already in use` };
+        lastError = `Port ${port} is already in use`;
+        return { success: false, error: lastError };
     }
     return new Promise((resolve) => {
         const isDev = !electron_1.app.isPackaged;
@@ -76,17 +80,21 @@ async function startWebServer(port) {
             },
             stdio: ["pipe", "pipe", "pipe", "ipc"],
         });
+        // Collect stderr for error reporting
+        let stderrBuf = "";
         const timeout = setTimeout(() => {
             child.kill("SIGTERM");
             serverProcess = null;
             currentPort = null;
-            resolve({ success: false, error: "Server startup timed out (10s)" });
+            lastError = stderrBuf.trim() || "Server startup timed out (10s)";
+            resolve({ success: false, error: lastError });
         }, 10000);
         child.on("message", (msg) => {
             if (msg?.type === "ready") {
                 clearTimeout(timeout);
                 serverProcess = child;
                 currentPort = msg.port || port;
+                lastError = null;
                 console.log(`[Tron] Web server started on port ${currentPort}`);
                 resolve({ success: true, port: currentPort });
             }
@@ -95,7 +103,8 @@ async function startWebServer(port) {
             clearTimeout(timeout);
             serverProcess = null;
             currentPort = null;
-            resolve({ success: false, error: err.message });
+            lastError = err.message;
+            resolve({ success: false, error: lastError });
         });
         child.on("exit", (code) => {
             clearTimeout(timeout);
@@ -103,6 +112,7 @@ async function startWebServer(port) {
                 console.log(`[Tron] Web server exited with code ${code}`);
                 serverProcess = null;
                 currentPort = null;
+                lastError = stderrBuf.trim() || `Server exited with code ${code}`;
             }
         });
         // Forward server stdout/stderr to Electron's console
@@ -110,6 +120,7 @@ async function startWebServer(port) {
             process.stdout.write(`[WebServer] ${data}`);
         });
         child.stderr?.on("data", (data) => {
+            stderrBuf += data.toString();
             process.stderr.write(`[WebServer] ${data}`);
         });
     });
@@ -150,7 +161,9 @@ function getLocalIPs() {
         if (!iface)
             continue;
         for (const info of iface) {
-            if (info.family === "IPv4" && !info.internal) {
+            // Node 18.4+ returns family as number (4/6), older versions as string ("IPv4"/"IPv6")
+            const isIPv4 = info.family === "IPv4" || info.family === 4;
+            if (isIPv4 && !info.internal) {
                 ips.push(info.address);
             }
         }
@@ -163,6 +176,7 @@ function getWebServerStatus() {
         running: serverProcess !== null && !serverProcess.killed,
         port: currentPort,
         localIPs: getLocalIPs(),
+        error: lastError,
     };
 }
 /** Register all web server IPC handlers. */

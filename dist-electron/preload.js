@@ -44,6 +44,11 @@ const ALLOWED_INVOKE_CHANNELS = [
     "webServer.stop",
     "webServer.status",
     "webServer.checkPort",
+    "updater.checkForUpdates",
+    "updater.downloadUpdate",
+    "updater.quitAndInstall",
+    "updater.getStatus",
+    "updater.getVersion",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -59,6 +64,8 @@ const ALLOWED_RECEIVE_CHANNELS = [
     "menu.closeTab",
     "window.confirmClose",
     "ssh.statusChange",
+    "updater.status",
+    "updater.downloadProgress",
 ];
 const invokeSet = new Set(ALLOWED_INVOKE_CHANNELS);
 const sendSet = new Set(ALLOWED_SEND_CHANNELS);
@@ -135,6 +142,12 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         stopWebServer: () => electron_1.ipcRenderer.invoke("webServer.stop"),
         getWebServerStatus: () => electron_1.ipcRenderer.invoke("webServer.status"),
         checkPort: (port) => electron_1.ipcRenderer.invoke("webServer.checkPort", port),
+        // Updater
+        checkForUpdates: () => electron_1.ipcRenderer.invoke("updater.checkForUpdates"),
+        downloadUpdate: () => electron_1.ipcRenderer.invoke("updater.downloadUpdate"),
+        quitAndInstall: () => electron_1.ipcRenderer.invoke("updater.quitAndInstall"),
+        getUpdateStatus: () => electron_1.ipcRenderer.invoke("updater.getStatus"),
+        getAppVersion: () => electron_1.ipcRenderer.invoke("updater.getVersion"),
     },
 });
 //# sourceMappingURL=preload.js.map

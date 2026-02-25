@@ -34,6 +34,7 @@ import {
   RefreshCw,
   Copy,
   ExternalLink,
+  Download,
 } from "lucide-react";
 
 
@@ -76,14 +77,16 @@ const NAV_SECTIONS_BASE = [
   { id: "view", label: "View Mode", icon: Monitor },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "web-server", label: "Web Server", icon: Wifi },
+  { id: "updates", label: "Updates", icon: Download },
   { id: "ssh", label: "SSH", icon: Globe },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 ] as const;
 
-// Web Server section only shown in Electron mode
+// Web Server + Updates sections only shown in Electron mode
+const ELECTRON_ONLY_SECTIONS = new Set(["web-server", "updates"]);
 const NAV_SECTIONS = window.electron
   ? NAV_SECTIONS_BASE
-  : NAV_SECTIONS_BASE.filter((s) => s.id !== "web-server");
+  : NAV_SECTIONS_BASE.filter((s) => !ELECTRON_ONLY_SECTIONS.has(s.id));
 
 // --- SSH Profiles Sub-component ---
 function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
@@ -408,6 +411,201 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
             Use the IP address to access from other devices on your local network.
             For remote access, use Tailscale or a reverse proxy to securely expose this address.
           </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Updates Sub-component (Electron only) ---
+function UpdatesSection({ cardClass, t, resolvedTheme }: {
+  cardClass: string;
+  t: any;
+  resolvedTheme: string;
+}) {
+  const { config: tronConfig, updateConfig } = useConfig();
+  const autoUpdate = tronConfig.autoUpdate !== false;
+
+  const [appVersion, setAppVersion] = useState("");
+  const [status, setStatus] = useState<string>("idle");
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; releaseNotes?: string } | null>(null);
+  const [progress, setProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const ipc = window.electron?.ipcRenderer;
+
+  // Fetch version + current status on mount
+  useEffect(() => {
+    ipc?.getAppVersion?.().then(setAppVersion).catch(() => {});
+    ipc?.getUpdateStatus?.().then((s) => {
+      setStatus(s.status);
+      setUpdateInfo(s.updateInfo);
+      setProgress(s.downloadProgress);
+      setLastError(s.lastError);
+    }).catch(() => {});
+  }, [ipc]);
+
+  // Listen for status + progress events
+  useEffect(() => {
+    if (!ipc?.on) return;
+    const cleanupStatus = ipc.on("updater.status", (data: any) => {
+      setStatus(data.status);
+      setChecking(false);
+      if (data.updateInfo) setUpdateInfo(data.updateInfo);
+      if (data.downloadProgress) setProgress(data.downloadProgress);
+      if (data.lastError) setLastError(data.lastError);
+      if (data.status === "not-available" || data.status === "error") {
+        setChecking(false);
+      }
+    });
+    const cleanupProgress = ipc.on("updater.downloadProgress", (data: any) => {
+      setProgress(data);
+    });
+    return () => {
+      cleanupStatus?.();
+      cleanupProgress?.();
+    };
+  }, [ipc]);
+
+  const handleCheck = () => {
+    setChecking(true);
+    setLastError(null);
+    ipc?.checkForUpdates?.().catch(() => setChecking(false));
+  };
+
+  const handleDownload = () => {
+    ipc?.downloadUpdate?.().catch(() => {});
+  };
+
+  const handleQuitAndInstall = () => {
+    ipc?.quitAndInstall?.().catch(() => {});
+  };
+
+  const handleToggleAutoUpdate = () => {
+    updateConfig({ autoUpdate: !autoUpdate });
+  };
+
+  const statusText = () => {
+    switch (status) {
+      case "checking": return "Checking for updates...";
+      case "available": return `Update available (v${updateInfo?.version})`;
+      case "downloading": return `Downloading... ${Math.round(progress?.percent ?? 0)}%`;
+      case "downloaded": return `v${updateInfo?.version} ready to install`;
+      case "not-available": return "You're up to date";
+      case "error": return "Update check failed";
+      default: return "";
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+        <Download className="w-3.5 h-3.5" />
+        Updates
+      </h3>
+
+      {/* Current version */}
+      <div className={cardClass}>
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-xs font-medium ${t.text}`}>Current Version</span>
+            <span className={`text-[10px] ${t.textFaint}`}>
+              {appVersion ? `v${appVersion}` : "Loading..."}
+            </span>
+          </div>
+          <button
+            onClick={handleCheck}
+            disabled={checking || status === "downloading"}
+            className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover} ${(checking || status === "downloading") ? "opacity-50" : ""}`}
+          >
+            <RefreshCw className={`w-3 h-3 ${checking ? "animate-spin" : ""}`} />
+            {checking ? "Checking..." : "Check for Updates"}
+          </button>
+        </div>
+      </div>
+
+      {/* Auto-update toggle */}
+      <div className={cardClass}>
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-xs font-medium ${t.text}`}>Auto-download Updates</span>
+            <span className={`text-[10px] ${t.textFaint}`}>
+              Automatically download updates when available
+            </span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={autoUpdate}
+            onClick={handleToggleAutoUpdate}
+            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${autoUpdate
+              ? "bg-purple-500"
+              : resolvedTheme === "light"
+                ? "bg-gray-300"
+                : "bg-white/15"
+              }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${autoUpdate ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* Status */}
+      {status !== "idle" && (
+        <div className={cardClass}>
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${
+              status === "downloaded" ? "bg-green-400" :
+              status === "available" || status === "downloading" ? "bg-blue-400" :
+              status === "error" ? "bg-red-400" :
+              status === "not-available" ? "bg-green-400" :
+              "bg-yellow-400"
+            }`} />
+            <span className={`text-xs ${t.text}`}>{statusText()}</span>
+          </div>
+
+          {/* Progress bar */}
+          {status === "downloading" && progress && (
+            <div className="mt-2">
+              <div className={`w-full h-1.5 rounded-full ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}>
+                <div
+                  className="h-full rounded-full bg-purple-500 transition-all duration-300"
+                  style={{ width: `${Math.min(progress.percent, 100)}%` }}
+                />
+              </div>
+              <p className={`text-[10px] ${t.textFaint} mt-1`}>
+                {(progress.transferred / 1024 / 1024).toFixed(1)} / {(progress.total / 1024 / 1024).toFixed(1)} MB
+              </p>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          {status === "available" && !autoUpdate && (
+            <button
+              onClick={handleDownload}
+              className="mt-2 flex items-center gap-1 text-[10px] px-3 py-1 rounded border border-purple-500/30 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors"
+            >
+              <Download className="w-3 h-3" />
+              Download Update
+            </button>
+          )}
+
+          {status === "downloaded" && (
+            <button
+              onClick={handleQuitAndInstall}
+              className="mt-2 flex items-center gap-1 text-[10px] px-3 py-1 rounded border border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Relaunch to Update
+            </button>
+          )}
+
+          {/* Error */}
+          {status === "error" && lastError && (
+            <p className="text-[10px] text-red-400 mt-1.5">{lastError}</p>
+          )}
         </div>
       )}
     </div>
@@ -1361,6 +1559,15 @@ const SettingsPane = () => {
             {/* Web Server (Electron only) */}
             {activeSection === "web-server" && window.electron && (
               <WebServerSection
+                cardClass={cardClass}
+                t={t}
+                resolvedTheme={resolvedTheme}
+              />
+            )}
+
+            {/* Updates (Electron only) */}
+            {activeSection === "updates" && window.electron && (
+              <UpdatesSection
                 cardClass={cardClass}
                 t={t}
                 resolvedTheme={resolvedTheme}

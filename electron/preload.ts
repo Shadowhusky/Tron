@@ -44,6 +44,11 @@ const ALLOWED_INVOKE_CHANNELS = [
   "webServer.stop",
   "webServer.status",
   "webServer.checkPort",
+  "updater.checkForUpdates",
+  "updater.downloadUpdate",
+  "updater.quitAndInstall",
+  "updater.getStatus",
+  "updater.getVersion",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -61,6 +66,8 @@ const ALLOWED_RECEIVE_CHANNELS = [
   "menu.closeTab",
   "window.confirmClose",
   "ssh.statusChange",
+  "updater.status",
+  "updater.downloadProgress",
 ] as const;
 
 type InvokeChannel = (typeof ALLOWED_INVOKE_CHANNELS)[number];
@@ -203,5 +210,21 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("webServer.status") as Promise<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>,
     checkPort: (port: number) =>
       ipcRenderer.invoke("webServer.checkPort", port) as Promise<{ available: boolean }>,
+    // Updater
+    checkForUpdates: () =>
+      ipcRenderer.invoke("updater.checkForUpdates") as Promise<void>,
+    downloadUpdate: () =>
+      ipcRenderer.invoke("updater.downloadUpdate") as Promise<void>,
+    quitAndInstall: () =>
+      ipcRenderer.invoke("updater.quitAndInstall") as Promise<void>,
+    getUpdateStatus: () =>
+      ipcRenderer.invoke("updater.getStatus") as Promise<{
+        status: string;
+        updateInfo: { version: string; releaseNotes?: string } | null;
+        downloadProgress: { percent: number; bytesPerSecond: number; transferred: number; total: number } | null;
+        lastError: string | null;
+      }>,
+    getAppVersion: () =>
+      ipcRenderer.invoke("updater.getVersion") as Promise<string>,
   },
 });
