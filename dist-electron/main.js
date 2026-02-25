@@ -243,20 +243,20 @@ electron_1.app.whenReady().then(async () => {
             console.error(`[Tron] Failed to start web server: ${result.error}`);
         }
     }
-    // Auto-check for updates (reads config to determine auto-download)
-    try {
-        const fs = require("fs");
-        const configPath = path_1.default.join(electron_1.app.getPath("userData"), "tron.config.json");
+    // Auto-check for updates (deferred — does not block launch)
+    {
         let autoUpdate = true;
-        if (fs.existsSync(configPath)) {
-            const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-            if (raw?.autoUpdate === false)
-                autoUpdate = false;
+        try {
+            const fs = require("fs");
+            const cfgPath = path_1.default.join(electron_1.app.getPath("userData"), "tron.config.json");
+            if (fs.existsSync(cfgPath)) {
+                const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+                if (raw?.autoUpdate === false)
+                    autoUpdate = false;
+            }
         }
-        (0, updater_1.autoCheckForUpdates)(autoUpdate);
-    }
-    catch {
-        (0, updater_1.autoCheckForUpdates)(true);
+        catch { /* use default */ }
+        (0, updater_1.autoCheckForUpdates)(autoUpdate, () => mainWindow);
     }
 });
 electron_1.app.on("window-all-closed", () => {
