@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="2032" height="1167" alt="Screenshot 2026-02-23 at 11 48 02" src="https://github.com/user-attachments/assets/8d479dd0-e2b6-45e3-bd26-e7d026b40b23" />
+  <img alt="Tron Desktop" src="screenshots/desktop-hero.png" />
 </p>
 
 <h1 align="center">Tron — AI-Powered Terminal</h1>
@@ -8,7 +8,7 @@
   <em>Works on mobile too — access your terminal from anywhere via web mode</em>
 </p>
 <p align="center">
-  <img src="screenshots/mobile-web.png" width="280" />
+  <img src="screenshots/mobile-web.jpg" width="280" />
 </p>
 
 <p align="center">
