@@ -26,8 +26,8 @@ src/
     motion.ts             # Shared framer-motion variants
   contexts/           # React contexts (Layout, Theme, History, Agent)
   components/
-    layout/           # TabBar, SplitPane (recursive), TerminalPane, ContextBar, CloseConfirmModal, EmptyState
-    ui/               # Modal, FeatureIcon
+    layout/           # TabBar, SplitPane (recursive), TerminalPane, ContextBar, CloseConfirmModal, NotificationOverlay, SavedTabsModal, EmptyState
+    ui/               # Modal, FeatureIcon, SpotlightOverlay
   features/
     terminal/         # Terminal.tsx (xterm.js), SmartInput.tsx
     agent/            # AgentOverlay.tsx, TokenHeatBar.tsx
@@ -82,6 +82,8 @@ e2e/                  # Playwright E2E test suite
 - **Terminal loading overlay**: All terminal mounts show a themed loading overlay (skeleton lines + `$` prompt + blinking cursor) for 1s to mask flicker from history replay and initial rendering. Uses `@keyframes termBlink` for cursor animation. Overlay fades out via `transition-opacity duration-500 ease-out`.
 - **No backdrop-blur on overlays**: Never use `backdrop-blur` on modal/overlay backdrops — it causes visible lag on Electron and low-end devices. Use opaque or semi-transparent backgrounds (`bg-black/50`) instead. `backdrop-blur` is acceptable on persistent UI elements (e.g. tab bar, context bar) but not on transient overlays.
 - **Modal component**: Use `<Modal>` from `src/components/ui/Modal.tsx` for all modal dialogs. Provides consistent theming (`bg-black/70` backdrop, `rounded-2xl` panel, theme-aware borders), `fadeScale`/`overlay` animation, and `onClose` backdrop click. Accepts `maxWidth`, `zIndex`, `testId` props. Pass content as children.
+- **Cross-tab notifications**: `AgentContext` tracks `activeSessionIdsForNotifs` (a `Set<string>` of all session IDs in the active tab's layout tree). Notifications are only created when a session finishes outside the active tab. `NotificationOverlay` also applies a display-time filter as a safety net. In agent view mode (`fullHeight`), command execution toasts in `AgentOverlay` are suppressed since steps are already fully visible.
+- **Agent view mode SmartInput**: SmartInput always starts in auto-detect mode (`isAuto=true`), even in agent view mode. The auto-detect classifier routes simple commands (`ls`, `cd`, `git status`) directly to PTY instead of through the AI agent loop. The default fallback mode is "agent" when `defaultAgentMode=true`.
 
 ## Deployment Modes
 
