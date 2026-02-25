@@ -6,6 +6,7 @@ import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
 import { isWindows, isMacOS, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { isSshOnly } from "../../services/mode";
+import logoSvg from "../../assets/logo.svg";
 
 interface TabBarProps {
   tabs: Tab[];
@@ -179,6 +180,13 @@ const TabBar: React.FC<TabBarProps> = ({
     >
       {/* Traffic Lights Spacer (macOS Electron only) */}
       {isElectronApp() && !isWindows() && <div className="w-16 shrink-0" />}
+
+      {/* App icon (web mode only — Electron has native title bar / traffic lights) */}
+      {!isElectronApp() && (
+        <div className="flex items-center pl-3 pr-1 shrink-0">
+          <img src={logoSvg} alt="Tron" className="w-5 h-5" draggable={false} />
+        </div>
+      )}
 
       {/* Tabs */}
       <Reorder.Group
