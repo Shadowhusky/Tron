@@ -1,8 +1,4 @@
-<p align="center">
-  <img alt="Tron Desktop" src="screenshots/desktop-hero.png" />
-</p>
-
-<h1 align="center">Tron — AI-Powered Terminal</h1>
+ <h1 align="center">Tron — AI-Powered Terminal</h1>
 
 <p align="center">
   <em>Works on mobile too — access your terminal from anywhere via web mode</em>
