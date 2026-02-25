@@ -23,6 +23,8 @@ extraResources:
   - from: dist-server
     to: dist-server
 
+afterPack: build/afterPack.cjs
+
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns
