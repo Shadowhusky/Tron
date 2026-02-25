@@ -183,7 +183,7 @@ const TabBar: React.FC<TabBarProps> = ({
 
       {/* App icon (web mode only — Electron has native title bar / traffic lights) */}
       {!isElectronApp() && (
-        <div className="flex items-center pl-3 pr-1 shrink-0">
+        <div className="flex items-center pl-3 pr-2 shrink-0">
           <img src={logoSvg} alt="Tron" className="w-5 h-5" draggable={false} />
         </div>
       )}
