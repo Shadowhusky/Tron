@@ -87,6 +87,8 @@ const AppContent = () => {
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [showSavedTabs, setShowSavedTabs] = useState(false);
   const [sshToast, setSshToast] = useState("");
+  const [updateReady, setUpdateReady] = useState(false);
+  const [updateVersion, setUpdateVersion] = useState("");
 
   // Generic confirm modal — replaces window.confirm for styled modals
   const [confirmModal, setConfirmModal] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
@@ -164,6 +166,21 @@ const AppContent = () => {
       IPC.WINDOW_CONFIRM_CLOSE,
       () => {
         setShowCloseConfirm(true);
+      },
+    );
+    return cleanup;
+  }, []);
+
+  // Listen for auto-updater "downloaded" status
+  useEffect(() => {
+    if (!window.electron?.ipcRenderer?.on) return;
+    const cleanup = window.electron.ipcRenderer.on(
+      IPC.UPDATER_STATUS,
+      (data: any) => {
+        if (data.status === "downloaded" && data.updateInfo?.version) {
+          setUpdateVersion(data.updateInfo.version);
+          setUpdateReady(true);
+        }
       },
     );
     return cleanup;
@@ -371,6 +388,19 @@ const AppContent = () => {
         buttons={[
           { label: "Cancel", type: "ghost", onClick: () => { confirmModal?.resolve(false); setConfirmModal(null); } },
           { label: "Confirm", type: "primary", onClick: () => { confirmModal?.resolve(true); setConfirmModal(null); } },
+        ]}
+      />
+
+      {/* Update ready modal */}
+      <Modal
+        show={updateReady}
+        resolvedTheme={resolvedTheme}
+        onClose={() => setUpdateReady(false)}
+        title="Update Ready"
+        description={`A new version (v${updateVersion}) has been downloaded and is ready to install.`}
+        buttons={[
+          { label: "Later", type: "ghost", onClick: () => setUpdateReady(false) },
+          { label: "Relaunch Now", type: "primary", onClick: () => window.electron?.ipcRenderer?.quitAndInstall?.() },
         ]}
       />
 
