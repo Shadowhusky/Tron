@@ -11,6 +11,7 @@ import { registerSystemHandlers } from "./ipc/system";
 import { registerAIHandlers } from "./ipc/ai";
 import { registerConfigHandlers } from "./ipc/config";
 import { registerSSHHandlers, cleanupAllSSHSessions } from "./ipc/ssh";
+import { registerWebServerHandlers, startWebServer, stopWebServer, readWebServerConfig } from "./ipc/web-server";
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -196,6 +197,7 @@ registerSSHHandlers(() => mainWindow, getSessions, getSessionHistory);
 registerSystemHandlers();
 registerAIHandlers();
 registerConfigHandlers();
+registerWebServerHandlers();
 
 // --- Window close response from renderer ---
 ipcMain.on("window.closeConfirmed", () => {
@@ -210,15 +212,25 @@ ipcMain.on("window.closeCancelled", () => {
 });
 
 // --- App lifecycle ---
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  // Auto-start integrated web server
+  const wsConfig = readWebServerConfig();
+  if (wsConfig.enabled) {
+    const result = await startWebServer(wsConfig.port);
+    if (!result.success) {
+      console.error(`[Tron] Failed to start web server: ${result.error}`);
+    }
+  }
 });
 
 app.on("window-all-closed", () => {
   cleanupAllSessions();
+  stopWebServer();
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -226,4 +238,5 @@ app.on("before-quit", () => {
   forceQuit = true;
   cleanupAllSSHSessions();
   cleanupAllSessions();
+  stopWebServer();
 });

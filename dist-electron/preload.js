@@ -40,6 +40,10 @@ const ALLOWED_INVOKE_CHANNELS = [
     "ssh.profiles.write",
     "savedTabs.read",
     "savedTabs.write",
+    "webServer.start",
+    "webServer.stop",
+    "webServer.status",
+    "webServer.checkPort",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -126,6 +130,11 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         // Saved Tabs
         readSavedTabs: () => electron_1.ipcRenderer.invoke("savedTabs.read"),
         writeSavedTabs: (tabs) => electron_1.ipcRenderer.invoke("savedTabs.write", tabs),
+        // Web Server
+        startWebServer: (port) => electron_1.ipcRenderer.invoke("webServer.start", port),
+        stopWebServer: () => electron_1.ipcRenderer.invoke("webServer.stop"),
+        getWebServerStatus: () => electron_1.ipcRenderer.invoke("webServer.status"),
+        checkPort: (port) => electron_1.ipcRenderer.invoke("webServer.checkPort", port),
     },
 });
 //# sourceMappingURL=preload.js.map

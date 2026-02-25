@@ -30,6 +30,10 @@ import {
   Globe,
   Trash2,
   Plus,
+  Wifi,
+  RefreshCw,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
 
 
@@ -66,14 +70,20 @@ const HOTKEY_LABELS: Record<string, string> = {
   forceCommand: "Force Command (in input)",
 };
 
-const NAV_SECTIONS = [
+const NAV_SECTIONS_BASE = [
   { id: "ai", label: "AI", icon: Cpu },
   { id: "ai-features", label: "AI Features", icon: Sparkles },
   { id: "view", label: "View Mode", icon: Monitor },
   { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "web-server", label: "Web Server", icon: Wifi },
   { id: "ssh", label: "SSH", icon: Globe },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 ] as const;
+
+// Web Server section only shown in Electron mode
+const NAV_SECTIONS = window.electron
+  ? NAV_SECTIONS_BASE
+  : NAV_SECTIONS_BASE.filter((s) => s.id !== "web-server");
 
 // --- SSH Profiles Sub-component ---
 function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
@@ -171,6 +181,233 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Web Server Sub-component (Electron only) ---
+function WebServerSection({ cardClass, t, resolvedTheme }: {
+  cardClass: string;
+  t: any;
+  resolvedTheme: string;
+}) {
+  const { config: tronConfig, updateConfig } = useConfig();
+  const wsConfig = tronConfig.webServer ?? { enabled: true, port: 3888 };
+
+  const [status, setStatus] = useState<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>({ running: false, port: null, localIPs: [], error: null });
+  const [portInput, setPortInput] = useState(String(wsConfig.port));
+  const [portWarning, setPortWarning] = useState("");
+  const [restarting, setRestarting] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const portCheckTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const ipc = window.electron?.ipcRenderer;
+
+  // Poll server status
+  useEffect(() => {
+    const poll = () => {
+      ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => clearInterval(id);
+  }, [ipc]);
+
+  // Debounced port-in-use check
+  useEffect(() => {
+    clearTimeout(portCheckTimer.current);
+    const port = Number(portInput);
+    if (!port || port < 1 || port > 65535) {
+      setPortWarning("Invalid port number");
+      return;
+    }
+    setPortWarning("");
+    portCheckTimer.current = setTimeout(() => {
+      if (status.running && status.port === port) return;
+      ipc?.checkPort?.(port).then((res) => {
+        if (!res.available) setPortWarning(`Port ${port} is in use`);
+      }).catch(() => {});
+    }, 500);
+  }, [portInput, ipc, status.running, status.port]);
+
+  const handleToggle = async () => {
+    const next = !wsConfig.enabled;
+    updateConfig({ webServer: { ...wsConfig, enabled: next } });
+    if (next) {
+      await ipc?.startWebServer?.(wsConfig.port);
+    } else {
+      await ipc?.stopWebServer?.();
+    }
+    ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+  };
+
+  const handlePortBlur = () => {
+    const port = Number(portInput);
+    if (port >= 1 && port <= 65535 && port !== wsConfig.port) {
+      updateConfig({ webServer: { ...wsConfig, port } });
+    }
+  };
+
+  const handleRestart = async () => {
+    setRestarting(true);
+    const port = Number(portInput) || wsConfig.port;
+    await ipc?.stopWebServer?.();
+    updateConfig({ webServer: { ...wsConfig, port, enabled: true } });
+    await ipc?.startWebServer?.(port);
+    ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+    setRestarting(false);
+  };
+
+  const displayPort = status.port || wsConfig.port;
+  const primaryIP = status.localIPs[0] || "127.0.0.1";
+
+  const handleCopy = (url: string) => {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedUrl(url);
+      setTimeout(() => setCopiedUrl(null), 2000);
+    }).catch(() => {});
+  };
+
+  const handleOpen = (url: string) => {
+    ipc?.openExternal?.(url);
+  };
+
+  return (
+    <div className="space-y-3">
+      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+        <Wifi className="w-3.5 h-3.5" />
+        Web Server
+      </h3>
+
+      {/* Enable toggle */}
+      <div className={cardClass}>
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-xs font-medium ${t.text}`}>Enable Web Server</span>
+            <span className={`text-[10px] ${t.textFaint}`}>
+              Access your terminal from any browser on the network
+            </span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={wsConfig.enabled}
+            onClick={handleToggle}
+            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${wsConfig.enabled
+              ? "bg-purple-500"
+              : resolvedTheme === "light"
+                ? "bg-gray-300"
+                : "bg-white/15"
+              }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${wsConfig.enabled ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* Status */}
+      <div className={cardClass}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${status.running ? "bg-green-400" : "bg-red-400"}`} />
+            <span className={`text-xs ${t.text}`}>
+              {status.running ? `Running on port ${status.port}` : "Stopped"}
+            </span>
+          </div>
+          {wsConfig.enabled && (
+            <button
+              onClick={handleRestart}
+              disabled={restarting}
+              className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover} ${restarting ? "opacity-50" : ""}`}
+              title="Restart server"
+            >
+              <RefreshCw className={`w-3 h-3 ${restarting ? "animate-spin" : ""}`} />
+              {restarting ? "Restarting..." : "Restart"}
+            </button>
+          )}
+        </div>
+        {!status.running && status.error && (
+          <p className="text-[10px] text-red-400 mt-1.5">{status.error}</p>
+        )}
+      </div>
+
+      {/* IP Address (read-only) + Port (editable) */}
+      <div className={cardClass}>
+        <div className="flex items-center gap-4">
+          <div className="flex-1">
+            <label className={`text-xs font-medium mb-1.5 block ${t.textMuted}`}>IP Address</label>
+            <div className={`px-2 py-1 text-xs rounded border ${t.border} ${resolvedTheme === "light" ? "bg-gray-50 text-gray-500" : "bg-white/3 text-gray-400"}`}>
+              {status.localIPs.length > 0 ? primaryIP : "—"}
+            </div>
+          </div>
+          <div>
+            <label className={`text-xs font-medium mb-1.5 block ${t.textMuted}`}>Port</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                value={portInput}
+                onChange={(e) => setPortInput(e.target.value)}
+                onBlur={handlePortBlur}
+                className={`w-20 px-2 py-1 text-xs rounded border ${t.border} ${t.surface} ${t.text} outline-none focus:border-purple-500`}
+              />
+            </div>
+          </div>
+        </div>
+        {portWarning && (
+          <span className="text-[10px] text-amber-400 mt-1.5 block">{portWarning}</span>
+        )}
+        {status.localIPs.length > 1 && (
+          <p className={`text-[10px] ${t.textFaint} mt-1.5`}>
+            Also available on: {status.localIPs.slice(1).join(", ")}
+          </p>
+        )}
+        {status.running && status.port !== null && Number(portInput) !== status.port ? (
+          <p className="text-[10px] text-red-400 mt-1.5">
+            Port changed — restart to apply
+          </p>
+        ) : (
+          <p className={`text-[10px] ${t.textFaint} mt-1`}>
+            Restart required after changing port
+          </p>
+        )}
+      </div>
+
+      {/* Access URLs */}
+      {status.running && (
+        <div className={cardClass}>
+          <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>Access URLs</label>
+          <div className="space-y-1.5">
+            {[`http://localhost:${displayPort}`, ...(status.localIPs.length > 0 ? [`http://${primaryIP}:${displayPort}`] : [])].map((url) => (
+              <div key={url} className="flex items-center gap-1.5">
+                <code className={`text-xs px-2 py-1 rounded ${resolvedTheme === "light" ? "bg-gray-100 text-gray-800" : "bg-white/5 text-gray-300"} flex-1 truncate`}>
+                  {url}
+                </code>
+                <button
+                  onClick={() => handleCopy(url)}
+                  className={`p-1 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+                  title="Copy URL"
+                >
+                  {copiedUrl === url ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                </button>
+                <button
+                  onClick={() => handleOpen(url)}
+                  className={`p-1 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+                  title="Open in browser"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+          <p className={`text-[10px] ${t.textFaint} mt-2 leading-relaxed`}>
+            Use the IP address to access from other devices on your local network.
+            For remote access, use Tailscale or a reverse proxy to securely expose this address.
+          </p>
         </div>
       )}
     </div>
@@ -1119,6 +1356,15 @@ const SettingsPane = () => {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Web Server (Electron only) */}
+            {activeSection === "web-server" && window.electron && (
+              <WebServerSection
+                cardClass={cardClass}
+                t={t}
+                resolvedTheme={resolvedTheme}
+              />
             )}
 
             {/* SSH Profiles */}

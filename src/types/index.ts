@@ -64,6 +64,11 @@ export interface HotkeyMap {
   [key: string]: string;
 }
 
+export interface WebServerConfig {
+  enabled: boolean;  // default: true
+  port: number;      // default: 3888
+}
+
 export interface TronConfig {
   ai?: AIConfig;
   providerConfigs?: Record<string, { model?: string; apiKey?: string; baseUrl?: string }>;
@@ -72,6 +77,7 @@ export interface TronConfig {
   configured?: boolean;
   hotkeys?: HotkeyMap;
   aiBehavior?: AIBehavior;
+  webServer?: WebServerConfig;
 }
 
 // --- SSH Types ---
