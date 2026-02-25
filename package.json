@@ -2,7 +2,7 @@
   "name": "tron",
   "description": "Self-hosted AI-powered terminal. Run shells, use local or cloud LLMs (Ollama, OpenAI, Claude), and get agent-assisted commands from your desktop.",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -31,7 +31,6 @@
   },
   "dependencies": {
     "@radix-ui/react-popover": "^1.1.15",
-    "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-query": "^5.90.21",
     "@tanstack/react-virtual": "^3.13.18",
     "@xterm/addon-fit": "^0.11.0",
@@ -54,6 +53,7 @@
     "@eslint/js": "^9.39.1",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.1.18",
+    "@tailwindcss/vite": "^4.2.1",
     "@types/express": "^5.0.6",
     "@types/marked": "^5.0.2",
     "@types/node": "^24.10.1",
