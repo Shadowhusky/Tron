@@ -71,6 +71,17 @@ export const IPC = {
   WEB_SERVER_STATUS: "webServer.status",
   WEB_SERVER_CHECK_PORT: "webServer.checkPort",
 
+  // Updater — invoke
+  UPDATER_CHECK: "updater.checkForUpdates",
+  UPDATER_DOWNLOAD: "updater.downloadUpdate",
+  UPDATER_QUIT_AND_INSTALL: "updater.quitAndInstall",
+  UPDATER_GET_STATUS: "updater.getStatus",
+  UPDATER_GET_VERSION: "updater.getVersion",
+
+  // Updater — main→renderer events
+  UPDATER_STATUS: "updater.status",
+  UPDATER_DOWNLOAD_PROGRESS: "updater.downloadProgress",
+
   // Window — main→renderer events
   WINDOW_CONFIRM_CLOSE: "window.confirmClose",
   // Window — renderer→main (send)

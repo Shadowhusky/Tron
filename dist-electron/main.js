@@ -44,6 +44,7 @@ const ai_1 = require("./ipc/ai");
 const config_1 = require("./ipc/config");
 const ssh_1 = require("./ipc/ssh");
 const web_server_1 = require("./ipc/web-server");
+const updater_1 = require("./ipc/updater");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
@@ -216,6 +217,7 @@ const createWindow = () => {
 (0, ai_1.registerAIHandlers)();
 (0, config_1.registerConfigHandlers)();
 (0, web_server_1.registerWebServerHandlers)();
+(0, updater_1.registerUpdaterHandlers)(() => mainWindow);
 // --- Window close response from renderer ---
 electron_1.ipcMain.on("window.closeConfirmed", () => {
     forceQuit = true;
@@ -240,6 +242,21 @@ electron_1.app.whenReady().then(async () => {
         if (!result.success) {
             console.error(`[Tron] Failed to start web server: ${result.error}`);
         }
+    }
+    // Auto-check for updates (reads config to determine auto-download)
+    try {
+        const fs = require("fs");
+        const configPath = path_1.default.join(electron_1.app.getPath("userData"), "tron.config.json");
+        let autoUpdate = true;
+        if (fs.existsSync(configPath)) {
+            const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+            if (raw?.autoUpdate === false)
+                autoUpdate = false;
+        }
+        (0, updater_1.autoCheckForUpdates)(autoUpdate);
+    }
+    catch {
+        (0, updater_1.autoCheckForUpdates)(true);
     }
 });
 electron_1.app.on("window-all-closed", () => {
