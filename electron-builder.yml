@@ -56,9 +56,14 @@ nsis:
 linux:
   icon: build/icon.png
   target:
-    - AppImage
-    - deb
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
   category: Development
+  maintainer: tron@tronai.dev
 
 publish:
   provider: github
