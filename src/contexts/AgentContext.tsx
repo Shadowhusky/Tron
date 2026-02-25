@@ -55,7 +55,7 @@ class AgentStore {
   public notifications: CrossTabNotification[] = [];
   private notifId = 0;
   private prevRunning = new Map<string, boolean>();
-  public activeSessionIdForNotifs: string | null = null;
+  public activeSessionIdsForNotifs = new Set<string>();
   private notificationListeners = new Set<() => void>();
 
   getSnapshot = () => this.states;
@@ -115,7 +115,7 @@ class AgentStore {
     // Notification logic
     const wasRunning = this.prevRunning.get(sessionId) ?? false;
     const isRunning = next.isAgentRunning;
-    if (wasRunning && !isRunning && sessionId !== this.activeSessionIdForNotifs) {
+    if (wasRunning && !isRunning && !this.activeSessionIdsForNotifs.has(sessionId)) {
       const lastStep = next.agentThread[next.agentThread.length - 1];
       const msg = lastStep
         ? lastStep.step === "done" || lastStep.step === "success"
@@ -436,8 +436,8 @@ export const useAgentContext = () => {
     store.dismissNotification(id);
   }, [store]);
 
-  const setActiveSessionForNotifications = useCallback((sessionId: string | null) => {
-    store.activeSessionIdForNotifs = sessionId;
+  const setActiveSessionForNotifications = useCallback((sessionIds: Set<string>) => {
+    store.activeSessionIdsForNotifs = sessionIds;
   }, [store]);
 
   return {
