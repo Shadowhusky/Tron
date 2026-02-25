@@ -65,6 +65,14 @@ const NotificationOverlay: React.FC<NotificationOverlayProps> = ({
                             </button>
                         </div>
                         <div className="mt-0.5 truncate opacity-75">{n.message}</div>
+                        {targetTabId && (
+                            <button
+                                className={`mt-1 text-[10px] font-medium ${resolvedTheme === "light" ? "text-blue-600 hover:text-blue-800" : "text-blue-400 hover:text-blue-300"}`}
+                                onClick={(e) => { e.stopPropagation(); onSelectTab(targetTabId); onDismiss(n.id); }}
+                            >
+                                Go to tab
+                            </button>
+                        )}
                     </motion.div>
                 );
             })}

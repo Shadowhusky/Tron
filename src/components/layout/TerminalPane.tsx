@@ -343,7 +343,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           setShowEmbeddedTerminal(true);
           handleCommand(fixed, queueCallback);
         } else {
-          handleCommandInOverlay(fixed, queueCallback);
+          await handleCommandInOverlay(fixed, queueCallback);
         }
       } else {
         handleCommand(fixed, queueCallback);
