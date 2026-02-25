@@ -74,11 +74,10 @@ const NAV_SECTIONS_BASE = [
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 ] as const;
 
-// Web Server + Updates are Electron-only; Storage is web-only
+// Web Server + Updates are Electron-only
 const ELECTRON_ONLY_SECTIONS = new Set(["web-server", "updates"]);
-const WEB_ONLY_SECTIONS = new Set(["storage"]);
 const NAV_SECTIONS = window.electron
-  ? NAV_SECTIONS_BASE.filter((s) => !WEB_ONLY_SECTIONS.has(s.id))
+  ? NAV_SECTIONS_BASE
   : NAV_SECTIONS_BASE.filter((s) => !ELECTRON_ONLY_SECTIONS.has(s.id));
 
 // --- SSH Profiles Sub-component ---

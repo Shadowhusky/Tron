@@ -69,6 +69,108 @@ const sessions = new Map<string, pty.IPty>();
 const sessionHistory = new Map<string, string>();
 const occupiedSessions = new Set<string>(); // Sessions with a stalled process still running
 const activeChildProcesses = new Set<ChildProcess>();
+// Sessions being cleaned up during shutdown — onExit should preserve history files
+let isShuttingDown = false;
+
+// ---------------------------------------------------------------------------
+// Terminal history persistence — survives app restarts
+// ---------------------------------------------------------------------------
+const historyDir = path.join(app.getPath("userData"), "terminal-history");
+const historyDirtySet = new Set<string>();
+let historyFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function ensureHistoryDir() {
+  try { fs.mkdirSync(historyDir, { recursive: true }); } catch { /* exists */ }
+}
+
+/** Remove history files older than 7 days. */
+function cleanupStaleHistoryFiles() {
+  ensureHistoryDir();
+  const now = Date.now();
+  const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+  try {
+    for (const file of fs.readdirSync(historyDir)) {
+      const filePath = path.join(historyDir, file);
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs > MAX_AGE) {
+        fs.unlinkSync(filePath);
+      }
+    }
+  } catch { /* best effort */ }
+}
+
+cleanupStaleHistoryFiles();
+
+function persistSessionHistory(sessionId: string) {
+  ensureHistoryDir();
+  const history = sessionHistory.get(sessionId);
+  if (history === undefined) return;
+  try {
+    fs.writeFileSync(path.join(historyDir, `${sessionId}.txt`), history, "utf-8");
+  } catch { /* best effort */ }
+}
+
+function loadPersistedHistory(sessionId: string): string {
+  try {
+    return fs.readFileSync(path.join(historyDir, `${sessionId}.txt`), "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+function removePersistedHistory(sessionId: string) {
+  try { fs.unlinkSync(path.join(historyDir, `${sessionId}.txt`)); } catch { /* ok */ }
+}
+
+/** Mark a session's history as dirty; batched flush runs every 5s. */
+function markHistoryDirty(sessionId: string) {
+  historyDirtySet.add(sessionId);
+  if (!historyFlushTimer) {
+    historyFlushTimer = setTimeout(flushDirtyHistory, 5000);
+  }
+}
+
+function flushDirtyHistory() {
+  historyFlushTimer = null;
+  for (const sid of historyDirtySet) {
+    persistSessionHistory(sid);
+  }
+  historyDirtySet.clear();
+}
+
+/** Persist all session history to disk (called on shutdown). */
+function persistAllHistory() {
+  if (historyFlushTimer) { clearTimeout(historyFlushTimer); historyFlushTimer = null; }
+  for (const [sid] of sessionHistory) {
+    persistSessionHistory(sid);
+  }
+  historyDirtySet.clear();
+}
+
+export function getPersistedHistoryStats(): { fileCount: number; totalBytes: number } {
+  ensureHistoryDir();
+  let fileCount = 0, totalBytes = 0;
+  try {
+    for (const file of fs.readdirSync(historyDir)) {
+      const stat = fs.statSync(path.join(historyDir, file));
+      fileCount++;
+      totalBytes += stat.size;
+    }
+  } catch { /* best effort */ }
+  return { fileCount, totalBytes };
+}
+
+export function clearAllPersistedHistory(): { deletedCount: number } {
+  ensureHistoryDir();
+  let deletedCount = 0;
+  try {
+    for (const file of fs.readdirSync(historyDir)) {
+      fs.unlinkSync(path.join(historyDir, file));
+      deletedCount++;
+    }
+  } catch { /* best effort */ }
+  return { deletedCount };
+}
 
 // Per-session display buffering — active during execInTerminal to strip sentinels cleanly
 interface DisplayBuffer { data: string; timer: ReturnType<typeof setTimeout> | null; send: (cleaned: string) => void }
@@ -212,8 +314,11 @@ export function getSessionHistory() {
   return sessionHistory;
 }
 
-/** Kill all tracked child processes and PTY sessions. */
+/** Kill all tracked child processes and PTY sessions. Persists history to disk first. */
 export function cleanupAllSessions() {
+  isShuttingDown = true;
+  persistAllHistory();
+
   for (const child of activeChildProcesses) {
     try {
       child.kill();
@@ -233,9 +338,9 @@ export function cleanupAllSessions() {
 export function registerTerminalHandlers(
   getMainWindow: () => BrowserWindow | null,
 ) {
-  // Terminal history stats — no-op in Electron (history isn't persisted to disk)
-  ipcMain.handle("terminal.history.getStats", () => ({ fileCount: 0, totalBytes: 0 }));
-  ipcMain.handle("terminal.history.clearAll", () => ({ deletedCount: 0 }));
+  // Terminal history stats
+  ipcMain.handle("terminal.history.getStats", () => getPersistedHistoryStats());
+  ipcMain.handle("terminal.history.clearAll", () => clearAllPersistedHistory());
 
   // Check if a PTY session is still alive (for reconnection after renderer refresh)
   ipcMain.handle("terminal.sessionExists", (_event, sessionId: string) => {
@@ -256,7 +361,16 @@ export function registerTerminalHandlers(
       }
 
       const { shell, args: shellArgs } = detectShell();
+      // Reuse old session ID when reconnecting after app restart
       const sessionId = reconnectId || randomUUID();
+
+      // Load persisted history from a previous app run so getHistory works
+      if (reconnectId) {
+        const persisted = loadPersistedHistory(reconnectId);
+        if (persisted) {
+          sessionHistory.set(sessionId, persisted);
+        }
+      }
 
       try {
         // Clean environment: strip Electron/Node npm vars that conflict
@@ -277,7 +391,10 @@ export function registerTerminalHandlers(
           env: cleanEnv,
         });
 
-        sessionHistory.set(sessionId, "");
+        // Preserve persisted history (loaded above) or start fresh
+        if (!sessionHistory.has(sessionId)) {
+          sessionHistory.set(sessionId, "");
+        }
 
         const sendToRenderer = (cleaned: string) => {
           const mainWindow = getMainWindow();
@@ -294,6 +411,7 @@ export function registerTerminalHandlers(
           } else {
             sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
           }
+          markHistoryDirty(sessionId);
 
           // During execInTerminal: buffer display data and strip sentinels
           if (bufferIfExecActive(sessionId, data, sendToRenderer)) return;
@@ -312,6 +430,11 @@ export function registerTerminalHandlers(
           }
           sessions.delete(sessionId);
           sessionHistory.delete(sessionId);
+          // Only delete history file on normal exit (user closed terminal).
+          // During shutdown, preserve files so sessions restore on next launch.
+          if (!isShuttingDown) {
+            removePersistedHistory(sessionId);
+          }
         });
 
         sessions.set(sessionId, ptyProcess);
@@ -340,6 +463,7 @@ export function registerTerminalHandlers(
       session.kill();
       sessions.delete(id);
       sessionHistory.delete(id);
+      removePersistedHistory(id);
     }
   });
 
