@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import compression from "compression";
 import http from "http";
 import fs from "fs";
 import os from "os";
@@ -70,6 +71,8 @@ ensureDataDir();
 const clientSessions = loadJsonMap(sessionsFile);
 const clientConfigs = loadJsonMap(configsFile);
 const app = express();
+// Gzip compression — dramatically reduces JS/CSS bundle transfer size
+app.use(compression());
 const server = http.createServer(app);
 // ---------------------------------------------------------------------------
 // AI provider HTTP proxy — routes browser requests to AI providers through
@@ -146,10 +149,21 @@ if (isDev) {
     }));
 }
 else {
-    // In production, serve built React assets
+    // In production, serve built React assets with caching
     const staticPath = path.join(__dirname, "../dist-react");
-    app.use(express.static(staticPath));
+    // Hashed assets (JS/CSS) — immutable, cache for 1 year
+    app.use("/assets", express.static(path.join(staticPath, "assets"), {
+        maxAge: "1y",
+        immutable: true,
+    }));
+    // Other static files (favicons, icons) — cache for 1 day
+    app.use(express.static(staticPath, {
+        maxAge: "1d",
+        index: false, // Don't serve index.html from express.static (we handle it below)
+    }));
+    // SPA fallback — no cache for index.html so updates take effect immediately
     app.get("/{*path}", (_req, res) => {
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         res.sendFile(path.join(staticPath, "index.html"));
     });
 }
