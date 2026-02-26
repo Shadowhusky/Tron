@@ -9,6 +9,7 @@ import url from "url";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
+import { pipeline } from "stream";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import * as terminal from "./handlers/terminal.js";
 import * as ai from "./handlers/ai.js";
@@ -157,18 +158,34 @@ app.all("/api/ai-proxy/{*path}", express.raw({ type: "*/*", limit: "5mb" }), asy
     }
 
     if (response.body) {
-      const readable = Readable.fromWeb(response.body as any);
-      readable.on("error", (err) => {
-        if (!res.writableEnded) res.end();
-        console.error("[AI Proxy] Stream error:", err.message);
+      let readable: Readable;
+      try {
+        readable = Readable.fromWeb(response.body as any);
+      } catch (err: any) {
+        if (!res.headersSent) {
+          res.status(502).json({ error: "Stream conversion error" });
+        } else if (!res.writableEnded) {
+          res.end();
+        }
+        return;
+      }
+
+      // Use pipeline() instead of pipe() for proper stream cleanup and error handling.
+      // pipe() leaves streams in broken state on error; pipeline() destroys both ends.
+      // This prevents server crashes when clients disconnect mid-stream (SSE/chunked).
+      pipeline(readable, res, (err) => {
+        if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+          console.error("[AI Proxy] Stream pipeline error:", err.message);
+        }
       });
-      readable.pipe(res);
     } else {
       res.end();
     }
   } catch (e: any) {
     if (!res.headersSent) {
       res.status(502).json({ error: e.message || "Proxy error" });
+    } else if (!res.writableEnded) {
+      res.end();
     }
   }
 });
@@ -508,3 +525,18 @@ const shutdownHandler = () => {
 };
 process.on("SIGINT", shutdownHandler);
 process.on("SIGTERM", shutdownHandler);
+
+// Prevent server crashes from unhandled stream/network errors — log and continue.
+// Fatal startup errors (e.g. EADDRINUSE) should still crash.
+let serverStarted = false;
+server.on("listening", () => { serverStarted = true; });
+process.on("uncaughtException", (err) => {
+  if (!serverStarted) {
+    console.error("[Tron Web] Fatal startup error:", err.message);
+    process.exit(1);
+  }
+  console.error("[Tron Web] Uncaught exception (keeping server alive):", err.message);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[Tron Web] Unhandled rejection:", reason);
+});
