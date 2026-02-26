@@ -166,6 +166,24 @@ npm run lint             # ESLint
 npm run test:e2e         # Playwright E2E tests
 ```
 
+## Releasing
+
+```bash
+npm run release:mac      # Build + publish macOS (dmg + zip)
+npm run release:win      # Build + publish Windows (nsis exe)
+npm run release:linux    # Build + publish Linux (AppImage + deb)
+npm run release:all      # All platforms in sequence
+```
+
+All `release:*` scripts use `--publish always` which automatically uploads artifacts **and** the `latest-mac.yml` / `latest.yml` / `latest-linux.yml` files to the GitHub release. These yml files are required by `electron-updater` for auto-update checks — without them, the in-app updater can't find new versions.
+
+### Packaging details (`electron-builder.yml`)
+
+- **asar + asarUnpack**: The app is packaged as `app.asar`, but `dist-server/**`, `dist-react/**`, `node_modules/**`, and `package.json` are extracted to `app.asar.unpacked/`. This is required because the embedded web server runs as a forked child process with `ELECTRON_RUN_AS_NODE=1` (plain Node.js, no asar support). It needs real filesystem access to `dist-server` (server code), `dist-react` (static files for browsers), `node_modules` (all dependencies including transitive ones), and `package.json` (`"type": "module"` for ESM).
+- **Cross-platform native modules**: macOS builds use `@electron/rebuild` to compile native modules (`node-pty`, `cpu-features`). Windows and Linux builds use `--config.npmRebuild=false` because node-gyp cannot cross-compile from macOS. `node-pty` ships prebuilt binaries in `prebuilds/` for Windows; Linux builds include the macOS binary but node-pty falls back to prebuilds at runtime.
+- **afterSign hook** (`build/afterSign.cjs`): Re-signs macOS `.app` bundles with `--deep` for ad-hoc builds. Checks `context.packager.platform.name` (not `process.platform`) to skip non-macOS targets when cross-compiling.
+- **app-update.yml** (`build/app-update.yml`): Copied to `Contents/Resources/` via `extraResources`. Contains the GitHub publish config that `electron-updater` reads at runtime. This is needed because `electron-builder --dir` builds don't auto-generate it.
+
 ## Conventions
 
 - React 19 JSX transform — no `import React` unless using `React.FC`, `React.useRef`, etc.
@@ -196,3 +214,5 @@ npm run test:e2e         # Playwright E2E tests
 
 - After finishing a feature or batch of fixes, commit and push **without** Claude as co-author
 - Update `CLAUDE.md` periodically to reflect new architecture, patterns, and conventions
+- To release: bump version with `npm version patch/minor`, commit, tag, push, then run `npm run release:all`. The `--publish always` flag handles GitHub release creation and artifact upload automatically.
+- Update download links in `tron-website/src/components/HeroSection.jsx` after each release
