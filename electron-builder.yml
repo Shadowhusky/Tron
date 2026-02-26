@@ -13,7 +13,13 @@ files:
 
 asarUnpack:
   - dist-server/**/*
+  - dist-react/**/*
   - node_modules/**/*
+  - package.json
+
+extraResources:
+  - from: build/app-update.yml
+    to: app-update.yml
 
 afterSign: build/afterSign.cjs
 

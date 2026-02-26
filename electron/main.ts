@@ -220,12 +220,18 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
-  // Auto-start integrated web server
+  // Auto-start integrated web server (retry once on transient failure)
   const wsConfig = readWebServerConfig();
   if (wsConfig.enabled) {
     const result = await startWebServer(wsConfig.port);
     if (!result.success) {
-      console.error(`[Tron] Failed to start web server: ${result.error}`);
+      console.error(`[Tron] Web server start failed, retrying in 2s: ${result.error}`);
+      setTimeout(async () => {
+        const retry = await startWebServer(wsConfig.port);
+        if (!retry.success) {
+          console.error(`[Tron] Web server retry failed: ${retry.error}`);
+        }
+      }, 2000);
     }
   }
 
