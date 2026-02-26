@@ -1,11 +1,7 @@
  <h1 align="center">Tron — AI-Powered Terminal</h1>
+<img width="2032" height="1167" alt="Screenshot 2026-02-26 at 20 18 03" src="https://github.com/user-attachments/assets/d103ce77-46fe-4e00-adc0-abd9ae1a1e82" />
 
-<p align="center">
-  <em>Works on mobile too — access your terminal from anywhere via web mode</em>
-</p>
-<p align="center">
-  <img src="screenshots/mobile-web.jpg" width="280" />
-</p>
+
 
 <p align="center">
   A terminal where the AI operates directly in your shell — running commands, reading output, writing files, and iterating until the job is done.
@@ -19,6 +15,13 @@
 </p>
 
 ---
+
+<p align="center">
+  <em>Works on mobile too — access your terminal from anywhere via web mode</em>
+</p>
+<p align="center">
+  <img src="screenshots/mobile-web.jpg" width="280" />
+</p>
 
 ## Why Tron?
 
