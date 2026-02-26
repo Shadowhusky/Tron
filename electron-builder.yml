@@ -21,6 +21,7 @@ extraResources:
   - from: build/app-update.yml
     to: app-update.yml
 
+afterPack: build/afterPack.cjs
 afterSign: build/afterSign.cjs
 
 mac:
