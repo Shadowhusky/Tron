@@ -1,5 +1,5 @@
- <h1 align="center">Tron — Vibe Code Anywhere</h1> 
-<img width="2032" height="1167" alt="Screenshot 2026-02-26 at 20 35 44" src="https://github.com/user-attachments/assets/4a2186bb-33f2-4578-9ead-c94434a5f85f" />
+ <h1 align="center">Tron — Vibe Code Anywhere</h1>  
+<img width="2032" height="1167" alt="Screenshot 2026-02-26 at 20 37 54" src="https://github.com/user-attachments/assets/a21ea28c-c7f4-4496-92b2-d161e3961604" />
 
 <h3 align="center">Open-source AI terminal with a built-in web server.<br/>Open the app, and your AI coding environment is instantly available from any browser — phone, tablet, or another machine.</h3>
 
