@@ -29,8 +29,9 @@ export function readWebServerConfig(): { enabled: boolean; port: number } {
 /** Resolve path to the server entry point (dev vs production). */
 function getServerPath(): string {
   if (app.isPackaged) {
-    // Production: dist-server is in extraResources
-    return path.join(process.resourcesPath, "dist-server", "index.js");
+    // Production: use the asar-unpacked copy so the forked child process
+    // can resolve node_modules (express, ws, etc.) via normal require paths.
+    return path.join(process.resourcesPath, "app.asar.unpacked", "dist-server", "index.js");
   }
   // Dev: built server is at project root dist-server/
   return path.join(__dirname, "../../dist-server/index.js");
@@ -117,8 +118,12 @@ export async function startWebServer(port: number): Promise<{ success: boolean; 
         console.log(`[Tron] Web server exited with code ${code}`);
         serverProcess = null;
         currentPort = null;
-        lastError = stderrBuf.trim() || `Server exited with code ${code}`;
       }
+      // Always resolve — if the child exits before sending "ready",
+      // this ensures the IPC handler doesn't hang ("reply was never sent").
+      // If "ready" already resolved the Promise, this second call is a no-op.
+      lastError = stderrBuf.trim() || `Server exited with code ${code}`;
+      resolve({ success: false, error: lastError });
     });
 
     // Forward server stdout/stderr to Electron's console

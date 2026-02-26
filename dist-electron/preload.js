@@ -41,6 +41,8 @@ const ALLOWED_INVOKE_CHANNELS = [
     "ssh.profiles.write",
     "savedTabs.read",
     "savedTabs.write",
+    "terminal.history.getStats",
+    "terminal.history.clearAll",
     "webServer.start",
     "webServer.stop",
     "webServer.status",
@@ -138,6 +140,9 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         // Sync Tabs
         readSyncTabs: () => electron_1.ipcRenderer.invoke("savedTabs.read"),
         writeSyncTabs: (tabs) => electron_1.ipcRenderer.invoke("savedTabs.write", tabs),
+        // Terminal history stats (web mode only — Electron stubs return empty)
+        getPersistedHistoryStats: () => electron_1.ipcRenderer.invoke("terminal.history.getStats"),
+        clearAllPersistedHistory: () => electron_1.ipcRenderer.invoke("terminal.history.clearAll"),
         // Web Server
         startWebServer: (port) => electron_1.ipcRenderer.invoke("webServer.start", port),
         stopWebServer: () => electron_1.ipcRenderer.invoke("webServer.stop"),
