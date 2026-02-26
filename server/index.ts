@@ -5,7 +5,6 @@ import http from "http";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import url from "url";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
@@ -233,8 +232,8 @@ const activeConnections = new Map<string, WebSocket>();
 
 wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   // Use persistent client token from URL query (survives reconnects) or fall back to random
-  const parsed = url.parse(req.url || "", true);
-  const clientId = (parsed.query.token as string) || randomUUID();
+  const wsUrl = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+  const clientId = wsUrl.searchParams.get("token") || randomUUID();
 
   // Cancel any pending cleanup for this client (reconnected before grace period expired)
   const pendingCleanup = pendingCleanups.get(clientId);
