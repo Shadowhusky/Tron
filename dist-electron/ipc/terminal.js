@@ -36,6 +36,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getPersistedHistoryStats = getPersistedHistoryStats;
+exports.clearAllPersistedHistory = clearAllPersistedHistory;
 exports.bufferIfExecActive = bufferIfExecActive;
 exports.getSessions = getSessions;
 exports.getSessionHistory = getSessionHistory;
@@ -106,6 +108,111 @@ const sessions = new Map();
 const sessionHistory = new Map();
 const occupiedSessions = new Set(); // Sessions with a stalled process still running
 const activeChildProcesses = new Set();
+// Sessions being cleaned up during shutdown — onExit should preserve history files
+let isShuttingDown = false;
+// ---------------------------------------------------------------------------
+// Terminal history persistence — survives app restarts
+// ---------------------------------------------------------------------------
+const historyDir = path_1.default.join(electron_1.app.getPath("userData"), "terminal-history");
+const historyDirtySet = new Set();
+let historyFlushTimer = null;
+function ensureHistoryDir() {
+    try {
+        fs_1.default.mkdirSync(historyDir, { recursive: true });
+    }
+    catch { /* exists */ }
+}
+/** Remove history files older than 7 days. */
+function cleanupStaleHistoryFiles() {
+    ensureHistoryDir();
+    const now = Date.now();
+    const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+    try {
+        for (const file of fs_1.default.readdirSync(historyDir)) {
+            const filePath = path_1.default.join(historyDir, file);
+            const stat = fs_1.default.statSync(filePath);
+            if (now - stat.mtimeMs > MAX_AGE) {
+                fs_1.default.unlinkSync(filePath);
+            }
+        }
+    }
+    catch { /* best effort */ }
+}
+cleanupStaleHistoryFiles();
+function persistSessionHistory(sessionId) {
+    ensureHistoryDir();
+    const history = sessionHistory.get(sessionId);
+    if (history === undefined)
+        return;
+    try {
+        fs_1.default.writeFileSync(path_1.default.join(historyDir, `${sessionId}.txt`), history, "utf-8");
+    }
+    catch { /* best effort */ }
+}
+function loadPersistedHistory(sessionId) {
+    try {
+        return fs_1.default.readFileSync(path_1.default.join(historyDir, `${sessionId}.txt`), "utf-8");
+    }
+    catch {
+        return "";
+    }
+}
+function removePersistedHistory(sessionId) {
+    try {
+        fs_1.default.unlinkSync(path_1.default.join(historyDir, `${sessionId}.txt`));
+    }
+    catch { /* ok */ }
+}
+/** Mark a session's history as dirty; batched flush runs every 5s. */
+function markHistoryDirty(sessionId) {
+    historyDirtySet.add(sessionId);
+    if (!historyFlushTimer) {
+        historyFlushTimer = setTimeout(flushDirtyHistory, 5000);
+    }
+}
+function flushDirtyHistory() {
+    historyFlushTimer = null;
+    for (const sid of historyDirtySet) {
+        persistSessionHistory(sid);
+    }
+    historyDirtySet.clear();
+}
+/** Persist all session history to disk (called on shutdown). */
+function persistAllHistory() {
+    if (historyFlushTimer) {
+        clearTimeout(historyFlushTimer);
+        historyFlushTimer = null;
+    }
+    for (const [sid] of sessionHistory) {
+        persistSessionHistory(sid);
+    }
+    historyDirtySet.clear();
+}
+function getPersistedHistoryStats() {
+    ensureHistoryDir();
+    let fileCount = 0, totalBytes = 0;
+    try {
+        for (const file of fs_1.default.readdirSync(historyDir)) {
+            const stat = fs_1.default.statSync(path_1.default.join(historyDir, file));
+            fileCount++;
+            totalBytes += stat.size;
+        }
+    }
+    catch { /* best effort */ }
+    return { fileCount, totalBytes };
+}
+function clearAllPersistedHistory() {
+    ensureHistoryDir();
+    let deletedCount = 0;
+    try {
+        for (const file of fs_1.default.readdirSync(historyDir)) {
+            fs_1.default.unlinkSync(path_1.default.join(historyDir, file));
+            deletedCount++;
+        }
+    }
+    catch { /* best effort */ }
+    return { deletedCount };
+}
 const displayBuffers = new Map();
 const execActiveSessions = new Set(); // Sessions currently running execInTerminal
 /**
@@ -238,8 +345,10 @@ function getSessions() {
 function getSessionHistory() {
     return sessionHistory;
 }
-/** Kill all tracked child processes and PTY sessions. */
+/** Kill all tracked child processes and PTY sessions. Persists history to disk first. */
 function cleanupAllSessions() {
+    isShuttingDown = true;
+    persistAllHistory();
     for (const child of activeChildProcesses) {
         try {
             child.kill();
@@ -257,6 +366,9 @@ function cleanupAllSessions() {
     sessionHistory.clear();
 }
 function registerTerminalHandlers(getMainWindow) {
+    // Terminal history stats
+    electron_1.ipcMain.handle("terminal.history.getStats", () => getPersistedHistoryStats());
+    electron_1.ipcMain.handle("terminal.history.clearAll", () => clearAllPersistedHistory());
     // Check if a PTY session is still alive (for reconnection after renderer refresh)
     electron_1.ipcMain.handle("terminal.sessionExists", (_event, sessionId) => {
         return sessions.has(sessionId);
@@ -272,7 +384,15 @@ function registerTerminalHandlers(getMainWindow) {
             return { sessionId: reconnectId, reconnected: true };
         }
         const { shell, args: shellArgs } = detectShell();
+        // Reuse old session ID when reconnecting after app restart
         const sessionId = reconnectId || (0, crypto_1.randomUUID)();
+        // Load persisted history from a previous app run so getHistory works
+        if (reconnectId) {
+            const persisted = loadPersistedHistory(reconnectId);
+            if (persisted) {
+                sessionHistory.set(sessionId, persisted);
+            }
+        }
         try {
             // Clean environment: strip Electron/Node npm vars that conflict
             // with user tools like nvm (which rejects npm_config_prefix).
@@ -291,7 +411,10 @@ function registerTerminalHandlers(getMainWindow) {
                 cwd: cwd || os_1.default.homedir(),
                 env: cleanEnv,
             });
-            sessionHistory.set(sessionId, "");
+            // Preserve persisted history (loaded above) or start fresh
+            if (!sessionHistory.has(sessionId)) {
+                sessionHistory.set(sessionId, "");
+            }
             const sendToRenderer = (cleaned) => {
                 const mainWindow = getMainWindow();
                 if (mainWindow && !mainWindow.isDestroyed() && cleaned) {
@@ -307,6 +430,7 @@ function registerTerminalHandlers(getMainWindow) {
                 else {
                     sessionHistory.set(sessionId, currentHistory.slice(-80000) + data);
                 }
+                markHistoryDirty(sessionId);
                 // During execInTerminal: buffer display data and strip sentinels
                 if (bufferIfExecActive(sessionId, data, sendToRenderer))
                     return;
@@ -323,6 +447,11 @@ function registerTerminalHandlers(getMainWindow) {
                 }
                 sessions.delete(sessionId);
                 sessionHistory.delete(sessionId);
+                // Only delete history file on normal exit (user closed terminal).
+                // During shutdown, preserve files so sessions restore on next launch.
+                if (!isShuttingDown) {
+                    removePersistedHistory(sessionId);
+                }
             });
             sessions.set(sessionId, ptyProcess);
             return { sessionId, reconnected: false };
@@ -349,6 +478,7 @@ function registerTerminalHandlers(getMainWindow) {
             session.kill();
             sessions.delete(id);
             sessionHistory.delete(id);
+            removePersistedHistory(id);
         }
     });
     electron_1.ipcMain.handle("terminal.checkCommand", async (_event, data) => {

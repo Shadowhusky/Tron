@@ -18,10 +18,7 @@ asarUnpack:
   - node_modules/dotenv/**
   - node_modules/http-proxy-middleware/**
   - node_modules/ssh2/**
-
-extraResources:
-  - from: dist-server
-    to: dist-server
+  - node_modules/node-pty/**
 
 afterSign: build/afterSign.cjs
 
