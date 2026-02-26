@@ -269,6 +269,7 @@ export function initWebSocketBridge() {
         invoke("terminal.getCompletions", { prefix, cwd, sessionId }),
       getHistory: (sessionId: string) => invoke("terminal.getHistory", sessionId),
       scanCommands: () => invoke("terminal.scanCommands") as Promise<string[]>,
+      getShellHistory: () => invoke("terminal.getShellHistory") as Promise<string[]>,
       exec: (sessionId: string, command: string) =>
         invoke("terminal.exec", { sessionId, command }),
       testAIConnection: (config: { provider: string; model: string; apiKey?: string; baseUrl?: string }) =>
@@ -293,6 +294,9 @@ export function initWebSocketBridge() {
         invoke("sessions.write", data) as Promise<boolean>,
       getSystemPaths: () =>
         invoke("config.getSystemPaths") as Promise<Record<string, string>>,
+      // Clipboard (server-side — bypasses browser secure context requirement)
+      clipboardReadText: () => invoke("clipboard.readText") as Promise<string>,
+      clipboardWriteText: (text: string) => invoke("clipboard.writeText", text) as Promise<boolean>,
       // System
       selectFolder: (_defaultPath?: string) =>
         Promise.resolve(null) as Promise<string | null>,

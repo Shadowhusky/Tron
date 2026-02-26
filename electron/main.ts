@@ -11,7 +11,7 @@ import { registerSystemHandlers } from "./ipc/system";
 import { registerAIHandlers } from "./ipc/ai";
 import { registerConfigHandlers } from "./ipc/config";
 import { registerSSHHandlers, cleanupAllSSHSessions } from "./ipc/ssh";
-import { registerWebServerHandlers, startWebServer, stopWebServer, readWebServerConfig } from "./ipc/web-server";
+import { registerWebServerHandlers, startWebServerManaged, stopWebServer, readWebServerConfig } from "./ipc/web-server";
 import { registerUpdaterHandlers, autoCheckForUpdates } from "./ipc/updater";
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -192,6 +192,15 @@ const createWindow = () => {
   }
 };
 
+// --- Clipboard image reader (for SmartInput paste) ---
+ipcMain.handle("clipboard.readImage", async () => {
+  const { clipboard } = await import("electron");
+  const image = clipboard.readImage();
+  if (image.isEmpty()) return null;
+  const png = image.toPNG();
+  return png.toString("base64");
+});
+
 // --- Register all IPC handlers ---
 registerTerminalHandlers(() => mainWindow);
 registerSSHHandlers(() => mainWindow, getSessions, getSessionHistory);
@@ -230,18 +239,12 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
-  // Auto-start integrated web server (retry once on transient failure)
+  // Auto-start integrated web server (auto-restarts on crash with backoff)
   const wsConfig = readWebServerConfig();
   if (wsConfig.enabled) {
-    const result = await startWebServer(wsConfig.port);
+    const result = await startWebServerManaged(wsConfig.port);
     if (!result.success) {
-      console.error(`[Tron] Web server start failed, retrying in 2s: ${result.error}`);
-      setTimeout(async () => {
-        const retry = await startWebServer(wsConfig.port);
-        if (!retry.success) {
-          console.error(`[Tron] Web server retry failed: ${retry.error}`);
-        }
-      }, 2000);
+      console.error(`[Tron] Web server initial start failed (will retry): ${result.error}`);
     }
   }
 

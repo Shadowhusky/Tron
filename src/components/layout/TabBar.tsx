@@ -210,18 +210,21 @@ const TabBar: React.FC<TabBarProps> = ({
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Tabs — scrollable container wraps both reorder group and new-tab button */}
+      <div
+        ref={scrollRef}
+        className={`no-scrollbar flex flex-1 items-stretch overflow-x-auto ${isMacOS() ? "pl-3" : ""}`}
+        style={{ WebkitAppRegion: "drag", touchAction: "pan-x", overscrollBehaviorY: "none" } as any}
+      >
       <Reorder.Group
         as="div"
-        ref={scrollRef}
         axis="x"
         values={localTabs}
         onReorder={(newTabs) => {
           isDraggingRef.current = true;
           setLocalTabs(newTabs);
         }}
-        className={`no-scrollbar flex flex-1 items-stretch overflow-x-auto ${isMacOS() ? "pl-3" : ""}`}
-        style={{ WebkitAppRegion: "drag", touchAction: "pan-x", overscrollBehaviorY: "none" } as any}
+        className="flex items-stretch"
       >
         <AnimatePresence initial={false}>
           {localTabs.map((tab, index) => {
@@ -389,10 +392,11 @@ const TabBar: React.FC<TabBarProps> = ({
             );
           })}
         </AnimatePresence>
+      </Reorder.Group>
 
-        {/* New Tab + Dropdown — sticky: sits after last tab, pins to right edge on overflow */}
+        {/* New Tab + Dropdown — outside Reorder.Group so tabs can't be dragged over it */}
         <div
-          className={`flex items-stretch shrink-0 sticky right-0 z-10 ${themeClass(
+          className={`flex items-stretch shrink-0 z-10 ${themeClass(
             resolvedTheme,
             {
               dark: "bg-[#0e0e0e]",
@@ -473,7 +477,7 @@ const TabBar: React.FC<TabBarProps> = ({
                   {
                     dark: "border-white/10 bg-[#1e1e1e] text-gray-200",
                     modern:
-                      "border-white/[0.15] bg-white/[0.08] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-3xl",
+                      "border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
                     light: "border-gray-200 bg-white text-gray-800 shadow-xl",
                   },
                 )}`}
@@ -581,7 +585,7 @@ const TabBar: React.FC<TabBarProps> = ({
           </Popover.Root>
         )}
       </div>
-      </Reorder.Group>
+      </div>
 
       {/* Settings Button */}
       <button
@@ -641,7 +645,7 @@ const TabBar: React.FC<TabBarProps> = ({
               {
                 dark: "border-white/10 bg-[#1e1e1e] text-gray-200",
                 modern:
-                  "border-white/[0.15] bg-white/[0.08] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-3xl",
+                  "border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
                 light: "border-gray-200 bg-white text-gray-800 shadow-xl",
               },
             )}`}

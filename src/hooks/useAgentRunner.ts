@@ -518,7 +518,7 @@ System Paths:
         const contextLimit =
           session?.aiConfig?.contextWindow ||
           aiService.getConfig().contextWindow ||
-          4000;
+          16000;
 
         if (session?.contextSummary && session.contextSummarySourceLength) {
           const newContent = sessionHistory.slice(
@@ -528,6 +528,7 @@ System Paths:
         } else if (sessionHistory.length > contextLimit) {
           const summary = await aiService.summarizeContext(
             sessionHistory.slice(-contextLimit),
+            "moderate",
           );
           sessionHistory = `[CONTEXT SUMMARIZED]\n${summary}`;
         }
@@ -823,6 +824,18 @@ ${prompt}
         currentContinuation || undefined,
         images,
         { isSSH: !!session?.sshProfileId, sessionId },
+        async (description: string) => {
+          if (alwaysAllowRef.current) return;
+          setPendingCommand(description);
+          const allowed = await new Promise<boolean>((resolve) => {
+            setPermissionResolve(resolve);
+          });
+          setPendingCommand(null);
+          setPermissionResolve(null);
+          if (!allowed) {
+            throw new Error("User denied file operation.");
+          }
+        },
       );
 
       // Flush any remaining streaming buffer before processing final answer

@@ -25,8 +25,8 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   modeAgent: "meta+3",
   modeAuto: "meta+0",
   cycleMode: "ctrl+shift+m",
-  forceAgent: "shift+enter",
-  forceCommand: "meta+enter",
+  forceAgent: "meta+enter",
+  forceCommand: "meta+shift+enter",
 };
 
 const DEFAULT_CONFIG: TronConfig = {
@@ -112,6 +112,13 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setConfig((prev) => {
       const next = { ...prev, ...partial };
       persistConfig(next);
+      // Mirror critical flags to localStorage as fallback for web mode reconnects
+      if (partial.configured !== undefined) {
+        try { localStorage.setItem(STORAGE_KEYS.CONFIGURED, String(partial.configured)); } catch { /* private mode */ }
+      }
+      if (partial.tutorialCompleted !== undefined) {
+        try { localStorage.setItem(STORAGE_KEYS.TUTORIAL_COMPLETED, String(partial.tutorialCompleted)); } catch { /* private mode */ }
+      }
       return next;
     });
   }, [persistConfig]);

@@ -1399,7 +1399,7 @@ const SettingsPane = () => {
                       min="1000"
                       max="128000"
                       step="1000"
-                      value={config.contextWindow || 4000}
+                      value={config.contextWindow || 16000}
                       onChange={(e) =>
                         setConfig({
                           ...config,
@@ -1412,7 +1412,7 @@ const SettingsPane = () => {
                     <span
                       className={`text-xs font-mono min-w-12 text-right ${t.accent}`}
                     >
-                      {((config.contextWindow || 4000) / 1000).toFixed(0)}k
+                      {((config.contextWindow || 16000) / 1000).toFixed(0)}k
                     </span>
                   </div>
                 </div>

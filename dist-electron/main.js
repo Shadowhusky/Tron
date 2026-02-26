@@ -210,6 +210,15 @@ const createWindow = () => {
         mainWindow.loadFile(path_1.default.join(__dirname, "../dist-react/index.html"));
     }
 };
+// --- Clipboard image reader (for SmartInput paste) ---
+electron_1.ipcMain.handle("clipboard.readImage", async () => {
+    const { clipboard } = await Promise.resolve().then(() => __importStar(require("electron")));
+    const image = clipboard.readImage();
+    if (image.isEmpty())
+        return null;
+    const png = image.toPNG();
+    return png.toString("base64");
+});
 // --- Register all IPC handlers ---
 (0, terminal_1.registerTerminalHandlers)(() => mainWindow);
 (0, ssh_1.registerSSHHandlers)(() => mainWindow, terminal_1.getSessions, terminal_1.getSessionHistory);
@@ -245,18 +254,12 @@ electron_1.app.whenReady().then(async () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0)
             createWindow();
     });
-    // Auto-start integrated web server (retry once on transient failure)
+    // Auto-start integrated web server (auto-restarts on crash with backoff)
     const wsConfig = (0, web_server_1.readWebServerConfig)();
     if (wsConfig.enabled) {
-        const result = await (0, web_server_1.startWebServer)(wsConfig.port);
+        const result = await (0, web_server_1.startWebServerManaged)(wsConfig.port);
         if (!result.success) {
-            console.error(`[Tron] Web server start failed, retrying in 2s: ${result.error}`);
-            setTimeout(async () => {
-                const retry = await (0, web_server_1.startWebServer)(wsConfig.port);
-                if (!retry.success) {
-                    console.error(`[Tron] Web server retry failed: ${retry.error}`);
-                }
-            }, 2000);
+            console.error(`[Tron] Web server initial start failed (will retry): ${result.error}`);
         }
     }
     // Auto-check for updates (deferred — does not block launch)

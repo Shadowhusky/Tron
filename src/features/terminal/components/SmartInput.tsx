@@ -86,6 +86,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const [reactValue, setReactValue] = useState("");
   const [, startTransition] = useTransition();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const resizeRafRef = useRef<number>(0);
+
+  /** Coalesce textarea auto-resize into a single rAF to avoid forced synchronous layout. */
+  const resizeTextarea = useCallback((el: HTMLTextAreaElement) => {
+    if (resizeRafRef.current) cancelAnimationFrame(resizeRafRef.current);
+    resizeRafRef.current = requestAnimationFrame(() => {
+      el.style.height = "auto";
+      el.style.height = el.scrollHeight + "px";
+      resizeRafRef.current = 0;
+    });
+  }, []);
 
   // Initialize from draft input (persisted across tab switches)
   const draftApplied = useRef(false);
@@ -107,16 +118,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
             : valOrUpdater;
         if (inputRef.current && inputRef.current.value !== newVal) {
           inputRef.current.value = newVal;
-          // Auto-resize textarea height to fit content
-          inputRef.current.style.height = 'auto';
-          if (newVal) {
-            inputRef.current.style.height = inputRef.current.scrollHeight + 'px';
-          }
+          if (newVal) resizeTextarea(inputRef.current);
         }
         return newVal;
       });
     },
-    [],
+    [resizeTextarea],
   );
 
   // Sync draft persistence outside render phase to avoid setState-during-render
@@ -150,7 +157,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   }, [suggestedCommand]);
 
   // Autocomplete & History State
-  type CompletionItem = { text: string; source: "history" | "suggestion" };
+  type CompletionItem = { text: string; source: "history" | "suggestion" | "shell-history" };
   const [completions, setCompletions] = useState<CompletionItem[]>([]);
   const [showCompletions, setShowCompletions] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -223,9 +230,30 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const placeholderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  // Track whether user has sent any command in this session — skip AI
+  // placeholder on fresh terminals (no useful context to suggest from)
+  const hasActivityRef = useRef(false);
+
+  // Reset activity tracking when session changes
+  const prevSessionIdRef = useRef(sessionId);
+  if (prevSessionIdRef.current !== sessionId) {
+    prevSessionIdRef.current = sessionId;
+    hasActivityRef.current = false;
+  }
 
   // Per-session command history (for completions — not global)
   const sessionCommandsRef = useRef<string[]>([]);
+
+  // Shell history (loaded once from ~/.zsh_history, ~/.bash_history, etc.)
+  const shellHistoryRef = useRef<string[]>([]);
+  const shellHistoryLoaded = useRef(false);
+  useEffect(() => {
+    if (shellHistoryLoaded.current) return;
+    shellHistoryLoaded.current = true;
+    window.electron?.ipcRenderer?.getShellHistory?.()
+      .then((cmds: string[]) => { if (cmds?.length) shellHistoryRef.current = cmds; })
+      .catch(() => {});
+  }, []);
 
   // Scan system commands on mount and rescan periodically
   const commandsScanDone = useRef(false);
@@ -291,10 +319,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
     if (el) el.scrollIntoView({ block: "nearest" });
   }, [selectedIndex, showCompletions]);
 
-  // Fetch AI placeholder when input is empty
+  // Fetch AI placeholder when input is empty (skip on fresh sessions — no context yet)
   useEffect(() => {
     if (placeholderTimerRef.current) clearTimeout(placeholderTimerRef.current);
-    if (!aiBehavior.ghostText || value.trim() !== "" || !sessionId || isAgentRunning) {
+    if (!hasActivityRef.current || !aiBehavior.ghostText || value.trim() !== "" || !sessionId || isAgentRunning) {
       return;
     }
     placeholderTimerRef.current = setTimeout(async () => {
@@ -361,6 +389,19 @@ const SmartInput: React.FC<SmartInputProps> = ({
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [activeSessionId, sessionId, focusTarget]);
+
+  // Listen for "Add to Input" events from the pane context menu
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId && detail?.text) {
+        setValue((prev) => (prev ? prev + "\n" + detail.text : detail.text));
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("tron:addToInput", handler);
+    return () => window.removeEventListener("tron:addToInput", handler);
+  }, [sessionId, setValue]);
 
   // Auto-detect mode hierarchy
   useEffect(() => {
@@ -480,18 +521,32 @@ const SmartInput: React.FC<SmartInputProps> = ({
         }
       }
 
+      // Shell history matches (from ~/.zsh_history etc., lower priority than in-app history)
+      const shellMatches: CompletionItem[] = [];
+      const shellCmds = shellHistoryRef.current;
+      for (let i = 0; i < shellCmds.length && shellMatches.length < 5; i++) {
+        const cmd = shellCmds[i];
+        const lower = cmd.toLowerCase();
+        if (lower.startsWith(trimmedInput) && lower !== trimmedInput && !histSeen.has(lower)) {
+          histSeen.add(lower);
+          shellMatches.push({ text: cmd, source: "shell-history" });
+        }
+      }
+
       if (!shouldComplete) {
-        // No smart completions available — show history matches only
-        setCompletions(globalHistoryMatches);
-        setShowCompletions(globalHistoryMatches.length > 0);
+        // No smart completions available — show history + shell history matches
+        const combined = [...globalHistoryMatches, ...shellMatches];
+        setCompletions(combined);
+        setShowCompletions(combined.length > 0);
         setSelectedIndex(0);
         setGhostText("");
         return;
       }
 
-      // Show history matches immediately (no debounce)
-      if (globalHistoryMatches.length > 0) {
-        setCompletions(globalHistoryMatches);
+      // Show history + shell history matches immediately (no debounce)
+      const immediateResults = [...globalHistoryMatches, ...shellMatches];
+      if (immediateResults.length > 0) {
+        setCompletions(immediateResults);
         setShowCompletions(true);
         setSelectedIndex(0);
       }
@@ -513,8 +568,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
             ? getCommandCompletions(input.trim(), 8)
             : [];
 
-          // Build suggestion list (deduped against history)
-          const seen = new Set(globalHistoryMatches.map(h => h.text.toLowerCase()));
+          // Build suggestion list (deduped against history + shell history)
+          const seen = new Set([
+            ...globalHistoryMatches.map(h => h.text.toLowerCase()),
+            ...shellMatches.map(h => h.text.toLowerCase()),
+          ]);
           const suggestions: CompletionItem[] = [];
           for (const c of localCmdMatches) {
             if (!seen.has(c)) { seen.add(c); suggestions.push({ text: c, source: "suggestion" }); }
@@ -523,16 +581,18 @@ const SmartInput: React.FC<SmartInputProps> = ({
             if (!seen.has(r.toLowerCase())) { seen.add(r.toLowerCase()); suggestions.push({ text: r, source: "suggestion" }); }
           }
 
-          // History at top, suggestions below
+          // History at top, shell history next, suggestions below
           const finalResults = [
             ...globalHistoryMatches,
+            ...shellMatches,
             ...suggestions,
           ].slice(0, 15);
 
           setCompletions(finalResults);
           setShowCompletions(finalResults.length > 0);
           // Default selection = first smart suggestion (history items are above, reachable via ArrowUp)
-          setSelectedIndex(suggestions.length > 0 ? globalHistoryMatches.length : 0);
+          const historyCount = globalHistoryMatches.length + shellMatches.length;
+          setSelectedIndex(suggestions.length > 0 ? historyCount : 0);
 
           // Ghost text from best suggestion (prefer suggestions over history for ghost)
           const bestSuggestion = suggestions[0]?.text || globalHistoryMatches[0]?.text;
@@ -562,7 +622,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           setShowCompletions(false);
           setGhostText("");
         }
-      }, 80);
+      }, isTouchDevice() ? 400 : 80);
     },
     [mode, isAuto, activeSessionId, history],
   );
@@ -617,7 +677,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
     const completion = item.text;
     // Suppress the fetch that setValue will trigger
     suppressNextFetchRef.current = true;
-    if (item.source === "history") {
+    if (item.source === "history" || item.source === "shell-history") {
       setValue(completion + " ");
     } else {
       setValue(buildCompletionValue(value, completion));
@@ -639,7 +699,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
     // Tab / Right Arrow: Accept Ghost Text OR Selected Completion OR Placeholder
     // Strict Tab behavior: Only accept, never cycle
-    if (e.key === "Tab" || e.key === "ArrowRight") {
+    if (e.key === "Tab" || (e.key === "ArrowRight" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey)) {
       // Accept advice suggestion command into input box for editing
       if (e.key === "Tab" && parsedSuggestion?.command) {
         e.preventDefault();
@@ -760,8 +820,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    // Up/Down: navigate completions dropdown when visible, otherwise navigate history
-    if (e.key === "ArrowUp") {
+    // Up/Down: navigate completions dropdown when visible, otherwise navigate history.
+    // Pass through to native behavior when modifier keys are held
+    // (Cmd+Up/Down = go to start/end, Shift+Up/Down = text selection).
+    if (e.key === "ArrowUp" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       if (showCompletions && completions.length > 0) {
         navigatedCompletionsRef.current = true;
@@ -790,7 +852,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       if (showCompletions && completions.length > 0) {
         navigatedCompletionsRef.current = true;
@@ -814,10 +876,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
     if (e.key === "Enter") {
       e.stopPropagation(); // Prevent terminal from also receiving this Enter
 
-      // Shift+Enter (without Cmd): insert newline
+      // Shift+Enter (without Cmd): insert newline.
+      // Let the browser's default textarea behavior handle it —
+      // manual insertion via e.preventDefault() + DOM manipulation
+      // fails on some platforms. The onChange handler syncs React state.
       if (e.shiftKey && !e.metaKey) {
-        // Let the textarea handle the newline naturally
-        return;
+        return; // don't preventDefault — browser inserts newline natively
       }
 
       // Cmd+Shift+Enter: force send as command
@@ -871,7 +935,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         const item = completions[selectedIndex];
         // Apply completion and EXECUTE immediately
         let finalVal: string;
-        if (item.source === "history") {
+        if (item.source === "history" || item.source === "shell-history") {
           finalVal = item.text.trim();
         } else {
           finalVal = buildCompletionValue(value, item.text).trim();
@@ -891,6 +955,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
       const finalVal = value.trim();
       const hasImages = attachedImages.length > 0;
       if (finalVal === "" && !hasImages) return;
+
+      // Mark session as active (enables AI placeholder after first command)
+      hasActivityRef.current = true;
 
       // Intercept slash commands (e.g. /log) before mode routing
       if (finalVal.startsWith("/") && onSlashCommand) {
@@ -923,7 +990,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
         setAttachedImages([]);
         setValue("");
         setGhostText("");
+        setAiPlaceholder("");
+        setSuggestedCommand(null);
         setCompletions([]);
+        setShowCompletions(false);
         setHistoryIndex(-1);
         return;
       }
@@ -993,8 +1063,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
       // Cleanup
       setValue("");
       setGhostText("");
+      setAiPlaceholder("");
       setSuggestedCommand(null);
       setCompletions([]);
+      setShowCompletions(false);
       setHistoryIndex(-1);
     }
   };
@@ -1005,6 +1077,19 @@ const SmartInput: React.FC<SmartInputProps> = ({
     showCompletions && completions.length > 0
       ? completions[selectedIndex]?.text
       : null;
+
+  // Memoize ghost text to avoid redundant string ops on every render
+  const displayedGhost = useMemo(() => {
+    if (ghostText) return ghostText;
+    if (!value && aiPlaceholder) return aiPlaceholder;
+    if (currentCompletion) {
+      const lastLine = value.split("\n").pop() || "";
+      if (currentCompletion.startsWith(lastLine)) {
+        return currentCompletion.slice(lastLine.length);
+      }
+    }
+    return "";
+  }, [ghostText, value, aiPlaceholder, currentCompletion]);
 
   return (
     <div
@@ -1211,43 +1296,34 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
           <div className="relative flex-1 flex items-center">
             {/* Ghost Text Overlay — tappable on touch devices to accept suggestion */}
-            {(value.length > 0 || (!value && aiPlaceholder)) && (() => {
-              const displayedGhost = ghostText ||
-                (!value && aiPlaceholder ? aiPlaceholder : "") ||
-                (currentCompletion && currentCompletion.startsWith(value.split('\n').pop() || "")
-                  ? currentCompletion.slice((value.split('\n').pop() || "").length)
-                  : "");
-              if (!displayedGhost) return null;
-              const isTouch = isTouchDevice();
-              const acceptGhost = () => {
-                if (ghostText) {
-                  setValue((prev) => prev + ghostText);
-                  setGhostText("");
-                } else if (aiPlaceholder && !value) {
-                  setValue(aiPlaceholder);
-                  setAiPlaceholder("");
-                }
-                setTimeout(() => inputRef.current?.focus(), 0);
-              };
-              return (
-                <div
-                  className="absolute inset-0 font-mono text-sm whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
-                >
-                  <span className="invisible">{value}</span>
-                  <span className="text-gray-500 opacity-50">
-                    {displayedGhost}
+            {displayedGhost && (
+              <div
+                className="absolute inset-0 font-mono text-sm whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
+              >
+                <span className="invisible">{value}</span>
+                <span className="text-gray-500 opacity-50">
+                  {displayedGhost}
+                </span>
+                {isTouchDevice() && (
+                  <span
+                    className="pointer-events-auto inline-flex items-center ml-1.5 px-1.5 py-0 rounded text-[10px] font-medium align-middle cursor-pointer bg-gray-500/20 text-gray-400 active:bg-gray-500/40"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (ghostText) {
+                        setValue((prev) => prev + ghostText);
+                        setGhostText("");
+                      } else if (aiPlaceholder && !value) {
+                        setValue(aiPlaceholder);
+                        setAiPlaceholder("");
+                      }
+                      setTimeout(() => inputRef.current?.focus(), 0);
+                    }}
+                  >
+                    Tab ↹
                   </span>
-                  {isTouch && (
-                    <span
-                      className="pointer-events-auto inline-flex items-center ml-1.5 px-1.5 py-0 rounded text-[10px] font-medium align-middle cursor-pointer bg-gray-500/20 text-gray-400 active:bg-gray-500/40"
-                      onClick={(e) => { e.stopPropagation(); acceptGhost(); }}
-                    >
-                      Tab ↹
-                    </span>
-                  )}
-                </div>
-              );
-            })()}
+                )}
+              </div>
+            )}
 
             <textarea
               ref={inputRef}
@@ -1275,29 +1351,82 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 const val = e.target.value;
                 inputTriggeredByUserRef.current = true;
                 onFocusInput?.();
+                // Clear ghost/placeholder immediately (outside transition) to prevent
+                // overlap with native placeholder when input is cleared quickly
+                if (val.trim() === "") {
+                  setGhostText("");
+                  setAiPlaceholder("");
+                }
                 startTransition(() => {
                   setReactValue(val);
                   setHistoryIndex(-1);
                   setSuggestedCommand(null);
                   navigatedCompletionsRef.current = false;
                   if (val.trim() !== "") setAiPlaceholder("");
-                  onDraftChange?.(val || undefined);
+                  // Note: onDraftChange fires via the useEffect on reactValue — no need to call here
                 });
-                // Auto-resize textarea
-                const el = e.target;
-                el.style.height = 'auto';
-                el.style.height = el.scrollHeight + 'px';
+                resizeTextarea(e.target);
               }}
               onFocus={() => onFocusInput?.()}
               onKeyDown={handleKeyDown}
               onPaste={(e) => {
-                const items = e.clipboardData?.files;
-                if (items && items.length > 0) {
-                  const imageFiles = Array.from(items).filter(f => ALLOWED_TYPES.includes(f.type));
-                  if (imageFiles.length > 0 && supportsVision) {
-                    e.preventDefault();
-                    handleImageFiles(imageFiles);
+                // Check both clipboardData.files (direct file paste) and
+                // clipboardData.items (screenshot paste — some browsers only
+                // expose images via items, not files).
+                // clipboardData works on HTTP (no secure context needed).
+                let imageFiles: File[] = [];
+                const files = e.clipboardData?.files;
+                if (files && files.length > 0) {
+                  imageFiles = Array.from(files).filter(f => ALLOWED_TYPES.includes(f.type));
+                }
+                if (imageFiles.length === 0 && e.clipboardData?.items) {
+                  for (const item of Array.from(e.clipboardData.items)) {
+                    if (item.kind === "file" && ALLOWED_TYPES.includes(item.type)) {
+                      const file = item.getAsFile();
+                      if (file) imageFiles.push(file);
+                    }
                   }
+                }
+                if (imageFiles.length > 0 && supportsVision) {
+                  e.preventDefault();
+                  handleImageFiles(imageFiles);
+                  return;
+                }
+                // No images in clipboardData — try async APIs as fallback.
+                // In Electron, clipboardData may not expose screenshot images;
+                // navigator.clipboard.read() or Electron IPC can fill the gap.
+                // Don't preventDefault — let native text paste happen normally.
+                if (supportsVision) {
+                  (async () => {
+                    try {
+                      if (navigator.clipboard?.read) {
+                        const items = await navigator.clipboard.read();
+                        for (const item of items) {
+                          const imageType = item.types.find((t: string) => t.startsWith("image/"));
+                          if (imageType) {
+                            const blob = await item.getType(imageType);
+                            const ext = imageType.split("/")[1]?.replace("jpeg", "jpg") || "png";
+                            const file = new File([blob], `paste-${Date.now()}.${ext}`, { type: imageType });
+                            handleImageFiles([file]);
+                            return;
+                          }
+                        }
+                      }
+                    } catch { /* not available in non-secure context */ }
+                    try {
+                      if (window.electron?.ipcRenderer?.readClipboardImage) {
+                        const base64 = await window.electron.ipcRenderer.readClipboardImage();
+                        if (base64) {
+                          const byteChars = atob(base64);
+                          const bytes = new Uint8Array(byteChars.length);
+                          for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+                          const blob = new Blob([bytes], { type: "image/png" });
+                          const file = new File([blob], `paste-${Date.now()}.png`, { type: "image/png" });
+                          handleImageFiles([file]);
+                        }
+                      }
+                    } catch { /* IPC not available */ }
+                  })();
                 }
               }}
               autoFocus
@@ -1462,10 +1591,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
               >
                 {comp.source === "history" ? (
                   <Clock className="w-3 h-3 opacity-50 shrink-0" />
+                ) : comp.source === "shell-history" ? (
+                  <Clock className="w-3 h-3 opacity-30 shrink-0" />
                 ) : (
                   <Terminal className="w-3 h-3 opacity-50 shrink-0" />
                 )}
-                <span className="truncate">{comp.text}</span>
+                <span className={`truncate${comp.source === "shell-history" ? " opacity-70" : ""}`}>{comp.text}</span>
               </motion.div>
             ))}
           </motion.div>

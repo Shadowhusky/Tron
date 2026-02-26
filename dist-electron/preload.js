@@ -41,6 +41,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "ssh.profiles.write",
     "savedTabs.read",
     "savedTabs.write",
+    "terminal.getShellHistory",
     "terminal.history.getStats",
     "terminal.history.clearAll",
     "webServer.start",
@@ -52,6 +53,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "updater.quitAndInstall",
     "updater.getStatus",
     "updater.getVersion",
+    "clipboard.readImage",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -112,6 +114,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         getCompletions: (prefix, cwd, sessionId) => electron_1.ipcRenderer.invoke("terminal.getCompletions", { prefix, cwd, sessionId }),
         getHistory: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getHistory", sessionId),
         scanCommands: () => electron_1.ipcRenderer.invoke("terminal.scanCommands"),
+        getShellHistory: () => electron_1.ipcRenderer.invoke("terminal.getShellHistory"),
         exec: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.exec", { sessionId, command }),
         execInTerminal: (sessionId, command) => electron_1.ipcRenderer.invoke("terminal.execInTerminal", { sessionId, command }),
         // Config
@@ -155,6 +158,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         quitAndInstall: () => electron_1.ipcRenderer.invoke("updater.quitAndInstall"),
         getUpdateStatus: () => electron_1.ipcRenderer.invoke("updater.getStatus"),
         getAppVersion: () => electron_1.ipcRenderer.invoke("updater.getVersion"),
+        readClipboardImage: () => electron_1.ipcRenderer.invoke("clipboard.readImage"),
     },
 });
 //# sourceMappingURL=preload.js.map

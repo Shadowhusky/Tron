@@ -41,6 +41,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "ssh.profiles.write",
   "savedTabs.read",
   "savedTabs.write",
+  "terminal.getShellHistory",
   "terminal.history.getStats",
   "terminal.history.clearAll",
   "webServer.start",
@@ -52,6 +53,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "updater.quitAndInstall",
   "updater.getStatus",
   "updater.getVersion",
+  "clipboard.readImage",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -124,6 +126,8 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("terminal.getHistory", sessionId),
     scanCommands: () =>
       ipcRenderer.invoke("terminal.scanCommands") as Promise<string[]>,
+    getShellHistory: () =>
+      ipcRenderer.invoke("terminal.getShellHistory") as Promise<string[]>,
     exec: (sessionId: string, command: string) =>
       ipcRenderer.invoke("terminal.exec", { sessionId, command }),
     execInTerminal: (sessionId: string, command: string) =>
@@ -235,5 +239,7 @@ contextBridge.exposeInMainWorld("electron", {
       }>,
     getAppVersion: () =>
       ipcRenderer.invoke("updater.getVersion") as Promise<string>,
+    readClipboardImage: () =>
+      ipcRenderer.invoke("clipboard.readImage") as Promise<string | null>,
   },
 });

@@ -7,7 +7,7 @@ export interface AIConfig {
   model: string;
   apiKey?: string;
   baseUrl?: string;
-  contextWindow?: number; // Max context chars, default 4000
+  contextWindow?: number; // Max context chars, default 16000
   maxAgentSteps?: number; // Max agent loop iterations, default 100
   favoritedModels?: string[]; // Array of explicitly starred model strings
 }

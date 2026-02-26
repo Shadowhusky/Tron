@@ -85,7 +85,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const maxContext =
     session?.aiConfig?.contextWindow ||
     aiService.getConfig().contextWindow ||
-    4000;
+    16000;
 
   // Poll for context length (history size)
   const [contextLength, setContextLength] = useState(0);
@@ -283,7 +283,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
   const handleOpenContextModal = () => setShowContextModal(true);
 
-  const handleSummarize = async (_level: "brief" | "moderate" | "detailed", freshContext?: string) => {
+  const handleSummarize = async (level: "brief" | "moderate" | "detailed", freshContext?: string) => {
     if (isSummarizingRef.current) return;
     isSummarizingRef.current = true;
     setIsSummarizing(true);
@@ -292,6 +292,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
       const textToSummarize = freshContext || contextTextRef.current || "";
       const summary = await aiService.summarizeContext(
         textToSummarize.slice(-10000),
+        level,
       );
 
       // Update local view

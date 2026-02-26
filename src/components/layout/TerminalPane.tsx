@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Bot, ChevronRight, Folder } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
+import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -18,12 +19,12 @@ import {
   smartQuotePaths,
 } from "../../utils/commandClassifier";
 import { IPC } from "../../constants/ipc";
-import { abbreviateHome, isTouchDevice } from "../../utils/platform";
+import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platform";
 import type { AttachedImage, SSHConnectionStatus } from "../../types";
 import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
 import TuiKeyToolbar from "../../features/terminal/components/TuiKeyToolbar";
 import { useAllConfiguredModels } from "../../hooks/useModels";
-import { readScreenBuffer } from "../../services/terminalBuffer";
+import { readScreenBuffer, getTerminalSelection } from "../../services/terminalBuffer";
 
 interface TerminalPaneProps {
   sessionId: string;
@@ -41,6 +42,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     openSettingsTab,
     renameTab,
     refreshCwd,
+    splitUserAction,
+    closePane,
   } = useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
@@ -210,6 +213,21 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     });
     return cleanup;
   }, [sessionId, isSSH]);
+
+  // Context menu state (right-click / long-press for split/close)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const longPressTriggered = useRef(false);
+
+  // Radix Popover virtual anchor — positions popover at click/touch coordinates
+  const anchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
+    getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
+  });
+  if (contextMenu) {
+    anchorRef.current = {
+      getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: contextMenu.x, y: contextMenu.y }),
+    };
+  }
 
   // In agent view: show embedded terminal when user runs a command
   const [showEmbeddedTerminal, setShowEmbeddedTerminal] = useState(false);
@@ -480,6 +498,121 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     if (!isActive) focusSession(sessionId);
   };
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (isConnectPane || isElectronApp()) return;
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (isConnectPane || isElectronApp()) return;
+    longPressTriggered.current = false;
+    const touch = e.touches[0];
+    const x = touch.clientX;
+    const y = touch.clientY;
+    longPressTimer.current = setTimeout(() => {
+      longPressTriggered.current = true;
+      setContextMenu({ x, y });
+    }, 500);
+  };
+  const handleTouchEnd = () => {
+    clearTimeout(longPressTimer.current);
+  };
+  const handleTouchMove = () => {
+    clearTimeout(longPressTimer.current);
+  };
+
+  // Read selection from xterm first, fall back to DOM selection (agent overlay, input box)
+  const selection = contextMenu
+    ? (getTerminalSelection(sessionId) || window.getSelection()?.toString() || "")
+    : "";
+  const hasSelection = selection.trim().length > 0;
+
+  const isTouch = isTouchDevice();
+  const contextMenuItems = [
+    // Clipboard & selection items hidden on touch devices — xterm.js doesn't
+    // support text selection on touch, and programmatic clipboard access is
+    // unreliable on mobile HTTP. Users should use native long-press instead.
+    ...(isTouch ? [] : [
+      {
+        label: "Copy",
+        icon: <Copy className="h-3.5 w-3.5" />,
+        action: () => {
+          if (!hasSelection) return;
+          const deviceCopy = (text: string) => {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+            document.body.appendChild(ta);
+            ta.focus({ preventScroll: true });
+            ta.select();
+            try { document.execCommand("copy"); } catch { /* ignored */ }
+            ta.remove();
+          };
+          if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(selection).catch(() => deviceCopy(selection));
+          } else {
+            deviceCopy(selection);
+          }
+        },
+        disabled: !hasSelection,
+      },
+      {
+        label: "Paste",
+        icon: <ClipboardPaste className="h-3.5 w-3.5" />,
+        action: () => {
+          const sendToTerminal = (text: string) => {
+            if (text && window.electron) {
+              window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data: text });
+            }
+          };
+          if (navigator.clipboard?.readText) {
+            navigator.clipboard.readText().then(sendToTerminal).catch(() => {
+              window.electron?.ipcRenderer?.clipboardReadText?.().then(sendToTerminal).catch(() => {});
+            });
+          } else if (window.electron?.ipcRenderer?.clipboardReadText) {
+            window.electron.ipcRenderer.clipboardReadText().then(sendToTerminal).catch(() => {});
+          }
+        },
+      },
+      { separator: true as const } as const,
+      {
+        label: "Ask Agent",
+        icon: <Bot className="h-3.5 w-3.5" />,
+        action: () => { if (hasSelection) stableOnRunAgent(selection); },
+        disabled: !hasSelection,
+      },
+      {
+        label: "Add to Input",
+        icon: <TextCursorInput className="h-3.5 w-3.5" />,
+        action: () => {
+          if (hasSelection) {
+            window.dispatchEvent(new CustomEvent("tron:addToInput", { detail: { sessionId, text: selection } }));
+          }
+        },
+        disabled: !hasSelection,
+      },
+      { separator: true as const } as const,
+    ]),
+    {
+      label: "Split Horizontal",
+      icon: <Columns2 className="h-3.5 w-3.5" />,
+      action: () => { focusSession(sessionId); splitUserAction("horizontal"); },
+    },
+    {
+      label: "Split Vertical",
+      icon: <Rows2 className="h-3.5 w-3.5" />,
+      action: () => { focusSession(sessionId); splitUserAction("vertical"); },
+    },
+    { separator: true as const },
+    {
+      label: "Close Pane",
+      icon: <X className="h-3.5 w-3.5" />,
+      action: () => closePane(sessionId),
+      danger: true,
+    },
+  ];
+
   return (
     <div
       onMouseDown={handlePaneFocus}
@@ -553,6 +686,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 animate={{ height: "40%", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.2 }}
+                onContextMenu={handleContextMenu}
+                onTouchStart={handleTouchStart}
+                onTouchEnd={handleTouchEnd}
+                onTouchMove={handleTouchMove}
                 className={`relative shrink-0 border-t ${themeClass(
                   resolvedTheme,
                   {
@@ -610,6 +747,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           <div
             className="relative min-h-0 flex-1"
             onMouseDown={() => setFocusTarget("terminal")}
+            onContextMenu={handleContextMenu}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            onTouchMove={handleTouchMove}
           >
             {isConnectPane ? (
               <div
@@ -877,6 +1018,63 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Pane context menu (right-click / long-press) — Radix Popover with virtual anchor */}
+      <Popover.Root
+        open={!!contextMenu}
+        onOpenChange={(open) => { if (!open) setContextMenu(null); }}
+      >
+        <Popover.Anchor virtualRef={anchorRef as any} />
+        <Popover.Portal>
+          <Popover.Content
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+            className={`z-[100] min-w-[160px] overflow-hidden rounded-lg py-1 shadow-xl ${themeClass(
+              resolvedTheme,
+              {
+                dark: "border border-white/10 bg-[#1e1e1e] text-gray-200",
+                modern: "border border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                light: "border border-gray-200 bg-white text-gray-800 shadow-xl",
+              },
+            )}`}
+            onContextMenu={(e) => e.preventDefault()}
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
+            {contextMenuItems.map((item, i) =>
+              "separator" in item ? (
+                <div
+                  key={i}
+                  className={`my-1 h-px ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}
+                />
+              ) : (
+                <button
+                  key={i}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                    item.disabled
+                      ? "opacity-40 cursor-default pointer-events-none"
+                      : item.danger
+                        ? resolvedTheme === "light"
+                          ? "cursor-pointer text-red-600 hover:bg-red-50"
+                          : "cursor-pointer text-red-400 hover:bg-red-500/10"
+                        : resolvedTheme === "light"
+                          ? "cursor-pointer hover:bg-gray-100"
+                          : "cursor-pointer hover:bg-white/10"
+                  }`}
+                  onClick={() => {
+                    item.action();
+                    setContextMenu(null);
+                  }}
+                >
+                  {item.icon}
+                  {item.label}
+                </button>
+              ),
+            )}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   );
 };

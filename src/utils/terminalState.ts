@@ -50,6 +50,173 @@ const TUI_MENU_PATTERNS = [
 ];
 
 /**
+ * Full-screen TUI program detection.
+ * Each entry maps a program name to patterns found in its rendered output.
+ * Patterns are checked across ALL lines (not just the last few) since TUI
+ * programs fill the entire screen.
+ */
+const TUI_PROGRAM_PATTERNS: { name: string; patterns: RegExp[] }[] = [
+  // vim / nvim: mode indicators, tilde empty-line markers, command line
+  {
+    name: "vim",
+    patterns: [
+      /-- INSERT --/,
+      /-- VISUAL --/,
+      /-- REPLACE --/,
+      /-- NORMAL --/,
+      // 3+ consecutive lines that are just "~" (vim empty buffer)
+      /^~\s*\n~\s*\n~\s*$/m,
+      // vim command-line prompt at bottom
+      /^:[^/].*\s*$/m,
+    ],
+  },
+  // nano: header line + bottom shortcut bar
+  {
+    name: "nano",
+    patterns: [/GNU nano/i, /\^[GOXRWK]\s+\w/],
+  },
+  // htop / top / btop: process viewer indicators
+  {
+    name: "htop",
+    patterns: [
+      /PID\s+USER\s+PR/,  // top/htop header
+      /Tasks:\s+\d+/,
+      /%Cpu/i,
+    ],
+  },
+  // less / man / pager: bottom status indicators
+  {
+    name: "less",
+    patterns: [
+      /^\(END\)\s*$/m,
+      /Manual page\s+\S+/,
+      /^lines \d+-\d+/m,
+    ],
+  },
+  // lazygit: git TUI
+  {
+    name: "lazygit",
+    patterns: [/Branches\s.*Local Branches/i, /lazygit/i],
+  },
+  // ranger / nnn / mc: file manager TUI
+  {
+    name: "file-manager",
+    patterns: [/ranger\s+\d+\.\d+/i],
+  },
+  // AI CLI tools (Claude Code, aider, etc.) — full-screen Ink/React-based CLIs
+  {
+    name: "ai-cli",
+    patterns: [
+      /claude/i,                    // Claude Code CLI branding/prompt
+      /[╭╰].*─{3,}/,               // Box-drawing message borders (Ink-based CLIs)
+      /\b(sonnet|opus|haiku)\b/i,   // Claude model family names in output
+      /aider/i,                     // Aider CLI
+    ],
+  },
+];
+
+/**
+ * Return an ordered list of exit keystrokes to try for a TUI program.
+ * Each entry has: keys to send, wait time (ms), and description.
+ * Multi-key entries (e.g. rapid double Ctrl+C) send all keys in one write
+ * so the program receives them without a readTerminal gap in between.
+ */
+export function getTuiExitSequence(tui: string): { keys: string; wait: number; desc: string }[] {
+  switch (tui) {
+    case "vim":
+      return [
+        { keys: "\x1b:q!\r", wait: 500, desc: "Esc + :q!" },
+        { keys: "\x1b\x1b:q!\r", wait: 500, desc: "double-Esc + :q!" },
+        { keys: "\x03\x03", wait: 500, desc: "Ctrl+C x2" },
+      ];
+    case "nano":
+      return [
+        { keys: "\x18", wait: 500, desc: "Ctrl+X" },
+        { keys: "n", wait: 500, desc: "discard save prompt" },
+      ];
+    case "less": case "man":
+      return [{ keys: "q", wait: 300, desc: "q" }];
+    case "htop":
+      return [{ keys: "q", wait: 300, desc: "q" }];
+    case "lazygit":
+      return [
+        { keys: "q", wait: 300, desc: "q" },
+        { keys: "q", wait: 300, desc: "q (sub-panel)" },
+        { keys: "q", wait: 300, desc: "q (outer)" },
+      ];
+    default:
+      // Adaptive sequence — covers AI CLIs (claude, aider), unknown TUIs.
+      // Rapid double/triple Ctrl+C sent as a single write (no readTerminal gap).
+      return [
+        { keys: "\x03", wait: 1000, desc: "Ctrl+C" },
+        { keys: "\x03\x03", wait: 1500, desc: "rapid Ctrl+C x2" },
+        { keys: "\x04", wait: 1000, desc: "Ctrl+D (EOF)" },
+        { keys: "/exit\r", wait: 1000, desc: "/exit command" },
+        { keys: "exit\r", wait: 1000, desc: "exit command" },
+        { keys: "\x03\x03\x03\x04", wait: 1500, desc: "rapid Ctrl+C x3 + Ctrl+D" },
+        { keys: "q", wait: 500, desc: "q key" },
+      ];
+  }
+}
+
+/**
+ * Check whether the TUI has exited by examining terminal output.
+ * Prioritizes classifyTerminalOutput ("idle") over detectTuiProgram because
+ * after a TUI exits, old TUI artifacts (text, box-drawing) may remain in the
+ * terminal buffer above the shell prompt, causing false TUI detection.
+ */
+function isTuiExited(output: string): boolean {
+  const state = classifyTerminalOutput(output);
+  // If we see a shell prompt, trust it — TUI is gone even if old patterns linger
+  if (state === "idle") return true;
+  // If TUI patterns are gone from the buffer, it's exited
+  if (!detectTuiProgram(output)) return true;
+  return false;
+}
+
+/**
+ * Programmatically attempt to exit a TUI program by trying exit sequences
+ * in order, verifying after each attempt.
+ * Returns { exited, attempts } — the caller can report what happened.
+ */
+export async function attemptTuiExit(
+  tui: string,
+  writeToTerminal: (text: string, isRaw?: boolean) => Promise<void> | void,
+  readTerminal: (lines: number) => Promise<string>,
+): Promise<{ exited: boolean; attempts: string[] }> {
+  const seq = getTuiExitSequence(tui);
+  const attempts: string[] = [];
+  for (const step of seq) {
+    await writeToTerminal(step.keys, true);
+    attempts.push(step.desc);
+    await new Promise(r => setTimeout(r, step.wait));
+    const output = await readTerminal(30);
+    if (isTuiExited(output || "")) {
+      return { exited: true, attempts };
+    }
+  }
+  return { exited: false, attempts };
+}
+
+/**
+ * Detect if terminal output looks like a full-screen TUI program.
+ * Returns the program name if detected, or null.
+ */
+export function detectTuiProgram(output: string): string | null {
+  for (const { name, patterns } of TUI_PROGRAM_PATTERNS) {
+    // Require at least 2 pattern matches for confidence (reduces false positives)
+    let matches = 0;
+    for (const p of patterns) {
+      if (p.test(output)) matches++;
+      if (matches >= 2) return name;
+    }
+    // Single-pattern entries with very distinctive markers are OK with 1 match
+    if (matches >= 1 && patterns.length <= 2) return name;
+  }
+  return null;
+}
+
+/**
  * Classify terminal output into one of four states:
  * - "idle": shell prompt visible, ready for commands
  * - "server": dev server / listener running, safe to Ctrl+C

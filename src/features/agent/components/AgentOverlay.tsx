@@ -981,6 +981,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     }
   }, [scrollTrigger]);
 
+  // Scroll to bottom when a new agent prompt starts
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    if (isAgentRunning && !prevRunningRef.current) {
+      scrollToBottom();
+    }
+    prevRunningRef.current = isAgentRunning;
+  }, [isAgentRunning, scrollToBottom]);
+
   // Reset toasts on new run
   useEffect(() => {
     if (agentThread.length === 0) setToasts([]);
@@ -1024,7 +1033,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       if (s.step === "separator") {
         runs.push({ title: s.output, isAgentRun: true, steps: [] });
       } else {
-        if (runs.length === 0 || runs[runs.length - 1].isAgentRun) {
+        if (runs.length === 0) {
           runs.push({ title: "", isAgentRun: false, steps: [] });
         }
         runs[runs.length - 1].steps.push({ step: s, globalIdx: gi });
@@ -1054,11 +1063,13 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
           isLast: true,
           title: run.title,
           isAgentRun: true,
-          steps: [],
+          steps: run.steps,
         });
-        run.steps.forEach((s) =>
-          items.push({ kind: "step", step: s.step, globalIdx: s.globalIdx }),
-        );
+        if (!collapsedRuns.has(runIdx)) {
+          run.steps.forEach((s) =>
+            items.push({ kind: "step", step: s.step, globalIdx: s.globalIdx }),
+          );
+        }
       } else {
         // Previous runs or standalone: single item containing all steps
         items.push({
@@ -1095,7 +1106,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       }
     }
     return items;
-  }, [panelSteps, isAgentRunning]);
+  }, [panelSteps, isAgentRunning, collapsedRuns]);
 
   const virtualizer = useVirtualizer({
     count: flatItems.length,
@@ -1317,8 +1328,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
             )}
           </div>
 
-          {/* Thread History - Only show when expanded */}
-          {isExpanded && (panelSteps.length > 0 || isAgentRunning) && (
+          {/* Thread History - Only show when expanded and no permission dialog */}
+          {isExpanded && !pendingCommand && (panelSteps.length > 0 || isAgentRunning) && (
             <div className="flex-1 relative min-h-0">
               <div
                 ref={scrollRef}
@@ -1836,17 +1847,29 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                         </div>
                       ) : null;
 
-                    // Current (last) agent run: just the header (steps are separate virtual items)
+                    // Current (last) agent run: header (steps are separate virtual items when expanded)
                     if (item.isLast && item.isAgentRun) {
+                      const isCurrentCollapsed = collapsedRuns.has(item.runIdx);
                       return (
                         <div className="py-1">
-                          <div className="flex items-center gap-1.5">
+                          <div
+                            className="flex items-center gap-1.5 cursor-pointer select-none"
+                            onClick={() => toggleRunCollapse(item.runIdx)}
+                          >
+                            <span className={`text-[9px] opacity-50 transition-transform ${isCurrentCollapsed ? "" : "rotate-90"}`}>
+                              ▶
+                            </span>
                             <Bot className="w-3 h-3 text-purple-400 opacity-60 shrink-0" />
                             <span
                               className={`text-[10px] truncate flex-1 min-w-0 ${isLight ? "text-gray-400" : "text-gray-500"}`}
                             >
                               {displayTitle}
                             </span>
+                            {isCurrentCollapsed && item.steps.length > 0 && (
+                              <span className={`text-[9px] shrink-0 ${isLight ? "text-gray-400" : "text-gray-500"} opacity-60`}>
+                                {item.steps.length} {item.steps.length === 1 ? "step" : "steps"}
+                              </span>
+                            )}
                           </div>
                           {imageThumbs}
                         </div>
@@ -1914,6 +1937,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           >
                             {displayTitle}
                           </span>
+                          {isRunCollapsed && item.steps.length > 0 && (
+                            <span className={`text-[9px] shrink-0 ${isLight ? "text-gray-400" : "text-gray-500"} opacity-60`}>
+                              {item.steps.length} {item.steps.length === 1 ? "step" : "steps"}
+                            </span>
+                          )}
                         </div>
                         {!isRunCollapsed && (
                           <>
@@ -2067,7 +2095,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                className="shrink-0 max-h-[60%]"
+                className="flex-1 min-h-0 overflow-y-auto"
               >
                 <PermissionRequest
                   command={pendingCommand}

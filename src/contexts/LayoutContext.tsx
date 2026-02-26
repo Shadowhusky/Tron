@@ -16,6 +16,7 @@ import { isSshOnly } from "../services/mode";
 import { onServerReconnect } from "../services/ws-bridge";
 import { matchesHotkey } from "../hooks/useHotkey";
 import { useConfig } from "./ConfigContext";
+import { isElectronApp } from "../utils/platform";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -34,6 +35,8 @@ interface LayoutContextType {
   selectTab: (tabId: string) => void;
   splitUserAction: (direction: SplitDirection) => Promise<void>;
   closeSession: (sessionId: string) => void;
+  /** Remove a specific pane from the layout tree and kill its PTY session. */
+  closePane: (sessionId: string) => void;
   updateSessionConfig: (sessionId: string, config: Partial<AIConfig>) => void;
   updateSession: (sessionId: string, updates: Partial<TerminalSession>) => void;
   addInteraction: (
@@ -755,6 +758,43 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /** Remove a specific pane (by sessionId) from the layout tree and kill its PTY. */
+  const closePane = (targetId: string) => {
+    // Find the tab containing this session
+    const tab = tabs.find((t) => {
+      const findSession = (n: LayoutNode): boolean => {
+        if (n.type === "leaf") return n.sessionId === targetId;
+        return n.children.some(findSession);
+      };
+      return findSession(t.root);
+    });
+    if (!tab) return;
+
+    const removeNode = (node: LayoutNode): LayoutNode | null => {
+      if (node.type === "leaf") return node.sessionId === targetId ? null : node;
+      const newChildren = node.children.map(removeNode).filter((c): c is LayoutNode => c !== null);
+      if (newChildren.length === 0) return null;
+      if (newChildren.length === 1) return newChildren[0];
+      return { ...node, children: newChildren, sizes: newChildren.map(() => 100 / newChildren.length) };
+    };
+
+    const newRoot = removeNode(tab.root);
+    closeSession(targetId);
+
+    if (!newRoot) {
+      closeTab(tab.id);
+    } else {
+      const findFirstSession = (n: LayoutNode): string => {
+        if (n.type === "leaf") return n.sessionId;
+        return findFirstSession(n.children[0]);
+      };
+      const newActiveId = findFirstSession(newRoot);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === tab.id ? { ...t, root: newRoot, activeSessionId: newActiveId } : t)),
+      );
+    }
+  };
+
   const closeSession = (sessionId: string) => {
     if (sessionId === "settings" || sessionId.startsWith("ssh-connect")) return; // pseudo-sessions
 
@@ -1190,22 +1230,25 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   // Keyboard Shortcuts (customizable via hotkey system)
+  // In web mode, Cmd+W/Cmd+D/Cmd+Shift+D conflict with browser shortcuts
+  // (close tab, bookmark, etc.) so we only register them in Electron.
   const { hotkeys } = useConfig();
+  const isElectron = isElectronApp();
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (matchesHotkey(e, hotkeys.newTab || "meta+t")) {
         e.preventDefault();
         createTab();
       }
-      if (matchesHotkey(e, hotkeys.closeTab || "meta+w")) {
+      if (isElectron && matchesHotkey(e, hotkeys.closeTab || "meta+w")) {
         e.preventDefault();
         closeActivePaneWithConfirm();
       }
-      if (matchesHotkey(e, hotkeys.splitHorizontal || "meta+d")) {
+      if (isElectron && matchesHotkey(e, hotkeys.splitHorizontal || "meta+d")) {
         e.preventDefault();
         splitUserAction("horizontal");
       }
-      if (matchesHotkey(e, hotkeys.splitVertical || "meta+shift+d")) {
+      if (isElectron && matchesHotkey(e, hotkeys.splitVertical || "meta+shift+d")) {
         e.preventDefault();
         splitUserAction("vertical");
       }
@@ -1250,6 +1293,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         selectTab,
         splitUserAction,
         closeSession,
+        closePane,
         updateSessionConfig,
         updateSession,
         markSessionDirty,

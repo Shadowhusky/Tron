@@ -5,10 +5,11 @@ import http from "http";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import url from "url";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
+import { pipeline } from "stream";
+import { execSync } from "child_process";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import * as terminal from "./handlers/terminal.js";
 import * as ai from "./handlers/ai.js";
@@ -141,13 +142,27 @@ app.all("/api/ai-proxy/{*path}", express.raw({ type: "*/*", limit: "5mb" }), asy
             res.flushHeaders();
         }
         if (response.body) {
-            const readable = Readable.fromWeb(response.body);
-            readable.on("error", (err) => {
-                if (!res.writableEnded)
+            let readable;
+            try {
+                readable = Readable.fromWeb(response.body);
+            }
+            catch (err) {
+                if (!res.headersSent) {
+                    res.status(502).json({ error: "Stream conversion error" });
+                }
+                else if (!res.writableEnded) {
                     res.end();
-                console.error("[AI Proxy] Stream error:", err.message);
+                }
+                return;
+            }
+            // Use pipeline() instead of pipe() for proper stream cleanup and error handling.
+            // pipe() leaves streams in broken state on error; pipeline() destroys both ends.
+            // This prevents server crashes when clients disconnect mid-stream (SSE/chunked).
+            pipeline(readable, res, (err) => {
+                if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+                    console.error("[AI Proxy] Stream pipeline error:", err.message);
+                }
             });
-            readable.pipe(res);
         }
         else {
             res.end();
@@ -156,6 +171,9 @@ app.all("/api/ai-proxy/{*path}", express.raw({ type: "*/*", limit: "5mb" }), asy
     catch (e) {
         if (!res.headersSent) {
             res.status(502).json({ error: e.message || "Proxy error" });
+        }
+        else if (!res.writableEnded) {
+            res.end();
         }
     }
 });
@@ -195,8 +213,8 @@ const pendingCleanups = new Map();
 const activeConnections = new Map();
 wss.on("connection", (ws, req) => {
     // Use persistent client token from URL query (survives reconnects) or fall back to random
-    const parsed = url.parse(req.url || "", true);
-    const clientId = parsed.query.token || randomUUID();
+    const wsUrl = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+    const clientId = wsUrl.searchParams.get("token") || randomUUID();
     // Cancel any pending cleanup for this client (reconnected before grace period expired)
     const pendingCleanup = pendingCleanups.get(clientId);
     if (pendingCleanup) {
@@ -374,6 +392,8 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return terminal.execInTerminal(data.sessionId, data.command, pushEvent);
         case "terminal.scanCommands":
             return terminal.scanCommands();
+        case "terminal.getShellHistory":
+            return terminal.getShellHistory();
         case "file.saveTempImage": {
             const tmpDir = path.join(os.tmpdir(), "tron-images");
             if (!fs.existsSync(tmpDir))
@@ -419,6 +439,38 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
                 downloads: path.join(home, "Downloads"),
                 temp: os.tmpdir(),
             };
+        }
+        case "clipboard.readText": {
+            // Server-side clipboard read — bypasses browser secure context requirement
+            try {
+                const platform = process.platform;
+                if (platform === "darwin")
+                    return execSync("pbpaste", { encoding: "utf-8", timeout: 2000 });
+                if (platform === "linux")
+                    return execSync("xclip -selection clipboard -o", { encoding: "utf-8", timeout: 2000 });
+                if (platform === "win32")
+                    return execSync("powershell -command Get-Clipboard", { encoding: "utf-8", timeout: 2000 });
+                return "";
+            }
+            catch {
+                return "";
+            }
+        }
+        case "clipboard.writeText": {
+            try {
+                const text = typeof data === "string" ? data : data?.text || "";
+                const platform = process.platform;
+                if (platform === "darwin")
+                    execSync("pbcopy", { input: text, timeout: 2000 });
+                else if (platform === "linux")
+                    execSync("xclip -selection clipboard", { input: text, timeout: 2000 });
+                else if (platform === "win32")
+                    execSync("powershell -command Set-Clipboard", { input: text, timeout: 2000 });
+                return true;
+            }
+            catch {
+                return false;
+            }
         }
         case "system.selectFolder":
             return null; // Not available in web mode
@@ -471,4 +523,18 @@ const shutdownHandler = () => {
 };
 process.on("SIGINT", shutdownHandler);
 process.on("SIGTERM", shutdownHandler);
+// Prevent server crashes from unhandled stream/network errors — log and continue.
+// Fatal startup errors (e.g. EADDRINUSE) should still crash.
+let serverStarted = false;
+server.on("listening", () => { serverStarted = true; });
+process.on("uncaughtException", (err) => {
+    if (!serverStarted) {
+        console.error("[Tron Web] Fatal startup error:", err.message);
+        process.exit(1);
+    }
+    console.error("[Tron Web] Uncaught exception (keeping server alive):", err.message);
+});
+process.on("unhandledRejection", (reason) => {
+    console.error("[Tron Web] Unhandled rejection:", reason);
+});
 //# sourceMappingURL=index.js.map
