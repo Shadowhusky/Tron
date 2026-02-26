@@ -583,7 +583,11 @@ function isPathLike(token: string): boolean {
  * shell meta-characters to avoid breaking intentional syntax.
  */
 export function smartQuotePaths(input: string): string {
-  const trimmed = input.trim();
+  // Normalize curly/smart quotes to straight quotes (macOS & mobile keyboards auto-replace)
+  const normalized = input
+    .replace(/[\u201C\u201D]/g, '"')   // " " → "
+    .replace(/[\u2018\u2019]/g, "'");  // ' ' → '
+  const trimmed = normalized.trim();
   if (!trimmed) return trimmed;
 
   // Skip if the command already uses quotes, backslash escapes, or shell operators

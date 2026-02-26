@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
 import { pipeline } from "stream";
+import { execSync } from "child_process";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import * as terminal from "./handlers/terminal.js";
 import * as ai from "./handlers/ai.js";
@@ -425,6 +426,8 @@ async function handleInvoke(
       return terminal.execInTerminal(data.sessionId, data.command, pushEvent);
     case "terminal.scanCommands":
       return terminal.scanCommands();
+    case "terminal.getShellHistory":
+      return terminal.getShellHistory();
     case "file.saveTempImage": {
       const tmpDir = path.join(os.tmpdir(), "tron-images");
       if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
@@ -469,6 +472,26 @@ async function handleInvoke(
         downloads: path.join(home, "Downloads"),
         temp: os.tmpdir(),
       };
+    }
+    case "clipboard.readText": {
+      // Server-side clipboard read — bypasses browser secure context requirement
+      try {
+        const platform = process.platform;
+        if (platform === "darwin") return execSync("pbpaste", { encoding: "utf-8", timeout: 2000 });
+        if (platform === "linux") return execSync("xclip -selection clipboard -o", { encoding: "utf-8", timeout: 2000 });
+        if (platform === "win32") return execSync("powershell -command Get-Clipboard", { encoding: "utf-8", timeout: 2000 });
+        return "";
+      } catch { return ""; }
+    }
+    case "clipboard.writeText": {
+      try {
+        const text = typeof data === "string" ? data : data?.text || "";
+        const platform = process.platform;
+        if (platform === "darwin") execSync("pbcopy", { input: text, timeout: 2000 });
+        else if (platform === "linux") execSync("xclip -selection clipboard", { input: text, timeout: 2000 });
+        else if (platform === "win32") execSync("powershell -command Set-Clipboard", { input: text, timeout: 2000 });
+        return true;
+      } catch { return false; }
     }
     case "system.selectFolder":
       return null; // Not available in web mode

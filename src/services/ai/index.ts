@@ -8,9 +8,11 @@ import type {
 import { STORAGE_KEYS } from "../../constants/storage";
 import {
   classifyTerminalOutput,
+  detectTuiProgram,
   describeKeys as describeKeysUtil,
   autoCdCommand,
   isDuplicateScaffold,
+  attemptTuiExit,
   type TerminalState,
 } from "../../utils/terminalState";
 import agentPrompt from "./agent.md?raw";
@@ -644,9 +646,14 @@ class AIService {
     return models;
   }
 
-  async summarizeContext(history: string): Promise<string> {
+  async summarizeContext(history: string, level: "brief" | "moderate" | "detailed" = "moderate"): Promise<string> {
     const { provider, model, apiKey, baseUrl } = this.config;
-    const prompt = `Summarize the following terminal session history. Retain key actions, file changes, errors, and state changes. Be concise.\n\n${history}`;
+    const charLimit = level === "brief"
+      ? Math.round(history.length * 0.3)
+      : level === "moderate"
+        ? Math.round(history.length * 0.5)
+        : Math.round(history.length * 0.7);
+    const prompt = `Summarize the following terminal session history into at most ${charLimit} characters (~${level === "brief" ? "30" : level === "moderate" ? "50" : "70"}% of original length). Retain key actions, file changes, errors, and current state. Omit repetitive output and verbose logs.\n\n${history}`;
 
     try {
       if (provider === "ollama") {
@@ -663,6 +670,8 @@ class AIService {
         return data.response?.trim() || history;
       }
 
+      const summaryMaxTokens = level === "brief" ? 500 : level === "moderate" ? 1000 : 2000;
+
       if (
         isAnthropicProtocol(provider) &&
         (apiKey || provider === "anthropic-compat")
@@ -672,7 +681,7 @@ class AIService {
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model,
-            max_tokens: 500,
+            max_tokens: summaryMaxTokens,
             messages: [{ role: "user", content: prompt }],
           }),
         });
@@ -690,7 +699,7 @@ class AIService {
           model,
           apiKey || "",
           [{ role: "user", content: prompt }],
-          500,
+          summaryMaxTokens,
           providerUsesBaseUrl(provider) ? baseUrl : undefined,
         );
         return result || history;
@@ -1535,6 +1544,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     continuation?: AgentContinuation,
     images?: AttachedImage[],
     options?: { isSSH?: boolean; sessionId?: string },
+    checkFilePermission?: (description: string) => Promise<void>,
   ): Promise<AgentResult> {
     const cfg = sessionConfig || this.config;
     const provider = cfg.provider;
@@ -1571,33 +1581,30 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           content: `Terminal agent. Respond ONLY with valid JSON.
 
 TOOLS:
-1. {"tool":"execute_command","command":"..."} — Run a non-interactive command, get output. For: ls, mkdir, grep, git, npm install.
+1. {"tool":"execute_command","command":"..."} — Run a non-interactive command, get output.
 2. {"tool":"run_in_terminal","command":"..."} — Run interactive/long-running commands (npm create, dev servers). Monitor with read_terminal after.
 3. {"tool":"read_terminal","lines":50} — Read last N lines of terminal output.
 4. {"tool":"send_text","text":"...","description":"..."} — Send keystrokes. Include description. Keys: \\r=Enter, \\x1B[B=Down, \\x1B[A=Up, \\x03=Ctrl+C.
 5. {"tool":"ask_question","question":"..."} — Ask user for clarification.
 6. {"tool":"final_answer","content":"..."} — Task complete. 1-3 lines.
-7. {"tool":"write_file","path":"/absolute/path","content":"..."} — Create a NEW file or fully replace a small file. Do NOT use for modifying existing files — use edit_file instead.
-8. {"tool":"read_file","path":"/absolute/path"} — Read a file's content directly. Use INSTEAD of cat through execute_command for reading files.
-9. {"tool":"list_dir","path":"/absolute/path"} — List contents of a directory safely. Use INSTEAD of ls or dir.
-10. {"tool":"search_dir","path":"/absolute/path","query":"..."} — Search for text inside a directory recursively. High performance, preferred over grep.
-11. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — PREFERRED for modifying existing files. Exact string search-and-replace. Use this for any change to an existing file — even multiple edits are better than rewriting the whole file.
+7. {"tool":"write_file","path":"/absolute/path","content":"..."} — Create a NEW file or fully replace a small file. Use edit_file for modifying existing files.
+8. {"tool":"read_file","path":"/absolute/path"} — Read a file directly. Use instead of cat.
+9. {"tool":"list_dir","path":"/absolute/path"} — List directory. Use instead of ls/dir.
+10. {"tool":"search_dir","path":"/absolute/path","query":"..."} — Search text recursively. Use instead of grep.
+11. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — PREFERRED for modifying existing files. Exact search-and-replace. Multiple edit_file calls are better than rewriting with write_file.
 
 RULES:
-1. Execute commands directly. Do not explain what you would do.
-2. On failure, read error, fix root cause.
+1. Execute directly — never explain. Be autonomous: check system state yourself (ps, curl, lsof, ls) instead of asking the user.
+2. On failure, analyze the error, fix root cause proactively (missing files, permissions, paths, deps), then retry. Don't give up or retry blindly.
 3. If user denies permission, STOP.
-4. FILE OPERATIONS: Use read_file to read, list_dir to explore, search_dir to find text, edit_file to modify existing files, write_file ONLY for new files. NEVER rewrite an entire existing file with write_file when you only need to change part of it — use edit_file instead (multiple edit_file calls if needed). Do NOT use cat, heredoc, grep, ls, or printf through the terminal.
-5. After interactive command: read_terminal → if menu, send_text → read_terminal again. Loop until done.
-6. START DEV SERVER ONLY AS THE VERY LAST STEP. Do not start it until all files are written, dependencies installed, and configuration is complete. Once started, the terminal is blocked.
-7. SCAFFOLDING: If the target directory might exist, run "rm -rf <dir>" FIRST. Do NOT run "mkdir" before scaffolding tools (npm create, git clone) — let them create the directory. This avoids "Directory not empty" prompts. Use non-interactive flags (e.g. --yes) where possible.
-8. AUTONOMY & STATE: Do NOT ask the user questions about system state (e.g. "Is the server running?", "Is the file created?", "What is on port X?"). CHECK IT YOURSELF using commands like "ps aux | grep <name>", "curl -I localhost:<port>", "lsof -i :<port>", or "ls -F". Only ask if you cannot determine the state programmatically after trying.
-9. INTERACTIVE PROMPTS: If a terminal command stops to ask a question (like "Use Experimental Vite?" or "Ok to proceed?"), do NOT ask the user what to choose unless it's a critical architectural choice they haven't clarified. Use send_text("\\r") to accept defaults, or send_text("y\\r") to proceed automatically! Be an autonomous agent.
-10. PROBLEM SOLVING: If a command fails or results are unexpected, do NOT just give up or retry blindly. ANALYZE the error message to find the root cause (missing file, permission denied, wrong path, dependency needed). PROACTIVELY FIX the issue (create the missing file, chmod, npm install, correct the path) and then retry. You have permission to fix environment issues to achieve the goal.
-10. CONTEXT AWARENESS: The [PROJECT FILES] section shows existing files. Do NOT recreate files that already exist — use read_file or edit_file to modify them. Do NOT scaffold a new project if one already exists. Always check the project structure before creating files.
-11. IMAGES: If the user mentions images or screenshots, they were already analyzed in a prior step. Use the description provided — do NOT try to access image files with read_file, execute_command, or ls.
-12. TAB TITLE: Always include "_tab_title": "short 2-5 word title" at the root of your JSON response. This sets the terminal tab name and should reflect the current task. Update it as the task evolves. If asking for clarification, omit it.
-13. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation and terminal history are context for reference — do NOT re-execute or repeat actions from previous turns.
+4. FILE OPS: Use read_file, list_dir, search_dir, edit_file, write_file (new files only). Never use cat/heredoc/grep/ls/printf through the terminal.
+5. INTERACTIVE: After interactive command, loop read_terminal → send_text until done. Auto-accept defaults with send_text("\\r") or send_text("y\\r") — only ask user about critical unresolved choices.
+6. Start dev server ONLY as the LAST step after all code/deps/config are complete.
+7. SCAFFOLDING: Let scaffolding tools create directories — don't mkdir first. Use non-interactive flags (--yes). If directory exists and conflicts, clean it first.
+8. CONTEXT: Check [PROJECT FILES] before creating files. Don't recreate existing files or re-scaffold existing projects — use edit_file to modify.
+9. IMAGES: User-mentioned images were analyzed in a prior step. Use the description — don't try to access them.
+10. TAB TITLE: Include "_tab_title": "2-5 word title" in JSON response. Update as task evolves.
+11. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation is reference — don't re-execute previous actions.
 ${agentPrompt}
 `,
         },
@@ -1667,6 +1674,7 @@ ${agentPrompt}
     let commandsFailed = 0;
     let consecutiveBusy = 0; // Count consecutive busy-state skips to avoid infinite loops
     let consecutiveGuardBlocks = 0; // Global counter for ANY guard rejection — force-stops when too high
+    let tuiExitFailures = 0; // Count consecutive TUI auto-exit failures — escalates to ask_question
     let lastReadTerminalOutput = ""; // Track consecutive identical read_terminal results
     let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
     let readTerminalCount = 0; // Total consecutive read_terminal calls (for UI merging + backoff)
@@ -2455,6 +2463,36 @@ ${agentPrompt}
 
       if (action.tool === "run_in_terminal") {
         try {
+          // Pre-flight TUI check — catch TUI programs started outside agent loop
+          // (user may have launched a TUI manually; terminalBusy would be false)
+          if (!terminalBusy) {
+            const pfOutput = await readTerminal(30);
+            const tui = detectTuiProgram(pfOutput || "");
+            if (tui) {
+              onUpdate("executed", `Exiting TUI "${tui}"…`, action);
+              const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
+              if (result.exited) {
+                onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
+                tuiExitFailures = 0;
+                // TUI exited — let the command proceed (don't continue)
+              } else {
+                tuiExitFailures++;
+                if (tuiExitFailures >= 2) {
+                  onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
+                  history.push({
+                    role: "user",
+                    content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
+                  });
+                } else {
+                  history.push({
+                    role: "user",
+                    content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
+                  });
+                }
+                continue;
+              }
+            }
+          }
           // If terminal has a running process, check its state first
           if (terminalBusy) {
             const state = await detectTerminalState();
@@ -2469,47 +2507,79 @@ ${agentPrompt}
               });
               continue;
             } else if (state === "busy") {
-              // Process still running (installing, building) — DON'T kill it, wait with backoff
-              consecutiveBusy++;
-              const waitMs = Math.min(2000 * consecutiveBusy, 8000);
-              await new Promise((r) => setTimeout(r, waitMs));
-              // Re-check after waiting — it may have finished
-              const freshState = await detectTerminalState();
-              if (freshState === "idle") {
-                terminalBusy = false;
+              // Check if a TUI program is running instead of a build/install process
+              const tuiOutput = await readTerminal(30);
+              const tui = detectTuiProgram(tuiOutput);
+              if (tui) {
                 consecutiveBusy = 0;
-                const finishedOutput = await readTerminal(15);
-                history.push({
-                  role: "user",
-                  content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)`,
-                });
-                // Don't continue — let the original command execute
-              } else if (consecutiveBusy >= 5) {
-                // Stuck for too long — stop polling and tell agent to change approach
-                onUpdate(
-                  "executed",
-                  `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
-                  action
-                );
-                history.push({
-                  role: "user",
-                  content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input not detected as a prompt. You MUST either:\n1. Use send_text("\\x03") to Ctrl+C the process\n2. Use send_text to provide input\n3. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
-                });
-                consecutiveGuardBlocks++;
-                continue;
+                onUpdate("executed", `Exiting TUI "${tui}"…`, action);
+                const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
+                if (result.exited) {
+                  onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
+                  terminalBusy = false;
+                  tuiExitFailures = 0;
+                } else {
+                  tuiExitFailures++;
+                  if (tuiExitFailures >= 2) {
+                    onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
+                    history.push({
+                      role: "user",
+                      content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
+                    });
+                  } else {
+                    history.push({
+                      role: "user",
+                      content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
+                    });
+                  }
+                  continue;
+                }
+              }
+              if (!terminalBusy) {
+                // TUI was exited above — skip busy waiting, proceed to command
               } else {
-                const output = await readTerminal(15);
-                onUpdate(
-                  "executed",
-                  "(Terminal busy — auto-read)\n---\n" +
-                  (output || "(no output)"),
-                  action
-                );
-                history.push({
-                  role: "user",
-                  content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
-                });
-                continue;
+                // Process still running (installing, building) — DON'T kill it, wait with backoff
+                consecutiveBusy++;
+                const waitMs = Math.min(2000 * consecutiveBusy, 8000);
+                await new Promise((r) => setTimeout(r, waitMs));
+                // Re-check after waiting — it may have finished
+                const freshState = await detectTerminalState();
+                if (freshState === "idle") {
+                  terminalBusy = false;
+                  consecutiveBusy = 0;
+                  const finishedOutput = await readTerminal(15);
+                  history.push({
+                    role: "user",
+                    content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)`,
+                  });
+                  // Don't continue — let the original command execute
+                } else if (consecutiveBusy >= 5) {
+                  // Stuck for too long — stop polling and tell agent to change approach
+                  onUpdate(
+                    "executed",
+                    `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
+                    action
+                  );
+                  history.push({
+                    role: "user",
+                    content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input not detected as a prompt. You MUST either:\n1. Use send_text("\\x03") to Ctrl+C the process\n2. Use send_text to provide input\n3. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
+                  });
+                  consecutiveGuardBlocks++;
+                  continue;
+                } else {
+                  const output = await readTerminal(15);
+                  onUpdate(
+                    "executed",
+                    "(Terminal busy — auto-read)\n---\n" +
+                    (output || "(no output)"),
+                    action
+                  );
+                  history.push({
+                    role: "user",
+                    content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
+                  });
+                  continue;
+                }
               }
             } else if (state === "server") {
               // Dev server / listener running — don't silently kill it
@@ -2795,9 +2865,18 @@ ${agentPrompt}
             action
           );
 
-          // Detect if terminal is waiting for user input
+          // Detect terminal state and TUI programs
+          // Always run TUI detection — some TUI prompts (e.g. ">") look like shell prompts
           const termState = classifyTerminalOutput(output || "");
-          if (termState === "input_needed") {
+          const tuiProgram = detectTuiProgram(output || "");
+
+          if (tuiProgram) {
+            // Full-screen TUI program detected — inform agent
+            history.push({
+              role: "user",
+              content: `${output}\n\n⚠️ A TUI program is running: **${tuiProgram}**. The terminal is NOT at a shell prompt.\n- If your current task is UNRELATED to ${tuiProgram}: use execute_command or run_in_terminal for your next command — the system will automatically exit the TUI first.\n- If your task IS related to ${tuiProgram}: interact directly using send_text with appropriate keystrokes, then read_terminal to verify.`,
+            });
+          } else if (termState === "input_needed") {
             // After 3+ identical reads with input_needed, force agent to use ask_question
             if (identicalReadCount >= 3) {
               history.push({
@@ -2888,6 +2967,9 @@ ${agentPrompt}
           continue;
         }
         try {
+          if (checkFilePermission) {
+            await checkFilePermission(`Write file: ${filePath}`);
+          }
           onUpdate("executing", `Writing file: ${filePath}`, action);
           let result: any;
           if (options?.isSSH && options.sessionId) {
@@ -3006,6 +3088,9 @@ ${agentPrompt}
             throw new Error(
               "edit_file requires 'path', 'search', and 'replace' (all strings)",
             );
+          }
+          if (checkFilePermission) {
+            await checkFilePermission(`Edit file: ${filePath}`);
           }
           onUpdate("executing", `Editing file: ${filePath}`, action);
           let result: any;
@@ -3199,6 +3284,34 @@ ${agentPrompt}
           continue;
         }
 
+        // Pre-flight TUI check — catch TUI programs started outside agent loop
+        if (!terminalBusy) {
+          const pfOutput = await readTerminal(30);
+          const tui = detectTuiProgram(pfOutput || "");
+          if (tui) {
+            onUpdate("executed", `Exiting TUI "${tui}"…`, action);
+            const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
+            if (result.exited) {
+              onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
+              tuiExitFailures = 0;
+            } else {
+              tuiExitFailures++;
+              if (tuiExitFailures >= 2) {
+                onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
+                history.push({
+                  role: "user",
+                  content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
+                });
+              } else {
+                history.push({
+                  role: "user",
+                  content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
+                });
+              }
+              continue;
+            }
+          }
+        }
         // execute_command uses sentinel-based exec — can't work with a foreground process
         if (terminalBusy) {
           const state = await detectTerminalState();
@@ -3212,45 +3325,77 @@ ${agentPrompt}
             });
             continue;
           } else if (state === "busy") {
-            // Process still running — wait with exponential backoff before re-checking
-            consecutiveBusy++;
-            const waitMs = Math.min(2000 * consecutiveBusy, 8000);
-            await new Promise((r) => setTimeout(r, waitMs));
-            // Re-check after waiting
-            const freshState = await detectTerminalState();
-            if (freshState === "idle") {
-              terminalBusy = false;
+            // Check if a TUI program is running — auto-exit it
+            const tuiOutput = await readTerminal(30);
+            const tui = detectTuiProgram(tuiOutput);
+            if (tui) {
               consecutiveBusy = 0;
-              const finishedOutput = await readTerminal(15);
-              history.push({
-                role: "user",
-                content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)`,
-              });
-              // Don't continue — let the original command execute
-            } else if (consecutiveBusy >= 5) {
-              onUpdate(
-                "executed",
-                `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
-                action
-              );
-              history.push({
-                role: "user",
-                content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input not detected as a prompt. You MUST either:\n1. Use send_text("\\x03") to Ctrl+C the process\n2. Use send_text to provide input\n3. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
-              });
-              continue;
+              onUpdate("executed", `Exiting TUI "${tui}"…`, action);
+              const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
+              if (result.exited) {
+                onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
+                terminalBusy = false;
+                tuiExitFailures = 0;
+              } else {
+                tuiExitFailures++;
+                if (tuiExitFailures >= 2) {
+                  onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
+                  history.push({
+                    role: "user",
+                    content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
+                  });
+                } else {
+                  history.push({
+                    role: "user",
+                    content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
+                  });
+                }
+                continue;
+              }
+            }
+            if (!terminalBusy) {
+              // TUI was exited above — skip busy waiting, proceed to command
             } else {
-              const output = await readTerminal(15);
-              onUpdate(
-                "executed",
-                "(Terminal busy — auto-read)\n---\n" +
-                (output || "(no output)"),
-                action
-              );
-              history.push({
-                role: "user",
-                content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
-              });
-              continue;
+              // Process still running (installing, building) — DON'T kill it, wait with backoff
+              consecutiveBusy++;
+              const waitMs = Math.min(2000 * consecutiveBusy, 8000);
+              await new Promise((r) => setTimeout(r, waitMs));
+              // Re-check after waiting
+              const freshState = await detectTerminalState();
+              if (freshState === "idle") {
+                terminalBusy = false;
+                consecutiveBusy = 0;
+                const finishedOutput = await readTerminal(15);
+                history.push({
+                  role: "user",
+                  content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)`,
+                });
+                // Don't continue — let the original command execute
+              } else if (consecutiveBusy >= 5) {
+                onUpdate(
+                  "executed",
+                  `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
+                  action
+                );
+                history.push({
+                  role: "user",
+                  content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input not detected as a prompt. You MUST either:\n1. Use send_text("\\x03") to Ctrl+C the process\n2. Use send_text to provide input\n3. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
+                });
+                continue;
+              } else {
+                const output = await readTerminal(15);
+                onUpdate(
+                  "executed",
+                  "(Terminal busy — auto-read)\n---\n" +
+                  (output || "(no output)"),
+                  action
+                );
+                history.push({
+                  role: "user",
+                  content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
+                });
+                continue;
+              }
             }
           } else if (state === "server") {
             // Dev server is running — warn agent, cap consecutive attempts

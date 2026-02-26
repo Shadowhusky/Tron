@@ -9,6 +9,16 @@ let serverProcess: ChildProcess | null = null;
 let currentPort: number | null = null;
 let lastError: string | null = null;
 
+// --- Auto-restart state ---
+const MAX_RESTART_ATTEMPTS = 5;
+const INITIAL_BACKOFF_MS = 1000; // 1s → 2s → 4s → 8s → 16s (capped at 30s)
+const MAX_BACKOFF_MS = 30_000;
+
+let intentionalStop = false;
+let restartAttempts = 0;
+let restartTimer: ReturnType<typeof setTimeout> | null = null;
+let lastStartPort = 3888;
+
 const CONFIG_FILE = "tron.config.json";
 
 /** Read webServer config from the persisted tron.config.json. */
@@ -49,12 +59,33 @@ function isPortAvailable(port: number): Promise<boolean> {
   });
 }
 
+/** Schedule an auto-restart with exponential backoff. */
+function scheduleRestart() {
+  if (intentionalStop) return;
+  if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
+    console.error(`[Tron] Web server restart limit reached (${MAX_RESTART_ATTEMPTS} attempts). Giving up.`);
+    return;
+  }
+  const backoff = Math.min(INITIAL_BACKOFF_MS * 2 ** restartAttempts, MAX_BACKOFF_MS);
+  restartAttempts++;
+  console.log(`[Tron] Scheduling web server restart in ${backoff}ms (attempt ${restartAttempts}/${MAX_RESTART_ATTEMPTS})...`);
+  restartTimer = setTimeout(async () => {
+    restartTimer = null;
+    const result = await startWebServer(lastStartPort);
+    if (!result.success) {
+      console.error(`[Tron] Web server restart failed: ${result.error}`);
+      scheduleRestart();
+    }
+  }, backoff);
+}
+
 /** Start the web server as a forked child process. */
 export async function startWebServer(port: number): Promise<{ success: boolean; port?: number; error?: string }> {
   if (serverProcess) {
     return { success: false, error: "Server is already running" };
   }
 
+  lastStartPort = port;
   lastError = null;
 
   const serverPath = getServerPath();
@@ -99,6 +130,18 @@ export async function startWebServer(port: number): Promise<{ success: boolean; 
         serverProcess = child;
         currentPort = msg.port || port;
         lastError = null;
+        restartAttempts = 0; // Reset backoff on successful start
+
+        // Monitor for unexpected crashes after successful startup
+        child.on("exit", (crashCode) => {
+          if (!intentionalStop && serverProcess === child) {
+            console.error(`[Tron] Web server crashed unexpectedly (code ${crashCode}). Scheduling restart...`);
+            serverProcess = null;
+            currentPort = null;
+            scheduleRestart();
+          }
+        });
+
         console.log(`[Tron] Web server started on port ${currentPort}`);
         resolve({ success: true, port: currentPort! });
       }
@@ -139,6 +182,13 @@ export async function startWebServer(port: number): Promise<{ success: boolean; 
 
 /** Stop the web server process. */
 export async function stopWebServer(): Promise<void> {
+  intentionalStop = true;
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
+  restartAttempts = 0;
+
   if (!serverProcess) return;
 
   const child = serverProcess;
@@ -182,13 +232,28 @@ function getLocalIPs(): string[] {
   return ips;
 }
 
+/**
+ * Start the web server with automatic restart on crash.
+ * Use this instead of `startWebServer` for the initial app startup.
+ */
+export async function startWebServerManaged(port: number) {
+  intentionalStop = false;
+  restartAttempts = 0;
+  lastStartPort = port;
+  const result = await startWebServer(port);
+  if (!result.success) scheduleRestart();
+  return result;
+}
+
 /** Get current server status. */
-export function getWebServerStatus(): { running: boolean; port: number | null; localIPs: string[]; error: string | null } {
+export function getWebServerStatus(): { running: boolean; port: number | null; localIPs: string[]; error: string | null; restarting: boolean; restartAttempts: number } {
   return {
     running: serverProcess !== null && !serverProcess.killed,
     port: currentPort,
     localIPs: getLocalIPs(),
     error: lastError,
+    restarting: restartTimer !== null,
+    restartAttempts,
   };
 }
 

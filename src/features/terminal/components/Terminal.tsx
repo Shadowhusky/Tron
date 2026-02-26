@@ -5,8 +5,8 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
-import { registerScreenBufferReader, unregisterScreenBufferReader } from "../../../services/terminalBuffer";
-import { isElectronApp } from "../../../utils/platform";
+import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader } from "../../../services/terminalBuffer";
+import { isElectronApp, isTouchDevice } from "../../../utils/platform";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -84,12 +84,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     const reconnecting = !!isReconnected;
 
+    const isTouch = isTouchDevice();
+
     const term = new Xterm({
       cursorBlink: true,
       fontFamily: '"JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
       fontSize: 14,
       theme: termTheme,
       allowProposedApi: true,
+      // Reduce scrollback on mobile to save memory and speed up fit()/scroll
+      ...(isTouch ? { scrollback: 1000 } : {}),
     });
 
     const fitAddon = new FitAddon();
@@ -118,6 +122,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
       return result.join("\n");
     });
+
+    // Register selection reader so context menu can read selected text
+    registerSelectionReader(sessionId, () => term.getSelection());
 
     // Local-only fit (adjusts xterm cols/rows to container — no IPC to backend).
     // We must NOT send resize IPC before history is restored, because resizing
@@ -150,49 +157,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
     };
 
-    // Take full control of Cmd/Ctrl+V: read clipboard ourselves, handle
-    // both file/image content (save to temp → paste path) and plain text.
-    // This bypasses xterm's internal paste which can't handle non-text.
-    const handlePaste = async () => {
-      try {
-        // Try the full Clipboard API first (supports images + text)
-        const items = await navigator.clipboard.read();
-        for (const item of items) {
-          const fileType = item.types.find(t => t.startsWith("image/") || !t.startsWith("text/"));
-          if (fileType && !fileType.startsWith("text/")) {
-            const blob = await item.getType(fileType);
-            await saveFileAndType(blob);
-            return;
-          }
-        }
-        // No file content — paste as text
-        for (const item of items) {
-          if (item.types.includes("text/plain")) {
-            const blob = await item.getType("text/plain");
-            const text = await blob.text();
-            if (text) {
-              window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, {
-                id: sessionId,
-                data: text,
-              });
-            }
-            return;
-          }
-        }
-      } catch {
-        // clipboard.read() failed (permissions/http) — fallback to readText
-        try {
-          const text = await navigator.clipboard.readText();
-          if (text) {
-            window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, {
-              id: sessionId,
-              data: text,
-            });
-          }
-        } catch { /* clipboard completely unavailable */ }
-      }
-    };
-
     // Custom key handling — intercept configurable hotkeys before xterm
     term.attachCustomKeyEventHandler((e) => {
       // Parse the clearTerminal hotkey to check dynamically
@@ -218,16 +182,32 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if (matches(overlayCombo)) {
         return false;
       }
-      // Cmd/Ctrl+V — take full control of paste so we can handle images/files.
-      // preventDefault stops the browser from also firing a native 'paste' event
-      // (which xterm.js would handle via onData, causing double-paste).
-      if (e.key === "v" && (e.metaKey || e.ctrlKey) && e.type === "keydown") {
-        e.preventDefault();
-        handlePaste();
-        return false;
-      }
+      // Let xterm handle Cmd/Ctrl+V natively — its internal paste handler
+      // reads clipboardData synchronously (more reliable than async Clipboard
+      // API) and wraps text in bracketed paste sequences for TUI compatibility.
+      // Image handling is done via the separate 'paste' event listener below.
       return true;
     });
+
+    // Paste event listener — intercepts images/files from clipboard.
+    // Text paste is handled natively by xterm (bracketed paste aware).
+    // This fires on both Cmd+V and right-click paste.
+    const onPaste = async (e: ClipboardEvent) => {
+      const cd = e.clipboardData;
+      if (!cd) return;
+      // Check for image/file items in clipboardData
+      for (const item of Array.from(cd.items)) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          e.preventDefault();
+          e.stopPropagation();
+          const file = item.getAsFile();
+          if (file) await saveFileAndType(file);
+          return;
+        }
+      }
+      // Text paste — let xterm handle it (default behavior)
+    };
+    el.addEventListener("paste", onPaste);
 
     // Resize Logic — syncs xterm dimensions to backend PTY.
     // During reconnect settling, ResizeObserver resizes are deferred to avoid
@@ -238,7 +218,23 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if (!reconnectSettled) return; // defer until bounce completes
 
       try {
+        // Save scroll state BEFORE fit() — fit() recalculates rows and can
+        // reset the viewport scroll position, causing a visible jump.
+        const viewport = el.querySelector(".xterm-viewport");
+        const wasAtBottom = !viewport || (viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 5);
+        const savedScrollTop = viewport?.scrollTop ?? 0;
+
         fitAddonRef.current.fit();
+
+        // Restore scroll position to prevent visible jump during resize.
+        // If user was at the bottom, pin there; otherwise restore exact position.
+        if (viewport) {
+          if (wasAtBottom) {
+            viewport.scrollTop = viewport.scrollHeight;
+          } else {
+            viewport.scrollTop = savedScrollTop;
+          }
+        }
         const { cols, rows } = xtermRef.current;
         if (
           window.electron &&
@@ -256,11 +252,27 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
     };
 
-    let resizeTimeout: ReturnType<typeof setTimeout>;
+    // Time-based trailing-edge resize debounce — limits fit() + SIGWINCH to
+    // at most once per 100ms of no resize events. This is critical for TUIs
+    // (Claude Code, vim, etc.) which do expensive full redraws on each
+    // SIGWINCH. RAF-based debouncing would fire 60x/sec and cause visible
+    // flickering as the TUI redraws on every frame.
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let splitDragging = false;
     const debouncedResize = () => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(performResize, 50);
+      if (splitDragging) return; // defer fit() during split drag
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(performResize, 100);
     };
+
+    // Defer fit() during SplitPane drag to eliminate ALL xterm redraws
+    const onSplitDragStart = () => { splitDragging = true; };
+    const onSplitDragEnd = () => {
+      splitDragging = false;
+      performResize(); // one clean fit() at final size
+    };
+    window.addEventListener("tron:splitDragStart", onSplitDragStart);
+    window.addEventListener("tron:splitDragEnd", onSplitDragEnd);
 
     // NOTE: No performResize() calls here! We defer until after history +
     // listener are set up (see getHistory .then() below).
@@ -350,10 +362,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
               performResize();
             }, 300);
           } else {
-            // Fresh session — sync dimensions normally
+            // Fresh session — sync dimensions normally.
+            // On mobile a single resize is enough; desktop does a follow-up
+            // at 250ms to catch late layout settling (font load, etc.).
             performResize();
-            setTimeout(performResize, 50);
-            setTimeout(performResize, 250);
+            if (!isTouch) setTimeout(performResize, 250);
           }
 
           // Re-focus after reconnect settles or animation completes
@@ -386,13 +399,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     let touchAccum = 0;
     const LINE_HEIGHT = term.options.fontSize ? term.options.fontSize * 1.2 : 17;
 
+    // Suppress touch-scroll while the virtual keyboard is opening/closing.
+    // The viewport resize generates touch events with large dy deltas that
+    // would otherwise scroll the terminal to the top of history.
+    let viewportResizing = false;
+    let viewportResizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const vv = isTouchDevice() ? window.visualViewport : null;
+    const onViewportResize = () => {
+      viewportResizing = true;
+      clearTimeout(viewportResizeTimer);
+      viewportResizeTimer = setTimeout(() => { viewportResizing = false; }, 300);
+    };
+    vv?.addEventListener("resize", onViewportResize);
+
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
+      if (e.touches.length !== 1 || viewportResizing) return;
       touchStartY = e.touches[0].clientY;
       touchAccum = 0;
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
+      if (e.touches.length !== 1 || viewportResizing) return;
       const dy = touchStartY - e.touches[0].clientY;
       touchStartY = e.touches[0].clientY;
       touchAccum += dy;
@@ -426,10 +452,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     el.addEventListener("dragover", onDragOver);
     el.addEventListener("drop", onDrop);
 
-    // ResizeObserver
+    // ResizeObserver — covers both window resize and container layout changes
+    // (e.g. agent overlay expand/collapse). No separate window resize listener
+    // needed — that would cause duplicate fit() calls on every resize event.
     const resizeObserver = new ResizeObserver(debouncedResize);
     resizeObserver.observe(el);
-    window.addEventListener("resize", debouncedResize);
 
     // Send Input
     let activityFired = false;
@@ -457,17 +484,22 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     return () => {
       mounted = false;
-      clearTimeout(resizeTimeout);
+      clearTimeout(resizeTimer);
+      window.removeEventListener("tron:splitDragStart", onSplitDragStart);
+      window.removeEventListener("tron:splitDragEnd", onSplitDragEnd);
       unregisterScreenBufferReader(sessionId);
+      unregisterSelectionReader(sessionId);
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
       resizeObserver.disconnect();
-      window.removeEventListener("resize", debouncedResize);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
+      vv?.removeEventListener("resize", onViewportResize);
+      clearTimeout(viewportResizeTimer);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
+      el.removeEventListener("paste", onPaste);
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
@@ -505,10 +537,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   const theme = THEMES[resolvedTheme] || THEMES.dark;
 
   return (
-    <div className={`relative overflow-hidden ${className || ""}`}>
+    <div className={`relative overflow-hidden ${className || ""}`} style={{ contain: "strict" }}>
       <div
         ref={terminalRef}
-        className="absolute inset-0 transition-opacity duration-300 ease-in"
+        className={`absolute inset-0${loading ? " transition-opacity duration-300 ease-in" : ""}`}
         style={{ opacity: loading ? 0 : 1 }}
       />
       {/* Loading overlay — retro bash-style spinner */}

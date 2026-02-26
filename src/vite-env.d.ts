@@ -63,6 +63,8 @@ interface Window {
       // Sync Tabs
       readSyncTabs: () => Promise<any[]>;
       writeSyncTabs: (tabs: any[]) => Promise<boolean>;
+      // Shell history (zsh/bash/fish)
+      getShellHistory: () => Promise<string[]>;
       // Terminal history stats
       getPersistedHistoryStats: () => Promise<{ fileCount: number; totalBytes: number }>;
       clearAllPersistedHistory: () => Promise<{ deletedCount: number }>;
@@ -82,6 +84,10 @@ interface Window {
         lastError: string | null;
       }>;
       getAppVersion: () => Promise<string>;
+      // Clipboard
+      readClipboardImage: () => Promise<string | null>;
+      clipboardReadText: () => Promise<string>;
+      clipboardWriteText: (text: string) => Promise<boolean>;
     };
   };
 }

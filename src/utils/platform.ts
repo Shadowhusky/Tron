@@ -34,10 +34,14 @@ export function isElectronApp(): boolean {
   return false;
 }
 
-/** Detect if running on a touch device (mobile/tablet). */
+/** Detect if running on a touch device (mobile/tablet). Cached at module load. */
+const _isTouch =
+  typeof window !== "undefined"
+    ? "ontouchstart" in window || navigator.maxTouchPoints > 0
+    : false;
+
 export function isTouchDevice(): boolean {
-  if (typeof window === "undefined") return false;
-  return "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  return _isTouch;
 }
 
 /** Extract filename from a path, handling both / and \ separators. */

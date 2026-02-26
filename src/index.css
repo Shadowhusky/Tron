@@ -106,6 +106,18 @@ button:disabled {
   }
 }
 
+/* Wider scrollbars on touch/mobile devices for easier interaction */
+@media (pointer: coarse) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .terminal.xterm .xterm-viewport::-webkit-scrollbar {
+    width: 8px;
+  }
+}
+
 /* GPU-accelerated dropdown/suggestion animations (avoids framer-motion main-thread cost) */
 @keyframes dropdown-in {
   from { opacity: 0; transform: translateY(4px) scale(0.98); }

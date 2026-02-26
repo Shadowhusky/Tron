@@ -31,3 +31,26 @@ export function readScreenBuffer(
   if (!reader) return null;
   return reader(lines);
 }
+
+// --- Selection reader (for context menu Copy / Ask Agent / Add to Input) ---
+
+export type SelectionReader = () => string;
+
+const selectionReaders = new Map<string, SelectionReader>();
+
+export function registerSelectionReader(
+  sessionId: string,
+  reader: SelectionReader,
+) {
+  selectionReaders.set(sessionId, reader);
+}
+
+export function unregisterSelectionReader(sessionId: string) {
+  selectionReaders.delete(sessionId);
+}
+
+export function getTerminalSelection(sessionId: string): string {
+  const reader = selectionReaders.get(sessionId);
+  if (!reader) return "";
+  return reader();
+}

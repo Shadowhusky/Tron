@@ -42,6 +42,7 @@ exports.bufferIfExecActive = bufferIfExecActive;
 exports.getSessions = getSessions;
 exports.getSessionHistory = getSessionHistory;
 exports.cleanupAllSessions = cleanupAllSessions;
+exports.getShellHistory = getShellHistory;
 exports.registerTerminalHandlers = registerTerminalHandlers;
 const electron_1 = require("electron");
 const pty = __importStar(require("node-pty"));
@@ -122,17 +123,35 @@ function ensureHistoryDir() {
     }
     catch { /* exists */ }
 }
-/** Remove history files older than 7 days. */
+/** Remove stale history files to prevent disk bloat from abandoned sessions.
+ *  1. Delete files older than 24 hours
+ *  2. If still over MAX_FILES, delete oldest until under the cap */
 function cleanupStaleHistoryFiles() {
     ensureHistoryDir();
     const now = Date.now();
-    const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+    const MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
+    const MAX_FILES = 50;
     try {
+        const entries = [];
         for (const file of fs_1.default.readdirSync(historyDir)) {
             const filePath = path_1.default.join(historyDir, file);
             const stat = fs_1.default.statSync(filePath);
             if (now - stat.mtimeMs > MAX_AGE) {
                 fs_1.default.unlinkSync(filePath);
+            }
+            else {
+                entries.push({ file, mtime: stat.mtimeMs });
+            }
+        }
+        // Cap total file count — remove oldest first
+        if (entries.length > MAX_FILES) {
+            entries.sort((a, b) => a.mtime - b.mtime);
+            const excess = entries.length - MAX_FILES;
+            for (let i = 0; i < excess; i++) {
+                try {
+                    fs_1.default.unlinkSync(path_1.default.join(historyDir, entries[i].file));
+                }
+                catch { /* ok */ }
             }
         }
     }
@@ -365,10 +384,112 @@ function cleanupAllSessions() {
     sessions.clear();
     sessionHistory.clear();
 }
+// ---------------------------------------------------------------------------
+// Shell history reading — reads ~/.zsh_history, ~/.bash_history, or fish history
+// ---------------------------------------------------------------------------
+let shellHistoryCache = null;
+const SHELL_HISTORY_TTL = 5 * 60 * 1000; // 5 minutes
+function getShellHistory() {
+    // Return cached if fresh
+    if (shellHistoryCache && Date.now() - shellHistoryCache.timestamp < SHELL_HISTORY_TTL) {
+        return shellHistoryCache.commands;
+    }
+    const shell = process.env.SHELL || "";
+    const home = os_1.default.homedir();
+    let historyFile;
+    let format;
+    if (shell.includes("zsh")) {
+        historyFile = process.env.HISTFILE || path_1.default.join(home, ".zsh_history");
+        format = "zsh";
+    }
+    else if (shell.includes("fish")) {
+        historyFile = path_1.default.join(home, ".local", "share", "fish", "fish_history");
+        format = "fish";
+    }
+    else {
+        // Default to bash
+        historyFile = process.env.HISTFILE || path_1.default.join(home, ".bash_history");
+        format = "bash";
+    }
+    try {
+        if (!fs_1.default.existsSync(historyFile)) {
+            shellHistoryCache = { commands: [], timestamp: Date.now() };
+            return [];
+        }
+        // Read only the last ~200KB for performance
+        const stat = fs_1.default.statSync(historyFile);
+        const READ_SIZE = 200 * 1024;
+        const fd = fs_1.default.openSync(historyFile, "r");
+        const offset = Math.max(0, stat.size - READ_SIZE);
+        const bufSize = Math.min(stat.size, READ_SIZE);
+        const buffer = Buffer.alloc(bufSize);
+        fs_1.default.readSync(fd, buffer, 0, bufSize, offset);
+        fs_1.default.closeSync(fd);
+        const raw = buffer.toString("utf-8");
+        const commands = [];
+        const seen = new Set();
+        if (format === "zsh") {
+            // zsh format: ": timestamp:duration;command" or plain command
+            const lines = raw.split("\n");
+            for (let i = lines.length - 1; i >= 0; i--) {
+                const line = lines[i];
+                if (!line)
+                    continue;
+                // Handle multiline continuation (lines ending with \)
+                let cmd;
+                const zshMatch = line.match(/^:\s*\d+:\d+;(.+)/);
+                cmd = zshMatch ? zshMatch[1] : line;
+                cmd = cmd.trim();
+                if (cmd && !seen.has(cmd)) {
+                    seen.add(cmd);
+                    commands.push(cmd);
+                }
+                if (commands.length >= 3000)
+                    break;
+            }
+        }
+        else if (format === "fish") {
+            // fish format: "- cmd: <command>" lines
+            const lines = raw.split("\n");
+            for (let i = lines.length - 1; i >= 0; i--) {
+                const match = lines[i].match(/^- cmd:\s*(.+)/);
+                if (!match)
+                    continue;
+                const cmd = match[1].trim();
+                if (cmd && !seen.has(cmd)) {
+                    seen.add(cmd);
+                    commands.push(cmd);
+                }
+                if (commands.length >= 3000)
+                    break;
+            }
+        }
+        else {
+            // bash: plain commands, one per line
+            const lines = raw.split("\n");
+            for (let i = lines.length - 1; i >= 0; i--) {
+                const cmd = lines[i].trim();
+                if (cmd && !seen.has(cmd)) {
+                    seen.add(cmd);
+                    commands.push(cmd);
+                }
+                if (commands.length >= 3000)
+                    break;
+            }
+        }
+        shellHistoryCache = { commands, timestamp: Date.now() };
+        return commands;
+    }
+    catch {
+        return [];
+    }
+}
 function registerTerminalHandlers(getMainWindow) {
     // Terminal history stats
     electron_1.ipcMain.handle("terminal.history.getStats", () => getPersistedHistoryStats());
     electron_1.ipcMain.handle("terminal.history.clearAll", () => clearAllPersistedHistory());
+    // Shell history (reads ~/.zsh_history, ~/.bash_history, etc.)
+    electron_1.ipcMain.handle("terminal.getShellHistory", () => getShellHistory());
     // Check if a PTY session is still alive (for reconnection after renderer refresh)
     electron_1.ipcMain.handle("terminal.sessionExists", (_event, sessionId) => {
         return sessions.has(sessionId);

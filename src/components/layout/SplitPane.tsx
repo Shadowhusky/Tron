@@ -196,6 +196,14 @@ const DragOverlay: React.FC<{
 }) => {
   const finalSizesRef = useRef<number[] | null>(null);
 
+  // Notify terminals to defer fit() during drag
+  useEffect(() => {
+    window.dispatchEvent(new Event("tron:splitDragStart"));
+    return () => {
+      window.dispatchEvent(new Event("tron:splitDragEnd"));
+    };
+  }, []);
+
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
       if (!dragStartRef.current || !containerRef.current) return;

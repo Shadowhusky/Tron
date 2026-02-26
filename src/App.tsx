@@ -36,17 +36,29 @@ function useVisualViewportHeight() {
     const vv = window.visualViewport;
     if (!vv) return;
 
+    let lastH = 0;
+    let raf = 0;
     const update = () => {
-      const h = vv.height;
-      document.documentElement.style.setProperty("--app-height", `${h}px`);
-      // On iOS the page may scroll behind the keyboard — pin it back
-      window.scrollTo(0, 0);
+      // Coalesce rapid events (keyboard animation fires per-pixel) into a
+      // single rAF to avoid CSS custom-property churn and forced scrollTo.
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const h = vv.height;
+        // Skip no-op updates (same height)
+        if (h === lastH) return;
+        lastH = h;
+        document.documentElement.style.setProperty("--app-height", `${h}px`);
+        // On iOS the page may scroll behind the keyboard — pin it back
+        window.scrollTo(0, 0);
+      });
     };
 
     update();
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
       document.documentElement.style.removeProperty("--app-height");

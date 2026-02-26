@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.readWebServerConfig = readWebServerConfig;
 exports.startWebServer = startWebServer;
 exports.stopWebServer = stopWebServer;
+exports.startWebServerManaged = startWebServerManaged;
 exports.getWebServerStatus = getWebServerStatus;
 exports.registerWebServerHandlers = registerWebServerHandlers;
 const electron_1 = require("electron");
@@ -17,6 +18,14 @@ const fs_1 = __importDefault(require("fs"));
 let serverProcess = null;
 let currentPort = null;
 let lastError = null;
+// --- Auto-restart state ---
+const MAX_RESTART_ATTEMPTS = 5;
+const INITIAL_BACKOFF_MS = 1000; // 1s → 2s → 4s → 8s → 16s (capped at 30s)
+const MAX_BACKOFF_MS = 30000;
+let intentionalStop = false;
+let restartAttempts = 0;
+let restartTimer = null;
+let lastStartPort = 3888;
 const CONFIG_FILE = "tron.config.json";
 /** Read webServer config from the persisted tron.config.json. */
 function readWebServerConfig() {
@@ -54,11 +63,32 @@ function isPortAvailable(port) {
         server.listen(port, "0.0.0.0");
     });
 }
+/** Schedule an auto-restart with exponential backoff. */
+function scheduleRestart() {
+    if (intentionalStop)
+        return;
+    if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
+        console.error(`[Tron] Web server restart limit reached (${MAX_RESTART_ATTEMPTS} attempts). Giving up.`);
+        return;
+    }
+    const backoff = Math.min(INITIAL_BACKOFF_MS * 2 ** restartAttempts, MAX_BACKOFF_MS);
+    restartAttempts++;
+    console.log(`[Tron] Scheduling web server restart in ${backoff}ms (attempt ${restartAttempts}/${MAX_RESTART_ATTEMPTS})...`);
+    restartTimer = setTimeout(async () => {
+        restartTimer = null;
+        const result = await startWebServer(lastStartPort);
+        if (!result.success) {
+            console.error(`[Tron] Web server restart failed: ${result.error}`);
+            scheduleRestart();
+        }
+    }, backoff);
+}
 /** Start the web server as a forked child process. */
 async function startWebServer(port) {
     if (serverProcess) {
         return { success: false, error: "Server is already running" };
     }
+    lastStartPort = port;
     lastError = null;
     const serverPath = getServerPath();
     if (!fs_1.default.existsSync(serverPath)) {
@@ -96,6 +126,16 @@ async function startWebServer(port) {
                 serverProcess = child;
                 currentPort = msg.port || port;
                 lastError = null;
+                restartAttempts = 0; // Reset backoff on successful start
+                // Monitor for unexpected crashes after successful startup
+                child.on("exit", (crashCode) => {
+                    if (!intentionalStop && serverProcess === child) {
+                        console.error(`[Tron] Web server crashed unexpectedly (code ${crashCode}). Scheduling restart...`);
+                        serverProcess = null;
+                        currentPort = null;
+                        scheduleRestart();
+                    }
+                });
                 console.log(`[Tron] Web server started on port ${currentPort}`);
                 resolve({ success: true, port: currentPort });
             }
@@ -132,6 +172,12 @@ async function startWebServer(port) {
 }
 /** Stop the web server process. */
 async function stopWebServer() {
+    intentionalStop = true;
+    if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+    }
+    restartAttempts = 0;
     if (!serverProcess)
         return;
     const child = serverProcess;
@@ -175,6 +221,19 @@ function getLocalIPs() {
     }
     return ips;
 }
+/**
+ * Start the web server with automatic restart on crash.
+ * Use this instead of `startWebServer` for the initial app startup.
+ */
+async function startWebServerManaged(port) {
+    intentionalStop = false;
+    restartAttempts = 0;
+    lastStartPort = port;
+    const result = await startWebServer(port);
+    if (!result.success)
+        scheduleRestart();
+    return result;
+}
 /** Get current server status. */
 function getWebServerStatus() {
     return {
@@ -182,6 +241,8 @@ function getWebServerStatus() {
         port: currentPort,
         localIPs: getLocalIPs(),
         error: lastError,
+        restarting: restartTimer !== null,
+        restartAttempts,
     };
 }
 /** Register all web server IPC handlers. */
