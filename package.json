@@ -2,7 +2,7 @@
   "name": "tron",
   "description": "Self-hosted AI-powered terminal. Run shells, use local or cloud LLMs (Ollama, OpenAI, Claude), and get agent-assisted commands from your desktop.",
   "private": true,
-  "version": "1.2.1",
+  "version": "1.2.2",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
