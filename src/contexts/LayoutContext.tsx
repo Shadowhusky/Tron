@@ -300,110 +300,109 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           }
 
           const newSessions = new Map<string, TerminalSession>();
-          const regeneratedTabs: Tab[] = [];
 
-          for (const tab of savedTabs) {
-            // Recursively regenerate sessions for this tab
-            const regenerateNode = async (
-              node: LayoutNode,
-            ): Promise<LayoutNode | null> => {
-              if (node.type === "leaf") {
-                // If settings node, just restore
-                if (node.contentType === "settings") {
-                  return node;
-                }
-
-                const oldId = node.sessionId;
-                const cwd = savedCwds[oldId];
-                const aiConfig = (parsed.sessionConfigs || {})[oldId];
-                const interactions = (parsed.sessionInteractions || {})[oldId];
-                const summaryConstant = (parsed.sessionSummaries || {})[oldId];
-                const wasDirty =
-                  (parsed.sessionDirtyFlags || {})[oldId] ?? false;
-                const sshProfileId = (parsed.sessionSSHProfileIds || {})[oldId];
-
-                let newId: string;
-                let sessionTitle = "Terminal";
-
-                if (sshProfileId) {
-                  // SSH session — reconnect via profile
-                  try {
-                    const ipc = window.electron?.ipcRenderer;
-                    const readFn = (ipc as any)?.readSSHProfiles || (() => ipc?.invoke("ssh.profiles.read"));
-                    const profiles = await readFn() || [];
-                    const profile = profiles.find((p: any) => p.id === sshProfileId);
-                    if (!profile) throw new Error("Profile not found");
-
-                    const connectFn = (ipc as any)?.connectSSH || ((c: any) => ipc?.invoke("ssh.connect", c));
-                    const result = await connectFn({
-                      ...profile,
-                      password: profile.savedPassword,
-                      passphrase: profile.savedPassphrase,
-                      cols: 80,
-                      rows: 30,
-                    });
-                    newId = result.sessionId;
-                    sessionTitle = profile.name || `${profile.username}@${profile.host}`;
-                    console.log(`Reconnected SSH session: ${oldId} → ${newId}`);
-                  } catch (err: any) {
-                    console.warn(`Failed to reconnect SSH session ${oldId}:`, err.message);
-                    return null; // Drop this leaf — SSH reconnect failed
-                  }
-                } else if (isSshOnly()) {
-                  // Non-SSH session in SSH-only mode — cannot reconnect
-                  return null;
-                } else {
-                  // Local PTY — try to reconnect to existing PTY, else create new
-                  newId = await createPTY(cwd, oldId);
-                  if (newId === oldId) {
-                    console.log(`Reconnected to PTY session: ${oldId}`);
-                  }
-                }
-
-                const config = aiConfig || aiService.getConfig();
-                newSessions.set(newId, {
-                  id: newId,
-                  title: sessionTitle,
-                  cwd,
-                  aiConfig: config,
-                  interactions: interactions || [],
-                  contextSummary: summaryConstant?.summary,
-                  contextSummarySourceLength: summaryConstant?.sourceLength,
-                  dirty: wasDirty,
-                  sshProfileId,
-                  // Mark as reconnected only if we reattached to a live PTY
-                  // (server confirmed the PTY was still alive). This avoids false
-                  // positives when a fresh PTY is created with the same session ID
-                  // after the grace period expired (e.g. mobile OS killed the page).
-                  reconnected: !sshProfileId && livePtyReconnectsRef.current.has(newId),
-                });
-                return { ...node, sessionId: newId };
-              } else {
-                const newChildren = (await Promise.all(
-                  node.children.map((c) => regenerateNode(c)),
-                )).filter((c): c is LayoutNode => c !== null);
-                if (newChildren.length === 0) return null;
-                return { ...node, children: newChildren };
+          // Recursively regenerate sessions for a layout node
+          const regenerateNode = async (
+            node: LayoutNode,
+          ): Promise<LayoutNode | null> => {
+            if (node.type === "leaf") {
+              // If settings node, just restore
+              if (node.contentType === "settings") {
+                return node;
               }
-            };
 
-            const newRoot = await regenerateNode(tab.root);
+              const oldId = node.sessionId;
+              const cwd = savedCwds[oldId];
+              const aiConfig = (parsed.sessionConfigs || {})[oldId];
+              const interactions = (parsed.sessionInteractions || {})[oldId];
+              const summaryConstant = (parsed.sessionSummaries || {})[oldId];
+              const wasDirty =
+                (parsed.sessionDirtyFlags || {})[oldId] ?? false;
+              const sshProfileId = (parsed.sessionSSHProfileIds || {})[oldId];
 
-            // Skip tabs where all sessions failed to reconnect
-            if (!newRoot) continue;
+              let newId: string;
+              let sessionTitle = "Terminal";
 
-            // Fix activeSessionId if it pointed to an old session
-            const findFirstSession = (n: LayoutNode): string => {
-              if (n.type === "leaf") return n.sessionId;
-              return findFirstSession(n.children[0]);
-            };
+              if (sshProfileId) {
+                // SSH session — reconnect via profile
+                try {
+                  const ipc = window.electron?.ipcRenderer;
+                  const readFn = (ipc as any)?.readSSHProfiles || (() => ipc?.invoke("ssh.profiles.read"));
+                  const profiles = await readFn() || [];
+                  const profile = profiles.find((p: any) => p.id === sshProfileId);
+                  if (!profile) throw new Error("Profile not found");
 
-            regeneratedTabs.push({
-              ...tab,
-              root: newRoot,
-              activeSessionId: findFirstSession(newRoot),
-            });
-          }
+                  const connectFn = (ipc as any)?.connectSSH || ((c: any) => ipc?.invoke("ssh.connect", c));
+                  const result = await connectFn({
+                    ...profile,
+                    password: profile.savedPassword,
+                    passphrase: profile.savedPassphrase,
+                    cols: 80,
+                    rows: 30,
+                  });
+                  newId = result.sessionId;
+                  sessionTitle = profile.name || `${profile.username}@${profile.host}`;
+                  console.log(`Reconnected SSH session: ${oldId} → ${newId}`);
+                } catch (err: any) {
+                  console.warn(`Failed to reconnect SSH session ${oldId}:`, err.message);
+                  return null; // Drop this leaf — SSH reconnect failed
+                }
+              } else if (isSshOnly()) {
+                // Non-SSH session in SSH-only mode — cannot reconnect
+                return null;
+              } else {
+                // Local PTY — try to reconnect to existing PTY, else create new
+                newId = await createPTY(cwd, oldId);
+                if (newId === oldId) {
+                  console.log(`Reconnected to PTY session: ${oldId}`);
+                }
+              }
+
+              const config = aiConfig || aiService.getConfig();
+              newSessions.set(newId, {
+                id: newId,
+                title: sessionTitle,
+                cwd,
+                aiConfig: config,
+                interactions: interactions || [],
+                contextSummary: summaryConstant?.summary,
+                contextSummarySourceLength: summaryConstant?.sourceLength,
+                dirty: wasDirty,
+                sshProfileId,
+                // Mark as reconnected only if we reattached to a live PTY
+                // (server confirmed the PTY was still alive). This avoids false
+                // positives when a fresh PTY is created with the same session ID
+                // after the grace period expired (e.g. mobile OS killed the page).
+                reconnected: !sshProfileId && livePtyReconnectsRef.current.has(newId),
+              });
+              return { ...node, sessionId: newId };
+            } else {
+              const newChildren = (await Promise.all(
+                node.children.map((c) => regenerateNode(c)),
+              )).filter((c): c is LayoutNode => c !== null);
+              if (newChildren.length === 0) return null;
+              return { ...node, children: newChildren };
+            }
+          };
+
+          const findFirstSession = (n: LayoutNode): string => {
+            if (n.type === "leaf") return n.sessionId;
+            return findFirstSession(n.children[0]);
+          };
+
+          // Regenerate all tabs in parallel for faster hydration
+          const tabResults = await Promise.all(
+            savedTabs.map(async (tab): Promise<Tab | null> => {
+              const newRoot = await regenerateNode(tab.root);
+              if (!newRoot) return null;
+              return {
+                ...tab,
+                root: newRoot,
+                activeSessionId: findFirstSession(newRoot),
+              } as Tab;
+            }),
+          );
+          const regeneratedTabs = tabResults.filter((t): t is Tab => t !== null);
 
           if (regeneratedTabs.length > 0) {
             setSessions(newSessions);

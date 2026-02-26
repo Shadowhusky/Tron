@@ -15,17 +15,15 @@ async function boot() {
   // In Electron mode, initWebSocketBridge is a no-op and modeReady
   // never resolves — so we race with a short timeout.
   if ((window as any).electron) {
-    // Electron — render immediately
+    // Electron — remove loader immediately (fast local IPC, no WS wait)
+    const loader = document.getElementById('tron-loader');
+    if (loader) {
+      loader.classList.add('fade-out');
+      setTimeout(() => loader.remove(), 300);
+    }
   } else {
     // Web — wait for server mode message or demo fallback
     await modeReady;
-  }
-
-  // Remove loading indicator
-  const loader = document.getElementById('tron-loader');
-  if (loader) {
-    loader.classList.add('fade-out');
-    setTimeout(() => loader.remove(), 300);
   }
 
   createRoot(document.getElementById('root')!).render(

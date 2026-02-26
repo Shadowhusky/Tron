@@ -255,6 +255,16 @@ const AppContent = () => {
     [loadSavedTab, restoreAgentSession]
   );
 
+  // Remove loading indicator once hydrated (covers both Electron and web mode)
+  useEffect(() => {
+    if (!isHydrated) return;
+    const loader = document.getElementById("tron-loader");
+    if (loader) {
+      loader.classList.add("fade-out");
+      setTimeout(() => loader.remove(), 300);
+    }
+  }, [isHydrated]);
+
   // Prevent initial flash/blink by waiting for hydration
   if (!isHydrated) return null;
 

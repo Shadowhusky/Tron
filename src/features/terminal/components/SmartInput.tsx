@@ -830,6 +830,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         onSend(finalVal);
         setValue("");
         setGhostText("");
+        setSuggestedCommand(null);
         setCompletions([]);
         setShowCompletions(false);
         setHistoryIndex(-1);
@@ -847,6 +848,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         if (hasImgs) setAttachedImages([]);
         setValue("");
         setGhostText("");
+        setSuggestedCommand(null);
         setCompletions([]);
         setShowCompletions(false);
         return;
@@ -991,6 +993,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       // Cleanup
       setValue("");
       setGhostText("");
+      setSuggestedCommand(null);
       setCompletions([]);
       setHistoryIndex(-1);
     }

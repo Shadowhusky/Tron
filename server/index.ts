@@ -77,7 +77,13 @@ const clientConfigs = loadJsonMap(configsFile);
 const app = express();
 
 // Gzip compression — dramatically reduces JS/CSS bundle transfer size
-app.use(compression());
+// Skip compression for AI proxy routes (already streamed from upstream)
+app.use(compression({
+  filter: (req, res) => {
+    if (req.path.startsWith("/api/ai-proxy")) return false;
+    return compression.filter(req, res);
+  },
+}));
 
 const server = http.createServer(app);
 
@@ -119,7 +125,7 @@ app.all("/api/ai-proxy/{*path}", express.raw({ type: "*/*", limit: "5mb" }), asy
 
   try {
     // Forward all headers except hop-by-hop and internal proxy headers
-    const skipHeaders = new Set(["host", "connection", "keep-alive", "transfer-encoding", "x-target-base", "origin", "referer"]);
+    const skipHeaders = new Set(["host", "connection", "keep-alive", "transfer-encoding", "x-target-base", "origin", "referer", "accept-encoding"]);
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers)) {
       if (!skipHeaders.has(key) && typeof value === "string") {
@@ -142,8 +148,21 @@ app.all("/api/ai-proxy/{*path}", express.raw({ type: "*/*", limit: "5mb" }), asy
       }
     }
 
+    // For streaming responses (SSE), flush headers immediately so the client
+    // receives chunks in real-time instead of buffering until stream ends.
+    const isStreaming = response.headers.get("content-type")?.includes("text/event-stream") ||
+      response.headers.get("transfer-encoding") === "chunked";
+    if (isStreaming) {
+      res.flushHeaders();
+    }
+
     if (response.body) {
-      Readable.fromWeb(response.body as any).pipe(res);
+      const readable = Readable.fromWeb(response.body as any);
+      readable.on("error", (err) => {
+        if (!res.writableEnded) res.end();
+        console.error("[AI Proxy] Stream error:", err.message);
+      });
+      readable.pipe(res);
     } else {
       res.end();
     }
