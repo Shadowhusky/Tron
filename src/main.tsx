@@ -21,6 +21,13 @@ async function boot() {
     await modeReady;
   }
 
+  // Remove loading indicator
+  const loader = document.getElementById('tron-loader');
+  if (loader) {
+    loader.classList.add('fade-out');
+    setTimeout(() => loader.remove(), 300);
+  }
+
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>

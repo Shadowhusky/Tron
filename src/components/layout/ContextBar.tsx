@@ -104,8 +104,10 @@ const ContextBar: React.FC<ContextBarProps> = ({
   }, [showContextModal]);
 
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const isSummarizingRef = useRef(false);
   const [isSummarized, setIsSummarized] = useState(!!session?.contextSummary);
   const isSummarizedRef = useRef(!!session?.contextSummary);
+  const contextTextRef = useRef("");
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showCtxTooltip, setShowCtxTooltip] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -253,14 +255,15 @@ const ContextBar: React.FC<ContextBarProps> = ({
         // Calculate usage percent
         const percent = (fullContext.length / maxContext) * 100;
 
-        // Auto-summarize at 90%
-        if (percent > 90 && !isSummarizing && !isSummarizedRef.current) {
-          handleSummarize("moderate");
+        // Auto-summarize at 90% (use refs to avoid stale closure reads)
+        if (percent > 90 && !isSummarizingRef.current && !isSummarizedRef.current) {
+          handleSummarize("moderate", fullContext);
         }
 
         // Update display text: summary + new output, or raw context
         if (!isSummarizedRef.current) {
           setContextText(fullContext);
+          contextTextRef.current = fullContext;
         } else if (session?.contextSummary) {
           const newOutput = session.contextSummarySourceLength
             ? fullContext.slice(session.contextSummarySourceLength).trim()
@@ -280,13 +283,13 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
   const handleOpenContextModal = () => setShowContextModal(true);
 
-  const handleSummarize = async (_level: "brief" | "moderate" | "detailed") => {
-    if (isSummarizing) return;
+  const handleSummarize = async (_level: "brief" | "moderate" | "detailed", freshContext?: string) => {
+    if (isSummarizingRef.current) return;
+    isSummarizingRef.current = true;
     setIsSummarizing(true);
     try {
-      // Use the already-populated contextText (from polling) rather than re-fetching,
-      // which avoids potential issues where re-fetch or re-clean returns empty.
-      const textToSummarize = contextText || "";
+      // Use fresh context passed from poll, or fall back to ref (avoids stale closure)
+      const textToSummarize = freshContext || contextTextRef.current || "";
       const summary = await aiService.summarizeContext(
         textToSummarize.slice(-10000),
       );
@@ -304,6 +307,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
     } catch (e) {
       console.error("Summarization failed", e);
     } finally {
+      isSummarizingRef.current = false;
       setIsSummarizing(false);
     }
   };
@@ -320,7 +324,9 @@ const ContextBar: React.FC<ContextBarProps> = ({
         "terminal.getHistory",
         sessionId,
       );
-      setContextText(stripAnsi(history));
+      const text = stripAnsi(history);
+      setContextText(text);
+      contextTextRef.current = text;
     }
   };
 
@@ -351,9 +357,11 @@ const ContextBar: React.FC<ContextBarProps> = ({
       );
       const text = stripAnsi(history);
       setContextText(text);
+      contextTextRef.current = text;
       setContextLength(text.length);
     } else {
       setContextText("");
+      contextTextRef.current = "";
       setContextLength(0);
     }
   };
