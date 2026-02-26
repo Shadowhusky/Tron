@@ -101,6 +101,10 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
     setResolvedTheme(effective);
     // Keep localStorage in sync as fast cache
     localStorage.setItem(STORAGE_KEYS.THEME, theme);
+    // Notify Electron main process so Windows title bar overlay colors update
+    try {
+      (window as any).electron?.ipcRenderer?.send("window.themeChanged", effective);
+    } catch { /* web mode — no electron */ }
   }, [theme]);
 
   // Listener for system theme changes if mode is 'system'

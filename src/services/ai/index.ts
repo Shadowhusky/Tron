@@ -2846,6 +2846,25 @@ ${agentPrompt}
         lastReadTerminalOutput = "";
       }
 
+      // --- Resolve relative file paths against terminal cwd ---
+      // Weak models may use "." or relative paths instead of absolute ones.
+      // Resolve them via terminal.getCwd so file ops target the correct directory.
+      if (["write_file", "read_file", "edit_file", "list_dir", "search_dir"].includes(action.tool)) {
+        const p = action.path || action.dirPath;
+        if (p && !p.startsWith("/") && !/^[A-Z]:\\/i.test(p)) {
+          try {
+            const cwd = await (window as any).electron.ipcRenderer.invoke("terminal.getCwd", options?.sessionId);
+            if (cwd) {
+              // Use platform-appropriate separator
+              const sep = cwd.includes("\\") ? "\\" : "/";
+              const resolved = p === "." ? cwd : `${cwd}${sep}${p}`;
+              if (action.path) action.path = resolved;
+              if (action.dirPath) action.dirPath = resolved;
+            }
+          } catch { /* best effort — continue with original path */ }
+        }
+      }
+
       if (action.tool === "write_file") {
         const filePath = action.path;
         const content = action.content;

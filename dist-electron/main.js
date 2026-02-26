@@ -57,9 +57,9 @@ if (process.env.TRON_TEST_PROFILE) {
     }
     electron_1.app.setPath("userData", process.env.TRON_TEST_PROFILE);
 }
-// Suppress Chromium GPU SharedImageManager / mailbox errors on macOS.
-electron_1.app.commandLine.appendSwitch("disable-gpu");
-electron_1.app.commandLine.appendSwitch("disable-software-rasterizer");
+// Note: do NOT use disable-gpu / disable-software-rasterizer — they force
+// Chromium into a very slow CPU-only rendering path. The macOS
+// SharedImageManager console warnings are harmless.
 // --- Global State ---
 let mainWindow = null;
 let forceQuit = false;
@@ -227,6 +227,16 @@ electron_1.ipcMain.on("window.closeConfirmed", () => {
 });
 electron_1.ipcMain.on("window.closeCancelled", () => {
     // No-op — renderer dismissed the modal
+});
+// Update Windows title bar overlay colors when theme changes
+electron_1.ipcMain.on("window.themeChanged", (_, resolvedTheme) => {
+    if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed())
+        return;
+    const isLight = resolvedTheme === "light";
+    mainWindow.setTitleBarOverlay({
+        color: isLight ? "#f3f4f6" : "#0a0a0a",
+        symbolColor: isLight ? "#111827" : "#ffffff",
+    });
 });
 // --- App lifecycle ---
 electron_1.app.whenReady().then(async () => {
