@@ -1,11 +1,7 @@
- <h1 align="center">Tron — AI-Powered Terminal</h1>
+ <h1 align="center">Tron — Vibe Code Anywhere</h1>
 <img width="2032" height="1167" alt="Screenshot 2026-02-26 at 20 18 03" src="https://github.com/user-attachments/assets/d103ce77-46fe-4e00-adc0-abd9ae1a1e82" />
 
-
-
-<p align="center">
-  A terminal where the AI operates directly in your shell — running commands, reading output, writing files, and iterating until the job is done.
-</p>
+<h3 align="center">Open-source AI terminal with a built-in web server.<br/>Open the app, and your AI coding environment is instantly available from any browser — phone, tablet, or another machine.</h3>
 
 <p align="center">
   <a href="https://github.com/Shadowhusky/Tron/stargazers"><img src="https://img.shields.io/github/stars/Shadowhusky/Tron?style=flat&color=yellow" alt="Stars" /></a>
@@ -17,7 +13,7 @@
 ---
 
 <p align="center">
-  <em>Works on mobile too — access your terminal from anywhere via web mode</em>
+  <em>Vibe code from your phone — sessions persist even if you close the browser</em>
 </p>
 <p align="center">
   <img src="screenshots/mobile-web.jpg" width="280" />
@@ -25,16 +21,15 @@
 
 ## Why Tron?
 
-Most AI coding tools are chat-first — you paste context in, copy commands out, run them yourself. Tron is **terminal-first**: the AI agent executes multi-step plans directly in your real shell with full visibility and permission controls.
+**Your data never leaves your machine.** Tron runs locally — the AI agent, terminal, and web server all live on your computer. No cloud relay, no third-party servers. Add [Tailscale](https://tailscale.com) for encrypted remote access from anywhere, without exposing a single port.
 
-- **Real terminal** — full PTY with xterm.js, your aliases and tools all work
-- **AI agent** — describe what you want, the agent executes step-by-step with live output
+- **Vibe code everywhere** — built-in web server starts automatically; open any browser on your phone, tablet, or another PC and you're in
+- **Sessions never die** — close the browser, reopen it hours later, everything is exactly where you left it: terminal output, agent threads, scroll position
+- **AI agent in your real shell** — the agent executes multi-step plans directly in your terminal with live output and permission controls
 - **Any model** — Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, or any compatible API
-- **SSH remote** — connect to remote servers; terminal, agent, and file ops work identically over SSH
-- **Built-in web server** — toggle it on in Settings and access your terminal from any browser on the network
-- **Session persistence** — save tabs, restore sessions across restarts; use your favorite coding agent (Claude Code, etc.) and pick up right where you left off
-- **Cross-platform** — macOS, Windows, Linux. Desktop (Electron) or browser.
-- **Safe** — dangerous command detection, permission prompts, loop detection, circuit breakers
+- **SSH remote** — connect to remote servers; terminal, agent, and all features work identically over SSH
+- **Private & secure** — everything runs on your machine, dangerous command detection, permission prompts, loop guards
+- **Cross-platform** — macOS, Windows, Linux. Desktop (Electron) or browser
 
 https://github.com/user-attachments/assets/1e71e424-940a-4ff5-be21-5460d6843ab1
 
