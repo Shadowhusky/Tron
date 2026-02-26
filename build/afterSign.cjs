@@ -6,7 +6,8 @@ const { execSync } = require("child_process");
 const path = require("path");
 
 module.exports = async function afterSign(context) {
-  if (process.platform !== "darwin") return;
+  // Only run for macOS targets (not Windows/Linux built on macOS)
+  if (context.packager.platform.name !== "mac") return;
 
   const appPath = path.join(
     context.appOutDir,
