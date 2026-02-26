@@ -4,7 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WEB_PORT = 3888; // Server listens on hardcoded port 3888
+const WEB_PORT = Number(process.env.TRON_TEST_PORT) || 3889; // Use different port to avoid conflicts with running Electron app
 
 type WebFixture = {
   page: Page;
@@ -27,7 +27,7 @@ async function ensureServer(): Promise<void> {
 
     serverProcess = spawn("node", ["dist-server/index.js"], {
       cwd: path.resolve(__dirname, "../.."),
-      env: { ...process.env },
+      env: { ...process.env, TRON_PORT: String(WEB_PORT) },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -58,19 +58,6 @@ async function ensureServer(): Promise<void> {
   });
 }
 
-/**
- * Bypass onboarding by injecting localStorage keys.
- */
-async function dismissOnboarding(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    localStorage.setItem("tron_configured", "true");
-    localStorage.setItem("tron_tutorial_completed", "true");
-    localStorage.setItem("tron_theme", "dark");
-    localStorage.setItem("tron_view_mode", "terminal");
-  });
-  await page.reload();
-}
-
 export const test = base.extend<WebFixture>({
   page: async ({ browser }, use) => {
     await ensureServer();
@@ -87,9 +74,10 @@ export const test = base.extend<WebFixture>({
     });
     page.on("pageerror", (err) => console.log(`[Web Page Error]: ${err.message}`));
 
-    await page.goto(`http://localhost:${WEB_PORT}`);
+    // Use skip-setup URL param to bypass onboarding (localStorage won't work
+    // in web mode because config is server-backed, not localStorage-backed)
+    await page.goto(`http://localhost:${WEB_PORT}?skip-setup=true`);
     await page.waitForLoadState("domcontentloaded");
-    await dismissOnboarding(page);
     await page.waitForSelector('[data-testid="tab-bar"]', { timeout: 15_000 });
 
     await use(page);
