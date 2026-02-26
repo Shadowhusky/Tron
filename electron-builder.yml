@@ -13,12 +13,7 @@ files:
 
 asarUnpack:
   - dist-server/**/*
-  - node_modules/express/**
-  - node_modules/ws/**
-  - node_modules/dotenv/**
-  - node_modules/http-proxy-middleware/**
-  - node_modules/ssh2/**
-  - node_modules/node-pty/**
+  - node_modules/**/*
 
 afterSign: build/afterSign.cjs
 
