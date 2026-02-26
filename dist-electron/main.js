@@ -235,12 +235,18 @@ electron_1.app.whenReady().then(async () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0)
             createWindow();
     });
-    // Auto-start integrated web server
+    // Auto-start integrated web server (retry once on transient failure)
     const wsConfig = (0, web_server_1.readWebServerConfig)();
     if (wsConfig.enabled) {
         const result = await (0, web_server_1.startWebServer)(wsConfig.port);
         if (!result.success) {
-            console.error(`[Tron] Failed to start web server: ${result.error}`);
+            console.error(`[Tron] Web server start failed, retrying in 2s: ${result.error}`);
+            setTimeout(async () => {
+                const retry = await (0, web_server_1.startWebServer)(wsConfig.port);
+                if (!retry.success) {
+                    console.error(`[Tron] Web server retry failed: ${retry.error}`);
+                }
+            }, 2000);
         }
     }
     // Auto-check for updates (deferred — does not block launch)
