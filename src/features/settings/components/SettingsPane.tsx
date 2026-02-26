@@ -467,7 +467,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
         <div className={cardClass}>
           <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>Access URLs</label>
           <div className="space-y-1.5">
-            {[`http://localhost:${displayPort}`, ...(status.localIPs.length > 0 ? [`http://${primaryIP}:${displayPort}`] : [])].map((url) => (
+            {[`http://localhost:${displayPort}`, ...status.localIPs.map((ip) => `http://${ip}:${displayPort}`)].map((url) => (
               <div key={url} className="flex items-center gap-1.5">
                 <code className={`text-xs px-2 py-1 rounded ${resolvedTheme === "light" ? "bg-gray-100 text-gray-800" : "bg-white/5 text-gray-300"} flex-1 truncate`}>
                   {url}
