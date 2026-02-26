@@ -60,6 +60,7 @@ const ALLOWED_SEND_CHANNELS = [
   "terminal.close",
   "window.closeConfirmed",
   "window.closeCancelled",
+  "window.themeChanged",
 ] as const;
 
 const ALLOWED_RECEIVE_CHANNELS = [
