@@ -100,6 +100,7 @@ const AppContent = () => {
   const [showSavedTabs, setShowSavedTabs] = useState(false);
   const [sshToast, setSshToast] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateVersion, setUpdateVersion] = useState("");
 
   // Generic confirm modal — replaces window.confirm for styled modals
@@ -183,15 +184,21 @@ const AppContent = () => {
     return cleanup;
   }, []);
 
-  // Listen for auto-updater "downloaded" status
+  // Listen for auto-updater status changes
   useEffect(() => {
     if (!window.electron?.ipcRenderer?.on) return;
     const cleanup = window.electron.ipcRenderer.on(
       IPC.UPDATER_STATUS,
       (data: any) => {
-        if (data.status === "downloaded" && data.updateInfo?.version) {
-          setUpdateVersion(data.updateInfo.version);
-          setUpdateReady(true);
+        if (data.updateInfo?.version) {
+          if (data.status === "downloaded") {
+            setUpdateVersion(data.updateInfo.version);
+            setUpdateReady(true);
+          } else if (data.status === "available") {
+            // Surface "available" for users with auto-download off
+            setUpdateVersion(data.updateInfo.version);
+            setUpdateAvailable(true);
+          }
         }
       },
     );
@@ -423,6 +430,22 @@ const AppContent = () => {
         buttons={[
           { label: "Later", type: "ghost", onClick: () => setUpdateReady(false) },
           { label: "Relaunch Now", type: "primary", onClick: () => window.electron?.ipcRenderer?.quitAndInstall?.() },
+        ]}
+      />
+
+      {/* Update available modal (when auto-download is off) */}
+      <Modal
+        show={updateAvailable && !updateReady}
+        resolvedTheme={resolvedTheme}
+        onClose={() => setUpdateAvailable(false)}
+        title="Update Available"
+        description={`A new version (v${updateVersion}) is available. Go to Settings to download it.`}
+        buttons={[
+          { label: "Later", type: "ghost", onClick: () => setUpdateAvailable(false) },
+          { label: "Download", type: "primary", onClick: () => {
+            setUpdateAvailable(false);
+            window.electron?.ipcRenderer?.downloadUpdate?.();
+          }},
         ]}
       />
 

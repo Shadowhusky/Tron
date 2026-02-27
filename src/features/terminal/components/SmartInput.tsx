@@ -312,6 +312,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestInputRef = useRef("");
 
+  /** Cancel any in-flight completion fetches so stale results can't re-show the popover. */
+  const cancelPendingCompletions = useCallback(() => {
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+    latestInputRef.current = "";
+  }, []);
+
   // Scroll selected completion into view
   useEffect(() => {
     if (!showCompletions || !completionsRef.current) return;
@@ -323,6 +329,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
   useEffect(() => {
     if (placeholderTimerRef.current) clearTimeout(placeholderTimerRef.current);
     if (!hasActivityRef.current || !aiBehavior.ghostText || value.trim() !== "" || !sessionId || isAgentRunning) {
+      // Clear stale AI placeholder when input is non-empty or conditions no longer met
+      if (value.trim() !== "") setAiPlaceholder("");
       return;
     }
     placeholderTimerRef.current = setTimeout(async () => {
@@ -331,7 +339,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
         const history = await window.electron.ipcRenderer.getHistory(sessionId);
         if (!history || history.length < 10) return;
         const suggestion = await aiService.generatePlaceholder(history);
-        if (suggestion) setAiPlaceholder(suggestion);
+        // Stale check: only set if input is still empty
+        if (suggestion && !inputRef.current?.value?.trim()) setAiPlaceholder(suggestion);
       } catch {
         // Non-critical, silently ignore
       }
@@ -884,6 +893,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return; // don't preventDefault — browser inserts newline natively
       }
 
+      // Cancel any in-flight completion fetches so stale results can't re-show after send
+      cancelPendingCompletions();
+
       // Cmd+Shift+Enter: force send as command
       if (e.metaKey && e.shiftKey) {
         e.preventDefault();
@@ -1373,7 +1385,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 // Check both clipboardData.files (direct file paste) and
                 // clipboardData.items (screenshot paste — some browsers only
                 // expose images via items, not files).
-                // clipboardData works on HTTP (no secure context needed).
+                if (!supportsVision) return; // let native text paste happen
                 let imageFiles: File[] = [];
                 const files = e.clipboardData?.files;
                 if (files && files.length > 0) {
@@ -1387,47 +1399,47 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     }
                   }
                 }
-                if (imageFiles.length > 0 && supportsVision) {
+                if (imageFiles.length > 0) {
                   e.preventDefault();
                   handleImageFiles(imageFiles);
                   return;
                 }
-                // No images in clipboardData — try async APIs as fallback.
-                // In Electron, clipboardData may not expose screenshot images;
-                // navigator.clipboard.read() or Electron IPC can fill the gap.
-                // Don't preventDefault — let native text paste happen normally.
-                if (supportsVision) {
-                  (async () => {
-                    try {
-                      if (navigator.clipboard?.read) {
-                        const items = await navigator.clipboard.read();
-                        for (const item of items) {
-                          const imageType = item.types.find((t: string) => t.startsWith("image/"));
-                          if (imageType) {
-                            const blob = await item.getType(imageType);
-                            const ext = imageType.split("/")[1]?.replace("jpeg", "jpg") || "png";
-                            const file = new File([blob], `paste-${Date.now()}.${ext}`, { type: imageType });
-                            handleImageFiles([file]);
-                            return;
-                          }
-                        }
+                // No images in clipboardData — try server-side IPC first (most
+                // reliable in web mode), then navigator.clipboard.read() as
+                // fallback. Don't preventDefault — let native text paste happen.
+                (async () => {
+                  // IPC: server reads system clipboard directly (bypasses browser restrictions)
+                  try {
+                    if (window.electron?.ipcRenderer?.readClipboardImage) {
+                      const base64 = await window.electron.ipcRenderer.readClipboardImage();
+                      if (base64) {
+                        const byteChars = atob(base64);
+                        const bytes = new Uint8Array(byteChars.length);
+                        for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+                        const blob = new Blob([bytes], { type: "image/png" });
+                        const file = new File([blob], `paste-${Date.now()}.png`, { type: "image/png" });
+                        handleImageFiles([file]);
+                        return;
                       }
-                    } catch { /* not available in non-secure context */ }
-                    try {
-                      if (window.electron?.ipcRenderer?.readClipboardImage) {
-                        const base64 = await window.electron.ipcRenderer.readClipboardImage();
-                        if (base64) {
-                          const byteChars = atob(base64);
-                          const bytes = new Uint8Array(byteChars.length);
-                          for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
-                          const blob = new Blob([bytes], { type: "image/png" });
-                          const file = new File([blob], `paste-${Date.now()}.png`, { type: "image/png" });
+                    }
+                  } catch { /* IPC not available */ }
+                  // Fallback: navigator.clipboard.read() (needs secure context)
+                  try {
+                    if (navigator.clipboard?.read) {
+                      const items = await navigator.clipboard.read();
+                      for (const item of items) {
+                        const imageType = item.types.find((t: string) => t.startsWith("image/"));
+                        if (imageType) {
+                          const blob = await item.getType(imageType);
+                          const ext = imageType.split("/")[1]?.replace("jpeg", "jpg") || "png";
+                          const file = new File([blob], `paste-${Date.now()}.${ext}`, { type: imageType });
                           handleImageFiles([file]);
+                          return;
                         }
                       }
-                    } catch { /* IPC not available */ }
-                  })();
-                }
+                    }
+                  } catch { /* not available or permission denied */ }
+                })();
               }}
               autoFocus
               disabled={

@@ -22,6 +22,7 @@ import {
   Square,
   Trash2,
   Info,
+  Loader2,
 } from "lucide-react";
 import { marked } from "marked";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -533,10 +534,10 @@ const PermissionRequest: React.FC<{
       }`}
     >
       {/* Scrollable content: header + command + warnings */}
-      <div className="overflow-y-auto min-h-0 p-4 pb-2" style={{ maxHeight: "calc(100% - 3rem)" }}>
+      <div className="overflow-y-auto min-h-0 px-3 pt-2.5 pb-1" style={{ maxHeight: "calc(100% - 2.5rem)" }}>
         {/* Header */}
         <div
-          className={`text-sm mb-2 font-medium flex items-center gap-2 shrink-0 ${
+          className={`text-xs mb-1.5 font-medium flex items-center gap-1.5 shrink-0 ${
             dangerous
               ? isLight
                 ? "text-red-700"
@@ -547,23 +548,23 @@ const PermissionRequest: React.FC<{
           }`}
         >
           {dangerous ? (
-            <ShieldAlert className="w-4 h-4" />
+            <ShieldAlert className="w-3.5 h-3.5" />
           ) : (
-            <Command className="w-4 h-4" />
+            <Command className="w-3.5 h-3.5" />
           )}
           {dangerous
-            ? "Dangerous command — review carefully!"
+            ? "Dangerous — review carefully!"
             : "Allow command execution?"}
         </div>
 
         {/* Command display — collapsed by default for long commands */}
-        <div className="shrink-0 mb-3">
+        <div className="shrink-0 mb-2">
           <div className="rounded border overflow-hidden">
             <code
-              className={`block p-3 text-xs font-mono break-all whitespace-pre-wrap transition-all ${
+              className={`block px-2.5 py-1.5 text-xs font-mono break-all whitespace-pre-wrap transition-all ${
                 isLongCommand && !cmdExpanded
-                  ? "max-h-[6rem] overflow-hidden"
-                  : "max-h-[25vh] overflow-y-auto"
+                  ? "max-h-[4rem] overflow-hidden"
+                  : "max-h-[20vh] overflow-y-auto"
               } ${
                 dangerous
                   ? isLight
@@ -606,31 +607,28 @@ const PermissionRequest: React.FC<{
         {/* Danger warning */}
         {dangerous && (
           <div
-            className={`shrink-0 flex items-start gap-2 mb-3 p-2 rounded text-xs ${
+            className={`shrink-0 flex items-center gap-1.5 mb-1.5 px-2 py-1 rounded text-[11px] leading-tight ${
               isLight
                 ? "bg-red-100/50 text-red-700"
                 : "bg-red-950/30 text-red-300/80"
             }`}
           >
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>
-              This command is potentially destructive and may cause irreversible
-              changes. Please verify before allowing.
-            </span>
+            <AlertTriangle className="w-3 h-3 shrink-0" />
+            <span>Potentially destructive — verify before allowing.</span>
           </div>
         )}
 
         {/* Double-confirm step for dangerous commands */}
         {dangerous && confirmStep === 1 && (
           <div
-            className={`shrink-0 flex items-center gap-2 mb-3 p-2 rounded border text-xs font-semibold animate-in fade-in ${
+            className={`shrink-0 flex items-center gap-1.5 mb-1.5 px-2 py-1 rounded border text-[11px] font-semibold animate-in fade-in ${
               isLight
                 ? "bg-red-200/60 border-red-400 text-red-800"
                 : "bg-red-900/40 border-red-500/40 text-red-200"
             }`}
           >
-            <ShieldAlert className="w-3.5 h-3.5 shrink-0 animate-pulse" />
-            Are you absolutely sure? Click "Confirm Execute" to proceed.
+            <ShieldAlert className="w-3 h-3 shrink-0 animate-pulse" />
+            Are you sure? Click "Confirm Execute" to proceed.
           </div>
         )}
       </div>
@@ -639,12 +637,12 @@ const PermissionRequest: React.FC<{
       <div
         ref={actionsRef}
         onKeyDown={handleKeyDown}
-        className="flex gap-2 justify-end shrink-0 px-4 py-3"
+        className="flex gap-1.5 justify-end shrink-0 px-3 py-2"
       >
         <button
           data-testid="permission-deny"
           onClick={() => onPermission("deny")}
-          className={`px-4 py-2 text-xs rounded-md border transition-colors flex items-center gap-1.5 ${
+          className={`px-3 py-1 text-xs rounded-md border transition-colors flex items-center gap-1 ${
             isLight
               ? "bg-white hover:bg-gray-50 text-gray-600 border-gray-300"
               : "bg-transparent hover:bg-white/5 text-white/60 border-white/10"
@@ -655,7 +653,7 @@ const PermissionRequest: React.FC<{
         {!dangerous && (
           <button
             onClick={() => onPermission("always")}
-            className={`px-4 py-2 text-xs rounded-md border transition-colors ${
+            className={`px-3 py-1 text-xs rounded-md border transition-colors ${
               isLight
                 ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300"
                 : "bg-blue-900/30 hover:bg-blue-900/50 text-blue-200 border-blue-500/20"
@@ -668,7 +666,7 @@ const PermissionRequest: React.FC<{
           ref={allowBtnRef}
           data-testid="permission-allow"
           onClick={handleAllow}
-          className={`px-4 py-2 text-xs rounded-md transition-colors flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 ${
+          className={`px-3 py-1 text-xs rounded-md transition-colors flex items-center gap-1 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 ${
             dangerous
               ? confirmStep === 1
                 ? "bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/30"
@@ -989,6 +987,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     }
     prevRunningRef.current = isAgentRunning;
   }, [isAgentRunning, scrollToBottom]);
+
+  // Scroll panel into view and thread to bottom when permission request appears
+  useEffect(() => {
+    if (pendingCommand) {
+      requestAnimationFrame(() => {
+        panelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        scrollToBottom();
+      });
+    }
+  }, [pendingCommand, scrollToBottom]);
 
   // Reset toasts on new run
   useEffect(() => {
@@ -1328,8 +1336,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
             )}
           </div>
 
-          {/* Thread History - Only show when expanded and no permission dialog */}
-          {isExpanded && !pendingCommand && (panelSteps.length > 0 || isAgentRunning) && (
+          {/* Thread History */}
+          {isExpanded && (panelSteps.length > 0 || isAgentRunning) && (
             <div className="flex-1 relative min-h-0">
               <div
                 ref={scrollRef}
@@ -1354,6 +1362,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     const isThought = step.step === "thought";
                     const isStreamingStep = step.step === "streaming";
                     const isSystem = step.step === "system";
+                    const isSummarizing = step.step === "summarizing";
+                    const isSummarized = step.step === "summarized";
                     const streamInfo = isStreamingStep
                       ? describeStreamingContent(step.output)
                       : null;
@@ -1403,11 +1413,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                               ? isLight
                                 ? "border-green-300"
                                 : "border-green-500/30"
-                              : isSystem
+                              : isSummarizing || isSummarized
                                 ? isLight
-                                  ? "border-teal-300"
-                                  : "border-teal-500/30"
-                                : isQuestion
+                                  ? "border-purple-300"
+                                  : "border-purple-500/30"
+                                : isSystem
+                                  ? isLight
+                                    ? "border-teal-300"
+                                    : "border-teal-500/30"
+                                  : isQuestion
                                   ? isLight
                                     ? "border-amber-300"
                                     : "border-amber-500/30"
@@ -1451,6 +1465,10 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             <AlertTriangle className="w-3 h-3 text-red-400" />
                           ) : isDone ? (
                             <Check className="w-3 h-3 text-green-400" />
+                          ) : isSummarizing ? (
+                            <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
+                          ) : isSummarized ? (
+                            <Check className="w-3 h-3 text-purple-400" />
                           ) : isSystem ? (
                             <Info className="w-3 h-3 text-teal-400" />
                           ) : isQuestion ? (
@@ -1478,9 +1496,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                     ? "text-red-400"
                                     : isDone
                                       ? "text-green-400"
-                                      : isSystem
-                                        ? "text-teal-400"
-                                        : isQuestion
+                                      : isSummarizing || isSummarized
+                                        ? "text-purple-400"
+                                        : isSystem
+                                          ? "text-teal-400"
+                                          : isQuestion
                                           ? "text-amber-400"
                                           : isThinkingStep || isThought
                                             ? "text-purple-400"
@@ -1491,13 +1511,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           >
                             {isExecuting
                               ? "running..."
-                              : isThinkingStep
-                                ? "thinking..."
-                                : isStreamingStep
-                                  ? `${streamInfo!.label}...`
-                                  : isExecuted && execCommand
-                                    ? summarizeCommand(execCommand)
-                                    : step.step}
+                              : isSummarizing
+                                ? "summarizing..."
+                                : isThinkingStep
+                                  ? "thinking..."
+                                  : isStreamingStep
+                                    ? `${streamInfo!.label}...`
+                                    : isExecuted && execCommand
+                                      ? summarizeCommand(execCommand)
+                                      : step.step}
                           </span>
                           {isCollapsed && (
                             <span
@@ -1762,7 +1784,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             }
                             return null;
                           })()
-                        ) : isDone || isSystem || isQuestion ? (
+                        ) : isDone || isSystem || isQuestion || isSummarized ? (
                           <LinkifiedDoneContent
                             content={step.output}
                             className={`text-[11px] leading-relaxed ${isLight ? "markdown-light text-gray-700" : "text-gray-300"}`}
@@ -2086,7 +2108,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
             </div>
           )}
 
-          {/* Permission Request - Only show when expanded */}
+          {/* Permission Request - pinned at bottom */}
           <AnimatePresence>
             {isExpanded && pendingCommand && (
               <motion.div
@@ -2095,7 +2117,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                className="flex-1 min-h-0 overflow-y-auto"
+                className="shrink-0 max-h-[50%] overflow-y-auto"
               >
                 <PermissionRequest
                   command={pendingCommand}

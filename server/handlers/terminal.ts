@@ -58,8 +58,23 @@ const activeChildProcesses = new Set<ChildProcess>();
 const cleanedUpSessions = new Set<string>();
 
 // Per-session display buffering — active during execInTerminal to strip sentinels cleanly
-const displayBuffers = new Map<string, { data: string; timer: ReturnType<typeof setTimeout> | null; pushEvent: EventPusher }>();
+const displayBuffers = new Map<string, { data: string; timer: ReturnType<typeof setTimeout> | null; pushEvent: EventPusher; holdbacks: number }>();
 const execActiveSessions = new Set<string>(); // Sessions currently running execInTerminal
+
+/**
+ * Check if the buffer tail might contain a partial sentinel pattern that would
+ * be completed by more incoming data (e.g. when command echo wraps in a narrow terminal).
+ */
+function mightHavePartialSentinel(data: string): boolean {
+  const tail = data.slice(-50);
+  const markers = ["__TRON_DONE_", "; printf"];
+  for (const marker of markers) {
+    for (let len = 4; len <= marker.length; len++) {
+      if (tail.endsWith(marker.slice(0, len))) return true;
+    }
+  }
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // Terminal history persistence — survives server restarts
@@ -573,12 +588,19 @@ export function pushSessionData(sessionId: string, data: string, pushEvent: Even
   if (execActiveSessions.has(sessionId)) {
     let buf = displayBuffers.get(sessionId);
     if (!buf) {
-      buf = { data: "", timer: null, pushEvent };
+      buf = { data: "", timer: null, pushEvent, holdbacks: 0 };
       displayBuffers.set(sessionId, buf);
     }
     buf.data += data;
     if (buf.timer) clearTimeout(buf.timer);
-    buf.timer = setTimeout(() => {
+
+    const flush = () => {
+      // If buffer tail looks like a partial sentinel, hold back for more data (max 3 times)
+      if (buf!.holdbacks < 3 && mightHavePartialSentinel(buf!.data)) {
+        buf!.holdbacks++;
+        buf!.timer = setTimeout(flush, 25);
+        return;
+      }
       if (buf!.data) {
         const cleaned = stripSentinels(buf!.data);
         buf!.data = "";
@@ -587,7 +609,10 @@ export function pushSessionData(sessionId: string, data: string, pushEvent: Even
         }
       }
       buf!.timer = null;
-    }, 8);
+      buf!.holdbacks = 0;
+    };
+
+    buf.timer = setTimeout(flush, 8);
     return;
   }
   // Normal path (no exec active): pass through immediately

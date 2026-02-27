@@ -27,7 +27,7 @@ src/
   contexts/           # React contexts (Layout, Theme, History, Agent)
   components/
     layout/           # TabBar, SplitPane (recursive), TerminalPane, ContextBar, CloseConfirmModal, NotificationOverlay, SavedTabsModal, EmptyState
-    ui/               # Modal, FeatureIcon, SpotlightOverlay
+    ui/               # Modal, FolderPickerModal, FeatureIcon, SpotlightOverlay
   features/
     terminal/         # Terminal.tsx (xterm.js), SmartInput.tsx
     agent/            # AgentOverlay.tsx, TokenHeatBar.tsx
@@ -101,9 +101,10 @@ e2e/                  # Playwright E2E test suite
 ## Context System (`src/components/layout/ContextBar.tsx`)
 
 - **Context composition**: `[cwd: ...]` header + stripped terminal history + agent thread activity. Polled every 3s.
-- **Auto-summarize**: Triggers at 90% context capacity via `aiService.summarizeContext()`.
-- **Live post-summary updates**: After summarization, new terminal output is appended with `--- New Output Since Summary ---` prefix. Tracked via `contextSummarySourceLength`.
+- **Auto-summarize**: Triggers at 90% context capacity. Waits for terminal idle AND agent not running before starting. Claims `isAgentRunning` so user prompts are queued during summarization. Shows `summarizing` → `summarized` steps in agent overlay. After success, clears old terminal history — only summary + new output going forward. Re-triggers if effective context grows past 90% again. Toast bubble floats up from context ring on completion.
+- **No "Reset to raw"**: After summarization, old raw context is dropped. The summary is the new baseline; future output appends naturally.
 - **Model switcher**: Inline model picker with search, favorites, per-provider grouping.
+- **FolderPickerModal**: Web-mode fallback for CWD folder selection (ContextBar) and SSH key browsing (SSHConnectModal). Uses `file.listDir` IPC to browse the server filesystem. Supports `mode="directory"` and `mode="file"`. Parent navigation disabled at filesystem root.
 
 ## Tab Management (`src/components/layout/TabBar.tsx`)
 
@@ -131,7 +132,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **Busy-state backoff**: Exponential wait (2s–8s) when terminal is busy. After 5 checks, forces approach change.
 - **Server detection**: When `identicalReadCount >= 1` with server state, blocks further writes and forces final_answer.
 - **Parse error hiding**: Parse failures silently retry (up to 3x) without showing in agent overlay. After 3 failures, raw text becomes final_answer.
-- **Dangerous command detection**: Pattern-based + heuristic detection. Double-confirm for destructive operations.
+- **Dangerous command detection**: Pattern-based + heuristic detection. Double-confirm for destructive operations. Permission request is pinned at bottom of the overlay (`shrink-0 max-h-[50%]`), thread history remains scrollable above it.
 - **Progress reflection**: Every 8 steps, if no progress in 6+ steps, injects reflection prompt.
 - **Context compaction**: Old tool results compressed after history exceeds 30 messages.
 - **Auto-cd**: Platform-aware (`&&` on Unix, `;` on Windows). Skips scaffold commands.
@@ -153,6 +154,8 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **Readline hotkeys**: `Ctrl+U` (kill line before cursor), `Ctrl+K` (kill after), `Ctrl+A` (home), `Ctrl+E` (end), `Ctrl+W` (delete word back).
 - **Dynamic footer**: Hotkey hints read from config via `formatHotkey()`.
 - **Race-safe mode detection**: Enter handler re-classifies synchronously to prevent stale mode from async PATH checks when typing fast.
+- **Completion cancellation on send**: Enter handler calls `cancelPendingCompletions()` to clear debounced IPC and reset `latestInputRef`, preventing stale async completions from re-showing the popover after send.
+- **AI placeholder stale guard**: The placeholder timer callback checks `inputRef.current?.value?.trim()` before setting `aiPlaceholder`, and the effect clears `aiPlaceholder` when value becomes non-empty.
 
 ## Build & Dev
 

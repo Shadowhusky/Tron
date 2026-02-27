@@ -483,6 +483,40 @@ async function handleInvoke(
         return "";
       } catch { return ""; }
     }
+    case "clipboard.readImage": {
+      // Read image from system clipboard as base64 PNG
+      try {
+        const platform = process.platform;
+        if (platform === "darwin") {
+          // osascript: write clipboard image to temp file, read as base64
+          const tmp = path.join(os.tmpdir(), `tron-clip-${Date.now()}.png`);
+          try {
+            execSync(
+              `osascript -e 'set img to the clipboard as «class PNGf»' -e 'set fp to open for access POSIX file "${tmp}" with write permission' -e 'write img to fp' -e 'close access fp'`,
+              { timeout: 3000 },
+            );
+            const buf = fs.readFileSync(tmp);
+            fs.unlinkSync(tmp);
+            return buf.toString("base64");
+          } catch {
+            try { fs.unlinkSync(tmp); } catch {}
+            return null;
+          }
+        }
+        if (platform === "linux") {
+          const buf = execSync("xclip -selection clipboard -t image/png -o", { timeout: 2000, encoding: "buffer" });
+          return buf.toString("base64");
+        }
+        if (platform === "win32") {
+          const buf = execSync(
+            'powershell -command "[Convert]::ToBase64String([System.Windows.Forms.Clipboard]::GetImage().Save([System.IO.MemoryStream]::new(), [System.Drawing.Imaging.ImageFormat]::Png).ToArray())"',
+            { encoding: "utf-8", timeout: 3000 },
+          );
+          return buf.trim() || null;
+        }
+        return null;
+      } catch { return null; }
+    }
     case "clipboard.writeText": {
       try {
         const text = typeof data === "string" ? data : data?.text || "";

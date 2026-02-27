@@ -150,21 +150,31 @@ export function registerUpdaterHandlers(
   ipcMain.handle("updater.getVersion", () => app.getVersion());
 }
 
-/** Check for updates after app is idle. Only runs when packaged. */
+/** Check for updates after app is idle, then periodically. Only runs when packaged. */
 export function autoCheckForUpdates(
   autoDownload: boolean,
   getMainWindow: () => BrowserWindow | null,
 ) {
   if (!app.isPackaged) return;
 
-  // Defer both the module load and the network check until the app is idle
-  setTimeout(async () => {
+  const CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+
+  const doCheck = async () => {
     try {
       const au = await getAutoUpdater(getMainWindow);
       au.autoDownload = autoDownload;
+      // Skip if already downloaded — no need to re-check
+      if (updateStatus === "downloaded" || updateStatus === "downloading") return;
       await au.checkForUpdates();
     } catch {
-      // Silently ignore startup check errors (e.g. no internet)
+      // Silently ignore check errors (e.g. no internet)
     }
+  };
+
+  // Defer first check until app is idle (10s after launch)
+  setTimeout(() => {
+    doCheck();
+    // Re-check periodically (every 4 hours)
+    setInterval(doCheck, CHECK_INTERVAL);
   }, 10_000);
 }
