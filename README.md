@@ -31,7 +31,7 @@
 - **Private & secure** — everything runs on your machine, dangerous command detection, permission prompts, loop guards
 - **Cross-platform** — macOS, Windows, Linux. Desktop (Electron) or browser
 
-https://github.com/user-attachments/assets/1e71e424-940a-4ff5-be21-5460d6843ab1
+https://github.com/Shadowhusky/Tron/raw/main/screenshots/demo-hero.mp4
 
 ## Demo
 
