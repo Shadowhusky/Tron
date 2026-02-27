@@ -137,20 +137,29 @@ function registerUpdaterHandlers(getMainWindow) {
     }));
     electron_1.ipcMain.handle("updater.getVersion", () => electron_1.app.getVersion());
 }
-/** Check for updates after app is idle. Only runs when packaged. */
+/** Check for updates after app is idle, then periodically. Only runs when packaged. */
 function autoCheckForUpdates(autoDownload, getMainWindow) {
     if (!electron_1.app.isPackaged)
         return;
-    // Defer both the module load and the network check until the app is idle
-    setTimeout(async () => {
+    const CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+    const doCheck = async () => {
         try {
             const au = await getAutoUpdater(getMainWindow);
             au.autoDownload = autoDownload;
+            // Skip if already downloaded — no need to re-check
+            if (updateStatus === "downloaded" || updateStatus === "downloading")
+                return;
             await au.checkForUpdates();
         }
         catch {
-            // Silently ignore startup check errors (e.g. no internet)
+            // Silently ignore check errors (e.g. no internet)
         }
+    };
+    // Defer first check until app is idle (10s after launch)
+    setTimeout(() => {
+        doCheck();
+        // Re-check periodically (every 4 hours)
+        setInterval(doCheck, CHECK_INTERVAL);
     }, 10000);
 }
 //# sourceMappingURL=updater.js.map

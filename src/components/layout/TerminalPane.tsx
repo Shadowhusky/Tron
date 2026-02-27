@@ -560,12 +560,24 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       {
         label: "Paste",
         icon: <ClipboardPaste className="h-3.5 w-3.5" />,
-        action: () => {
+        action: async () => {
           const sendToTerminal = (text: string) => {
             if (text && window.electron) {
               window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data: text });
             }
           };
+          // Try clipboard image first (saves to temp, types path into terminal)
+          try {
+            const base64 = await window.electron?.ipcRenderer?.readClipboardImage?.();
+            if (base64) {
+              const filePath = await window.electron?.ipcRenderer?.invoke(
+                "file.saveTempImage",
+                { base64, ext: "png" },
+              );
+              if (filePath) { sendToTerminal(filePath); return; }
+            }
+          } catch { /* no image or IPC unavailable */ }
+          // Fall back to text paste
           if (navigator.clipboard?.readText) {
             navigator.clipboard.readText().then(sendToTerminal).catch(() => {
               window.electron?.ipcRenderer?.clipboardReadText?.().then(sendToTerminal).catch(() => {});

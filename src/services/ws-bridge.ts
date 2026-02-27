@@ -297,6 +297,7 @@ export function initWebSocketBridge() {
       // Clipboard (server-side — bypasses browser secure context requirement)
       clipboardReadText: () => invoke("clipboard.readText") as Promise<string>,
       clipboardWriteText: (text: string) => invoke("clipboard.writeText", text) as Promise<boolean>,
+      readClipboardImage: () => invoke("clipboard.readImage") as Promise<string | null>,
       // System
       selectFolder: (_defaultPath?: string) =>
         Promise.resolve(null) as Promise<string | null>,

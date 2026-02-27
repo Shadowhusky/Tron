@@ -4,6 +4,8 @@ import { fadeScale, overlay } from "../../../utils/motion";
 import { themeClass } from "../../../utils/theme";
 import type { ResolvedTheme } from "../../../contexts/ThemeContext";
 import type { SSHConnectionConfig, SSHAuthMethod } from "../../../types";
+import { isElectronApp } from "../../../utils/platform";
+import FolderPickerModal from "../../../components/ui/FolderPickerModal";
 
 interface SSHProfile {
   id: string;
@@ -59,6 +61,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
   // Status
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showFilePicker, setShowFilePicker] = useState(false);
 
   // Load profiles on open
   useEffect(() => {
@@ -177,8 +180,13 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
   const handleBrowseKey = async () => {
     try {
       const result = await window.electron?.ipcRenderer?.invoke("system.selectFolder");
-      if (result) setPrivateKeyPath(result);
+      if (result) {
+        setPrivateKeyPath(result);
+        return;
+      }
     } catch { /* ignore */ }
+    // Fallback to folder picker modal in web mode
+    if (!isElectronApp()) setShowFilePicker(true);
   };
 
   const inputCls = `w-full px-2.5 py-1.5 text-[13px] rounded-md border outline-none transition-colors ${themeClass(resolvedTheme, {
@@ -200,6 +208,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
   })}`;
 
   return (
+    <>
     <AnimatePresence>
       {show && (
         <motion.div
@@ -487,6 +496,17 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
         </motion.div>
       )}
     </AnimatePresence>
+
+    {/* File picker modal (web mode fallback for SSH key browsing) */}
+    <FolderPickerModal
+      show={showFilePicker}
+      resolvedTheme={resolvedTheme}
+      initialPath="~/.ssh"
+      mode="file"
+      onSelect={(filePath) => setPrivateKeyPath(filePath)}
+      onClose={() => setShowFilePicker(false)}
+    />
+    </>
   );
 };
 

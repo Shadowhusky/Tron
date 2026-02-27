@@ -8,11 +8,12 @@ import { useConfig } from "../../contexts/ConfigContext";
 import { Folder, X, Loader2, Trash2, Search, Settings } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
-import { abbreviateHome, isWindows, isTouchDevice } from "../../utils/platform";
+import { abbreviateHome, isWindows, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi } from "../../utils/contextCleaner";
 import { classifyTerminalOutput } from "../../utils/terminalState";
 import { useAllConfiguredModels } from "../../hooks/useModels";
+import FolderPickerModal from "../ui/FolderPickerModal";
 
 // SVG Ring component for context usage visualization
 const ContextRing: React.FC<{ percent: number; size?: number }> = ({
@@ -75,8 +76,10 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const { sessions, updateSessionConfig, updateSession, openSettingsTab, refreshCwd } = useLayout();
   const { resolvedTheme: theme } = useTheme();
   const { config: appConfig } = useConfig();
-  const { agentThread, setAgentThread } = useAgent(sessionId);
+  const { agentThread, setAgentThread, isAgentRunning, setIsAgentRunning, setIsOverlayVisible } = useAgent(sessionId);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [showSummarizeToast, setShowSummarizeToast] = useState(false);
 
   // Derived state
   const session = sessions.get(sessionId);
@@ -105,9 +108,10 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
   const [isSummarizing, setIsSummarizing] = useState(false);
   const isSummarizingRef = useRef(false);
-  const [isSummarized, setIsSummarized] = useState(!!session?.contextSummary);
   const isSummarizedRef = useRef(!!session?.contextSummary);
   const contextTextRef = useRef("");
+  const isAgentRunningRef = useRef(false);
+  const pendingSummarizeRef = useRef<string | null>(null); // stashed context for deferred auto-summarize
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showCtxTooltip, setShowCtxTooltip] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -210,10 +214,27 @@ const ContextBar: React.FC<ContextBarProps> = ({
   // Update local state when session changes
   useEffect(() => {
     if (session) {
-      setIsSummarized(!!session.contextSummary);
       isSummarizedRef.current = !!session.contextSummary;
     }
   }, [session?.contextSummary]);
+
+  // Keep agent running ref in sync + trigger deferred summarize when agent finishes & terminal is idle
+  useEffect(() => {
+    const wasRunning = isAgentRunningRef.current;
+    isAgentRunningRef.current = isAgentRunning;
+
+    // Agent just finished — check if there's a pending auto-summarize
+    if (wasRunning && !isAgentRunning && pendingSummarizeRef.current) {
+      const stashed = pendingSummarizeRef.current;
+      pendingSummarizeRef.current = null;
+      // Defer slightly so terminal output settles
+      setTimeout(() => {
+        if (!isAgentRunningRef.current && !isSummarizingRef.current) {
+          handleSummarize("moderate", stashed, true);
+        }
+      }, 1000);
+    }
+  }, [isAgentRunning]);
 
   // Build agent thread text for context display
   const agentContextText = React.useMemo(() => {
@@ -250,29 +271,57 @@ const ContextBar: React.FC<ContextBarProps> = ({
           ? terminalText + "\n\n--- Agent Activity ---\n" + agentContextText
           : terminalText);
 
-        setContextLength(fullContext.length);
-
-        // Calculate usage percent
-        const percent = (fullContext.length / maxContext) * 100;
+        // Calculate usage percent from raw context (for auto-summarize trigger)
+        const rawPercent = (fullContext.length / maxContext) * 100;
 
         // Auto-summarize at 90% (use refs to avoid stale closure reads)
-        if (percent > 90 && !isSummarizingRef.current && !isSummarizedRef.current) {
-          handleSummarize("moderate", fullContext);
+        // For fresh context: check raw percent. For already-summarized: check effective context.
+        const shouldAutoSummarize = !isSummarizingRef.current && (
+          (!isSummarizedRef.current && rawPercent > 90) ||
+          (isSummarizedRef.current && session?.contextSummary && (() => {
+            const newOutput = terminalText.trim();
+            const effectiveLen = newOutput
+              ? session.contextSummary!.length + newOutput.length + 40 // 40 ≈ separator text
+              : session.contextSummary!.length;
+            return (effectiveLen / maxContext) * 100 > 90;
+          })())
+        );
+        if (shouldAutoSummarize) {
+          // Build the text to summarize: for re-summarize, include summary + new output
+          const textForSummarize = isSummarizedRef.current && session?.contextSummary
+            ? session.contextSummary + "\n\n" + terminalText.trim()
+            : fullContext;
+
+          if (isAgentRunningRef.current) {
+            pendingSummarizeRef.current = textForSummarize;
+          } else {
+            const lastLines = terminalText.split("\n").slice(-5).join("\n");
+            const termState = classifyTerminalOutput(lastLines);
+            if (termState === "idle") {
+              handleSummarize("moderate", textForSummarize, true);
+            } else {
+              pendingSummarizeRef.current = textForSummarize;
+            }
+          }
         }
 
-        // Update display text: summary + new output, or raw context
+        // Update display text and effective context length
         if (!isSummarizedRef.current) {
           setContextText(fullContext);
           contextTextRef.current = fullContext;
+          setContextLength(fullContext.length);
         } else if (session?.contextSummary) {
-          const newOutput = session.contextSummarySourceLength
-            ? fullContext.slice(session.contextSummarySourceLength).trim()
-            : "";
-          setContextText(
-            newOutput
-              ? session.contextSummary + "\n\n--- New Output Since Summary ---\n" + newOutput
-              : session.contextSummary,
-          );
+          // After summarization, terminal history was cleared. fullContext is only new output.
+          // Combine summary + any new output since the clear.
+          const newOutput = terminalText.trim();
+          const effectiveContext = newOutput
+            ? session.contextSummary + "\n\n--- New Output Since Summary ---\n" + newOutput
+            : session.contextSummary;
+          setContextText(effectiveContext);
+          contextTextRef.current = effectiveContext;
+          setContextLength(effectiveContext.length);
+        } else {
+          setContextLength(fullContext.length);
         }
       }
     };
@@ -283,10 +332,18 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
   const handleOpenContextModal = () => setShowContextModal(true);
 
-  const handleSummarize = async (level: "brief" | "moderate" | "detailed", freshContext?: string) => {
+  const handleSummarize = async (level: "brief" | "moderate" | "detailed", freshContext?: string, auto?: boolean) => {
     if (isSummarizingRef.current) return;
     isSummarizingRef.current = true;
     setIsSummarizing(true);
+
+    // For auto-summarize: claim the agent panel so user prompts queue
+    if (auto) {
+      setIsAgentRunning(true);
+      setIsOverlayVisible(true);
+      setAgentThread((prev) => [...prev, { step: "summarizing", output: "Summarizing context..." }]);
+    }
+
     try {
       // Use fresh context passed from poll, or fall back to ref (avoids stale closure)
       const textToSummarize = freshContext || contextTextRef.current || "";
@@ -297,41 +354,66 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
       // Update local view
       setContextText(summary);
-      setIsSummarized(true);
       isSummarizedRef.current = true;
 
-      // Persist to session
+      // Persist summary to session — drop old raw context since info is now in the summary.
+      // New terminal output will be appended naturally going forward.
       updateSession(sessionId, {
         contextSummary: summary,
-        contextSummarySourceLength: textToSummarize.length,
+        contextSummarySourceLength: 0, // Reset so all future output is treated as "new"
       });
+
+      // Clear old terminal history buffer so raw context doesn't keep accumulating
+      if (window.electron) {
+        await window.electron.ipcRenderer.invoke(IPC.TERMINAL_CLEAR_HISTORY, sessionId);
+      }
+
+      // Compute resulting context percent for the history entry
+      const resultPercent = Math.round((summary.length / maxContext) * 100);
+
+      if (auto) {
+        // Replace the "summarizing" step with the completed result
+        setAgentThread((prev) => {
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].step === "summarizing") {
+              updated[i] = { step: "summarized", output: `Context auto-summarized to ${resultPercent}%` };
+              return updated;
+            }
+          }
+          return [...updated, { step: "summarized", output: `Context auto-summarized to ${resultPercent}%` }];
+        });
+        // Show toast
+        setShowSummarizeToast(true);
+        setTimeout(() => setShowSummarizeToast(false), 2000);
+      }
     } catch (e) {
       console.error("Summarization failed", e);
+      if (auto) {
+        // Replace the "summarizing" step with an error
+        setAgentThread((prev) => {
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].step === "summarizing") {
+              updated[i] = { step: "error", output: `Auto-summarize failed: ${(e as Error).message || "unknown error"}` };
+              return updated;
+            }
+          }
+          return updated;
+        });
+      }
     } finally {
       isSummarizingRef.current = false;
       setIsSummarizing(false);
+      if (auto) {
+        setIsAgentRunning(false);
+      }
     }
   };
 
-  const handleResetContext = async () => {
-    updateSession(sessionId, {
-      contextSummary: undefined,
-      contextSummarySourceLength: undefined,
-    });
-    setIsSummarized(false);
-    isSummarizedRef.current = false;
-    if (window.electron) {
-      const history = await window.electron.ipcRenderer.invoke(
-        "terminal.getHistory",
-        sessionId,
-      );
-      const text = stripAnsi(history);
-      setContextText(text);
-      contextTextRef.current = text;
-    }
-  };
 
   const handleClearContext = async () => {
+    pendingSummarizeRef.current = null;
     // Clear terminal history
     if (window.electron) {
       await window.electron.ipcRenderer.invoke(
@@ -346,7 +428,6 @@ const ContextBar: React.FC<ContextBarProps> = ({
       contextSummary: undefined,
       contextSummarySourceLength: undefined,
     });
-    setIsSummarized(false);
     isSummarizedRef.current = false;
     setShowClearConfirm(false);
 
@@ -373,6 +454,30 @@ const ContextBar: React.FC<ContextBarProps> = ({
     Math.round((contextLength / maxContext) * 100),
   );
 
+  /** Send `cd <dir>` to the terminal and refresh CWD. */
+  const cdToDirectory = async (selected: string) => {
+    if (!sessionId) return;
+    // Check if terminal has a running process — if so, Ctrl+C first
+    try {
+      const history = await window.electron?.ipcRenderer?.getHistory?.(sessionId);
+      const lastLines = (history || "").split("\n").slice(-5).join("\n");
+      const state = classifyTerminalOutput(lastLines);
+      if (state !== "idle") {
+        window.electron?.ipcRenderer?.send?.("terminal.write", { id: sessionId, data: "\x03" });
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    } catch { /* proceed with cd anyway */ }
+
+    const clearChar = isWindows() ? "\x1b" : "\x15";
+    window.electron?.ipcRenderer?.send?.("terminal.write", { id: sessionId, data: clearChar });
+    if (isWindows()) await new Promise((r) => setTimeout(r, 50));
+    window.electron?.ipcRenderer?.send?.("terminal.write", {
+      id: sessionId,
+      data: `cd ${JSON.stringify(selected)}\r`,
+    });
+    setTimeout(() => refreshCwd(sessionId), 500);
+  };
+
   return (
     <div
       data-tutorial="context-bar"
@@ -393,42 +498,14 @@ const ContextBar: React.FC<ContextBarProps> = ({
           className="flex items-center gap-1.5 overflow-hidden cursor-pointer group/path"
           title={`Current directory: ${cwd}\nClick to change`}
           onClick={async () => {
-            if (!window.electron?.ipcRenderer?.selectFolder) return;
-            const selected =
-              await window.electron.ipcRenderer.selectFolder(cwd);
-            if (selected && sessionId) {
-              // Check if terminal has a running process — if so, Ctrl+C first
-              try {
-                const history = await window.electron.ipcRenderer.getHistory(sessionId);
-                const lastLines = (history || "").split("\n").slice(-5).join("\n");
-                const state = classifyTerminalOutput(lastLines);
-                if (state !== "idle") {
-                  // Send Ctrl+C to interrupt the running process
-                  window.electron.ipcRenderer.send("terminal.write", {
-                    id: sessionId,
-                    data: "\x03",
-                  });
-                  // Wait for the process to exit and shell prompt to appear
-                  await new Promise((r) => setTimeout(r, 500));
-                }
-              } catch { /* proceed with cd anyway */ }
-
-              // Clear current input line then cd into the selected directory
-              const clearChar = isWindows() ? "\x1b" : "\x15"; // Esc for Win, Ctrl+U for Unix
-              window.electron.ipcRenderer.send("terminal.write", {
-                id: sessionId,
-                data: clearChar,
-              });
-              // Delay on Windows so PSReadLine processes Esc as standalone keypress
-              if (isWindows()) await new Promise((r) => setTimeout(r, 50));
-              window.electron.ipcRenderer.send("terminal.write", {
-                id: sessionId,
-                data: `cd ${JSON.stringify(selected)}\r`,
-              });
-
-              // Refresh CWD after cd completes (wait for shell to process)
-              setTimeout(() => refreshCwd(sessionId), 500);
+            // Try native folder dialog first (Electron)
+            const selected = await window.electron?.ipcRenderer?.selectFolder?.(cwd) ?? null;
+            if (!selected && !isElectronApp()) {
+              // Web mode — native dialog not available, show folder picker modal
+              setShowFolderPicker(true);
+              return;
             }
+            if (selected) cdToDirectory(selected);
           }}
         >
           <Folder className="w-3 h-3 opacity-60 group-hover/path:opacity-100 transition-opacity" />
@@ -501,6 +578,43 @@ const ContextBar: React.FC<ContextBarProps> = ({
             </div>,
             document.body,
           )}
+
+        {/* Auto-summarize toast — floats up from context ring */}
+        <AnimatePresence>
+          {showSummarizeToast &&
+            createPortal(
+              <motion.div
+                key="summarize-toast"
+                initial={{ opacity: 0, y: 0 }}
+                animate={{ opacity: 1, y: -4 }}
+                exit={{ opacity: 0, y: -16 }}
+                transition={{ duration: 0.35, ease: "easeOut" }}
+                className="fixed z-[999] pointer-events-none"
+                style={{
+                  ...(ctxRingRef.current
+                    ? (() => {
+                      const rect = ctxRingRef.current!.getBoundingClientRect();
+                      return {
+                        bottom: window.innerHeight - rect.top + 6,
+                        right: window.innerWidth - rect.right - rect.width / 2,
+                        transform: "translateX(50%)",
+                      };
+                    })()
+                    : {}),
+                }}
+              >
+                <div
+                  className={`px-2.5 py-1 rounded-full text-[10px] whitespace-nowrap shadow-lg ${theme === "light"
+                    ? "bg-purple-100 text-purple-700 border border-purple-200"
+                    : "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                    }`}
+                >
+                  Context auto-summarized
+                </div>
+              </motion.div>,
+              document.body,
+            )}
+        </AnimatePresence>
 
         <div className="h-3 w-px bg-current opacity-20" />
         </>
@@ -753,18 +867,6 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   )}
                   <div className="flex-1" />
                   <button
-                    onClick={handleResetContext}
-                    disabled={!isSummarized}
-                    className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${!isSummarized
-                      ? "opacity-30 cursor-not-allowed border-white/5 text-gray-600"
-                      : theme === "light"
-                        ? "border-gray-200 hover:bg-gray-100 text-gray-500"
-                        : "border-white/10 hover:bg-white/5 text-gray-500"
-                      }`}
-                  >
-                    Reset to raw
-                  </button>
-                  <button
                     onClick={() => setShowClearConfirm(true)}
                     disabled={contextText.length < 100}
                     className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors flex items-center gap-1 ${contextText.length < 100
@@ -838,6 +940,16 @@ const ContextBar: React.FC<ContextBarProps> = ({
         </AnimatePresence>,
         document.body,
       )}
+
+      {/* Folder picker modal (web mode fallback) */}
+      <FolderPickerModal
+        show={showFolderPicker}
+        resolvedTheme={theme}
+        initialPath={cwd}
+        mode="directory"
+        onSelect={(dir) => cdToDirectory(dir)}
+        onClose={() => setShowFolderPicker(false)}
+      />
     </div>
   );
 };

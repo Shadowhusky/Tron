@@ -47,6 +47,7 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
 
 const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
+  const resizeMaskRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
@@ -205,6 +206,18 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           return;
         }
       }
+      // Fallback: server-side clipboard read (web mode — clipboardData may be empty)
+      try {
+        if (window.electron?.ipcRenderer?.readClipboardImage) {
+          const base64 = await window.electron.ipcRenderer.readClipboardImage();
+          if (base64) {
+            const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+            const blob = new Blob([bytes], { type: "image/png" });
+            await saveFileAndType(blob, `paste-${Date.now()}.png`);
+            return;
+          }
+        }
+      } catch { /* IPC not available */ }
       // Text paste — let xterm handle it (default behavior)
     };
     el.addEventListener("paste", onPaste);
@@ -213,6 +226,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // During reconnect settling, ResizeObserver resizes are deferred to avoid
     // sending premature SIGWINCH while the bounce-resize is in progress.
     let reconnectSettled = !reconnecting;
+    let prevCols = 0;
+    let prevRows = 0;
+    let resizeMaskTimer: ReturnType<typeof setTimeout> | undefined;
     const performResize = () => {
       if (!fitAddonRef.current || !xtermRef.current) return;
       if (!reconnectSettled) return; // defer until bounce completes
@@ -236,6 +252,22 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           }
         }
         const { cols, rows } = xtermRef.current;
+
+        // Brief mask when dimensions change significantly (e.g. split).
+        // Hides TUI redraw flicker (gap between fit() and SIGWINCH redraw).
+        const colDelta = Math.abs(cols - prevCols);
+        const rowDelta = Math.abs(rows - prevRows);
+        if (prevCols > 0 && (colDelta > 3 || rowDelta > 3)) {
+          const mask = resizeMaskRef.current;
+          if (mask) {
+            mask.style.opacity = "1";
+            clearTimeout(resizeMaskTimer);
+            resizeMaskTimer = setTimeout(() => { mask.style.opacity = "0"; }, 150);
+          }
+        }
+        prevCols = cols;
+        prevRows = rows;
+
         if (
           window.electron &&
           Number.isInteger(cols) &&
@@ -485,6 +517,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     return () => {
       mounted = false;
       clearTimeout(resizeTimer);
+      clearTimeout(resizeMaskTimer);
       window.removeEventListener("tron:splitDragStart", onSplitDragStart);
       window.removeEventListener("tron:splitDragEnd", onSplitDragEnd);
       unregisterScreenBufferReader(sessionId);
@@ -542,6 +575,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         ref={terminalRef}
         className={`absolute inset-0${loading ? " transition-opacity duration-300 ease-in" : ""}`}
         style={{ opacity: loading ? 0 : 1 }}
+      />
+      {/* Resize mask — briefly covers terminal during significant resizes (splits)
+          to hide TUI redraw flicker. Controlled imperatively from performResize(). */}
+      <div
+        ref={resizeMaskRef}
+        className="absolute inset-0 z-[5] pointer-events-none"
+        style={{ opacity: 0, backgroundColor: theme?.background, transition: "opacity 120ms ease-out" }}
       />
       {/* Loading overlay — retro bash-style spinner */}
       <div

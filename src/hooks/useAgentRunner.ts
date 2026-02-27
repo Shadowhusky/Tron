@@ -520,11 +520,11 @@ System Paths:
           aiService.getConfig().contextWindow ||
           16000;
 
-        if (session?.contextSummary && session.contextSummarySourceLength) {
-          const newContent = sessionHistory.slice(
-            session.contextSummarySourceLength,
-          );
-          sessionHistory = `[PREVIOUS CONTEXT SUMMARIZED]\n${session.contextSummary}\n\n[RECENT TERMINAL OUTPUT]\n${newContent}`;
+        if (session?.contextSummary) {
+          // After summarization, terminal history was cleared — sessionHistory is only new output.
+          sessionHistory = sessionHistory.trim()
+            ? `[PREVIOUS CONTEXT SUMMARIZED]\n${session.contextSummary}\n\n[RECENT TERMINAL OUTPUT]\n${sessionHistory}`
+            : `[PREVIOUS CONTEXT SUMMARIZED]\n${session.contextSummary}`;
         } else if (sessionHistory.length > contextLimit) {
           const summary = await aiService.summarizeContext(
             sessionHistory.slice(-contextLimit),

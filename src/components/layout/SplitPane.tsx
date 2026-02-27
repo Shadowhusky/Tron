@@ -147,7 +147,7 @@ const SplitChild: React.FC<{
       {index < totalChildren - 1 && (
         <div
           onMouseDown={(e) => onMouseDown(e, index)}
-          className={`shrink-0 z-20 group transition-colors ${
+          className={`shrink-0 z-20 relative group transition-colors ${
             isHorizontal ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
           } ${
             isDragging

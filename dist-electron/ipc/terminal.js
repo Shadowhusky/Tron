@@ -235,6 +235,25 @@ function clearAllPersistedHistory() {
 const displayBuffers = new Map();
 const execActiveSessions = new Set(); // Sessions currently running execInTerminal
 /**
+ * Check if the buffer tail might contain a partial sentinel pattern that would
+ * be completed by more incoming data. This prevents the 8ms flush timer from
+ * splitting the sentinel across two flushes (e.g. when the command echo wraps
+ * in a narrow terminal and the PTY sends data in multiple chunks).
+ */
+function mightHavePartialSentinel(data) {
+    const tail = data.slice(-50);
+    // Check for partial "; printf" or "__TRON_DONE_" at the end
+    const markers = ["__TRON_DONE_", "; printf"];
+    for (const marker of markers) {
+        // Start from 4 chars to avoid false positives on very short matches
+        for (let len = 4; len <= marker.length; len++) {
+            if (tail.endsWith(marker.slice(0, len)))
+                return true;
+        }
+    }
+    return false;
+}
+/**
  * If the session is currently running execInTerminal, buffer data and strip sentinels.
  * Returns true if data was buffered (caller should NOT send it directly).
  */
@@ -243,19 +262,27 @@ function bufferIfExecActive(sessionId, data, send) {
         return false;
     let buf = displayBuffers.get(sessionId);
     if (!buf) {
-        buf = { data: "", timer: null, send };
+        buf = { data: "", timer: null, send, holdbacks: 0 };
         displayBuffers.set(sessionId, buf);
     }
     buf.data += data;
     if (buf.timer)
         clearTimeout(buf.timer);
-    buf.timer = setTimeout(() => {
+    const flush = () => {
+        // If buffer tail looks like a partial sentinel, hold back for more data (max 3 times)
+        if (buf.holdbacks < 3 && mightHavePartialSentinel(buf.data)) {
+            buf.holdbacks++;
+            buf.timer = setTimeout(flush, 25);
+            return;
+        }
         const cleaned = stripSentinels(buf.data);
         buf.data = "";
         buf.timer = null;
+        buf.holdbacks = 0;
         if (cleaned)
             buf.send(cleaned);
-    }, 8);
+    };
+    buf.timer = setTimeout(flush, 8);
     return true;
 }
 /** Flush remaining display buffer data for a session. */
