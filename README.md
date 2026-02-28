@@ -57,7 +57,7 @@ https://github.com/user-attachments/assets/3f83279e-21ea-4b1e-b5a2-786d14d637e5
 
 | Web Server |
 |:---:|
-| ![Web Server](screenshots/demo-web-server.png) |
+| ![Web Server](screenshots/demo-web-server.gif) |
 
 ## Getting Started
 
