@@ -10,6 +10,10 @@
   <a href="https://github.com/Shadowhusky/Tron/releases"><img src="https://img.shields.io/github/v/release/Shadowhusky/Tron?style=flat&color=blue" alt="Release" /></a>
 </p>
 
+<p align="center">
+  <a href="https://tronai.dev"><strong>Website</strong></a> · <a href="https://github.com/Shadowhusky/Tron/releases">Download</a> · <a href="https://discord.gg/EeTCS7A6">Discord</a>
+</p>
+
 ---
 
 <p align="center">
@@ -50,6 +54,10 @@ https://github.com/user-attachments/assets/3f83279e-21ea-4b1e-b5a2-786d14d637e5
 | Themes | SSH |
 |:---:|:---:|
 | ![Themes](screenshots/demo-themes.gif) | ![SSH](screenshots/demo-ssh.gif) |
+
+| Web Server |
+|:---:|
+| ![Web Server](screenshots/demo-web-server.png) |
 
 ## Getting Started
 
