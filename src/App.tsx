@@ -40,27 +40,41 @@ function useVisualViewportHeight() {
     let raf = 0;
     const update = () => {
       // Coalesce rapid events (keyboard animation fires per-pixel) into a
-      // single rAF to avoid CSS custom-property churn and forced scrollTo.
+      // single rAF to avoid CSS custom-property churn.
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
         const h = vv.height;
-        // Skip no-op updates (same height)
-        if (h === lastH) return;
-        lastH = h;
-        document.documentElement.style.setProperty("--app-height", `${h}px`);
-        // On iOS the page may scroll behind the keyboard — pin it back
-        window.scrollTo(0, 0);
+        if (h !== lastH) {
+          lastH = h;
+          document.documentElement.style.setProperty("--app-height", `${h}px`);
+        }
+        // Always pin scroll to 0,0 — the browser may scroll the page to keep
+        // the focused input visible when the keyboard opens. This must run
+        // even when height hasn't changed (scroll-only events).
+        if (window.scrollY !== 0 || window.scrollX !== 0) {
+          window.scrollTo(0, 0);
+        }
       });
+    };
+
+    // Also listen for window scroll events — catches focus-triggered scrolls
+    // that happen outside of visualViewport resize/scroll events.
+    const pinScroll = () => {
+      if (window.scrollY !== 0 || window.scrollX !== 0) {
+        window.scrollTo(0, 0);
+      }
     };
 
     update();
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
+    window.addEventListener("scroll", pinScroll);
     return () => {
       if (raf) cancelAnimationFrame(raf);
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
+      window.removeEventListener("scroll", pinScroll);
       document.documentElement.style.removeProperty("--app-height");
     };
   }, []);
@@ -102,6 +116,7 @@ const AppContent = () => {
   const [updateReady, setUpdateReady] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateVersion, setUpdateVersion] = useState("");
+  const updateDismissedRef = useRef(false);
 
   // Generic confirm modal — replaces window.confirm for styled modals
   const [confirmModal, setConfirmModal] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
@@ -184,13 +199,20 @@ const AppContent = () => {
     return cleanup;
   }, []);
 
+  // Reset dismissed flag when user manually checks for updates (from Settings)
+  useEffect(() => {
+    const reset = () => { updateDismissedRef.current = false; };
+    window.addEventListener("tron:manual-update-check", reset);
+    return () => window.removeEventListener("tron:manual-update-check", reset);
+  }, []);
+
   // Listen for auto-updater status changes
   useEffect(() => {
     if (!window.electron?.ipcRenderer?.on) return;
     const cleanup = window.electron.ipcRenderer.on(
       IPC.UPDATER_STATUS,
       (data: any) => {
-        if (data.updateInfo?.version) {
+        if (data.updateInfo?.version && !updateDismissedRef.current) {
           if (data.status === "downloaded") {
             setUpdateVersion(data.updateInfo.version);
             setUpdateReady(true);
@@ -424,11 +446,11 @@ const AppContent = () => {
       <Modal
         show={updateReady}
         resolvedTheme={resolvedTheme}
-        onClose={() => setUpdateReady(false)}
+        onClose={() => { updateDismissedRef.current = true; setUpdateReady(false); }}
         title="Update Ready"
         description={`A new version (v${updateVersion}) has been downloaded and is ready to install.`}
         buttons={[
-          { label: "Later", type: "ghost", onClick: () => setUpdateReady(false) },
+          { label: "Later", type: "ghost", onClick: () => { updateDismissedRef.current = true; setUpdateReady(false); } },
           { label: "Relaunch Now", type: "primary", onClick: () => window.electron?.ipcRenderer?.quitAndInstall?.() },
         ]}
       />
@@ -437,11 +459,11 @@ const AppContent = () => {
       <Modal
         show={updateAvailable && !updateReady}
         resolvedTheme={resolvedTheme}
-        onClose={() => setUpdateAvailable(false)}
+        onClose={() => { updateDismissedRef.current = true; setUpdateAvailable(false); }}
         title="Update Available"
         description={`A new version (v${updateVersion}) is available. Go to Settings to download it.`}
         buttons={[
-          { label: "Later", type: "ghost", onClick: () => setUpdateAvailable(false) },
+          { label: "Later", type: "ghost", onClick: () => { updateDismissedRef.current = true; setUpdateAvailable(false); } },
           { label: "Download", type: "primary", onClick: () => {
             setUpdateAvailable(false);
             window.electron?.ipcRenderer?.downloadUpdate?.();

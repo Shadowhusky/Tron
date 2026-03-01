@@ -47,7 +47,7 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
 
 const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const resizeMaskRef = useRef<HTMLDivElement>(null);
+
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
@@ -220,18 +220,40 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       } catch { /* IPC not available */ }
       // Text paste — let xterm handle it (default behavior)
     };
-    el.addEventListener("paste", onPaste);
+    // Use capture phase so we intercept images BEFORE xterm's internal paste
+    // handler (which may stopPropagation, preventing bubbling to this container).
+    el.addEventListener("paste", onPaste, true);
+
+    // Prevent scroll-to-top on click: when the user clicks the terminal,
+    // xterm focuses its helper textarea. The browser may auto-scroll
+    // .xterm-viewport to bring the textarea into view, jumping to the top
+    // of the scrollback buffer. Save scrollTop on mousedown and restore it
+    // on the next frame if it jumped significantly.
+    const xtermViewport = el.querySelector(".xterm-viewport") as HTMLElement | null;
+    let preClickScrollTop = -1;
+    const onMouseDown = () => {
+      if (xtermViewport) preClickScrollTop = xtermViewport.scrollTop;
+      requestAnimationFrame(() => {
+        if (xtermViewport && preClickScrollTop >= 0 &&
+            Math.abs(xtermViewport.scrollTop - preClickScrollTop) > 50) {
+          xtermViewport.scrollTop = preClickScrollTop;
+        }
+        preClickScrollTop = -1;
+      });
+    };
+    el.addEventListener("mousedown", onMouseDown);
 
     // Resize Logic — syncs xterm dimensions to backend PTY.
     // During reconnect settling, ResizeObserver resizes are deferred to avoid
     // sending premature SIGWINCH while the bounce-resize is in progress.
     let reconnectSettled = !reconnecting;
-    let prevCols = 0;
-    let prevRows = 0;
-    let resizeMaskTimer: ReturnType<typeof setTimeout> | undefined;
+    // Declared here (before performResize) so it can be checked during resize.
+    // Set true while the virtual keyboard is opening/closing on mobile.
+    let viewportResizing = false;
     const performResize = () => {
       if (!fitAddonRef.current || !xtermRef.current) return;
       if (!reconnectSettled) return; // defer until bounce completes
+      if (viewportResizing) return; // skip fit() during keyboard open/close (mobile)
 
       try {
         // Save scroll state BEFORE fit() — fit() recalculates rows and can
@@ -252,21 +274,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           }
         }
         const { cols, rows } = xtermRef.current;
-
-        // Brief mask when dimensions change significantly (e.g. split).
-        // Hides TUI redraw flicker (gap between fit() and SIGWINCH redraw).
-        const colDelta = Math.abs(cols - prevCols);
-        const rowDelta = Math.abs(rows - prevRows);
-        if (prevCols > 0 && (colDelta > 3 || rowDelta > 3)) {
-          const mask = resizeMaskRef.current;
-          if (mask) {
-            mask.style.opacity = "1";
-            clearTimeout(resizeMaskTimer);
-            resizeMaskTimer = setTimeout(() => { mask.style.opacity = "0"; }, 150);
-          }
-        }
-        prevCols = cols;
-        prevRows = rows;
 
         if (
           window.electron &&
@@ -294,7 +301,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     const debouncedResize = () => {
       if (splitDragging) return; // defer fit() during split drag
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(performResize, 100);
+      // Longer debounce on mobile — fit() is expensive and keyboard transitions
+      // generate many resize events. 250ms prevents layout thrashing.
+      resizeTimer = setTimeout(performResize, isTouch ? 250 : 100);
     };
 
     // Defer fit() during SplitPane drag to eliminate ALL xterm redraws
@@ -431,16 +440,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     let touchAccum = 0;
     const LINE_HEIGHT = term.options.fontSize ? term.options.fontSize * 1.2 : 17;
 
-    // Suppress touch-scroll while the virtual keyboard is opening/closing.
-    // The viewport resize generates touch events with large dy deltas that
-    // would otherwise scroll the terminal to the top of history.
-    let viewportResizing = false;
+    // Suppress touch-scroll AND fit()/resize while the virtual keyboard is
+    // opening/closing. The viewport resize generates touch events with large
+    // dy deltas that would otherwise scroll the terminal to the top of history.
+    // Additionally, fit() during keyboard animation causes expensive forced
+    // synchronous layout on every frame, making input feel laggy on mobile.
     let viewportResizeTimer: ReturnType<typeof setTimeout> | undefined;
-    const vv = isTouchDevice() ? window.visualViewport : null;
+    const vv = isTouch ? window.visualViewport : null;
     const onViewportResize = () => {
       viewportResizing = true;
       clearTimeout(viewportResizeTimer);
-      viewportResizeTimer = setTimeout(() => { viewportResizing = false; }, 300);
+      viewportResizeTimer = setTimeout(() => {
+        viewportResizing = false;
+        // One clean resize after keyboard settles
+        performResize();
+        // Pin scroll to bottom so content stays visible after keyboard transition
+        const viewport = el.querySelector(".xterm-viewport");
+        if (viewport) {
+          requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
+        }
+      }, 500);
     };
     vv?.addEventListener("resize", onViewportResize);
 
@@ -517,7 +536,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     return () => {
       mounted = false;
       clearTimeout(resizeTimer);
-      clearTimeout(resizeMaskTimer);
       window.removeEventListener("tron:splitDragStart", onSplitDragStart);
       window.removeEventListener("tron:splitDragEnd", onSplitDragEnd);
       unregisterScreenBufferReader(sessionId);
@@ -530,9 +548,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       el.removeEventListener("touchmove", onTouchMove);
       vv?.removeEventListener("resize", onViewportResize);
       clearTimeout(viewportResizeTimer);
+      el.removeEventListener("mousedown", onMouseDown);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
-      el.removeEventListener("paste", onPaste);
+      el.removeEventListener("paste", onPaste, true);
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
@@ -570,18 +589,20 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   const theme = THEMES[resolvedTheme] || THEMES.dark;
 
   return (
-    <div className={`relative overflow-hidden ${className || ""}`} style={{ contain: "strict" }}>
+    <div
+      className={`relative overflow-hidden ${className || ""}`}
+      style={{
+        contain: "strict",
+        // Match terminal theme background so canvas clear during fit() resize
+        // is invisible — no overlay/mask needed. The container background fills
+        // the gap between canvas clear and redraw.
+        backgroundColor: theme?.background,
+      }}
+    >
       <div
         ref={terminalRef}
         className={`absolute inset-0${loading ? " transition-opacity duration-300 ease-in" : ""}`}
         style={{ opacity: loading ? 0 : 1 }}
-      />
-      {/* Resize mask — briefly covers terminal during significant resizes (splits)
-          to hide TUI redraw flicker. Controlled imperatively from performResize(). */}
-      <div
-        ref={resizeMaskRef}
-        className="absolute inset-0 z-[5] pointer-events-none"
-        style={{ opacity: 0, backgroundColor: theme?.background, transition: "opacity 120ms ease-out" }}
       />
       {/* Loading overlay — retro bash-style spinner */}
       <div

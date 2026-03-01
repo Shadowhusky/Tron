@@ -8,6 +8,7 @@ import { useLayout } from "../../../contexts/LayoutContext";
 import { useModelsWithCaps, useInvalidateModels, useInvalidateProviderModels } from "../../../hooks/useModels";
 import { useConfig, DEFAULT_HOTKEYS } from "../../../contexts/ConfigContext";
 import { formatHotkey, eventToCombo } from "../../../hooks/useHotkey";
+import { isElectronApp } from "../../../utils/platform";
 import {
   Gem,
   Laptop,
@@ -74,9 +75,9 @@ const NAV_SECTIONS_BASE = [
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 ] as const;
 
-// Web Server + Updates are Electron-only
+// Web Server + Updates are Electron-only (window.electron exists in web mode via WS bridge shim)
 const ELECTRON_ONLY_SECTIONS = new Set(["web-server", "updates"]);
-const NAV_SECTIONS = window.electron
+const NAV_SECTIONS = isElectronApp()
   ? NAV_SECTIONS_BASE
   : NAV_SECTIONS_BASE.filter((s) => !ELECTRON_ONLY_SECTIONS.has(s.id));
 
@@ -553,6 +554,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
   const handleCheck = () => {
     setChecking(true);
     setLastError(null);
+    window.dispatchEvent(new Event("tron:manual-update-check"));
     ipc?.checkForUpdates?.().catch(() => setChecking(false));
   };
 
@@ -1649,7 +1651,7 @@ const SettingsPane = () => {
             )}
 
             {/* Updates (Electron only) */}
-            {activeSection === "updates" && window.electron && (
+            {activeSection === "updates" && isElectronApp() && (
               <UpdatesSection
                 cardClass={cardClass}
                 t={t}

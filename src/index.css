@@ -15,6 +15,14 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html {
+  /* Prevent the browser from scrolling the viewport when focusing inputs
+     (mobile keyboard opens → browser scrolls page up to keep input visible).
+     overflow:hidden on body alone is not enough — browsers can scroll <html>. */
+  overflow: hidden;
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
