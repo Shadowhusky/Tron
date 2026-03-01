@@ -2467,7 +2467,9 @@ ${agentPrompt}
           // (user may have launched a TUI manually; terminalBusy would be false)
           if (!terminalBusy) {
             const pfOutput = await readTerminal(30);
-            const tui = detectTuiProgram(pfOutput || "");
+            const pfState = classifyTerminalOutput(pfOutput || "");
+            // Skip TUI detection if terminal is idle — shell prompt means no TUI running
+            const tui = pfState !== "idle" ? detectTuiProgram(pfOutput || "") : null;
             if (tui) {
               onUpdate("executed", `Exiting TUI "${tui}"…`, action);
               const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
@@ -2866,9 +2868,10 @@ ${agentPrompt}
           );
 
           // Detect terminal state and TUI programs
-          // Always run TUI detection — some TUI prompts (e.g. ">") look like shell prompts
+          // Only run TUI detection when terminal is NOT idle — stale buffer content
+          // (box-drawing chars, old TUI output) causes false positives when shell prompt is visible
           const termState = classifyTerminalOutput(output || "");
-          const tuiProgram = detectTuiProgram(output || "");
+          const tuiProgram = termState !== "idle" ? detectTuiProgram(output || "") : null;
 
           if (tuiProgram) {
             // Full-screen TUI program detected — inform agent
@@ -3287,7 +3290,9 @@ ${agentPrompt}
         // Pre-flight TUI check — catch TUI programs started outside agent loop
         if (!terminalBusy) {
           const pfOutput = await readTerminal(30);
-          const tui = detectTuiProgram(pfOutput || "");
+          const pfState = classifyTerminalOutput(pfOutput || "");
+          // Skip TUI detection if terminal is idle — shell prompt means no TUI running
+          const tui = pfState !== "idle" ? detectTuiProgram(pfOutput || "") : null;
           if (tui) {
             onUpdate("executed", `Exiting TUI "${tui}"…`, action);
             const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);

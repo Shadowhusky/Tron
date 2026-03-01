@@ -538,9 +538,15 @@ System Paths:
         // the interactions we know exist at this point — the current prompt was
         // just added but may not be reflected in `session` yet.
         const priorInteractions = (session?.interactions || [])
-          .slice(-10)
-          .map((i) => `${i.role === "user" ? "User" : "Agent"}: ${i.content}`)
-          .join("\n\n");
+          .slice(-6)
+          .map((i) => {
+            const role = i.role === "user" ? "User" : "Agent";
+            const text = typeof i.content === "string" ? i.content : "";
+            // Truncate to first 80 chars to prevent the model from re-executing old tasks
+            const summary = text.length > 80 ? text.slice(0, 80) + "…" : text;
+            return `${role}: ${summary}`;
+          })
+          .join("\n");
 
         // Always include history section so the agent sees prior prompts + responses
         const interactionContext = priorInteractions
@@ -567,7 +573,7 @@ ${projectFiles ? `\n[PROJECT FILES]\n${projectFiles}\n` : ""}
 [TERMINAL OUTPUT]
 ${sessionHistory}
 ${interactionContext}
-[CURRENT TASK — focus ONLY on this]
+[CURRENT TASK — focus ONLY on this, ignore all prior tasks above]
 ${prompt}
 `;
         }

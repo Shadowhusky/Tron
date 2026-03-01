@@ -499,7 +499,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
-    if (isConnectPane || isElectronApp()) return;
+    if (isConnectPane) return;
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
@@ -875,44 +875,42 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className={`overflow-hidden border-t ${themeClass(resolvedTheme, {
-              dark: "border-white/5 bg-[#0e0e0e]",
-              modern: "border-white/6 bg-white/[0.03]",
-              light: "border-gray-200 bg-amber-50/50",
-            })}`}
+            className="overflow-hidden"
           >
-            <div className="flex flex-wrap items-center gap-2 px-3 py-1.5">
+            <div className={`flex flex-wrap items-center gap-1.5 px-3 py-1 ${themeClass(resolvedTheme, {
+              dark: "bg-[#0a0a0a]",
+              modern: "bg-[#060618]",
+              light: "bg-gray-50",
+            })}`}>
               <span
-                className={`shrink-0 text-[10px] font-semibold tracking-wider uppercase ${
-                  resolvedTheme === "light"
-                    ? "text-amber-600"
-                    : "text-amber-400/70"
-                }`}
+                className={`shrink-0 text-[10px] font-medium opacity-40`}
               >
-                Queue ({inputQueue.length})
+                queued
               </span>
               {inputQueue.map((item, i) => (
                 <div
                   key={i}
-                  className={`flex max-w-[200px] items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] ${
-                    resolvedTheme === "light"
-                      ? item.type === "agent"
-                        ? "border border-purple-200 bg-purple-100 text-purple-700"
-                        : "border border-gray-200 bg-gray-100 text-gray-700"
-                      : item.type === "agent"
-                        ? "border border-purple-500/20 bg-purple-500/10 text-purple-300"
-                        : "border border-white/10 bg-white/5 text-gray-400"
-                  }`}
+                  className={`flex max-w-[220px] items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] ${themeClass(
+                    resolvedTheme,
+                    {
+                      dark: "bg-white/[0.04] text-gray-400",
+                      modern: item.type === "agent"
+                        ? "bg-purple-500/8 text-purple-300/80"
+                        : "bg-white/[0.04] text-gray-400",
+                      light: item.type === "agent"
+                        ? "bg-purple-50 text-purple-600"
+                        : "bg-gray-100 text-gray-500",
+                    },
+                  )}`}
                 >
                   {item.type === "agent" ? (
-                    <Bot className="h-3 w-3 shrink-0 opacity-60" />
+                    <Bot className="h-2.5 w-2.5 shrink-0 opacity-50" />
                   ) : (
-                    <ChevronRight className="h-3 w-3 shrink-0 opacity-60" />
+                    <ChevronRight className="h-2.5 w-2.5 shrink-0 opacity-50" />
                   )}
                   <span
-                    className="cursor-pointer truncate hover:underline"
+                    className="cursor-pointer truncate opacity-80 hover:opacity-100"
                     onClick={() => {
-                      // Pop item from queue into SmartInput for editing
                       setInputQueue((prev) =>
                         prev.filter((_, idx) => idx !== i),
                       );
@@ -936,9 +934,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                         prev.filter((_, idx) => idx !== i),
                       )
                     }
-                    className="shrink-0 opacity-40 transition-opacity hover:opacity-100"
+                    className="shrink-0 opacity-30 transition-opacity hover:opacity-80"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-2.5 w-2.5" />
                   </button>
                 </div>
               ))}
