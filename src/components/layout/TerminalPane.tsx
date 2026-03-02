@@ -567,24 +567,52 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             }
           };
           // Try clipboard image first (saves to temp, types path into terminal)
-          try {
-            const base64 = await window.electron?.ipcRenderer?.readClipboardImage?.();
-            if (base64) {
-              const filePath = await window.electron?.ipcRenderer?.invoke(
-                "file.saveTempImage",
-                { base64, ext: "png" },
-              );
-              if (filePath) { sendToTerminal(filePath); return; }
-            }
-          } catch { /* no image or IPC unavailable */ }
-          // Fall back to text paste
-          if (navigator.clipboard?.readText) {
-            navigator.clipboard.readText().then(sendToTerminal).catch(() => {
-              window.electron?.ipcRenderer?.clipboardReadText?.().then(sendToTerminal).catch(() => {});
-            });
-          } else if (window.electron?.ipcRenderer?.clipboardReadText) {
-            window.electron.ipcRenderer.clipboardReadText().then(sendToTerminal).catch(() => {});
+          if (isElectronApp()) {
+            try {
+              const base64 = await window.electron?.ipcRenderer?.readClipboardImage?.();
+              if (base64) {
+                const filePath = await window.electron?.ipcRenderer?.invoke(
+                  "file.saveTempImage",
+                  { base64, ext: "png" },
+                );
+                if (filePath) { sendToTerminal(filePath); return; }
+              }
+            } catch { /* no image or IPC unavailable */ }
           }
+          // Try navigator.clipboard.readText() (works in user gesture context)
+          try {
+            if (navigator.clipboard?.readText) {
+              const text = await navigator.clipboard.readText();
+              if (text) { sendToTerminal(text); return; }
+            }
+          } catch { /* permission denied or not supported */ }
+          // Fallback: server-side clipboard (reads server clipboard, useful for local/desktop web)
+          try {
+            const text = await window.electron?.ipcRenderer?.clipboardReadText?.();
+            if (text) { sendToTerminal(text); return; }
+          } catch { /* IPC not available */ }
+          // Last resort for mobile: create a temporary textarea for native paste
+          const ta = document.createElement("textarea");
+          ta.style.cssText = "position:fixed;left:0;top:40%;width:80%;height:44px;z-index:99999;font-size:16px;padding:8px;border:2px solid #666;border-radius:8px;background:#222;color:#fff;margin:0 10%";
+          ta.placeholder = "Tap here and paste, then press Enter";
+          document.body.appendChild(ta);
+          ta.focus();
+          const cleanup = () => { ta.remove(); };
+          ta.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              sendToTerminal(ta.value);
+              cleanup();
+            }
+          });
+          // Auto-send on paste event
+          ta.addEventListener("paste", () => {
+            setTimeout(() => {
+              if (ta.value) { sendToTerminal(ta.value); cleanup(); }
+            }, 50);
+          });
+          // Remove after 10s if unused
+          setTimeout(cleanup, 10000);
         },
       },
       { separator: true as const } as const,

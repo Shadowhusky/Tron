@@ -250,10 +250,21 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // Declared here (before performResize) so it can be checked during resize.
     // Set true while the virtual keyboard is opening/closing on mobile.
     let viewportResizing = false;
+    // Track last container dimensions to skip no-op fit() calls that would
+    // trigger ResizeObserver → fit() → ResizeObserver feedback loops.
+    let lastContainerW = 0;
+    let lastContainerH = 0;
     const performResize = () => {
       if (!fitAddonRef.current || !xtermRef.current) return;
       if (!reconnectSettled) return; // defer until bounce completes
       if (viewportResizing) return; // skip fit() during keyboard open/close (mobile)
+
+      // Skip if container dimensions haven't changed (prevents resize loops)
+      const cw = el.clientWidth;
+      const ch = el.clientHeight;
+      if (cw === lastContainerW && ch === lastContainerH && lastContainerW > 0) return;
+      lastContainerW = cw;
+      lastContainerH = ch;
 
       try {
         // Save scroll state BEFORE fit() — fit() recalculates rows and can
@@ -343,8 +354,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           // Prefer saved history from loaded tabs (pendingHistory) over server
           // getHistory. In web mode, the fresh PTY outputs a shell prompt before
           // getHistory responds, making it non-empty and masking the saved content.
-          const effectiveHistory = pendingHistory || ((history && history.length > 0) ? history : undefined);
+          let effectiveHistory = pendingHistory || ((history && history.length > 0) ? history : undefined);
           const isReconnect = knownReconnect || !!effectiveHistory;
+
+          // On mobile, truncate history to reduce write time and layout thrashing.
+          // Scrollback is limited to 1000 lines anyway, so excess data is discarded.
+          if (effectiveHistory && isTouch && effectiveHistory.length > 20000) {
+            effectiveHistory = effectiveHistory.slice(-20000);
+          }
 
           if (isReconnect) {
             // Suppress outgoing onData → PTY during bounce to prevent DSR
@@ -449,6 +466,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     const vv = isTouch ? window.visualViewport : null;
     const onViewportResize = () => {
       viewportResizing = true;
+      // Reset dimension cache so the settle resize always runs
+      lastContainerW = 0;
+      lastContainerH = 0;
       clearTimeout(viewportResizeTimer);
       viewportResizeTimer = setTimeout(() => {
         viewportResizing = false;
