@@ -56,6 +56,9 @@ const sessionPushEvents = new Map<string, EventPusher>();
 const activeChildProcesses = new Set<ChildProcess>();
 // Sessions being cleaned up by grace-period expiry — onExit should preserve history files
 const cleanedUpSessions = new Set<string>();
+// Creation order for FIFO eviction when max sessions exceeded
+const sessionCreationOrder: string[] = [];
+const MAX_SESSIONS = 20;
 
 // Per-session display buffering — active during execInTerminal to strip sentinels cleanly
 const displayBuffers = new Map<string, { data: string; timer: ReturnType<typeof setTimeout> | null; pushEvent: EventPusher; holdbacks: number }>();
@@ -269,6 +272,8 @@ export function cleanupClientSessions(clientId: string) {
         sessions.delete(sessionId);
         sessionHistory.delete(sessionId);
         sessionPushEvents.delete(sessionId);
+        const idx = sessionCreationOrder.indexOf(sessionId);
+        if (idx !== -1) sessionCreationOrder.splice(idx, 1);
       }
       sessionOwners.delete(sessionId);
     }
@@ -292,6 +297,7 @@ export function cleanupAllServerSessions() {
   sessionHistory.clear();
   sessionOwners.clear();
   sessionPushEvents.clear();
+  sessionCreationOrder.length = 0;
 }
 
 export function sessionExists(sessionId: string): boolean {
@@ -327,6 +333,21 @@ export function createSession(
     const persisted = loadPersistedHistory(reconnectId);
     if (persisted) {
       sessionHistory.set(sessionId, persisted);
+    }
+  }
+
+  // Evict oldest sessions if at capacity (FIFO — first created, first killed)
+  while (sessions.size >= MAX_SESSIONS && sessionCreationOrder.length > 0) {
+    const oldest = sessionCreationOrder.shift()!;
+    const oldPty = sessions.get(oldest);
+    if (oldPty) {
+      persistSessionHistory(oldest);
+      cleanedUpSessions.add(oldest);
+      try { oldPty.kill(); } catch { /* already dead */ }
+      sessions.delete(oldest);
+      sessionHistory.delete(oldest);
+      sessionOwners.delete(oldest);
+      sessionPushEvents.delete(oldest);
     }
   }
 
@@ -368,6 +389,8 @@ export function createSession(
     sessionHistory.delete(sessionId);
     sessionOwners.delete(sessionId);
     sessionPushEvents.delete(sessionId);
+    const idx = sessionCreationOrder.indexOf(sessionId);
+    if (idx !== -1) sessionCreationOrder.splice(idx, 1);
     // Only delete history file on normal exit (user/process closed terminal).
     // When cleanup killed the PTY (grace period expiry), preserve the file for reconnect.
     if (!cleanedUpSessions.has(sessionId)) {
@@ -377,6 +400,7 @@ export function createSession(
   });
 
   sessions.set(sessionId, ptyProcess);
+  sessionCreationOrder.push(sessionId);
   return { sessionId, reconnected: false };
 }
 
@@ -398,6 +422,8 @@ export function closeSession(id: string) {
     sessionHistory.delete(id);
     sessionOwners.delete(id);
     removePersistedHistory(id);
+    const idx = sessionCreationOrder.indexOf(id);
+    if (idx !== -1) sessionCreationOrder.splice(idx, 1);
   }
 }
 

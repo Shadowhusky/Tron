@@ -87,7 +87,18 @@ On first launch, the setup wizard walks you through theme selection and AI provi
 
 The **built-in web server** is the easiest way to access Tron from another device — toggle it on in Settings, and it shows your local IPs and port. For headless servers without a desktop, use the standalone web mode. Gateway mode restricts access to SSH connections only, making it safe for multi-user cloud deployments.
 
-> **Tip:** Local network addresses (e.g. `192.168.x.x`) are not reachable outside your LAN. For easy remote access on mobile, pair the web server with a mesh VPN like [Tailscale](https://tailscale.com) — it assigns a stable IP to each device so you can reach your terminal from anywhere without port forwarding.
+### Remote Access with Tailscale (2 minutes setup)
+
+Want to code from your phone on the bus, or SSH into your home machine from a coffee shop? [Tailscale](https://tailscale.com) makes this ridiculously easy — no port forwarding, no dynamic DNS, no firewall rules. It just works.
+
+1. **Install Tailscale** on your computer (the one running Tron) and your phone/tablet — [tailscale.com/download](https://tailscale.com/download)
+2. **Sign in** with the same account on both devices (Google, GitHub, etc.)
+3. **Find your computer's Tailscale IP** — it looks like `100.x.y.z`, shown in the Tailscale app
+4. **Open Tron** on your phone's browser: `http://100.x.y.z:3888`
+
+That's it. Encrypted, peer-to-peer, works from anywhere in the world. Free for personal use (up to 100 devices).
+
+> **Tip:** Tailscale IPs are stable — bookmark it once and it works forever, even if your home network changes.
 
 ### Docker
 
@@ -174,6 +185,18 @@ environment:
 
 ### Providers
 Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI Compatible, Anthropic Compatible.
+
+### Model Recommendations
+
+Tron's agent is designed for **everyday terminal tasks** — running commands, editing files, managing servers, light automation. You don't need the most powerful model for this.
+
+| Tier | Models | Best For |
+|------|--------|----------|
+| **Local (free)** | Qwen3-Coder (via Ollama/LM Studio) | Basic agent tasks: file ops, simple scripts, git workflows. Not suited for writing full projects or complex multi-file refactors. |
+| **Budget cloud** | Kimi, GLM, DeepSeek | Great balance of cost and capability. Handle most agent tasks well — command execution, file editing, debugging. Good daily drivers. |
+| **Premium cloud** | Claude, GPT, Gemini | Excellent but overkill for typical terminal agent work. Better suited for direct coding conversations. |
+
+> **Tip for complex coding:** Rather than using a premium model through Tron's agent, run a dedicated coding agent like [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) or [Aider](https://aider.chat) directly inside Tron's terminal. Tron's session persistence means you can start a long coding session, close the browser, and come back to it later — the agent keeps running and all output is preserved.
 
 ## Keyboard Shortcuts
 

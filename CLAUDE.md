@@ -78,12 +78,19 @@ e2e/                  # Playwright E2E test suite
 - **SSH transparency**: SSH sessions implement the `PtyLike` interface (same as node-pty). Terminal handlers check `sshSessionIds.has(sessionId)` to branch between local PTY and SSH-specific logic. Renderer code works identically for both.
 - **SSH agent file ops**: For SSH sessions, `write_file`/`read_file`/`edit_file`/`list_dir`/`search_dir` tools fallback to shell commands executed over SSH instead of direct file IPC.
 - **SSH profiles**: Saved in `app.getPath("userData")/ssh-profiles/profiles.json` (Electron) or `~/.tron/ssh-profiles.json` (server mode).
-- **Terminal reconnection**: On page refresh, PTY sessions survive in the main process (Electron) or server (web mode, 30s grace). LayoutContext detects reconnection (`newId === oldId`), sets `TerminalSession.reconnected = true`. Terminal.tsx skips `getHistory`, shows a loading overlay (skeleton lines + blinking cursor) for 1s, does a SIGWINCH bounce-resize (cols-1 → cols) to force TUI redraw behind the overlay, then fades out with 500ms ease-out transition. Outgoing data is suppressed during bounce to prevent DSR corruption. ResizeObserver resizes are deferred until settled. Backend reconnect handlers must NOT resize the PTY — the renderer controls resize timing.
-- **Terminal loading overlay**: All terminal mounts show a themed loading overlay (skeleton lines + `$` prompt + blinking cursor) for 1s to mask flicker from history replay and initial rendering. Uses `@keyframes termBlink` for cursor animation. Overlay fades out via `transition-opacity duration-500 ease-out`.
+- **Terminal reconnection**: On page refresh, PTY sessions survive in the main process (Electron) or server (web mode, 24h grace). LayoutContext detects reconnection (`newId === oldId`), sets `TerminalSession.reconnected = true`. Terminal.tsx skips `getHistory`, shows a loading overlay (skeleton lines + blinking cursor) for 1s, does a SIGWINCH bounce-resize (cols-1 → cols) to force TUI redraw behind the overlay, then fades out with 500ms ease-out transition. Outgoing data is suppressed during bounce to prevent DSR corruption. ResizeObserver resizes are deferred until settled. Backend reconnect handlers must NOT resize the PTY — the renderer controls resize timing.
+- **Terminal loading overlay**: All terminal mounts show a themed loading overlay (braille spinner) for 1.5s to mask flicker from history replay and initial rendering. Overlay fades out via `transition-opacity duration-300 ease-out`.
+- **Terminal scroll guard**: Prevents scroll-to-top on click/tap. When user interacts with the terminal, xterm focuses its hidden textarea causing the browser to auto-scroll. A temporary scroll listener (300ms after mousedown/touchstart/textarea focus) reverts any jump >50px. Covers both mouse and touch.
+- **Terminal scroll-to-bottom button**: Tracks scroll position via `term.onScroll()` + `term.onLineFeed()` (xterm API, not DOM scroll events — DOM events don't fire for `term.scrollLines()` used by touch handler). When user scrolls up >40px from bottom, a floating pill button appears in TerminalPane (outside Terminal's `contain: strict` boundary, z-20). Clicking dispatches `tron:scrollTermToBottom` window event → Terminal listens and calls `term.scrollToBottom()`.
+- **Mobile terminal optimizations**: Touch devices get 1000-line scrollback (vs default), history truncated to last 20KB on load, 250ms resize debounce (vs 100ms desktop). Virtual keyboard open/close suppresses fit() via VisualViewport API — one clean resize after 500ms settle. Container dimension tracking (`lastContainerW`/`lastContainerH`) prevents ResizeObserver → fit() → ResizeObserver feedback loops.
+- **Mobile paste**: Context menu paste uses fallback chain: (1) Electron clipboard image IPC, (2) `navigator.clipboard.readText()`, (3) server-side clipboard IPC, (4) temporary textarea element for manual paste (10s timeout, auto-submits on paste event or Enter).
+- **Session eviction**: Server caps at 20 concurrent PTY sessions (`MAX_SESSIONS`). When exceeded, oldest session is killed (FIFO). History is persisted to disk before eviction so reconnect can still restore it. Creation order tracked in `sessionCreationOrder` array, cleaned up on all exit/close paths.
 - **No backdrop-blur on overlays**: Never use `backdrop-blur` on modal/overlay backdrops — it causes visible lag on Electron and low-end devices. Use opaque or semi-transparent backgrounds (`bg-black/50`) instead. `backdrop-blur` is acceptable on persistent UI elements (e.g. tab bar, context bar) but not on transient overlays.
 - **Modal component**: Use `<Modal>` from `src/components/ui/Modal.tsx` for all modal dialogs. Provides consistent theming (`bg-black/70` backdrop, `rounded-2xl` panel, theme-aware borders), `fadeScale`/`overlay` animation, and `onClose` backdrop click. Accepts `maxWidth`, `zIndex`, `testId` props. Pass content as children.
 - **Cross-tab notifications**: `AgentContext` tracks `activeSessionIdsForNotifs` (a `Set<string>` of all session IDs in the active tab's layout tree). Notifications are only created when a session finishes outside the active tab. `NotificationOverlay` also applies a display-time filter as a safety net. In agent view mode (`fullHeight`), command execution toasts in `AgentOverlay` are suppressed since steps are already fully visible.
 - **Agent view mode SmartInput**: SmartInput always starts in auto-detect mode (`isAuto=true`), even in agent view mode. The auto-detect classifier routes simple commands (`ls`, `cd`, `git status`) directly to PTY instead of through the AI agent loop. The default fallback mode is "agent" when `defaultAgentMode=true`.
+- **Context menu in Electron**: `TerminalPane.handleContextMenu` no longer blocks on `isElectronApp()` — custom context menu (Copy, Paste, Ask Agent, Split) works in both Electron and web mode. `e.preventDefault()` suppresses the OS right-click menu.
+- **Update modal session dismiss**: `App.tsx` uses `updateDismissedRef` to suppress the update modal after user clicks "Later" for the rest of the session. Reset via `tron:manual-update-check` custom event (dispatched by Settings "Check for Updates" button).
 
 ## Deployment Modes
 
@@ -136,6 +143,8 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **Progress reflection**: Every 8 steps, if no progress in 6+ steps, injects reflection prompt.
 - **Context compaction**: Old tool results compressed after history exceeds 30 messages.
 - **Auto-cd**: Platform-aware (`&&` on Unix, `;` on Windows). Skips scaffold commands.
+- **Smarter TUI detection**: Pre-flight TUI checks in `run_in_terminal` and `execute_command` skip `detectTuiProgram()` when terminal is idle (`classifyTerminalOutput` returns `"idle"`). Prevents false positives from stale TUI artifacts (box-drawing chars, "claude", vim tildes) in scrollback after TUI has exited. Same gate in `read_terminal` handler.
+- **Agent task focus**: Prior interactions truncated to 80 chars each (6 most recent, not 10) in `useAgentRunner.ts`. Task boundary header strengthened: `[CURRENT TASK — focus ONLY on this, ignore all prior tasks above]`. `agent.md` includes `TASK FOCUS` directive.
 
 ### Terminal State Classification (`src/utils/terminalState.ts`)
 - `idle` — shell prompt visible (`$`, `%`, `#`, `>`, `PS C:\>`, `C:\>`)
@@ -149,7 +158,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **Advice mode**: AI suggests a single command with explanation. Tab accepts, Enter runs.
 - **Slash commands**: `/log` exports agent thread to structured JSON.
 - **AI ghost text**: Inline suggestions after 3s inactivity.
-- **Image attachments**: Drag-and-drop, paste, or file picker (vision models).
+- **Image attachments**: Drag-and-drop, paste (capture phase listener to intercept before xterm's `stopPropagation`), or file picker (vision models).
 - **Mode cycling**: `Ctrl+Shift+M` (configurable in Settings > Shortcuts).
 - **Readline hotkeys**: `Ctrl+U` (kill line before cursor), `Ctrl+K` (kill after), `Ctrl+A` (home), `Ctrl+E` (end), `Ctrl+W` (delete word back).
 - **Dynamic footer**: Hotkey hints read from config via `formatHotkey()`.
@@ -217,5 +226,6 @@ All `release:*` scripts use `--publish always` which automatically uploads artif
 
 - After finishing a feature or batch of fixes, commit and push **without** Claude as co-author
 - Update `CLAUDE.md` periodically to reflect new architecture, patterns, and conventions
-- To release: bump version with `npm version patch/minor`, commit, tag, push, then run `npm run release:all`. The `--publish always` flag handles GitHub release creation and artifact upload automatically.
-- Update download links in `tron-website/src/components/HeroSection.jsx` after each release
+- To release: bump version with `npm version patch/minor`, commit, tag, push, then run `GH_TOKEN=$(gh auth token) npm run release:mac && GH_TOKEN=$(gh auth token) npm run release:win && GH_TOKEN=$(gh auth token) npm run release:linux` (each platform separately). Then `gh release edit vX.Y.Z --draft=false --latest` to publish.
+- Update website after release: edit `tron-website/src/release.json` (version + asset URLs) and `tron-website/index.html` (`softwareVersion` in JSON-LD), commit, push. Cloudflare Pages auto-deploys. The `fetch-release.mjs` script can auto-fetch from GitHub API but only works after the release is published (not draft).
+- To re-release same version (e.g. hotfix): delete the GitHub release (`gh release delete vX.Y.Z --yes`), delete and re-create the tag (`git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z && git tag vX.Y.Z && git push origin vX.Y.Z`), then run the release commands again.
