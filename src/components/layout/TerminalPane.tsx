@@ -143,6 +143,14 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     modelToastTimer.current = setTimeout(() => setModelToast(false), 6000);
   }, []);
 
+  // Terminal scroll-to-bottom state
+  const [termScrolledUp, setTermScrolledUp] = useState(false);
+  const stableOnScrolledUpChange = useCallback((up: boolean) => setTermScrolledUp(up), []);
+  const scrollTermToBottom = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("tron:scrollTermToBottom", { detail: { sessionId } }));
+    setTermScrolledUp(false);
+  }, [sessionId]);
+
   // Stable callback for Terminal memo
   const markSessionDirtyRef = useRef(markSessionDirty);
   markSessionDirtyRef.current = markSessionDirty;
@@ -771,6 +779,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   focusTarget={focusTarget}
                   isReconnected={session?.reconnected}
                   pendingHistory={session?.pendingHistory}
+                  onScrolledUpChange={stableOnScrolledUpChange}
                 />
               </motion.div>
             )}
@@ -853,7 +862,24 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 stopAgent={stableStopAgent}
                 focusTarget={focusTarget}
                 isReconnected={session?.reconnected}
+                onScrolledUpChange={stableOnScrolledUpChange}
               />
+            )}
+            {/* Scroll to bottom button */}
+            {termScrolledUp && (
+              <button
+                onClick={scrollTermToBottom}
+                className={`absolute bottom-2 left-1/2 -translate-x-1/2 z-20 px-4 py-1 rounded-full text-[10px] font-medium shadow-lg transition-opacity ${themeClass(
+                  resolvedTheme,
+                  {
+                    dark: "bg-gray-800/90 hover:bg-gray-700/90 text-gray-200 border border-gray-600/50",
+                    modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border border-purple-500/30",
+                    light: "bg-white/90 hover:bg-gray-100/90 text-gray-700 border border-gray-300",
+                  },
+                )}`}
+              >
+                ↓ Scroll to bottom
+              </button>
             )}
           </div>
 

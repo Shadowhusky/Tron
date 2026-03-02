@@ -22,6 +22,8 @@ interface TerminalProps {
   isReconnected?: boolean;
   /** Saved terminal history to write directly to xterm on mount (loaded sync tabs). */
   pendingHistory?: string;
+  /** Called when user scrolls up/down — true = scrolled up from bottom */
+  onScrolledUpChange?: (scrolledUp: boolean) => void;
 }
 
 const THEMES: Record<string, Xterm["options"]["theme"]> = {
@@ -45,7 +47,7 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory, onScrolledUpChange }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
 
   const xtermRef = useRef<Xterm | null>(null);
@@ -62,6 +64,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     const timer = setTimeout(() => setLoading(false), 1500);
     return () => clearTimeout(timer);
   }, [sessionId]);
+
+  // Ref for onScrolledUpChange to avoid re-creating the main effect
+  const onScrolledUpChangeRef = useRef(onScrolledUpChange);
+  useEffect(() => { onScrolledUpChangeRef.current = onScrolledUpChange; }, [onScrolledUpChange]);
 
   // Refs for values accessed inside stable closures
   const isAgentRunningRef = useRef(isAgentRunning);
@@ -224,24 +230,61 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // handler (which may stopPropagation, preventing bubbling to this container).
     el.addEventListener("paste", onPaste, true);
 
-    // Prevent scroll-to-top on click: when the user clicks the terminal,
-    // xterm focuses its helper textarea. The browser may auto-scroll
-    // .xterm-viewport to bring the textarea into view, jumping to the top
-    // of the scrollback buffer. Save scrollTop on mousedown and restore it
-    // on the next frame if it jumped significantly.
+    // Prevent scroll-to-top on click/tap: when the user interacts with the
+    // terminal, xterm focuses its helper textarea. The browser may auto-scroll
+    // .xterm-viewport (or a parent) to bring the textarea into view, jumping
+    // to the top of the scrollback buffer. We guard against this by saving
+    // scroll position and reverting any large jump for 300ms after interaction.
+    // Also intercept focus events on the helper textarea directly.
     const xtermViewport = el.querySelector(".xterm-viewport") as HTMLElement | null;
-    let preClickScrollTop = -1;
-    const onMouseDown = () => {
-      if (xtermViewport) preClickScrollTop = xtermViewport.scrollTop;
-      requestAnimationFrame(() => {
-        if (xtermViewport && preClickScrollTop >= 0 &&
-            Math.abs(xtermViewport.scrollTop - preClickScrollTop) > 50) {
-          xtermViewport.scrollTop = preClickScrollTop;
-        }
-        preClickScrollTop = -1;
-      });
+    const xtermTextarea = el.querySelector(".xterm-helper-textarea") as HTMLElement | null;
+    let scrollGuardPos = -1;
+    let scrollGuardTimer: ReturnType<typeof setTimeout> | undefined;
+    const scrollGuard = () => {
+      if (xtermViewport && scrollGuardPos >= 0 &&
+          Math.abs(xtermViewport.scrollTop - scrollGuardPos) > 50) {
+        xtermViewport.scrollTop = scrollGuardPos;
+      }
     };
-    el.addEventListener("mousedown", onMouseDown);
+    const armScrollGuard = () => {
+      if (!xtermViewport) return;
+      scrollGuardPos = xtermViewport.scrollTop;
+      xtermViewport.addEventListener("scroll", scrollGuard);
+      clearTimeout(scrollGuardTimer);
+      scrollGuardTimer = setTimeout(() => {
+        xtermViewport.removeEventListener("scroll", scrollGuard);
+        scrollGuardPos = -1;
+      }, 300);
+    };
+    el.addEventListener("mousedown", armScrollGuard);
+    el.addEventListener("touchstart", armScrollGuard, { passive: true });
+    // Also guard on textarea focus (browser scrolls to focused element)
+    xtermTextarea?.addEventListener("focus", armScrollGuard);
+
+    // Track whether user is scrolled up from bottom (for scroll-to-bottom button).
+    // Use xterm's onScroll API instead of DOM scroll events — term.scrollLines()
+    // (used by our touch handler) may not fire native scroll events on .xterm-viewport.
+    let lastScrolledUp = false;
+    const checkScrolledUp = () => {
+      const buf = term.buffer.active;
+      const isUp = buf.viewportY < buf.baseY;
+      if (isUp !== lastScrolledUp) {
+        lastScrolledUp = isUp;
+        onScrolledUpChangeRef.current?.(isUp);
+      }
+    };
+    const disposableOnScroll = term.onScroll(checkScrolledUp);
+    // Also check on lineFeed — when new content arrives while scrolled up,
+    // baseY increases but viewportY stays, keeping isUp = true.
+    const disposableOnLineFeed = term.onLineFeed(checkScrolledUp);
+
+    // Listen for scrollToBottom requests from parent (via window event)
+    const handleScrollToBottom = (e: Event) => {
+      if ((e as CustomEvent).detail?.sessionId === sessionId) {
+        term.scrollToBottom();
+      }
+    };
+    window.addEventListener("tron:scrollTermToBottom", handleScrollToBottom);
 
     // Resize Logic — syncs xterm dimensions to backend PTY.
     // During reconnect settling, ResizeObserver resizes are deferred to avoid
@@ -568,7 +611,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       el.removeEventListener("touchmove", onTouchMove);
       vv?.removeEventListener("resize", onViewportResize);
       clearTimeout(viewportResizeTimer);
-      el.removeEventListener("mousedown", onMouseDown);
+      el.removeEventListener("mousedown", armScrollGuard);
+      el.removeEventListener("touchstart", armScrollGuard);
+      xtermTextarea?.removeEventListener("focus", armScrollGuard);
+      xtermViewport?.removeEventListener("scroll", scrollGuard);
+      disposableOnScroll.dispose();
+      disposableOnLineFeed.dispose();
+      window.removeEventListener("tron:scrollTermToBottom", handleScrollToBottom);
+      clearTimeout(scrollGuardTimer);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       el.removeEventListener("paste", onPaste, true);
