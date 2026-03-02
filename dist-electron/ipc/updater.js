@@ -36,6 +36,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerUpdaterHandlers = registerUpdaterHandlers;
 exports.autoCheckForUpdates = autoCheckForUpdates;
 const electron_1 = require("electron");
+const node_child_process_1 = require("node:child_process");
+const node_util_1 = require("node:util");
+const node_fs_1 = require("node:fs");
+const node_path_1 = require("node:path");
+const node_os_1 = require("node:os");
+const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
 let updateStatus = "idle";
 let updateInfo = null;
 let downloadProgress = null;
@@ -115,6 +121,52 @@ function wireEvents(autoUpdater, getMainWindow) {
         });
     });
 }
+/**
+ * Manually extract the downloaded update zip and replace the running .app bundle.
+ * This avoids the race in electron-updater's default quitAndInstall on macOS
+ * where the app relaunches before the zip extraction finishes.
+ */
+async function applyMacUpdate(getMainWindow) {
+    // Locate the pending update zip
+    const cacheDir = (0, node_path_1.join)(electron_1.app.getPath("userData"), "..", "Caches", "tron-updater", "pending");
+    if (!(0, node_fs_1.existsSync)(cacheDir)) {
+        throw new Error(`Cache dir not found: ${cacheDir}`);
+    }
+    const zips = (0, node_fs_1.readdirSync)(cacheDir).filter((f) => f.endsWith(".zip"));
+    if (zips.length === 0) {
+        throw new Error("No update zip found in pending directory");
+    }
+    const zipPath = (0, node_path_1.join)(cacheDir, zips[0]);
+    // Resolve the .app bundle path from the running executable
+    // exe is e.g. /Applications/Tron.app/Contents/MacOS/Tron
+    const exePath = electron_1.app.getPath("exe");
+    const appBundlePath = (0, node_path_1.dirname)((0, node_path_1.dirname)((0, node_path_1.dirname)(exePath))); // -> /Applications/Tron.app
+    if (!appBundlePath.endsWith(".app")) {
+        throw new Error(`Unexpected app path: ${appBundlePath}`);
+    }
+    // Notify renderer that we're extracting (can take a few seconds for ~140MB zip)
+    updateStatus = "installing";
+    sendToRenderer(getMainWindow, "updater.status", { status: updateStatus, updateInfo });
+    // Extract to a temp directory using ditto (preserves macOS attrs + code signing)
+    const extractDir = (0, node_path_1.join)((0, node_os_1.tmpdir)(), `tron-update-${Date.now()}`);
+    await execFileAsync("ditto", ["-xk", zipPath, extractDir]);
+    // Find the .app inside the extracted dir (should be Tron.app)
+    const extracted = (0, node_fs_1.readdirSync)(extractDir).filter((f) => f.endsWith(".app"));
+    if (extracted.length === 0) {
+        (0, node_fs_1.rmSync)(extractDir, { recursive: true, force: true });
+        throw new Error("No .app bundle found in extracted zip");
+    }
+    const newAppPath = (0, node_path_1.join)(extractDir, extracted[0]);
+    // Replace: remove old bundle, move new one in place
+    (0, node_fs_1.rmSync)(appBundlePath, { recursive: true, force: true });
+    await execFileAsync("mv", [newAppPath, appBundlePath]);
+    // Clean up temp dir (ignore errors)
+    try {
+        (0, node_fs_1.rmSync)(extractDir, { recursive: true, force: true });
+    }
+    catch { /* best-effort */ }
+    console.log("[Updater] macOS update applied successfully");
+}
 function registerUpdaterHandlers(getMainWindow) {
     // IPC handlers — lazy-load electron-updater on first call
     electron_1.ipcMain.handle("updater.checkForUpdates", async () => {
@@ -127,7 +179,23 @@ function registerUpdaterHandlers(getMainWindow) {
     });
     electron_1.ipcMain.handle("updater.quitAndInstall", async () => {
         const au = await getAutoUpdater(getMainWindow);
-        au.quitAndInstall();
+        // On macOS, electron-updater's default quitAndInstall can race — the app
+        // relaunches before the zip extraction/replacement finishes, so the old
+        // binary runs again. Fix: extract the update ourselves BEFORE quitting,
+        // then relaunch. This guarantees the new binary is in place on restart.
+        if (process.platform === "darwin") {
+            try {
+                await applyMacUpdate(getMainWindow);
+                electron_1.app.relaunch();
+                electron_1.app.exit(0);
+                return;
+            }
+            catch (err) {
+                // Fall through to default quitAndInstall if manual apply fails
+                console.error("[Updater] Manual apply failed, falling back:", err);
+            }
+        }
+        au.quitAndInstall(false, true);
     });
     electron_1.ipcMain.handle("updater.getStatus", () => ({
         status: updateStatus,

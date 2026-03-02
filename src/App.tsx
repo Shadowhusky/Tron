@@ -115,6 +115,7 @@ const AppContent = () => {
   const [sshToast, setSshToast] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
   const [updateVersion, setUpdateVersion] = useState("");
   const updateDismissedRef = useRef(false);
 
@@ -212,7 +213,9 @@ const AppContent = () => {
     const cleanup = window.electron.ipcRenderer.on(
       IPC.UPDATER_STATUS,
       (data: any) => {
-        if (data.updateInfo?.version && !updateDismissedRef.current) {
+        if (data.status === "installing") {
+          setUpdateInstalling(true);
+        } else if (data.updateInfo?.version && !updateDismissedRef.current) {
           if (data.status === "downloaded") {
             setUpdateVersion(data.updateInfo.version);
             setUpdateReady(true);
@@ -446,10 +449,12 @@ const AppContent = () => {
       <Modal
         show={updateReady}
         resolvedTheme={resolvedTheme}
-        onClose={() => { updateDismissedRef.current = true; setUpdateReady(false); }}
-        title="Update Ready"
-        description={`A new version (v${updateVersion}) has been downloaded and is ready to install.`}
-        buttons={[
+        onClose={updateInstalling ? () => {} : () => { updateDismissedRef.current = true; setUpdateReady(false); }}
+        title={updateInstalling ? "Installing Update" : "Update Ready"}
+        description={updateInstalling
+          ? "Extracting and applying update... The app will restart automatically."
+          : `A new version (v${updateVersion}) has been downloaded and is ready to install.`}
+        buttons={updateInstalling ? [] : [
           { label: "Later", type: "ghost", onClick: () => { updateDismissedRef.current = true; setUpdateReady(false); } },
           { label: "Relaunch Now", type: "primary", onClick: () => window.electron?.ipcRenderer?.quitAndInstall?.() },
         ]}

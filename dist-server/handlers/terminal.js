@@ -53,6 +53,9 @@ const sessionPushEvents = new Map();
 const activeChildProcesses = new Set();
 // Sessions being cleaned up by grace-period expiry — onExit should preserve history files
 const cleanedUpSessions = new Set();
+// Creation order for FIFO eviction when max sessions exceeded
+const sessionCreationOrder = [];
+const MAX_SESSIONS = 20;
 // Per-session display buffering — active during execInTerminal to strip sentinels cleanly
 const displayBuffers = new Map();
 const execActiveSessions = new Set(); // Sessions currently running execInTerminal
@@ -264,6 +267,9 @@ export function cleanupClientSessions(clientId) {
                 sessions.delete(sessionId);
                 sessionHistory.delete(sessionId);
                 sessionPushEvents.delete(sessionId);
+                const idx = sessionCreationOrder.indexOf(sessionId);
+                if (idx !== -1)
+                    sessionCreationOrder.splice(idx, 1);
             }
             sessionOwners.delete(sessionId);
         }
@@ -290,6 +296,7 @@ export function cleanupAllServerSessions() {
     sessionHistory.clear();
     sessionOwners.clear();
     sessionPushEvents.clear();
+    sessionCreationOrder.length = 0;
 }
 export function sessionExists(sessionId) {
     return sessions.has(sessionId);
@@ -316,6 +323,23 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         const persisted = loadPersistedHistory(reconnectId);
         if (persisted) {
             sessionHistory.set(sessionId, persisted);
+        }
+    }
+    // Evict oldest sessions if at capacity (FIFO — first created, first killed)
+    while (sessions.size >= MAX_SESSIONS && sessionCreationOrder.length > 0) {
+        const oldest = sessionCreationOrder.shift();
+        const oldPty = sessions.get(oldest);
+        if (oldPty) {
+            persistSessionHistory(oldest);
+            cleanedUpSessions.add(oldest);
+            try {
+                oldPty.kill();
+            }
+            catch { /* already dead */ }
+            sessions.delete(oldest);
+            sessionHistory.delete(oldest);
+            sessionOwners.delete(oldest);
+            sessionPushEvents.delete(oldest);
         }
     }
     const ptyProcess = pty.spawn(shell, shellArgs, {
@@ -354,6 +378,9 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         sessionHistory.delete(sessionId);
         sessionOwners.delete(sessionId);
         sessionPushEvents.delete(sessionId);
+        const idx = sessionCreationOrder.indexOf(sessionId);
+        if (idx !== -1)
+            sessionCreationOrder.splice(idx, 1);
         // Only delete history file on normal exit (user/process closed terminal).
         // When cleanup killed the PTY (grace period expiry), preserve the file for reconnect.
         if (!cleanedUpSessions.has(sessionId)) {
@@ -362,6 +389,7 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         cleanedUpSessions.delete(sessionId);
     });
     sessions.set(sessionId, ptyProcess);
+    sessionCreationOrder.push(sessionId);
     return { sessionId, reconnected: false };
 }
 export function writeToSession(id, data) {
@@ -382,6 +410,9 @@ export function closeSession(id) {
         sessionHistory.delete(id);
         sessionOwners.delete(id);
         removePersistedHistory(id);
+        const idx = sessionCreationOrder.indexOf(id);
+        if (idx !== -1)
+            sessionCreationOrder.splice(idx, 1);
     }
 }
 export async function checkCommand(command, sessionId) {

@@ -576,6 +576,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
       case "available": return `Update available (v${updateInfo?.version})`;
       case "downloading": return `Downloading... ${Math.round(progress?.percent ?? 0)}%`;
       case "downloaded": return `v${updateInfo?.version} ready to install`;
+      case "installing": return "Installing update...";
       case "not-available": return "You're up to date";
       case "error": return "Update check failed";
       default: return "";
@@ -642,6 +643,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${
               status === "downloaded" ? "bg-green-400" :
+              status === "installing" ? "bg-yellow-400 animate-pulse" :
               status === "available" || status === "downloading" ? "bg-blue-400" :
               status === "error" ? "bg-red-400" :
               status === "not-available" ? "bg-green-400" :

@@ -1,4 +1,11 @@
 import { ipcMain, app, BrowserWindow } from "electron";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+
+const execFileAsync = promisify(execFile);
 
 type UpdateStatus =
   | "idle"
@@ -6,6 +13,7 @@ type UpdateStatus =
   | "available"
   | "downloading"
   | "downloaded"
+  | "installing"
   | "not-available"
   | "error";
 
@@ -121,6 +129,62 @@ function wireEvents(
   });
 }
 
+/**
+ * Manually extract the downloaded update zip and replace the running .app bundle.
+ * This avoids the race in electron-updater's default quitAndInstall on macOS
+ * where the app relaunches before the zip extraction finishes.
+ */
+async function applyMacUpdate(
+  getMainWindow: () => BrowserWindow | null,
+): Promise<void> {
+  // Locate the pending update zip
+  const cacheDir = join(app.getPath("userData"), "..", "Caches", "tron-updater", "pending");
+  if (!existsSync(cacheDir)) {
+    throw new Error(`Cache dir not found: ${cacheDir}`);
+  }
+
+  const zips = readdirSync(cacheDir).filter((f) => f.endsWith(".zip"));
+  if (zips.length === 0) {
+    throw new Error("No update zip found in pending directory");
+  }
+  const zipPath = join(cacheDir, zips[0]);
+
+  // Resolve the .app bundle path from the running executable
+  // exe is e.g. /Applications/Tron.app/Contents/MacOS/Tron
+  const exePath = app.getPath("exe");
+  const appBundlePath = dirname(dirname(dirname(exePath))); // -> /Applications/Tron.app
+  if (!appBundlePath.endsWith(".app")) {
+    throw new Error(`Unexpected app path: ${appBundlePath}`);
+  }
+
+  // Notify renderer that we're extracting (can take a few seconds for ~140MB zip)
+  updateStatus = "installing";
+  sendToRenderer(getMainWindow, "updater.status", { status: updateStatus, updateInfo });
+
+  // Extract to a temp directory using ditto (preserves macOS attrs + code signing)
+  const extractDir = join(tmpdir(), `tron-update-${Date.now()}`);
+  await execFileAsync("ditto", ["-xk", zipPath, extractDir]);
+
+  // Find the .app inside the extracted dir (should be Tron.app)
+  const extracted = readdirSync(extractDir).filter((f) => f.endsWith(".app"));
+  if (extracted.length === 0) {
+    rmSync(extractDir, { recursive: true, force: true });
+    throw new Error("No .app bundle found in extracted zip");
+  }
+  const newAppPath = join(extractDir, extracted[0]);
+
+  // Replace: remove old bundle, move new one in place
+  rmSync(appBundlePath, { recursive: true, force: true });
+  await execFileAsync("mv", [newAppPath, appBundlePath]);
+
+  // Clean up temp dir (ignore errors)
+  try {
+    rmSync(extractDir, { recursive: true, force: true });
+  } catch { /* best-effort */ }
+
+  console.log("[Updater] macOS update applied successfully");
+}
+
 export function registerUpdaterHandlers(
   getMainWindow: () => BrowserWindow | null,
 ) {
@@ -137,7 +201,24 @@ export function registerUpdaterHandlers(
 
   ipcMain.handle("updater.quitAndInstall", async () => {
     const au = await getAutoUpdater(getMainWindow);
-    au.quitAndInstall();
+
+    // On macOS, electron-updater's default quitAndInstall can race — the app
+    // relaunches before the zip extraction/replacement finishes, so the old
+    // binary runs again. Fix: extract the update ourselves BEFORE quitting,
+    // then relaunch. This guarantees the new binary is in place on restart.
+    if (process.platform === "darwin") {
+      try {
+        await applyMacUpdate(getMainWindow);
+        app.relaunch();
+        app.exit(0);
+        return;
+      } catch (err) {
+        // Fall through to default quitAndInstall if manual apply fails
+        console.error("[Updater] Manual apply failed, falling back:", err);
+      }
+    }
+
+    au.quitAndInstall(false, true);
   });
 
   ipcMain.handle("updater.getStatus", () => ({
