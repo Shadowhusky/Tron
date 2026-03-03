@@ -114,6 +114,17 @@ button:disabled {
   }
 }
 
+/* On touch devices, disable native panning on xterm canvas and viewport.
+   We handle touch scrolling ourselves via term.scrollLines() —
+   native pan-y fights with it and causes scroll-to-top jumps. */
+@media (pointer: coarse) {
+  .terminal.xterm .xterm-screen,
+  .terminal.xterm .xterm-viewport {
+    touch-action: none !important;
+    overscroll-behavior: none;
+  }
+}
+
 /* Wider scrollbars on touch/mobile devices for easier interaction */
 @media (pointer: coarse) {
   ::-webkit-scrollbar {

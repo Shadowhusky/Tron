@@ -217,8 +217,11 @@ function parseCwdFromHistory(sessionId) {
 async function getCwdForPid(pid, sessionId) {
     try {
         if (os.platform() === "darwin") {
-            const { stdout } = await trackedExec(`lsof -p ${pid} 2>/dev/null | grep ' cwd ' | awk '{print $NF}'`);
-            return stdout.trim() || null;
+            // Use -Fn for machine-parseable output — handles paths with spaces
+            const { stdout } = await trackedExec(`lsof -a -d cwd -Fn -p ${pid} 2>/dev/null`);
+            // Output format: "p<pid>\nfcwd\nn<path>\n"
+            const nLine = stdout.split("\n").find(l => l.startsWith("n"));
+            return nLine ? nLine.slice(1) : null;
         }
         else if (os.platform() === "linux") {
             const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
@@ -342,11 +345,20 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
             sessionPushEvents.delete(oldest);
         }
     }
+    // Validate cwd exists and is accessible — external drives, deleted dirs, permission issues
+    let safeCwd = cwd || os.homedir();
+    try {
+        fs.accessSync(safeCwd, fs.constants.R_OK | fs.constants.X_OK);
+    }
+    catch {
+        console.warn(`[Terminal] CWD inaccessible, falling back to home: ${safeCwd}`);
+        safeCwd = os.homedir();
+    }
     const ptyProcess = pty.spawn(shell, shellArgs, {
         name: "xterm-256color",
         cols: cols || 80,
         rows: rows || 30,
-        cwd: cwd || os.homedir(),
+        cwd: safeCwd,
         env: {
             ...process.env,
             ...(os.platform() !== "win32" ? { PROMPT_EOL_MARK: "" } : {}),
@@ -371,8 +383,15 @@ export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEv
         const currentPushEvent = sessionPushEvents.get(sessionId) || pushEvent;
         pushSessionData(sessionId, data, currentPushEvent);
     });
+    const createdAt = Date.now();
     ptyProcess.onExit(({ exitCode }) => {
         const currentPushEvent = sessionPushEvents.get(sessionId) || pushEvent;
+        // If the shell exited within 3 seconds, it likely failed to start.
+        // Push a visible error to the terminal so the user doesn't see a blank screen.
+        if (Date.now() - createdAt < 3000 && exitCode !== 0) {
+            const msg = `\r\n\x1b[31m[Shell exited with code ${exitCode}]\x1b[0m\r\n\x1b[33mCWD was: ${safeCwd}\x1b[0m\r\n`;
+            currentPushEvent("terminal.incomingData", { id: sessionId, data: msg });
+        }
         currentPushEvent("terminal.exit", { id: sessionId, exitCode });
         sessions.delete(sessionId);
         sessionHistory.delete(sessionId);

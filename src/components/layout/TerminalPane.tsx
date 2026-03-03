@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput } from "lucide-react";
+import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -24,7 +24,7 @@ import type { AttachedImage, SSHConnectionStatus } from "../../types";
 import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
 import TuiKeyToolbar from "../../features/terminal/components/TuiKeyToolbar";
 import { useAllConfiguredModels } from "../../hooks/useModels";
-import { readScreenBuffer, getTerminalSelection } from "../../services/terminalBuffer";
+import { readScreenBuffer, getTerminalSelection, readViewportText } from "../../services/terminalBuffer";
 
 interface TerminalPaneProps {
   sessionId: string;
@@ -151,6 +151,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     setTermScrolledUp(false);
   }, [sessionId]);
 
+  // Selection overlay text — snapshot of visible viewport lines (no scrolling needed)
+  const [selectionText, setSelectionText] = useState("");
+
   // Stable callback for Terminal memo
   const markSessionDirtyRef = useRef(markSessionDirty);
   markSessionDirtyRef.current = markSessionDirty;
@@ -221,6 +224,15 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     });
     return cleanup;
   }, [sessionId, isSSH]);
+
+  // Touch selection mode — when active, a native-selectable text overlay appears
+  const [selectionMode, setSelectionMode] = useState(false);
+  // Snapshot the visible viewport text when entering selection mode
+  useEffect(() => {
+    if (selectionMode) {
+      setSelectionText(readViewportText(sessionId));
+    }
+  }, [selectionMode, sessionId]);
 
   // Context menu state (right-click / long-press for split/close)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -507,13 +519,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
-    if (isConnectPane) return;
+    if (isConnectPane || selectionMode) return;
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    if (isConnectPane || isElectronApp()) return;
+    if (isConnectPane || isElectronApp() || selectionMode) return;
     longPressTriggered.current = false;
     const touch = e.touches[0];
     const x = touch.clientX;
@@ -537,38 +549,38 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const hasSelection = selection.trim().length > 0;
 
   const isTouch = isTouchDevice();
+
+  // Copy helper — works on both desktop and mobile (fallback to execCommand)
+  const copyToClipboard = (text: string) => {
+    const deviceCopy = (t: string) => {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+      document.body.appendChild(ta);
+      ta.focus({ preventScroll: true });
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* ignored */ }
+      ta.remove();
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => deviceCopy(text));
+    } else {
+      deviceCopy(text);
+    }
+  };
+
   const contextMenuItems = [
-    // Clipboard & selection items hidden on touch devices — xterm.js doesn't
-    // support text selection on touch, and programmatic clipboard access is
-    // unreliable on mobile HTTP. Users should use native long-press instead.
-    ...(isTouch ? [] : [
-      {
-        label: "Copy",
-        icon: <Copy className="h-3.5 w-3.5" />,
-        action: () => {
-          if (!hasSelection) return;
-          const deviceCopy = (text: string) => {
-            const ta = document.createElement("textarea");
-            ta.value = text;
-            ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-            document.body.appendChild(ta);
-            ta.focus({ preventScroll: true });
-            ta.select();
-            try { document.execCommand("copy"); } catch { /* ignored */ }
-            ta.remove();
-          };
-          if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(selection).catch(() => deviceCopy(selection));
-          } else {
-            deviceCopy(selection);
-          }
-        },
-        disabled: !hasSelection,
-      },
-      {
-        label: "Paste",
-        icon: <ClipboardPaste className="h-3.5 w-3.5" />,
-        action: async () => {
+    // Copy, Paste, Select Text — shown on all devices
+    {
+      label: "Copy",
+      icon: <Copy className="h-3.5 w-3.5" />,
+      action: () => { if (hasSelection) copyToClipboard(selection); },
+      disabled: !hasSelection,
+    },
+    {
+      label: "Paste",
+      icon: <ClipboardPaste className="h-3.5 w-3.5" />,
+      action: async () => {
           const sendToTerminal = (text: string) => {
             if (text && window.electron) {
               window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data: text });
@@ -623,7 +635,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           setTimeout(cleanup, 10000);
         },
       },
-      { separator: true as const } as const,
+      { separator: true as const },
       {
         label: "Ask Agent",
         icon: <Bot className="h-3.5 w-3.5" />,
@@ -640,8 +652,24 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         },
         disabled: !hasSelection,
       },
-      { separator: true as const } as const,
-    ]),
+      // Touch-only: quick copy + line selection mode
+      ...(isTouch ? [
+        { separator: true as const },
+        {
+          label: "Copy Screen",
+          icon: <Copy className="h-3.5 w-3.5" />,
+          action: () => {
+            const content = readScreenBuffer(sessionId, 200);
+            if (content) copyToClipboard(content);
+          },
+        },
+        {
+          label: "Select Text",
+          icon: <TextSelect className="h-3.5 w-3.5" />,
+          action: () => setSelectionMode(true),
+        },
+      ] : []),
+      { separator: true as const },
     {
       label: "Split Horizontal",
       icon: <Columns2 className="h-3.5 w-3.5" />,
@@ -780,6 +808,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   isReconnected={session?.reconnected}
                   pendingHistory={session?.pendingHistory}
                   onScrolledUpChange={stableOnScrolledUpChange}
+                  selectionMode={selectionMode}
                 />
               </motion.div>
             )}
@@ -863,10 +892,41 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 focusTarget={focusTarget}
                 isReconnected={session?.reconnected}
                 onScrolledUpChange={stableOnScrolledUpChange}
+                selectionMode={selectionMode}
               />
             )}
+            {/* Selection mode: native text overlay for browser-native selection */}
+            {selectionMode && (
+              <>
+                <pre
+                  className={`absolute inset-0 z-20 overflow-hidden whitespace-pre font-mono text-[14px] leading-[16.8px] p-0 m-0 ${themeClass(resolvedTheme, {
+                    dark: "bg-[#0a0a0a] text-gray-200",
+                    modern: "bg-[#040414] text-gray-200",
+                    light: "bg-[#f9fafb] text-gray-800",
+                  })}`}
+                  style={{ userSelect: "text", WebkitUserSelect: "text", touchAction: "auto" }}
+                >
+                  {selectionText}
+                </pre>
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-30">
+                  <button
+                    onClick={() => setSelectionMode(false)}
+                    className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[11px] font-medium shadow-lg ${themeClass(
+                      resolvedTheme,
+                      {
+                        dark: "bg-gray-800/90 hover:bg-gray-700/90 text-gray-200 border border-gray-600/50",
+                        modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border border-purple-500/30",
+                        light: "bg-white/90 hover:bg-gray-100/90 text-gray-700 border border-gray-300",
+                      },
+                    )}`}
+                  >
+                    <Check className="h-3 w-3" /> Done
+                  </button>
+                </div>
+              </>
+            )}
             {/* Scroll to bottom button */}
-            {termScrolledUp && (
+            {termScrolledUp && !selectionMode && (
               <button
                 onClick={scrollTermToBottom}
                 className={`absolute bottom-2 left-1/2 -translate-x-1/2 z-20 px-4 py-1 rounded-full text-[10px] font-medium shadow-lg transition-opacity ${themeClass(

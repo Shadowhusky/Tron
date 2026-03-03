@@ -11,7 +11,7 @@ import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isWindows, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi } from "../../utils/contextCleaner";
-import { classifyTerminalOutput } from "../../utils/terminalState";
+import { classifyTerminalOutput, detectTuiProgram } from "../../utils/terminalState";
 import { useAllConfiguredModels } from "../../hooks/useModels";
 import FolderPickerModal from "../ui/FolderPickerModal";
 
@@ -265,7 +265,20 @@ const ContextBar: React.FC<ContextBarProps> = ({
         );
 
         // Combine cwd + terminal history + agent thread
-        const terminalText = stripAnsi(history);
+        let terminalText = stripAnsi(history);
+
+        // Cap TUI output: when a full-screen TUI (Claude Code, vim, etc.) is
+        // running, it constantly refreshes the screen, causing history to
+        // balloon. Replace with a short note to prevent context compaction loops.
+        const lastTermLines = terminalText.split("\n").slice(-30).join("\n");
+        const tuiProgram = detectTuiProgram(lastTermLines);
+        if (tuiProgram) {
+          // Only keep the last 20 lines (enough for the agent to see current state)
+          // plus a note explaining the truncation
+          const recentLines = terminalText.split("\n").slice(-20).join("\n");
+          terminalText = `[TUI program "${tuiProgram}" is running — terminal output capped]\n${recentLines}`;
+        }
+
         const cwdHeader = `[cwd: ${cwd}]\n`;
         const fullContext = cwdHeader + (agentContextText
           ? terminalText + "\n\n--- Agent Activity ---\n" + agentContextText
@@ -275,8 +288,10 @@ const ContextBar: React.FC<ContextBarProps> = ({
         const rawPercent = (fullContext.length / maxContext) * 100;
 
         // Auto-summarize at 90% (use refs to avoid stale closure reads)
+        // Skip when a TUI is running — TUI output is already capped above, and
+        // summarizing while a TUI constantly refreshes causes compaction loops.
         // For fresh context: check raw percent. For already-summarized: check effective context.
-        const shouldAutoSummarize = !isSummarizingRef.current && (
+        const shouldAutoSummarize = !tuiProgram && !isSummarizingRef.current && (
           (!isSummarizedRef.current && rawPercent > 90) ||
           (isSummarizedRef.current && session?.contextSummary && (() => {
             const newOutput = terminalText.trim();

@@ -362,8 +362,11 @@ async function getCwdForPid(pid, sessionId) {
     try {
         let result = null;
         if (os_1.default.platform() === "darwin") {
-            const { stdout } = await trackedExec(`lsof -p ${pid} 2>/dev/null | grep ' cwd ' | awk '{print $NF}'`);
-            result = stdout.trim() || null;
+            // Use -Fn for machine-parseable output — handles paths with spaces
+            const { stdout } = await trackedExec(`lsof -a -d cwd -Fn -p ${pid} 2>/dev/null`);
+            // Output format: "p<pid>\nfcwd\nn<path>\n"
+            const nLine = stdout.split("\n").find(l => l.startsWith("n"));
+            result = nLine ? nLine.slice(1) : null;
         }
         else if (os_1.default.platform() === "linux") {
             const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
@@ -552,11 +555,20 @@ function registerTerminalHandlers(getMainWindow) {
             delete cleanEnv.npm_config_loglevel;
             delete cleanEnv.npm_config_production;
             delete cleanEnv.NODE_ENV;
+            // Validate cwd exists and is accessible — external drives, deleted dirs, permission issues
+            let safeCwd = cwd || os_1.default.homedir();
+            try {
+                fs_1.default.accessSync(safeCwd, fs_1.default.constants.R_OK | fs_1.default.constants.X_OK);
+            }
+            catch {
+                console.warn(`[Terminal] CWD inaccessible, falling back to home: ${safeCwd}`);
+                safeCwd = os_1.default.homedir();
+            }
             const ptyProcess = pty.spawn(shell, shellArgs, {
                 name: "xterm-256color",
                 cols: cols || 80,
                 rows: rows || 30,
-                cwd: cwd || os_1.default.homedir(),
+                cwd: safeCwd,
                 env: cleanEnv,
             });
             // Preserve persisted history (loaded above) or start fresh
@@ -585,9 +597,16 @@ function registerTerminalHandlers(getMainWindow) {
                 // Normal path (no exec active): pass through immediately
                 sendToRenderer(data);
             });
+            const createdAt = Date.now();
             ptyProcess.onExit(({ exitCode }) => {
                 const mainWindow = getMainWindow();
                 if (mainWindow && !mainWindow.isDestroyed()) {
+                    // If the shell exited within 3 seconds, it likely failed to start.
+                    // Push a visible error so the user doesn't see a blank screen.
+                    if (Date.now() - createdAt < 3000 && exitCode !== 0) {
+                        const msg = `\r\n\x1b[31m[Shell exited with code ${exitCode}]\x1b[0m\r\n\x1b[33mCWD was: ${safeCwd}\x1b[0m\r\n`;
+                        mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data: msg });
+                    }
                     mainWindow.webContents.send("terminal.exit", {
                         id: sessionId,
                         exitCode,

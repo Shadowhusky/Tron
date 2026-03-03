@@ -13,7 +13,8 @@ export default defineConfig(({ mode }) => ({
     drop: mode === 'production' ? ['console', 'debugger'] : [],
   },
   server: {
-    port: Number(process.env.PORT) || 5173,
+    host: process.env.VITE_HOST || undefined,
+    port: 5173,
     strictPort: true,
   },
 }))

@@ -4,6 +4,7 @@ import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import SettingsPane from "../../features/settings/components/SettingsPane";
 import TerminalPane from "./TerminalPane";
+import BrowserPane from "./BrowserPane";
 
 interface SplitPaneProps {
   node: LayoutNode;
@@ -30,6 +31,15 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
   // SSH connect leaf — renders through TerminalPane with connect placeholder
   if (node.type === "leaf" && node.contentType === "ssh-connect") {
     return <TerminalPane sessionId={node.sessionId} />;
+  }
+
+  // Browser leaf
+  if (node.type === "leaf" && node.contentType === "browser") {
+    return (
+      <div style={{ width: "100%", height: "100%", overflow: "hidden", position: "relative" }}>
+        <BrowserPane sessionId={node.sessionId} initialUrl={node.url || "https://www.google.com"} />
+      </div>
+    );
   }
 
   // Settings leaf

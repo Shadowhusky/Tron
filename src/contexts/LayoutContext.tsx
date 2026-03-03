@@ -47,6 +47,7 @@ interface LayoutContextType {
   markSessionDirty: (sessionId: string) => void;
   updateSplitSizes: (path: number[], sizes: number[]) => void;
   openSettingsTab: (section?: string) => void;
+  openBrowserTab: (url: string, title?: string) => void;
   /** Which settings section to show when settings tab opens. */
   pendingSettingsSection: string | null;
   clearPendingSettingsSection: () => void;
@@ -574,6 +575,20 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId(newTabId);
   };
 
+  const openBrowserTab = (url: string, title?: string) => {
+    const newTabId = uuid();
+    const sessionId = `browser-${newTabId}`;
+    const label = title || new URL(url).hostname || "Browser";
+    const newTab: Tab = {
+      id: newTabId,
+      title: label,
+      root: { type: "leaf", sessionId, contentType: "browser", url },
+      activeSessionId: sessionId,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTabId);
+  };
+
   const creatingTabRef = useRef(false); // Guard against double-create in StrictMode
   const closeTab = (tabId: string) => {
     // Find tab to close
@@ -651,9 +666,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     // Gateway mode: no local PTY to split into
     if (isSshOnly()) return;
 
-    // Current session CWD
+    // Current session CWD — fetch fresh from server to avoid stale/truncated paths
     const currentSession = sessions.get(tab.activeSessionId);
-    const cwd = currentSession?.cwd;
+    let cwd = currentSession?.cwd;
+    try {
+      const freshCwd = await window.electron?.ipcRenderer?.getCwd(tab.activeSessionId);
+      if (freshCwd) cwd = freshCwd;
+    } catch { /* fall back to cached cwd */ }
 
     const newSessionId = await createPTY(cwd);
     const sessionConfig = currentSession?.aiConfig || aiService.getConfig();
@@ -796,7 +815,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const closeSession = (sessionId: string) => {
-    if (sessionId === "settings" || sessionId.startsWith("ssh-connect")) return; // pseudo-sessions
+    if (sessionId === "settings" || sessionId.startsWith("ssh-connect") || sessionId.startsWith("browser-")) return; // pseudo-sessions
 
     if (window.electron) {
       window.electron.ipcRenderer.send(IPC.TERMINAL_CLOSE, sessionId);
@@ -956,7 +975,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         const oldSession = sessions.get(oldSessionId);
 
         // Let's create a new completely disconnected PTY running in the same CWD
-        const cwd = oldSession?.cwd;
+        // Fetch fresh cwd from server to avoid stale/truncated paths
+        let cwd = oldSession?.cwd;
+        try {
+          const freshCwd = await window.electron?.ipcRenderer?.getCwd(oldSessionId);
+          if (freshCwd) cwd = freshCwd;
+        } catch { /* fall back to cached cwd */ }
         const newSessionId = await createPTY(cwd);
 
         // Copy configs only — not terminal/agent history
@@ -1299,6 +1323,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         markSessionDirty,
         updateSplitSizes,
         openSettingsTab,
+        openBrowserTab,
         pendingSettingsSection,
         clearPendingSettingsSection,
         reorderTabs,

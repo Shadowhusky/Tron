@@ -90,6 +90,7 @@ const AppContent = () => {
     selectTab,
     closeTab,
     openSettingsTab,
+    openBrowserTab,
     reorderTabs,
     updateSessionConfig,
     discardPersistedLayout,
@@ -117,6 +118,7 @@ const AppContent = () => {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [updateVersion, setUpdateVersion] = useState("");
+  const [linkPopover, setLinkPopover] = useState<{ url: string } | null>(null);
   const updateDismissedRef = useRef(false);
 
   // Generic confirm modal — replaces window.confirm for styled modals
@@ -205,6 +207,16 @@ const AppContent = () => {
     const reset = () => { updateDismissedRef.current = false; };
     window.addEventListener("tron:manual-update-check", reset);
     return () => window.removeEventListener("tron:manual-update-check", reset);
+  }, []);
+
+  // Listen for terminal link clicks — show open-in popover
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { url } = (e as CustomEvent).detail;
+      if (url) setLinkPopover({ url });
+    };
+    window.addEventListener("tron:linkClicked", handler);
+    return () => window.removeEventListener("tron:linkClicked", handler);
   }, []);
 
   // Listen for auto-updater status changes
@@ -472,6 +484,31 @@ const AppContent = () => {
           { label: "Download", type: "primary", onClick: () => {
             setUpdateAvailable(false);
             window.electron?.ipcRenderer?.downloadUpdate?.();
+          }},
+        ]}
+      />
+
+      {/* Link click popover — open in browser tab or external */}
+      <Modal
+        show={!!linkPopover}
+        resolvedTheme={resolvedTheme}
+        onClose={() => setLinkPopover(null)}
+        title="Open Link"
+        description={linkPopover?.url || ""}
+        maxWidth="sm"
+        buttons={[
+          { label: "Cancel", type: "ghost", onClick: () => setLinkPopover(null) },
+          { label: "Open External", type: "ghost", onClick: () => {
+            if (linkPopover) {
+              window.open(linkPopover.url, "_blank");
+              // Also try shell:openExternal for Electron
+              window.electron?.ipcRenderer?.invoke("shell:openExternal", linkPopover.url)?.catch(() => {});
+            }
+            setLinkPopover(null);
+          }},
+          { label: "Open in Tab", type: "primary", onClick: () => {
+            if (linkPopover) openBrowserTab(linkPopover.url);
+            setLinkPopover(null);
           }},
         ]}
       />

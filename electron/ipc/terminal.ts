@@ -325,10 +325,13 @@ async function getCwdForPid(pid: number, sessionId?: string): Promise<string | n
   try {
     let result: string | null = null;
     if (os.platform() === "darwin") {
+      // Use -Fn for machine-parseable output — handles paths with spaces
       const { stdout } = await trackedExec(
-        `lsof -p ${pid} 2>/dev/null | grep ' cwd ' | awk '{print $NF}'`,
+        `lsof -a -d cwd -Fn -p ${pid} 2>/dev/null`,
       );
-      result = stdout.trim() || null;
+      // Output format: "p<pid>\nfcwd\nn<path>\n"
+      const nLine = stdout.split("\n").find(l => l.startsWith("n"));
+      result = nLine ? nLine.slice(1) : null;
     } else if (os.platform() === "linux") {
       const { stdout } = await trackedExec(`readlink /proc/${pid}/cwd`);
       result = stdout.trim() || null;
@@ -528,11 +531,20 @@ export function registerTerminalHandlers(
         delete cleanEnv.npm_config_production;
         delete cleanEnv.NODE_ENV;
 
+        // Validate cwd exists and is accessible — external drives, deleted dirs, permission issues
+        let safeCwd = cwd || os.homedir();
+        try {
+          fs.accessSync(safeCwd, fs.constants.R_OK | fs.constants.X_OK);
+        } catch {
+          console.warn(`[Terminal] CWD inaccessible, falling back to home: ${safeCwd}`);
+          safeCwd = os.homedir();
+        }
+
         const ptyProcess = pty.spawn(shell, shellArgs, {
           name: "xterm-256color",
           cols: cols || 80,
           rows: rows || 30,
-          cwd: cwd || os.homedir(),
+          cwd: safeCwd,
           env: cleanEnv,
         });
 
@@ -565,9 +577,16 @@ export function registerTerminalHandlers(
           sendToRenderer(data);
         });
 
+        const createdAt = Date.now();
         ptyProcess.onExit(({ exitCode }) => {
           const mainWindow = getMainWindow();
           if (mainWindow && !mainWindow.isDestroyed()) {
+            // If the shell exited within 3 seconds, it likely failed to start.
+            // Push a visible error so the user doesn't see a blank screen.
+            if (Date.now() - createdAt < 3000 && exitCode !== 0) {
+              const msg = `\r\n\x1b[31m[Shell exited with code ${exitCode}]\x1b[0m\r\n\x1b[33mCWD was: ${safeCwd}\x1b[0m\r\n`;
+              mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data: msg });
+            }
             mainWindow.webContents.send("terminal.exit", {
               id: sessionId,
               exitCode,

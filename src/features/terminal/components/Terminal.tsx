@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
-import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader } from "../../../services/terminalBuffer";
+import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader } from "../../../services/terminalBuffer";
 import { isElectronApp, isTouchDevice } from "../../../utils/platform";
 import "@xterm/xterm/css/xterm.css";
 
@@ -24,6 +24,8 @@ interface TerminalProps {
   pendingHistory?: string;
   /** Called when user scrolls up/down — true = scrolled up from bottom */
   onScrolledUpChange?: (scrolledUp: boolean) => void;
+  /** When true, touch events are handled by the native text overlay instead of scrolling. */
+  selectionMode?: boolean;
 }
 
 const THEMES: Record<string, Xterm["options"]["theme"]> = {
@@ -31,23 +33,23 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
     background: "#0a0a0a",
     foreground: "#e5e7eb",
     cursor: "#e5e7eb",
-    selectionBackground: "#ffffff30",
+    selectionBackground: "#ffffff40",
   },
   modern: {
     background: "#040414",
     foreground: "#d4d4e0",
     cursor: "#c084fc",
-    selectionBackground: "#a855f718",
+    selectionBackground: "#a855f740",
   },
   light: {
     background: "#f9fafb",
     foreground: "#1f2937",
     cursor: "#1f2937",
-    selectionBackground: "#3b82f630",
+    selectionBackground: "#3b82f640",
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory, onScrolledUpChange }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory, onScrolledUpChange, selectionMode }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
 
   const xtermRef = useRef<Xterm | null>(null);
@@ -68,6 +70,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   // Ref for onScrolledUpChange to avoid re-creating the main effect
   const onScrolledUpChangeRef = useRef(onScrolledUpChange);
   useEffect(() => { onScrolledUpChangeRef.current = onScrolledUpChange; }, [onScrolledUpChange]);
+
+  // Refs for selection mode (touch-to-select) — accessed inside stable closures
+  const selectionModeRef = useRef(selectionMode);
+  useEffect(() => { selectionModeRef.current = selectionMode; }, [selectionMode]);
 
   // Refs for values accessed inside stable closures
   const isAgentRunningRef = useRef(isAgentRunning);
@@ -104,7 +110,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     });
 
     const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
+    const webLinksAddon = new WebLinksAddon((_event, uri) => {
+      // Dispatch event so parent can show open-in-browser-tab popover
+      window.dispatchEvent(new CustomEvent("tron:linkClicked", {
+        detail: { url: uri, sessionId },
+      }));
+    });
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
@@ -112,6 +123,17 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    // On mobile, disable ALL native touch panning on xterm elements.
+    // CSS @media(pointer:coarse) sets touch-action:none !important,
+    // but xterm may recreate elements — belt-and-suspenders via JS too.
+    // Also prevent page-level scroll (SPA should never scroll the page).
+    if (isTouch) {
+      for (const sel of [".xterm-screen", ".xterm-viewport"]) {
+        const node = el.querySelector(sel) as HTMLElement | null;
+        if (node) node.style.setProperty("touch-action", "none", "important");
+      }
+    }
 
     // Register screen buffer reader so the agent can read rendered TUI content
     registerScreenBufferReader(sessionId, (lines: number) => {
@@ -133,13 +155,27 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // Register selection reader so context menu can read selected text
     registerSelectionReader(sessionId, () => term.getSelection());
 
+    // Register viewport text reader — returns only the currently visible lines
+    registerViewportTextReader(sessionId, () => {
+      const buf = term.buffer.active;
+      const start = buf.viewportY;
+      const end = start + term.rows;
+      const lines: string[] = [];
+      for (let i = start; i < end; i++) {
+        const line = buf.getLine(i);
+        lines.push(line ? line.translateToString(true) : "");
+      }
+      return lines.join("\n");
+    });
+
     // Local-only fit (adjusts xterm cols/rows to container — no IPC to backend).
     // We must NOT send resize IPC before history is restored, because resizing
     // the PTY causes the shell to re-render its prompt, which appends a duplicate
     // prompt to the backend history buffer.
     try { fitAddon.fit(); } catch (e) { console.warn("Initial fit failed", e); }
 
-    term.focus();
+    // Skip initial focus on mobile — prevents keyboard from opening on mount
+    if (!isTouch) term.focus();
 
     // Save a file blob to temp via IPC and write the path to the terminal PTY.
     const saveFileAndType = async (blob: Blob, filename?: string) => {
@@ -231,13 +267,74 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     el.addEventListener("paste", onPaste, true);
 
     // Prevent scroll-to-top on click/tap: when the user interacts with the
-    // terminal, xterm focuses its helper textarea. The browser may auto-scroll
-    // .xterm-viewport (or a parent) to bring the textarea into view, jumping
-    // to the top of the scrollback buffer. We guard against this by saving
-    // scroll position and reverting any large jump for 300ms after interaction.
-    // Also intercept focus events on the helper textarea directly.
+    // terminal, xterm focuses its helper textarea. The browser auto-scrolls
+    // .xterm-viewport to bring the textarea into view, jumping to the top of
+    // the scrollback buffer.
     const xtermViewport = el.querySelector(".xterm-viewport") as HTMLElement | null;
     const xtermTextarea = el.querySelector(".xterm-helper-textarea") as HTMLElement | null;
+
+    // MOBILE SCROLL-TO-TOP FIX: block textarea focus entirely.
+    // Tapping the terminal causes xterm to focus its hidden textarea →
+    // virtual keyboard opens → viewport resizes → scroll jumps.
+    // On mobile, all typing goes through SmartInput, so the textarea
+    // focus is unnecessary. Also set position:fixed as extra safety
+    // and prevent page-level scroll (SPA should never scroll).
+    const origTextareaFocus = xtermTextarea
+      ? HTMLElement.prototype.focus.bind(xtermTextarea) : null;
+    const preventPageScroll = isTouch ? () => {
+      if (window.scrollY !== 0 || window.scrollX !== 0) window.scrollTo(0, 0);
+    } : null;
+    if (preventPageScroll) window.addEventListener("scroll", preventPageScroll);
+    // MOBILE SCROLL-TO-TOP FIX:
+    // On mobile, tapping the terminal can cause scroll-to-top via multiple paths
+    // (native focus, xterm internals, React re-renders from focusTarget state).
+    // Fix: completely block xterm textarea focus + continuously guard scroll position.
+    let mobileScrollObserver: MutationObserver | null = null;
+    if (isTouch && xtermTextarea) {
+      // Make textarea completely unfocusable from taps
+      xtermTextarea.style.setProperty("pointer-events", "none", "important");
+      xtermTextarea.style.setProperty("position", "fixed", "important");
+      xtermTextarea.style.setProperty("top", "-9999px", "important");
+      xtermTextarea.tabIndex = -1;
+
+      // Smart keyboard: allow focus only in normal buffer at bottom (shell prompt).
+      // Block in alternate buffer (TUI) and when scrolled up.
+      xtermTextarea.focus = (opts?: FocusOptions) => {
+        if (selectionModeRef.current) return;
+        if (!origTextareaFocus) return;
+        const buf = term.buffer.active;
+        if (buf.type !== "normal") return; // TUI = no keyboard
+        const isAtBottom = buf.viewportY >= buf.baseY - 2;
+        if (!isAtBottom) return;
+        origTextareaFocus(opts);
+      };
+
+      // Continuous scroll guard: use MutationObserver + scroll listener to catch
+      // ANY scroll-to-top regardless of cause (focus, re-render, layout shift)
+      if (xtermViewport) {
+        let guardedScrollTop = xtermViewport.scrollTop;
+        // Update guarded position when user intentionally scrolls (touch handler)
+        const updateGuard = () => { guardedScrollTop = xtermViewport!.scrollTop; };
+        const checkScroll = () => {
+          if (xtermViewport && guardedScrollTop > 50 &&
+              xtermViewport.scrollTop === 0) {
+            // Jumped to top — revert
+            xtermViewport.scrollTop = guardedScrollTop;
+          } else if (xtermViewport) {
+            guardedScrollTop = xtermViewport.scrollTop;
+          }
+        };
+        xtermViewport.addEventListener("scroll", checkScroll);
+        // Also observe DOM changes that might cause layout shifts
+        mobileScrollObserver = new MutationObserver(checkScroll);
+        mobileScrollObserver.observe(el, { childList: true, subtree: true, attributes: true });
+        // Update guard when user scrolls via our touch handler
+        term.onScroll(updateGuard);
+      }
+    }
+
+    // DESKTOP GUARD: timer-based guard on mousedown / textarea focus (less
+    // aggressive — desktop doesn't have the touch-scroll/DOM-scroll split).
     let scrollGuardPos = -1;
     let scrollGuardTimer: ReturnType<typeof setTimeout> | undefined;
     const scrollGuard = () => {
@@ -246,7 +343,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         xtermViewport.scrollTop = scrollGuardPos;
       }
     };
-    const armScrollGuard = () => {
+    const armScrollGuard = !isTouch ? () => {
       if (!xtermViewport) return;
       scrollGuardPos = xtermViewport.scrollTop;
       xtermViewport.addEventListener("scroll", scrollGuard);
@@ -255,11 +352,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         xtermViewport.removeEventListener("scroll", scrollGuard);
         scrollGuardPos = -1;
       }, 300);
-    };
-    el.addEventListener("mousedown", armScrollGuard);
-    el.addEventListener("touchstart", armScrollGuard, { passive: true });
-    // Also guard on textarea focus (browser scrolls to focused element)
-    xtermTextarea?.addEventListener("focus", armScrollGuard);
+    } : null;
+    if (armScrollGuard) {
+      el.addEventListener("mousedown", armScrollGuard);
+      xtermTextarea?.addEventListener("focus", armScrollGuard);
+    }
 
     // Track whether user is scrolled up from bottom (for scroll-to-bottom button).
     // Use xterm's onScroll API instead of DOM scroll events — term.scrollLines()
@@ -528,13 +625,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1 || viewportResizing) return;
+      // In selection mode, touch is handled by the native text overlay — skip
+      if (selectionModeRef.current) return;
       touchStartY = e.touches[0].clientY;
       touchAccum = 0;
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1 || viewportResizing) return;
-      const dy = touchStartY - e.touches[0].clientY;
-      touchStartY = e.touches[0].clientY;
+      if (e.touches.length !== 1 || viewportResizing || selectionModeRef.current) return;
+      const touch = e.touches[0];
+      const dy = touchStartY - touch.clientY;
+      touchStartY = touch.clientY;
       touchAccum += dy;
       const lines = Math.trunc(touchAccum / LINE_HEIGHT);
       if (lines !== 0) {
@@ -603,6 +703,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       window.removeEventListener("tron:splitDragEnd", onSplitDragEnd);
       unregisterScreenBufferReader(sessionId);
       unregisterSelectionReader(sessionId);
+      unregisterViewportTextReader(sessionId);
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
@@ -611,14 +712,21 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       el.removeEventListener("touchmove", onTouchMove);
       vv?.removeEventListener("resize", onViewportResize);
       clearTimeout(viewportResizeTimer);
-      el.removeEventListener("mousedown", armScrollGuard);
-      el.removeEventListener("touchstart", armScrollGuard);
-      xtermTextarea?.removeEventListener("focus", armScrollGuard);
-      xtermViewport?.removeEventListener("scroll", scrollGuard);
+      if (preventPageScroll) window.removeEventListener("scroll", preventPageScroll);
+      if (armScrollGuard) {
+        el.removeEventListener("mousedown", armScrollGuard);
+        xtermTextarea?.removeEventListener("focus", armScrollGuard);
+        xtermViewport?.removeEventListener("scroll", scrollGuard);
+        clearTimeout(scrollGuardTimer);
+      }
+      // Restore original textarea focus + clean up mobile listeners
+      if (xtermTextarea && origTextareaFocus) {
+        xtermTextarea.focus = origTextareaFocus;
+      }
+      if (mobileScrollObserver) mobileScrollObserver.disconnect();
       disposableOnScroll.dispose();
       disposableOnLineFeed.dispose();
       window.removeEventListener("tron:scrollTermToBottom", handleScrollToBottom);
-      clearTimeout(scrollGuardTimer);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       el.removeEventListener("paste", onPaste, true);

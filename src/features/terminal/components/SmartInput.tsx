@@ -43,6 +43,7 @@ interface SmartInputProps {
   awaitingAnswer?: boolean;
   focusTarget?: "input" | "terminal";
   onFocusInput?: () => void;
+  onBlurInput?: () => void;
   noModelConfigured?: boolean;
   onNoModel?: () => void;
 }

@@ -32,6 +32,29 @@ export function readScreenBuffer(
   return reader(lines);
 }
 
+// --- Viewport text reader (returns only the currently visible lines) ---
+
+export type ViewportTextReader = () => string;
+
+const viewportTextReaders = new Map<string, ViewportTextReader>();
+
+export function registerViewportTextReader(
+  sessionId: string,
+  reader: ViewportTextReader,
+) {
+  viewportTextReaders.set(sessionId, reader);
+}
+
+export function unregisterViewportTextReader(sessionId: string) {
+  viewportTextReaders.delete(sessionId);
+}
+
+export function readViewportText(sessionId: string): string {
+  const reader = viewportTextReaders.get(sessionId);
+  if (!reader) return "";
+  return reader();
+}
+
 // --- Selection reader (for context menu Copy / Ask Agent / Add to Input) ---
 
 export type SelectionReader = () => string;
