@@ -110,10 +110,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     });
 
     const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon((_event, uri) => {
-      // Dispatch event so parent can show open-in-browser-tab popover
+    const webLinksAddon = new WebLinksAddon((event, uri) => {
+      // Dispatch event so parent can show link popover at click position
+      const me = event as MouseEvent;
       window.dispatchEvent(new CustomEvent("tron:linkClicked", {
-        detail: { url: uri, sessionId },
+        detail: { url: uri, x: me.clientX, y: me.clientY, sessionId },
       }));
     });
 
@@ -403,6 +404,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       const cw = el.clientWidth;
       const ch = el.clientHeight;
       if (cw === lastContainerW && ch === lastContainerH && lastContainerW > 0) return;
+      // Minimum height guard: if container is too small (< 80px ≈ 4 rows),
+      // skip resize entirely. Prevents absurd 1-2 row terminals that cause
+      // massive reflow and flicker. The PTY keeps its previous dimensions.
+      const fontSize = xtermRef.current?.options.fontSize || 14;
+      if (ch < fontSize * 5) return;
       lastContainerW = cw;
       lastContainerH = ch;
 
@@ -602,6 +608,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // dy deltas that would otherwise scroll the terminal to the top of history.
     // Additionally, fit() during keyboard animation causes expensive forced
     // synchronous layout on every frame, making input feel laggy on mobile.
+    //
+    // Strategy: completely freeze terminal dimensions during keyboard transitions.
+    // The container shrinks/grows naturally (CSS), clipping the xterm canvas.
+    // After the keyboard fully settles, do ONE masked resize: briefly hide xterm
+    // with opacity:0 so the reflow is invisible, then fade back in.
     let viewportResizeTimer: ReturnType<typeof setTimeout> | undefined;
     const vv = isTouch ? window.visualViewport : null;
     const onViewportResize = () => {
@@ -609,17 +620,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       // Reset dimension cache so the settle resize always runs
       lastContainerW = 0;
       lastContainerH = 0;
+      // Cancel any pending debounced resize — the settle timeout handles it
+      clearTimeout(resizeTimer);
       clearTimeout(viewportResizeTimer);
+      // Wait 800ms after the LAST viewport resize event. iOS keyboard animation
+      // can take 300-500ms and fires many events; 800ms ensures it's truly done.
       viewportResizeTimer = setTimeout(() => {
         viewportResizing = false;
-        // One clean resize after keyboard settles
-        performResize();
-        // Pin scroll to bottom so content stays visible after keyboard transition
-        const viewport = el.querySelector(".xterm-viewport");
-        if (viewport) {
-          requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
-        }
-      }, 500);
+        // Mask the reflow: hide xterm → resize → show. This prevents the user
+        // from seeing content reflow/jump when row count changes drastically.
+        el.style.opacity = "0";
+        // Resize in next frame so opacity:0 paints first
+        requestAnimationFrame(() => {
+          performResize();
+          // Pin scroll to bottom so cursor stays visible
+          const viewport = el.querySelector(".xterm-viewport");
+          if (viewport) viewport.scrollTop = viewport.scrollHeight;
+          // Reveal after one more frame (resize has painted)
+          requestAnimationFrame(() => { el.style.opacity = "1"; });
+        });
+      }, 800);
     };
     vv?.addEventListener("resize", onViewportResize);
 

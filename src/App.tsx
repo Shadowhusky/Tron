@@ -21,8 +21,10 @@ import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import SavedTabsModal from "./components/layout/SavedTabsModal";
 import Modal from "./components/ui/Modal";
+import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
 import { isTouchDevice } from "./utils/platform";
+import { ExternalLink, PanelRight } from "lucide-react";
 
 /**
  * On mobile, the virtual keyboard shrinks the visible area but the browser
@@ -118,7 +120,15 @@ const AppContent = () => {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [updateVersion, setUpdateVersion] = useState("");
-  const [linkPopover, setLinkPopover] = useState<{ url: string } | null>(null);
+  const [linkPopover, setLinkPopover] = useState<{ url: string; x: number; y: number } | null>(null);
+  const linkAnchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
+    getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
+  });
+  if (linkPopover) {
+    linkAnchorRef.current = {
+      getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: linkPopover.x, y: linkPopover.y }),
+    };
+  }
   const updateDismissedRef = useRef(false);
 
   // Generic confirm modal — replaces window.confirm for styled modals
@@ -209,11 +219,13 @@ const AppContent = () => {
     return () => window.removeEventListener("tron:manual-update-check", reset);
   }, []);
 
-  // Listen for terminal link clicks — show open-in popover
+  // Listen for link clicks — show popover at click position
+  // Defer by one frame so the originating click finishes before Radix Popover
+  // installs its pointer-down-outside listener (otherwise it closes immediately).
   useEffect(() => {
     const handler = (e: Event) => {
-      const { url } = (e as CustomEvent).detail;
-      if (url) setLinkPopover({ url });
+      const { url, x, y } = (e as CustomEvent).detail;
+      if (url) requestAnimationFrame(() => setLinkPopover({ url, x: x ?? 0, y: y ?? 0 }));
     };
     window.addEventListener("tron:linkClicked", handler);
     return () => window.removeEventListener("tron:linkClicked", handler);
@@ -488,30 +500,67 @@ const AppContent = () => {
         ]}
       />
 
-      {/* Link click popover — open in browser tab or external */}
-      <Modal
-        show={!!linkPopover}
-        resolvedTheme={resolvedTheme}
-        onClose={() => setLinkPopover(null)}
-        title="Open Link"
-        description={linkPopover?.url || ""}
-        maxWidth="sm"
-        buttons={[
-          { label: "Cancel", type: "ghost", onClick: () => setLinkPopover(null) },
-          { label: "Open External", type: "ghost", onClick: () => {
-            if (linkPopover) {
-              window.open(linkPopover.url, "_blank");
-              // Also try shell:openExternal for Electron
-              window.electron?.ipcRenderer?.invoke("shell:openExternal", linkPopover.url)?.catch(() => {});
-            }
-            setLinkPopover(null);
-          }},
-          { label: "Open in Tab", type: "primary", onClick: () => {
-            if (linkPopover) openBrowserTab(linkPopover.url);
-            setLinkPopover(null);
-          }},
-        ]}
-      />
+      {/* Link click popover — context-menu style at click position */}
+      <Popover.Root
+        open={!!linkPopover}
+        onOpenChange={(open) => { if (!open) setLinkPopover(null); }}
+      >
+        <Popover.Anchor virtualRef={linkAnchorRef as any} />
+        <Popover.Portal>
+          <Popover.Content
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+            className={`z-[200] min-w-[180px] max-w-[320px] overflow-hidden rounded-lg py-1 shadow-xl ${
+              resolvedTheme === "light"
+                ? "border border-gray-200 bg-white text-gray-800 shadow-xl"
+                : resolvedTheme === "modern"
+                  ? "border border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+                  : "border border-white/10 bg-[#1e1e1e] text-gray-200"
+            }`}
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
+            {/* URL preview */}
+            <div className={`px-3 py-1.5 text-[11px] truncate ${
+              resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"
+            }`}>
+              {linkPopover?.url}
+            </div>
+            <div className={`my-0.5 h-px ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`} />
+            <button
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
+              }`}
+              onClick={() => {
+                if (linkPopover) {
+                  if (window.electron?.ipcRenderer) {
+                    window.electron.ipcRenderer.invoke("shell.openExternal", linkPopover.url)?.catch(() => {});
+                  } else {
+                    window.open(linkPopover.url, "_blank", "noopener,noreferrer");
+                  }
+                }
+                setLinkPopover(null);
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in Browser
+            </button>
+            <button
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
+              }`}
+              onClick={() => {
+                if (linkPopover) openBrowserTab(linkPopover.url);
+                setLinkPopover(null);
+              }}
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+              Open in Tab
+            </button>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
 
       {/* SSH-only toast */}
       <AnimatePresence>

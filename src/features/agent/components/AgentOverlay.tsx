@@ -171,7 +171,7 @@ function summarizeCommand(cmd: string): string {
   return `Ran ${firstWord}`;
 }
 
-/** Handle link clicks — open in Electron shell or new browser tab */
+/** Handle link clicks — dispatch event so App.tsx shows the link popover at click position */
 const handleLinkClick = (e: React.MouseEvent) => {
   const target = e.target as HTMLElement;
   const anchor = target.closest("a");
@@ -183,11 +183,9 @@ const handleLinkClick = (e: React.MouseEvent) => {
   if (href.startsWith("file://")) {
     window.electron?.ipcRenderer?.invoke("shell.openPath", decodeURI(href.slice(7)));
   } else if (href.startsWith("http://") || href.startsWith("https://")) {
-    if (window.electron?.ipcRenderer) {
-      window.electron.ipcRenderer.invoke("shell.openExternal", href);
-    } else {
-      window.open(href, "_blank", "noopener,noreferrer");
-    }
+    window.dispatchEvent(new CustomEvent("tron:linkClicked", {
+      detail: { url: href, x: e.clientX, y: e.clientY },
+    }));
   }
 };
 

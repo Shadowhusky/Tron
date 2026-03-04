@@ -20,8 +20,15 @@ export function registerSystemHandlers() {
   });
 
   ipcMain.handle("shell.openExternal", async (_event, url: string) => {
-    if (typeof url === "string" && (url.startsWith("http://") || url.startsWith("https://"))) {
-      await shell.openExternal(url);
+    if (typeof url !== "string") return;
+    // Trim whitespace/quotes that may wrap the URL
+    const trimmed = url.trim().replace(/^["']+|["']+$/g, "");
+    if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return;
+    try {
+      new URL(trimmed); // validate
+      await shell.openExternal(trimmed);
+    } catch {
+      // Invalid URL — ignore silently
     }
   });
 

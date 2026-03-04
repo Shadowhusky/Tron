@@ -710,52 +710,6 @@ class AIService {
     return history;
   }
 
-  /** Stream an Ollama /api/generate response, calling onToken for each chunk. Returns full text. */
-  private async streamOllamaGenerate(
-    baseUrl: string,
-    model: string,
-    prompt: string,
-    onToken?: (token: string, thinking?: string) => void,
-    signal?: AbortSignal,
-    apiKey?: string,
-  ): Promise<string> {
-    const response = await proxyFetch(`${baseUrl}/api/generate`, {
-      method: "POST",
-      headers: this.jsonHeaders(apiKey),
-      body: JSON.stringify({ model, prompt, stream: true }),
-      signal,
-    });
-    if (!response.ok) throw new Error(`Ollama Error: ${response.status}`);
-    if (!response.body) throw new Error("No response body for streaming");
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullText = "";
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const chunk = JSON.parse(line);
-          if (chunk.thinking && onToken) onToken("", chunk.thinking);
-          if (chunk.response) {
-            fullText += chunk.response;
-            if (onToken) onToken(chunk.response);
-          }
-        } catch {
-          /* skip malformed lines */
-        }
-      }
-    }
-    return fullText;
-  }
-
   /** Stream an Ollama /api/chat response. Returns content and thinking text. */
   private async streamOllamaChat(
     baseUrl: string,
@@ -767,14 +721,9 @@ class AIService {
     think: boolean = true,
     apiKey?: string,
   ): Promise<{ content: string; thinking: string }> {
-    // Many models reject think + format:"json" together — never send both
-    const body: any = { model, messages, stream: true };
-    if (format) {
-      body.format = format;
-      // Don't enable think when requesting structured output
-    } else if (think) {
-      body.think = true;
-    }
+    const body: any = { model, messages, stream: true, think };
+    if (format) body.format = format;
+    // If model rejects think+format combo, the 400 retry below drops both
 
     const headers = this.jsonHeaders(apiKey);
     let response = await proxyFetch(`${baseUrl}/api/chat`, {
@@ -941,6 +890,7 @@ class AIService {
     signal?: AbortSignal,
     responseFormat?: string,
     baseUrl?: string,
+    thinking?: boolean,
   ): Promise<{ content: string; thinking: string }> {
     const useResponses = isResponsesModel(model);
     const useCompletions = !useResponses && isCompletionsModel(model);
@@ -964,6 +914,18 @@ class AIService {
     // Only send response_format for cloud providers that support json_object (chat completions only).
     if (!useCompletions && !useResponses && responseFormat === "json" && !providerUsesBaseUrl(provider)) {
       body.response_format = { type: "json_object" };
+    }
+
+    // Enable reasoning/thinking for providers that support it
+    if (thinking && !useCompletions) {
+      // DeepSeek reasoning models
+      if (provider === "deepseek" || model.includes("deepseek")) {
+        body.enable_search = false; // required for reasoning
+      }
+      // OpenAI o-series models
+      if (model.match(/^o[1-9]|^o3/)) {
+        body.reasoning_effort = "medium";
+      }
     }
 
     const response = await proxyFetch(url, {
@@ -1107,8 +1069,12 @@ class AIService {
     prompt: string,
     onToken?: (token: string) => void,
     context?: { cwd?: string; terminalHistory?: string },
+    sessionConfig?: AIConfig,
+    signal?: AbortSignal,
+    options?: { thinking?: boolean; onThinking?: (text: string) => void },
   ): Promise<string> {
-    const { provider, model, apiKey, baseUrl } = this.config;
+    const cfg = sessionConfig || this.config;
+    const { provider, model, apiKey, baseUrl } = cfg;
 
     const contextLines = [
       context?.cwd ? `CWD: ${context.cwd}` : "",
@@ -1126,23 +1092,67 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     try {
       if (provider === "ollama") {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
+        let timedOut = false;
+        const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 60000);
+        // Abort on external signal (stop button) too
+        if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
+        const ollamaBase = baseUrl || "http://localhost:11434";
 
         try {
-          const result = await this.streamOllamaGenerate(
-            baseUrl || "http://localhost:11434",
-            model,
-            `${systemPrompt}\n\nUser request: ${prompt}\nCommand:`,
-            onToken ? (token) => onToken(token) : undefined,
-            controller.signal,
-            apiKey,
-          );
+          // Use chat endpoint with think:false — thinking models output <think> tags
+          // via /api/generate which corrupt the COMMAND:/TEXT: format.
+          // Fall back to /api/generate if /api/chat returns 404 (old models without chat template).
+          let result: string;
+          try {
+            const thinkEnabled = options?.thinking ?? false;
+            const chatResult = await this.streamOllamaChat(
+              ollamaBase,
+              model,
+              [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: prompt },
+              ],
+              (token, thinking) => {
+                if (thinking && options?.onThinking) options.onThinking(thinking);
+                if (token && onToken) onToken(token);
+              },
+              controller.signal,
+              undefined, // no format constraint
+              thinkEnabled,
+              apiKey,
+            );
+            result = chatResult.content;
+          } catch (chatErr: any) {
+            // Fallback to /api/generate for models without chat support
+            if (chatErr.message?.includes("404")) {
+              const resp = await proxyFetch(`${ollamaBase}/api/generate`, {
+                method: "POST",
+                headers: this.jsonHeaders(apiKey),
+                body: JSON.stringify({
+                  model,
+                  prompt: `${systemPrompt}\n\nUser request: ${prompt}\nCommand:`,
+                  stream: false,
+                }),
+                signal: controller.signal,
+              });
+              if (!resp.ok) throw chatErr;
+              const data = await resp.json();
+              // Strip <think>...</think> tags from thinking models
+              result = (data.response || "").replace(/<think>[\s\S]*?<\/think>/g, "");
+            } else {
+              throw chatErr;
+            }
+          }
           clearTimeout(timeout);
           return result.trim();
         } catch (fetchError: any) {
           clearTimeout(timeout);
-          if (fetchError.name === "AbortError")
-            throw new Error("Ollama connection timed out. Is it running?");
+          if (fetchError.name === "AbortError") {
+            if (timedOut) throw new Error("Ollama connection timed out. Is it running?");
+            // User-initiated abort (stop button) — propagate as AbortError
+            const abortErr = new DOMException("Advice generation stopped", "AbortError");
+            throw abortErr;
+          }
           throw fetchError;
         }
       }
@@ -1155,13 +1165,20 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model: model,
-            max_tokens: 300,
+            max_tokens: 1024,
             system: systemPrompt,
             messages: [{ role: "user", content: prompt }],
           }),
+          signal,
         });
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "");
+          throw new Error(`Anthropic error (${response.status}): ${errText.slice(0, 200)}`);
+        }
         const data = await response.json();
-        return data.content[0].text.trim();
+        // Find the text block (skip thinking blocks if model returned them)
+        const textBlock = data.content?.find((b: any) => b.type === "text");
+        return (textBlock?.text || data.content?.[0]?.text || "").trim();
       }
 
       // OpenAI-compatible providers (openai, deepseek, kimi, gemini, glm, lmstudio, openai-compat)
@@ -1217,9 +1234,30 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
 
     try {
       if (provider === "ollama") {
-        const response = await proxyFetch(
-          `${baseUrl || "http://localhost:11434"}/api/generate`,
-          {
+        const ollamaBase = baseUrl || "http://localhost:11434";
+        // Try chat endpoint first (think:false suppresses thinking tags),
+        // fall back to generate for models without chat template.
+        let response = await proxyFetch(`${ollamaBase}/api/chat`, {
+          method: "POST",
+          headers: this.jsonHeaders(apiKey),
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userContent },
+            ],
+            think: false,
+            stream: false,
+          }),
+          signal: combinedSignal,
+        });
+        let raw = "";
+        if (response.ok) {
+          const data = await response.json();
+          raw = data.message?.content || "";
+        } else {
+          // Fallback to /api/generate
+          response = await proxyFetch(`${ollamaBase}/api/generate`, {
             method: "POST",
             headers: this.jsonHeaders(apiKey),
             body: JSON.stringify({
@@ -1228,11 +1266,12 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
               stream: false,
             }),
             signal: combinedSignal,
-          },
-        );
-        if (!response.ok) return "";
-        const data = await response.json();
-        const result = (data.response || "").trim().replace(/^`+|`+$/g, "");
+          });
+          if (!response.ok) return "";
+          const data = await response.json();
+          raw = (data.response || "").replace(/<think>[\s\S]*?<\/think>/g, "");
+        }
+        const result = raw.trim().replace(/^`+|`+$/g, "");
         return result.length <= 80 ? result : "";
       }
 
@@ -1748,23 +1787,46 @@ ${agentPrompt}
         ) {
           // Anthropic Messages API with streaming
           let contentAccumulated = "";
-          const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
+          let thinkingAccumulated = "";
+          const anthropicBody: any = {
+            model,
+            max_tokens: thinkingEnabled ? 128000 : 16384,
+            system: history[0].content,
+            messages: history.slice(1),
+            stream: true,
+          };
+          if (thinkingEnabled) {
+            anthropicBody.thinking = { type: "enabled", budget_tokens: Math.min(32000, anthropicBody.max_tokens - 1024) };
+          }
+          let response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
             method: "POST",
             headers: this.anthropicHeaders(apiKey),
-            body: JSON.stringify({
-              model,
-              max_tokens: 16384,
-              system: history[0].content,
-              messages: history.slice(1),
-              stream: true,
-            }),
+            body: JSON.stringify(anthropicBody),
             signal,
           });
           if (!response.ok) {
             const errBody = await response.text().catch(() => "");
-            throw new Error(
-              `${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${errBody.slice(0, 300)}`,
-            );
+            // If thinking failed (model doesn't support it), retry without
+            if (thinkingEnabled && response.status === 400) {
+              delete anthropicBody.thinking;
+              anthropicBody.max_tokens = 16384;
+              response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
+                method: "POST",
+                headers: this.anthropicHeaders(apiKey),
+                body: JSON.stringify(anthropicBody),
+                signal,
+              });
+              if (!response.ok) {
+                const retryErr = await response.text().catch(() => "");
+                throw new Error(
+                  `${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${retryErr.slice(0, 300)}`,
+                );
+              }
+            } else {
+              throw new Error(
+                `${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${errBody.slice(0, 300)}`,
+              );
+            }
           }
           if (!response.body) throw new Error("No response body from server");
 
@@ -1782,15 +1844,25 @@ ${agentPrompt}
               if (!trimmed.startsWith("data: ")) continue;
               try {
                 const evt = JSON.parse(trimmed.slice(6));
-                if (evt.type === "content_block_delta" && evt.delta?.text) {
-                  contentAccumulated += evt.delta.text;
-                  onUpdate("streaming_response", contentAccumulated);
+                if (evt.type === "content_block_delta") {
+                  if (evt.delta?.type === "thinking_delta" && evt.delta?.thinking) {
+                    thinkingAccumulated += evt.delta.thinking;
+                    if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAccumulated);
+                  } else if (evt.delta?.text) {
+                    contentAccumulated += evt.delta.text;
+                    onUpdate("streaming_response", contentAccumulated);
+                  }
                 }
               } catch { }
             }
           }
           responseText = contentAccumulated;
-          onUpdate("thinking_done", "");
+          thinkingText = thinkingAccumulated;
+          if (thinkingAccumulated) {
+            onUpdate("thinking_complete", thinkingAccumulated);
+          } else {
+            onUpdate("thinking_done", "");
+          }
         } else if (
           isOpenAICompatible(provider) &&
           (apiKey || providerUsesBaseUrl(provider))
@@ -1816,6 +1888,7 @@ ${agentPrompt}
             signal,
             "json",
             baseUrl,
+            thinkingEnabled,
           );
           responseText = result.content;
           thinkingText = result.thinking;
