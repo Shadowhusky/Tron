@@ -192,7 +192,7 @@ Tron's agent is designed for **everyday terminal tasks** — running commands, e
 
 | Tier | Models | Best For |
 |------|--------|----------|
-| **Local (free)** | Qwen3-Coder (via Ollama/LM Studio) | Basic agent tasks: file ops, simple scripts, git workflows. Not suited for writing full projects or complex multi-file refactors. |
+| **Local (free)** | [Qwen3.5-9B](https://ollama.com/library/qwen3.5:9b) (via Ollama/LM Studio) | Surprisingly capable for a local model — multimodal, 256K context, thinking mode. Beats models 13× its size on reasoning benchmarks. Handles agent tasks, file editing, and scripting well. Runs on 8GB+ VRAM. |
 | **Budget cloud** | Kimi, GLM, MiniMax | Great balance of cost and capability. Handle most agent tasks well — command execution, file editing, debugging. Good daily drivers. |
 | **Premium cloud** | Claude, GPT, Gemini | Excellent but overkill for typical terminal agent work. Better suited for direct coding conversations. |
 
