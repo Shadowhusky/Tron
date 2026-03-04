@@ -298,15 +298,17 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       xtermTextarea.style.setProperty("top", "-9999px", "important");
       xtermTextarea.tabIndex = -1;
 
-      // Smart keyboard: allow focus only in normal buffer at bottom (shell prompt).
-      // Block in alternate buffer (TUI) and when scrolled up.
+      // Smart keyboard: allow focus in normal buffer (at bottom) and alternate
+      // buffer (TUI apps like vim, Claude Code need text input).
+      // Block only when scrolled up in normal buffer or in selection mode.
       xtermTextarea.focus = (opts?: FocusOptions) => {
         if (selectionModeRef.current) return;
         if (!origTextareaFocus) return;
         const buf = term.buffer.active;
-        if (buf.type !== "normal") return; // TUI = no keyboard
-        const isAtBottom = buf.viewportY >= buf.baseY - 2;
-        if (!isAtBottom) return;
+        if (buf.type === "normal") {
+          const isAtBottom = buf.viewportY >= buf.baseY - 2;
+          if (!isAtBottom) return;
+        }
         origTextareaFocus(opts);
       };
 
