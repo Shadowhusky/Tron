@@ -25,6 +25,8 @@ import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
 import TuiKeyToolbar from "../../features/terminal/components/TuiKeyToolbar";
 import { useAllConfiguredModels } from "../../hooks/useModels";
 import { readScreenBuffer, getTerminalSelection, readViewportText } from "../../services/terminalBuffer";
+import { aiService } from "../../services/ai";
+import { stripAnsi } from "../../utils/contextCleaner";
 
 interface TerminalPaneProps {
   sessionId: string;
@@ -195,6 +197,44 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         renameTabRef.current(sessionId, title);
       }
     }, 200);
+  }, [sessionId]);
+
+  // Auto-generate tab name after 60s of activity (once per session)
+  const autoNameAttempted = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!sessionId || sessionId.startsWith("ssh-connect")) return;
+    if (autoNameAttempted.current.has(sessionId)) return;
+    const timer = setTimeout(async () => {
+      if (autoNameAttempted.current.has(sessionId)) return;
+      autoNameAttempted.current.add(sessionId);
+      try {
+        // Check tab title is still default
+        const currentTab = tabsRef.current.find(
+          (t) => t.activeSessionId === sessionId,
+        );
+        if (!currentTab || currentTab.title !== "Terminal") return;
+        // Get history
+        const history = await window.electron?.ipcRenderer?.getHistory?.(sessionId);
+        if (!history || history.length < 50) return;
+        const stripped = stripAnsi(history);
+        if (stripped.trim().length < 30) return;
+        const name = await aiService.generateTabName(
+          stripped,
+          session?.aiConfig,
+        );
+        if (!name) return;
+        // Re-check tab still has default title
+        const recheckTab = tabsRef.current.find(
+          (t) => t.activeSessionId === sessionId,
+        );
+        if (recheckTab && recheckTab.title === "Terminal") {
+          renameTabRef.current(sessionId, name);
+        }
+      } catch {
+        // Non-critical, silently ignore
+      }
+    }, 60000);
+    return () => clearTimeout(timer);
   }, [sessionId]);
 
   // Input Queue

@@ -1424,6 +1424,90 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
   }
 
   /**
+   * Generate a tab name from terminal history context (2-4 words).
+   * Used for auto-naming tabs after ~60s of activity. Fire-and-forget safe.
+   */
+  async generateTabName(
+    context: string,
+    sessionConfig?: AIConfig,
+  ): Promise<string> {
+    const cfg = sessionConfig || this.config;
+    const provider = cfg.provider;
+    const model = cfg.model;
+    const apiKey = cfg.apiKey || this.config.apiKey;
+    const baseUrl = providerUsesBaseUrl(provider) ? cfg.baseUrl : undefined;
+    if (!model) return "";
+
+    const systemPrompt = `Based on the terminal history below, generate a short descriptive tab name (2-4 words, max 25 chars). Output ONLY the name, no quotes, no punctuation. Examples: "Node Server", "Git Rebase", "Docker Build", "Python Tests".`;
+    const userContent = context.slice(-500);
+    const signal = AbortSignal.timeout(10000);
+
+    try {
+      if (provider === "ollama") {
+        const response = await proxyFetch(
+          `${baseUrl || "http://localhost:11434"}/api/generate`,
+          {
+            method: "POST",
+            headers: this.jsonHeaders(apiKey),
+            body: JSON.stringify({
+              model,
+              prompt: `${systemPrompt}\n\nTerminal history:\n${userContent}\n\nTab name:`,
+              stream: false,
+            }),
+            signal,
+          },
+        );
+        if (!response.ok) return "";
+        const data = await response.json();
+        const result = (data.response || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+        return result.length > 0 && result.length <= 30 ? result : "";
+      }
+
+      if (
+        isAnthropicProtocol(provider) &&
+        (apiKey || provider === "anthropic-compat")
+      ) {
+        const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
+          method: "POST",
+          headers: this.anthropicHeaders(apiKey),
+          body: JSON.stringify({
+            model,
+            max_tokens: 15,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userContent }],
+          }),
+          signal,
+        });
+        const data = await response.json();
+        const result = (data.content?.[0]?.text || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+        return result.length > 0 && result.length <= 30 ? result : "";
+      }
+
+      if (
+        isOpenAICompatible(provider) &&
+        (apiKey || providerUsesBaseUrl(provider))
+      ) {
+        const result = await this.openAIChatSimple(
+          provider,
+          model,
+          apiKey || "",
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userContent },
+          ],
+          undefined,
+          baseUrl,
+        );
+        const clean = result.replace(/^["'`]+|["'`]+$/g, "");
+        return clean.length > 0 && clean.length <= 30 ? clean : "";
+      }
+    } catch {
+      // Non-critical
+    }
+    return "";
+  }
+
+  /**
    * Direct vision API call — bypasses the agent loop entirely.
    * Used when user attaches images. No tool definitions, no JSON constraint.
    */

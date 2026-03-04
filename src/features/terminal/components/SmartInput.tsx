@@ -376,6 +376,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const placeholderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  // Track current sessionAIConfig via ref so placeholder timer uses up-to-date model
+  const sessionAIConfigRef = useRef(sessionAIConfig);
+  sessionAIConfigRef.current = sessionAIConfig;
   // Track whether user has sent any command in this session — skip AI
   // placeholder on fresh terminals (no useful context to suggest from)
   const hasActivityRef = useRef(false);
@@ -499,7 +502,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         const suggestion = await aiService.generatePlaceholder(
           history,
           undefined,
-          sessionAIConfig,
+          sessionAIConfigRef.current,
         );
         // Stale check: only set if input is still empty
         if (suggestion && !inputRef.current?.value?.trim())

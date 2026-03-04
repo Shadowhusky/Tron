@@ -251,6 +251,27 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [tabs, activeTabId, sessions]);
 
+  // Periodic crash-resilience save (every 30s) — safety net for force-quit / kill -9
+  const periodicSaveRef = useRef<{ tabs: Tab[]; activeTabId: string; sessions: Map<string, TerminalSession> }>({ tabs, activeTabId, sessions });
+  periodicSaveRef.current = { tabs, activeTabId, sessions };
+  useEffect(() => {
+    const id = setInterval(() => {
+      const { tabs: t, activeTabId: aId, sessions: s } = periodicSaveRef.current;
+      if (!t.length) return;
+      const state = {
+        tabs: t.map((tab) => ({ ...tab })),
+        activeTabId: aId,
+        sessionCwds: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.cwd || "" }), {} as Record<string, string>),
+        sessionInteractions: Object.fromEntries(Array.from(s.entries()).map(([sid, sess]) => [sid, sess.interactions])),
+        sessionSummaries: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: { summary: sess.contextSummary, sourceLength: sess.contextSummarySourceLength } }), {} as Record<string, { summary?: string; sourceLength?: number } | undefined>),
+        sessionDirtyFlags: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.dirty ?? false }), {} as Record<string, boolean>),
+        sessionSSHProfileIds: Array.from(s.entries()).reduce((acc, [sid, sess]) => { if (sess.sshProfileId) acc[sid] = sess.sshProfileId; return acc; }, {} as Record<string, string>),
+      };
+      window.electron?.ipcRenderer?.writeSessions?.({ _layout: state })?.catch?.(() => {});
+    }, 30000);
+    return () => clearInterval(id);
+  }, []);
+
   // Hydration / Initialization
   useEffect(() => {
     if (initCalledRef.current) return;
