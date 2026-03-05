@@ -259,9 +259,10 @@ function extToLang(filePath: string): string {
 
 /** Pre-process text to linkify absolute file paths for markdown rendering */
 function linkifyPaths(text: string): string {
-  // Unix paths: /foo/bar/file.ext (not preceded by another / to avoid matching URLs)
+  // Unix paths: /foo/bar/file.ext
+  // Skip paths that are part of URLs (preceded by :// or a word char like .com/path)
   let result = text.replace(
-    /(?<!\[)(?<!\()(?<!\/)(\/([\w][\w./ _-]*)?[\w]+\.\w+)/g,
+    /(?<!\[)(?<!\()(?<!\/)(?<!\w)(\/([\w][\w./ _-]*)?[\w]+\.\w+)/g,
     (match) => `[${match}](file://${encodeURI(match)})`,
   );
   // Windows paths: C:\foo\bar\file.ext (drive letter + backslash path)

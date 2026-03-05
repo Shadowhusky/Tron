@@ -1110,6 +1110,47 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
+    // Force send as command (default: Cmd+Shift+Enter)
+    if (matchesHotkey(e, hotkeys.forceCommand)) {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelPendingCompletions();
+      const finalVal = value.trim();
+      if (!finalVal) return;
+      setFeedbackMsg("");
+      trackCommand(finalVal);
+      onSend(finalVal);
+      setValue("");
+      setGhostText("");
+      setSuggestedCommand(null);
+      setCompletions([]);
+      setShowCompletions(false);
+      setHistoryIndex(-1);
+      return;
+    }
+
+    // Force agent (default: Cmd+Enter)
+    if (matchesHotkey(e, hotkeys.forceAgent)) {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelPendingCompletions();
+      if (noModelConfigured) {
+        onNoModel?.();
+        return;
+      }
+      const hasImgs = attachedImages.length > 0;
+      setFeedbackMsg("Agent Started");
+      if (value.trim()) addToHistory(value.trim());
+      onRunAgent(value, hasImgs ? attachedImages : undefined);
+      if (hasImgs) setAttachedImages([]);
+      setValue("");
+      setGhostText("");
+      setSuggestedCommand(null);
+      setCompletions([]);
+      setShowCompletions(false);
+      return;
+    }
+
     // Enter
     if (e.key === "Enter") {
       e.stopPropagation(); // Prevent terminal from also receiving this Enter
@@ -1124,43 +1165,6 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
       // Cancel any in-flight completion fetches so stale results can't re-show after send
       cancelPendingCompletions();
-
-      // Cmd+Shift+Enter: force send as command
-      if (e.metaKey && e.shiftKey) {
-        e.preventDefault();
-        const finalVal = value.trim();
-        if (!finalVal) return;
-        setFeedbackMsg("");
-        trackCommand(finalVal);
-        onSend(finalVal);
-        setValue("");
-        setGhostText("");
-        setSuggestedCommand(null);
-        setCompletions([]);
-        setShowCompletions(false);
-        setHistoryIndex(-1);
-        return;
-      }
-
-      // Cmd+Enter: force agent
-      if (e.metaKey) {
-        e.preventDefault();
-        if (noModelConfigured) {
-          onNoModel?.();
-          return;
-        }
-        const hasImgs = attachedImages.length > 0;
-        setFeedbackMsg("Agent Started");
-        if (value.trim()) addToHistory(value.trim());
-        onRunAgent(value, hasImgs ? attachedImages : undefined);
-        if (hasImgs) setAttachedImages([]);
-        setValue("");
-        setGhostText("");
-        setSuggestedCommand(null);
-        setCompletions([]);
-        setShowCompletions(false);
-        return;
-      }
 
       e.preventDefault();
 

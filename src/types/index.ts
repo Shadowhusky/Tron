@@ -61,6 +61,11 @@ export interface HotkeyMap {
   modeAuto: string;
   cycleMode: string;
   forceAgent: string;
+  forceCommand: string;
+  newTab: string;
+  closeTab: string;
+  splitHorizontal: string;
+  splitVertical: string;
   [key: string]: string;
 }
 

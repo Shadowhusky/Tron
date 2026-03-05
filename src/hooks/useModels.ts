@@ -61,11 +61,15 @@ export function useModelsWithCaps(baseUrl?: string, enabled: boolean = true, pro
  */
 export function useAllConfiguredModels() {
   const { config } = useConfig();
+  // Include providerConfigs in the key so React Query refetches when configs change
+  // (invalidateModels() can fire before React propagates new config to the closure)
+  const configKey = JSON.stringify(config.providerConfigs ?? {});
   return useQuery<AIModel[]>({
-    queryKey: ["allConfiguredModels"],
+    queryKey: ["allConfiguredModels", configKey],
     queryFn: () => aiService.getAllConfiguredModels(config.providerConfigs),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev, // keep previous models visible while refetching
     retry: 0,
   });
 }

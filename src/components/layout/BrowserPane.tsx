@@ -67,19 +67,24 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
       >
         {/* Nav buttons */}
         <button
-          onClick={() => iframeRef.current?.contentWindow?.history.back()}
+          onClick={() => { try { iframeRef.current?.contentWindow?.history.back(); } catch { /* cross-origin */ } }}
           className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </button>
         <button
-          onClick={() => iframeRef.current?.contentWindow?.history.forward()}
+          onClick={() => { try { iframeRef.current?.contentWindow?.history.forward(); } catch { /* cross-origin */ } }}
           className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
         >
           <ArrowRight className="h-3.5 w-3.5" />
         </button>
         <button
-          onClick={() => { setLoading(true); iframeRef.current?.contentWindow?.location.reload(); }}
+          onClick={() => {
+            setLoading(true);
+            // Re-set src to reload — contentWindow.location.reload() throws on cross-origin iframes
+            const iframe = iframeRef.current;
+            if (iframe) iframe.src = url;
+          }}
           className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
         >
           <RotateCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -107,7 +112,13 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
 
         {/* Open external */}
         <button
-          onClick={() => window.open(url, "_blank")}
+          onClick={() => {
+            if (window.electron?.ipcRenderer?.invoke) {
+              window.electron.ipcRenderer.invoke("shell.openExternal", url)?.catch(() => {});
+            } else {
+              window.open(url, "_blank", "noopener,noreferrer");
+            }
+          }}
           className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
           title="Open in system browser"
         >
