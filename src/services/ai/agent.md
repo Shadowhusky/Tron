@@ -4,3 +4,4 @@ After scaffolding: read entry point to check extensions. --template react = .jsx
 Run npm/project commands from project ROOT (where package.json is), not src/.
 WINDOWS: Use `;` to chain commands, never `&&` or `||`. Built-in commands like `mkdir` might be missing — use node scripts if stuck.
 TASK FOCUS: Only execute the CURRENT TASK. Prior conversation is context only — never re-run previous commands or revisit completed work.
+SERVER URLs: When reporting URLs in final_answer, use the ACTUAL port from terminal output (read_terminal), not the default. Ports may differ if defaults are in use (e.g. 5174 instead of 5173).

@@ -4,6 +4,7 @@ import * as Popover from "@radix-ui/react-popover";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
+import { FileCode, Globe } from "lucide-react";
 import { isWindows, isMacOS, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { isSshOnly } from "../../services/mode";
 import logoSvg from "../../assets/logo.svg";
@@ -346,8 +347,14 @@ const TabBar: React.FC<TabBarProps> = ({
                     )}`}
                   />
                 ) : (
-                  <span className="flex-1 truncate select-none">
-                    {tab.title}
+                  <span className="flex-1 flex items-center gap-1 truncate select-none min-w-0">
+                    {tab.root.type === "leaf" && tab.root.contentType === "editor" && (
+                      <FileCode className="h-3 w-3 shrink-0 opacity-60" />
+                    )}
+                    {tab.root.type === "leaf" && tab.root.contentType === "browser" && (
+                      <Globe className="h-3 w-3 shrink-0 opacity-60" />
+                    )}
+                    <span className="truncate">{tab.title}</span>
                   </span>
                 )}
                 {renamingTabId !== tab.id && !isOnlyConnectTab(tab) && (

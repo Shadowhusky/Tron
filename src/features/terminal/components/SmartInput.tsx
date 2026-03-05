@@ -280,20 +280,35 @@ const SmartInput: React.FC<SmartInputProps> = ({
     }
   }, [mode]);
 
-  /** Parse "COMMAND: ... TEXT: ..." format from advice mode response. */
+  /** Parse "COMMAND: ... TEXT: ..." format from advice mode response.
+   *  Handles thinking models that dump reasoning before the structured output. */
   const parsedSuggestion = useMemo(() => {
     if (!suggestedCommand) return null;
-    const cmdMatch = suggestedCommand.match(
-      /^COMMAND:\s*([\s\S]*?)(?:\s*TEXT:\s*([\s\S]*))?$/i,
+    // Strip <think>...</think> tags from thinking models
+    const cleaned = suggestedCommand.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    if (!cleaned) return null;
+    // Try to find COMMAND:/TEXT: anywhere in the response (thinking models may prepend reasoning)
+    const cmdMatch = cleaned.match(
+      /COMMAND:\s*([\s\S]*?)(?:\s*TEXT:\s*([\s\S]*))?$/i,
     );
     if (cmdMatch) {
       return { command: cmdMatch[1].trim(), text: cmdMatch[2]?.trim() || "" };
     }
-    const textMatch = suggestedCommand.match(/^TEXT:\s*([\s\S]*)$/i);
+    const textMatch = cleaned.match(/TEXT:\s*([\s\S]*)$/i);
     if (textMatch) {
       return { command: "", text: textMatch[1].trim() };
     }
-    return { command: suggestedCommand.trim(), text: "" };
+    // No COMMAND/TEXT format found — detect reasoning/thinking dumps and discard
+    // Matches: thinking process keywords, markdown headers, numbered steps, conversational openers,
+    // bullet points, "Goal:", "Determine", question phrasing, asterisk emphasis
+    if (/^(thinking|##|\*\*|\*\s|step\s+\d|let me|okay|here|i |the user|we |so |first|now|to |determine|goal:|>\s)/i.test(cleaned)) {
+      return null;
+    }
+    // Multi-line output without COMMAND: is likely reasoning, not a command
+    if (cleaned.split("\n").length > 3) {
+      return null;
+    }
+    return { command: cleaned, text: "" };
   }, [suggestedCommand]);
 
   // Autocomplete & History State
@@ -1310,9 +1325,50 @@ const SmartInput: React.FC<SmartInputProps> = ({
               /* non-critical */
             }
           }
+          // Detect thinking tags in token stream for providers that don't
+          // separate thinking (e.g. LM Studio outputs <think> as regular content)
+          let tokenBuf = "";
+          let inThinkTag = false;
+          const thinkOpenRe = /^<(think|thinking|thought)>/i;
+          const thinkCloseRe = /<\/(think|thinking|thought)>/i;
           const cmd = await aiService.generateCommand(
             value,
             (token) => {
+              tokenBuf += token;
+              // Detect opening thinking tag at start of stream
+              if (!inThinkTag && tokenBuf.length <= 30) {
+                if (thinkOpenRe.test(tokenBuf.trimStart())) {
+                  inThinkTag = true;
+                  // Persist this model as a thinking model for future sessions
+                  const cfg = sessionAIConfig || aiService.getConfig();
+                  if (cfg.provider && cfg.model) aiService.markModelAsThinking(cfg.provider, cfg.model);
+                  // Route everything so far to thinking
+                  const afterTag = tokenBuf.trimStart().replace(thinkOpenRe, "");
+                  if (afterTag) setAdviceThinking((prev) => prev + afterTag);
+                  return;
+                }
+                // Still accumulating — might be a partial tag like "<thin"
+                if (/^<(t|th|thi|thin|think|thinki|thinkin|thinking|thou|thoug|though|thought)$/i.test(tokenBuf.trimStart())) {
+                  return; // wait for more tokens
+                }
+              }
+              if (inThinkTag) {
+                // Check for closing tag
+                const closeMatch = tokenBuf.match(thinkCloseRe);
+                if (closeMatch) {
+                  const closeIdx = tokenBuf.indexOf(closeMatch[0]);
+                  const thinkPart = token.substring(0, token.length - (tokenBuf.length - closeIdx - closeMatch[0].length));
+                  const afterClose = tokenBuf.substring(closeIdx + closeMatch[0].length);
+                  inThinkTag = false;
+                  // Route remaining thinking text
+                  if (thinkPart) setAdviceThinking((prev) => prev + thinkPart.replace(thinkCloseRe, ""));
+                  // Content after closing tag goes to suggestion
+                  if (afterClose.trim()) setSuggestedCommand((prev) => (prev || "") + afterClose);
+                } else {
+                  setAdviceThinking((prev) => prev + token);
+                }
+                return;
+              }
               setSuggestedCommand((prev) => (prev || "") + token);
             },
             { cwd, terminalHistory },
@@ -1325,7 +1381,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
               },
             },
           );
-          setSuggestedCommand(cmd);
+          // Final result: strip thinking tags and set clean command
+          const cleanCmd = cmd
+            .replace(/<(think|thinking|thought)>[\s\S]*?<\/(think|thinking|thought)>/gi, "")
+            .trim();
+          setSuggestedCommand(cleanCmd);
         } catch (err: any) {
           if (err?.name === "AbortError") {
             setSuggestedCommand(null);
@@ -1967,14 +2027,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
             {/* Scrollable middle content */}
             <div className="min-h-0 flex-1 overflow-hidden">
               <div className="flex-1">
-                {adviceThinking && (
+                {adviceThinking && isLoading && (
                   <AdviceThinkingBlock
                     content={adviceThinking}
                     isLight={theme === "light"}
-                    isStreaming={isLoading && !suggestion}
+                    isStreaming={isLoading}
                   />
                 )}
-                {!suggestion && isLoading && !adviceThinking && (
+                {isLoading && !adviceThinking && (
                   <div
                     className={`text-xs italic ${theme === "light" ? "text-gray-400" : "text-gray-500"}`}
                   >

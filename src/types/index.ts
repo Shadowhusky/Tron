@@ -132,7 +132,7 @@ export interface TerminalSession {
 export type SplitDirection = "horizontal" | "vertical";
 
 export type LayoutNode =
-  | { type: "leaf"; sessionId: string; contentType?: "terminal" | "settings" | "ssh-connect" | "browser"; url?: string }
+  | { type: "leaf"; sessionId: string; contentType?: "terminal" | "settings" | "ssh-connect" | "browser" | "editor"; url?: string; editorPath?: string }
   | {
     type: "split";
     direction: SplitDirection;

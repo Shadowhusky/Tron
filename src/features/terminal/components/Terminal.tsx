@@ -120,6 +120,54 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
+
+    // File path link provider — makes absolute paths clickable in terminal output
+    const filePathRegex = /(?:\/[\w._-]+){2,}(?:\.\w+)?/g; // Unix: /foo/bar or /foo/bar.ext
+    const winPathRegex = /[A-Z]:\\(?:[\w._-]+\\)*[\w._-]+(?:\.\w+)?/gi; // Windows: C:\foo\bar.ext
+    term.registerLinkProvider({
+      provideLinks(lineNumber, callback) {
+        const line = term.buffer.active.getLine(lineNumber - 1);
+        if (!line) { callback(undefined); return; }
+        const text = line.translateToString();
+        const links: import("@xterm/xterm").ILink[] = [];
+        for (const regex of [filePathRegex, winPathRegex]) {
+          regex.lastIndex = 0;
+          let m: RegExpExecArray | null;
+          while ((m = regex.exec(text)) !== null) {
+            const startCol = m.index + 1;
+            const endCol = startCol + m[0].length - 1;
+            const filePath = m[0];
+            links.push({
+              range: { start: { x: startCol, y: lineNumber }, end: { x: endCol, y: lineNumber } },
+              text: filePath,
+              activate(event) {
+                const ext = filePath.split(".").pop()?.toLowerCase() || "";
+                const baseName = filePath.split(/[/\\]/).pop() || "";
+                // Check if it's a supported editor file
+                const editorExts = new Set([
+                  "js","mjs","cjs","jsx","ts","mts","cts","tsx","py","pyw","json","jsonc",
+                  "c","h","cpp","cc","cxx","hpp","hxx","html","htm","svg","xml",
+                  "css","scss","less","md","mdx","rs","java","yaml","yml","toml","ini",
+                  "cfg","conf","sh","bash","zsh","fish","txt","log","env","sql",
+                  "vue","svelte","rb","php","go","swift","kt","kts",
+                ]);
+                const editorFiles = new Set(["Makefile","Dockerfile",".gitignore",".dockerignore"]);
+                if (editorExts.has(ext) || editorFiles.has(baseName)) {
+                  window.dispatchEvent(new CustomEvent("tron:openEditorTab", { detail: { filePath } }));
+                } else {
+                  // Show link popover for non-editor files
+                  window.dispatchEvent(new CustomEvent("tron:linkClicked", {
+                    detail: { url: `file://${filePath}`, x: event.clientX, y: event.clientY },
+                  }));
+                }
+              },
+            });
+          }
+        }
+        callback(links.length > 0 ? links : undefined);
+      },
+    });
+
     term.open(el);
 
     xtermRef.current = term;

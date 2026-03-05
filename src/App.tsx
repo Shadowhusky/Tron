@@ -93,6 +93,7 @@ const AppContent = () => {
     closeTab,
     openSettingsTab,
     openBrowserTab,
+    openEditorTab,
     reorderTabs,
     updateSessionConfig,
     discardPersistedLayout,
@@ -119,6 +120,8 @@ const AppContent = () => {
   const [updateReady, setUpdateReady] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
   const [updateVersion, setUpdateVersion] = useState("");
   const [linkPopover, setLinkPopover] = useState<{ url: string; x: number; y: number } | null>(null);
   const linkAnchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
@@ -231,6 +234,16 @@ const AppContent = () => {
     return () => window.removeEventListener("tron:linkClicked", handler);
   }, []);
 
+  // Open code editor tab from file path clicks (agent overlay, etc.)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { filePath } = (e as CustomEvent).detail;
+      if (filePath) openEditorTab(filePath);
+    };
+    window.addEventListener("tron:openEditorTab", handler);
+    return () => window.removeEventListener("tron:openEditorTab", handler);
+  }, [openEditorTab]);
+
   // Listen for auto-updater status changes
   useEffect(() => {
     if (!window.electron?.ipcRenderer?.on) return;
@@ -239,12 +252,23 @@ const AppContent = () => {
       (data: any) => {
         if (data.status === "installing") {
           setUpdateInstalling(true);
+          setUpdateDownloading(false);
+          setUpdateAvailable(false);
+        } else if (data.status === "downloading") {
+          setUpdateDownloading(true);
+          setUpdateAvailable(false);
+          if (data.downloadProgress) setDownloadProgress(data.downloadProgress);
+        } else if (data.status === "error") {
+          setUpdateDownloading(false);
+          setDownloadProgress(null);
         } else if (data.updateInfo?.version && !updateDismissedRef.current) {
           if (data.status === "downloaded") {
             setUpdateVersion(data.updateInfo.version);
+            setUpdateAvailable(false);
+            setUpdateDownloading(false);
+            setDownloadProgress(null);
             setUpdateReady(true);
           } else if (data.status === "available") {
-            // Surface "available" for users with auto-download off
             setUpdateVersion(data.updateInfo.version);
             setUpdateAvailable(true);
           }
@@ -484,17 +508,46 @@ const AppContent = () => {
         ]}
       />
 
+      {/* Downloading update modal with progress bar */}
+      <Modal
+        show={updateDownloading && !updateReady}
+        resolvedTheme={resolvedTheme}
+        onClose={() => {}}
+        title="Downloading Update"
+        buttons={[]}
+      >
+        <div className="px-1 py-2">
+          <p className={`text-sm mb-3 ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+            Downloading v{updateVersion}...{" "}
+            {downloadProgress ? `${Math.round(downloadProgress.percent)}%` : ""}
+          </p>
+          <div className={`w-full h-2 rounded-full overflow-hidden ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}>
+            <div
+              className="h-full rounded-full bg-purple-500 transition-all duration-300"
+              style={{ width: `${downloadProgress?.percent ?? 0}%` }}
+            />
+          </div>
+          {downloadProgress && downloadProgress.total > 0 && (
+            <p className={`text-[11px] mt-2 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}>
+              {(downloadProgress.transferred / 1024 / 1024).toFixed(1)} / {(downloadProgress.total / 1024 / 1024).toFixed(1)} MB
+              {downloadProgress.bytesPerSecond > 0 && ` — ${(downloadProgress.bytesPerSecond / 1024 / 1024).toFixed(1)} MB/s`}
+            </p>
+          )}
+        </div>
+      </Modal>
+
       {/* Update available modal (when auto-download is off) */}
       <Modal
-        show={updateAvailable && !updateReady}
+        show={updateAvailable && !updateReady && !updateDownloading}
         resolvedTheme={resolvedTheme}
         onClose={() => { updateDismissedRef.current = true; setUpdateAvailable(false); }}
         title="Update Available"
-        description={`A new version (v${updateVersion}) is available. Go to Settings to download it.`}
+        description={`A new version (v${updateVersion}) is available.`}
         buttons={[
           { label: "Later", type: "ghost", onClick: () => { updateDismissedRef.current = true; setUpdateAvailable(false); } },
           { label: "Download", type: "primary", onClick: () => {
             setUpdateAvailable(false);
+            setUpdateDownloading(true);
             window.electron?.ipcRenderer?.downloadUpdate?.();
           }},
         ]}

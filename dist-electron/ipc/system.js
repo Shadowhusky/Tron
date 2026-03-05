@@ -25,8 +25,18 @@ function registerSystemHandlers() {
         return result.filePaths[0];
     });
     electron_1.ipcMain.handle("shell.openExternal", async (_event, url) => {
-        if (typeof url === "string" && (url.startsWith("http://") || url.startsWith("https://"))) {
-            await electron_1.shell.openExternal(url);
+        if (typeof url !== "string")
+            return;
+        // Trim whitespace/quotes that may wrap the URL
+        const trimmed = url.trim().replace(/^["']+|["']+$/g, "");
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://"))
+            return;
+        try {
+            new URL(trimmed); // validate
+            await electron_1.shell.openExternal(trimmed);
+        }
+        catch {
+            // Invalid URL — ignore silently
         }
     });
     electron_1.ipcMain.handle("shell.openPath", async (_event, filePath) => {

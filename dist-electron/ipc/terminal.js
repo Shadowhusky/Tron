@@ -182,11 +182,11 @@ function removePersistedHistory(sessionId) {
     }
     catch { /* ok */ }
 }
-/** Mark a session's history as dirty; batched flush runs every 5s. */
+/** Mark a session's history as dirty; batched flush runs every 2s. */
 function markHistoryDirty(sessionId) {
     historyDirtySet.add(sessionId);
     if (!historyFlushTimer) {
-        historyFlushTimer = setTimeout(flushDirtyHistory, 5000);
+        historyFlushTimer = setTimeout(flushDirtyHistory, 2000);
     }
 }
 function flushDirtyHistory() {

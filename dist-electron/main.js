@@ -151,10 +151,11 @@ const createMenu = (win) => {
 const createWindow = () => {
     const preloadPath = path_1.default.join(__dirname, "preload.js");
     const isMacOS = process.platform === "darwin";
+    const shouldHide = process.argv.includes("--hidden");
     mainWindow = new electron_1.BrowserWindow({
         width: 1200,
         height: 800,
-        show: !process.argv.includes("--hidden"),
+        show: false, // Defer show until ready-to-show for faster perceived launch
         webPreferences: {
             preload: preloadPath,
             nodeIntegration: false,
@@ -188,6 +189,12 @@ const createWindow = () => {
             }),
     });
     createMenu(mainWindow);
+    // Show window once content is painted — avoids blank window flash on Windows
+    if (!shouldHide) {
+        mainWindow.once("ready-to-show", () => {
+            mainWindow?.show();
+        });
+    }
     // Intercept close to show confirmation in renderer
     mainWindow.on("close", (e) => {
         if (!forceQuit && mainWindow && !mainWindow.isDestroyed()) {

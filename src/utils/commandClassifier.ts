@@ -104,6 +104,30 @@ const NL_INDICATORS = new Set([
   "anything",
   "everything",
   "nothing",
+  // Prepositions commonly used in file/code requests
+  "under",
+  "inside",
+  "within",
+  "below",
+  "above",
+  "near",
+  "between",
+  "through",
+  "without",
+  "before",
+  "after",
+  "during",
+  "behind",
+  "beside",
+  // Common request verbs/adverbs
+  "every",
+  "each",
+  "make",
+  "ensure",
+  "maybe",
+  "probably",
+  "called",
+  "named",
 ]);
 
 // Words that almost always start a natural language question/request,
@@ -152,8 +176,13 @@ function hasNaturalLanguagePattern(words: string[]): boolean {
   for (let i = 1; i < words.length; i++) {
     if (NL_INDICATORS.has(words[i].toLowerCase())) nlCount++;
   }
-  // If 2+ NL words, or if the second word is NL, it's natural language
-  return nlCount >= 2 || NL_INDICATORS.has(words[1].toLowerCase());
+  // If 2+ NL words, or if the second word is NL, it's natural language.
+  // For longer inputs (4+ words), even a single NL word is strong evidence
+  // e.g. "Find json file under /path" — "under" alone signals NL intent.
+  if (nlCount >= 2) return true;
+  if (NL_INDICATORS.has(words[1].toLowerCase())) return true;
+  if (words.length >= 4 && nlCount >= 1) return true;
+  return false;
 }
 
 /**
@@ -462,11 +491,12 @@ export function isCommand(input: string): boolean {
   // Path-based invocations are always commands (Unix and Windows)
   if (firstWord.startsWith("./") || firstWord.startsWith(".\\") || firstWord.startsWith("/") || /^[a-zA-Z]:[/\\]/.test(firstWord)) return true;
 
-  // Explicit command syntax overrides everything
-  if (hasCommandSyntax(trimmed, words)) return true;
-
-  // If natural language is detected anywhere, it's a prompt
+  // Natural language check BEFORE command syntax — inputs like
+  // "Find json file under /path" contain paths but are clearly NL requests.
   if (hasNaturalLanguagePattern(words)) return false;
+
+  // Explicit command syntax (pipes, redirects, flags, paths)
+  if (hasCommandSyntax(trimmed, words)) return true;
 
   if (isKnownExecutable(firstWord)) {
     // Special handling for ambiguous words that are technically commands but often used as natural language

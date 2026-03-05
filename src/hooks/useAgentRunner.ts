@@ -142,6 +142,10 @@ export function useAgentRunner(
       ) {
         caps.push("vision");
       }
+      // Also check runtime-detected thinking models
+      if (!caps.includes("thinking") && provider && aiService.isDetectedThinkingModel(provider, model)) {
+        caps.push("thinking");
+      }
       setModelCapabilities(caps);
     } else {
       setModelCapabilities([]);

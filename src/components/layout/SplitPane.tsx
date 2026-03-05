@@ -1,10 +1,11 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react";
 import type { LayoutNode } from "../../types";
 import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import SettingsPane from "../../features/settings/components/SettingsPane";
 import TerminalPane from "./TerminalPane";
 import BrowserPane from "./BrowserPane";
+const CodeEditorPane = lazy(() => import("./CodeEditorPane"));
 
 interface SplitPaneProps {
   node: LayoutNode;
@@ -38,6 +39,17 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
     return (
       <div style={{ width: "100%", height: "100%", overflow: "hidden", position: "relative" }}>
         <BrowserPane sessionId={node.sessionId} initialUrl={node.url || "https://www.google.com"} />
+      </div>
+    );
+  }
+
+  // Code editor leaf (lazy-loaded — CodeMirror is ~300KB)
+  if (node.type === "leaf" && node.contentType === "editor") {
+    return (
+      <div style={{ width: "100%", height: "100%", overflow: "hidden", position: "relative" }}>
+        <Suspense fallback={<div className="flex items-center justify-center h-full opacity-40 text-sm">Loading editor...</div>}>
+          <CodeEditorPane sessionId={node.sessionId} filePath={node.editorPath || ""} />
+        </Suspense>
       </div>
     );
   }

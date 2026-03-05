@@ -23,12 +23,13 @@ import {
   Trash2,
   Info,
   Loader2,
+  ListOrdered,
 } from "lucide-react";
 import { marked } from "marked";
 import { useTheme } from "../../../contexts/ThemeContext";
 import type { AgentStep } from "../../../types";
 import { slideUp } from "../../../utils/motion";
-import { isDangerousCommand } from "../../../utils/dangerousCommand";
+import { classifyCommand } from "../../../utils/dangerousCommand";
 import TokenHeatBar from "./TokenHeatBar";
 
 // Configure marked for minimal, safe output
@@ -171,6 +172,24 @@ function summarizeCommand(cmd: string): string {
   return `Ran ${firstWord}`;
 }
 
+/** File extensions that should open in the built-in code editor */
+const EDITOR_EXTENSIONS = new Set([
+  "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx",
+  "py", "pyw", "json", "jsonc",
+  "c", "h", "cpp", "cc", "cxx", "hpp", "hxx",
+  "html", "htm", "svg", "xml",
+  "css", "scss", "less",
+  "md", "mdx",
+  "rs", "java",
+  "yaml", "yml", "toml", "ini", "cfg", "conf",
+  "sh", "bash", "zsh", "fish",
+  "txt", "log", "env", "gitignore", "dockerignore",
+  "sql", "graphql", "gql",
+  "vue", "svelte",
+  "rb", "php", "go", "swift", "kt", "kts",
+  "Makefile", "Dockerfile",
+]);
+
 /** Handle link clicks — dispatch event so App.tsx shows the link popover at click position */
 const handleLinkClick = (e: React.MouseEvent) => {
   const target = e.target as HTMLElement;
@@ -181,7 +200,14 @@ const handleLinkClick = (e: React.MouseEvent) => {
   e.preventDefault();
   e.stopPropagation();
   if (href.startsWith("file://")) {
-    window.electron?.ipcRenderer?.invoke("shell.openPath", decodeURI(href.slice(7)));
+    const filePath = decodeURI(href.slice(7));
+    const ext = filePath.split(".").pop()?.toLowerCase() || "";
+    const baseName = filePath.split(/[/\\]/).pop() || "";
+    if (EDITOR_EXTENSIONS.has(ext) || EDITOR_EXTENSIONS.has(baseName)) {
+      window.dispatchEvent(new CustomEvent("tron:openEditorTab", { detail: { filePath } }));
+    } else {
+      window.electron?.ipcRenderer?.invoke("shell.openPath", filePath);
+    }
   } else if (href.startsWith("http://") || href.startsWith("https://")) {
     window.dispatchEvent(new CustomEvent("tron:linkClicked", {
       detail: { url: href, x: e.clientX, y: e.clientY },
@@ -259,16 +285,27 @@ function extToLang(filePath: string): string {
 
 /** Pre-process text to linkify absolute file paths for markdown rendering */
 function linkifyPaths(text: string): string {
-  // Unix paths: /foo/bar/file.ext
+  // Unix paths: /foo/bar/file.ext or /foo/bar/ or /foo/bar
+  // Requires at least 2 path segments to avoid false positives on lone /word
   // Skip paths that are part of URLs (preceded by :// or a word char like .com/path)
+  // Also skip paths already inside markdown links [...](...) or after (
   let result = text.replace(
-    /(?<!\[)(?<!\()(?<!\/)(?<!\w)(\/([\w][\w./ _-]*)?[\w]+\.\w+)/g,
-    (match) => `[${match}](file://${encodeURI(match)})`,
+    /(?<!\[)(?<!\()(?<!\/)(?<!\w)(\/[\w._-]+(?:\/[\w._-]*)*)/g,
+    (match) => {
+      // Require at least 2 segments (e.g. /foo/bar not just /foo)
+      const segments = match.split("/").filter(Boolean);
+      if (segments.length < 2) return match;
+      return `[${match}](file://${encodeURI(match)})`;
+    },
   );
-  // Windows paths: C:\foo\bar\file.ext (drive letter + backslash path)
+  // Windows paths: C:\foo\bar\file.ext or C:\foo\bar (drive letter + backslash path)
   result = result.replace(
-    /(?<!\[)(?<!\()([A-Z]:\\(?:[\w ._-]+\\)*[\w ._-]+\.\w+)/gi,
-    (match) => `[${match}](file:///${encodeURI(match.replace(/\\/g, "/"))})`,
+    /(?<!\[)(?<!\()([A-Z]:\\(?:[\w ._-]+\\)*[\w ._-]+)/gi,
+    (match) => {
+      const segments = match.split(/[/\\]/).filter(Boolean);
+      if (segments.length < 2) return match;
+      return `[${match}](file:///${encodeURI(match.replace(/\\/g, "/"))})`;
+    },
   );
   return result;
 }
@@ -473,7 +510,9 @@ const PermissionRequest: React.FC<{
   isLight: boolean;
   onPermission: (choice: "allow" | "always" | "deny") => void;
 }> = ({ command, isLight, onPermission }) => {
-  const dangerous = isDangerousCommand(command);
+  const classification = classifyCommand(command);
+  const dangerous = classification?.level === "danger";
+  const warning = classification?.level === "warning";
   const [confirmStep, setConfirmStep] = useState<0 | 1>(0);
   const [cmdExpanded, setCmdExpanded] = useState(false);
   const isLongCommand = command.length > 300 || command.split("\n").length > 8;
@@ -527,9 +566,13 @@ const PermissionRequest: React.FC<{
           ? isLight
             ? "bg-red-50/90 border-red-300"
             : "bg-red-950/40 border-red-500/30"
-          : isLight
-            ? "bg-blue-50/80 border-blue-200"
-            : "bg-blue-900/20 border-blue-500/20"
+          : warning
+            ? isLight
+              ? "bg-amber-50/90 border-amber-300"
+              : "bg-amber-950/40 border-amber-500/30"
+            : isLight
+              ? "bg-blue-50/80 border-blue-200"
+              : "bg-blue-900/20 border-blue-500/20"
       }`}
     >
       {/* Scrollable content: header + command + warnings */}
@@ -538,22 +581,24 @@ const PermissionRequest: React.FC<{
         <div
           className={`text-xs mb-1.5 font-medium flex items-center gap-1.5 shrink-0 ${
             dangerous
-              ? isLight
-                ? "text-red-700"
-                : "text-red-300"
-              : isLight
-                ? "text-blue-700"
-                : "text-blue-200"
+              ? isLight ? "text-red-700" : "text-red-300"
+              : warning
+                ? isLight ? "text-amber-700" : "text-amber-300"
+                : isLight ? "text-blue-700" : "text-blue-200"
           }`}
         >
           {dangerous ? (
             <ShieldAlert className="w-3.5 h-3.5" />
+          ) : warning ? (
+            <AlertTriangle className="w-3.5 h-3.5" />
           ) : (
             <Command className="w-3.5 h-3.5" />
           )}
           {dangerous
             ? "Dangerous — review carefully!"
-            : "Allow command execution?"}
+            : warning
+              ? "Caution — review before allowing"
+              : "Allow command execution?"}
         </div>
 
         {/* Command display — collapsed by default for long commands */}
@@ -569,9 +614,13 @@ const PermissionRequest: React.FC<{
                   ? isLight
                     ? "bg-red-100 border-red-300 text-red-900"
                     : "bg-red-950/50 border-red-500/20 text-red-200"
-                  : isLight
-                    ? "bg-white border-blue-200 text-blue-800"
-                    : "bg-black/50 border-blue-500/10 text-blue-100"
+                  : warning
+                    ? isLight
+                      ? "bg-amber-100 border-amber-300 text-amber-900"
+                      : "bg-amber-950/50 border-amber-500/20 text-amber-200"
+                    : isLight
+                      ? "bg-white border-blue-200 text-blue-800"
+                      : "bg-black/50 border-blue-500/10 text-blue-100"
               }`}
               style={
                 isLongCommand && !cmdExpanded
@@ -603,17 +652,21 @@ const PermissionRequest: React.FC<{
           </div>
         </div>
 
-        {/* Danger warning */}
-        {dangerous && (
+        {/* Danger/warning reason */}
+        {classification && (
           <div
             className={`shrink-0 flex items-center gap-1.5 mb-1.5 px-2 py-1 rounded text-[11px] leading-tight ${
-              isLight
-                ? "bg-red-100/50 text-red-700"
-                : "bg-red-950/30 text-red-300/80"
+              dangerous
+                ? isLight
+                  ? "bg-red-100/50 text-red-700"
+                  : "bg-red-950/30 text-red-300/80"
+                : isLight
+                  ? "bg-amber-100/50 text-amber-700"
+                  : "bg-amber-950/30 text-amber-300/80"
             }`}
           >
             <AlertTriangle className="w-3 h-3 shrink-0" />
-            <span>Potentially destructive — verify before allowing.</span>
+            <span>{classification.reason}</span>
           </div>
         )}
 
@@ -672,7 +725,11 @@ const PermissionRequest: React.FC<{
                 : isLight
                   ? "bg-red-100 hover:bg-red-200 text-red-700 border border-red-300"
                   : "bg-red-900/40 hover:bg-red-900/60 text-red-200 border border-red-500/30"
-              : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20"
+              : warning
+                ? isLight
+                  ? "bg-amber-100 hover:bg-amber-200 text-amber-700 border border-amber-300"
+                  : "bg-amber-900/40 hover:bg-amber-900/60 text-amber-200 border border-amber-500/30"
+                : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20"
           }`}
         >
           {dangerous ? (
@@ -685,6 +742,10 @@ const PermissionRequest: React.FC<{
                 <ShieldAlert className="w-3 h-3" /> Allow Dangerous
               </>
             )
+          ) : warning ? (
+            <>
+              <AlertTriangle className="w-3 h-3" /> Allow Once
+            </>
           ) : (
             <>
               <Check className="w-3 h-3" /> Allow Once
@@ -895,9 +956,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     }
   }, [agentThread.length, fullHeight]);
 
-  // Auto-scroll: only if user hasn't manually scrolled up
+  // Auto-scroll: only if user hasn't manually scrolled up.
+  // Detaches on ANY upward scroll; reattaches only when user scrolls back to bottom.
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const userScrolledUpRef = useRef(false);
+  const lastScrollTopRef = useRef(0);
   const isAutoScrolling = useRef(false);
 
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -907,10 +970,26 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     if (isAutoScrolling.current) return;
     const el = scrollRef.current;
     if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const scrolledUp = distFromBottom > 60;
-    userScrolledUpRef.current = scrolledUp;
-    setUserScrolledUp(scrolledUp);
+
+    const currentTop = el.scrollTop;
+    const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
+    const prevTop = lastScrollTopRef.current;
+    lastScrollTopRef.current = currentTop;
+
+    // User scrolled UP (even slightly) → detach auto-scroll
+    if (currentTop < prevTop && distFromBottom > 10) {
+      if (!userScrolledUpRef.current) {
+        userScrolledUpRef.current = true;
+        setUserScrolledUp(true);
+      }
+    }
+    // User scrolled back to bottom → reattach
+    else if (distFromBottom <= 10) {
+      if (userScrolledUpRef.current) {
+        userScrolledUpRef.current = false;
+        setUserScrolledUp(false);
+      }
+    }
 
     // Debounce-save scroll position for persistence
     if (onScrollPositionChange) {
@@ -929,9 +1008,12 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-        requestAnimationFrame(() => {
+        // Keep guard up longer to cover any layout reflow scroll events
+        setTimeout(() => {
           isAutoScrolling.current = false;
-        });
+          // Sync lastScrollTopRef so next user scroll is correctly detected as up/down
+          if (scrollRef.current) lastScrollTopRef.current = scrollRef.current.scrollTop;
+        }, 50);
       });
     });
   }, []);
@@ -947,15 +1029,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
         hasRestoredScroll.current = true;
         isAutoScrolling.current = true;
         scrollRef.current.scrollTo(0, scrollPosition);
+        lastScrollTopRef.current = scrollPosition;
         // Mark as scrolled-up if not at bottom, so auto-scroll doesn't override
         const dist = scrollRef.current.scrollHeight - scrollPosition - scrollRef.current.clientHeight;
-        if (dist > 60) {
+        if (dist > 10) {
           userScrolledUpRef.current = true;
           setUserScrolledUp(true);
         }
-        requestAnimationFrame(() => {
+        setTimeout(() => {
           isAutoScrolling.current = false;
-        });
+        }, 50);
       }
     }, 100);
     return () => clearTimeout(timer);
@@ -966,13 +1049,13 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   useEffect(() => {
     if (!userScrolledUpRef.current) {
       isAutoScrolling.current = true;
-      // Double-rAF: let virtualizer re-measure before scrolling to true bottom
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-          requestAnimationFrame(() => {
+          setTimeout(() => {
             isAutoScrolling.current = false;
-          });
+            if (scrollRef.current) lastScrollTopRef.current = scrollRef.current.scrollTop;
+          }, 50);
         });
       });
     }
@@ -987,12 +1070,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     prevRunningRef.current = isAgentRunning;
   }, [isAgentRunning, scrollToBottom]);
 
-  // Scroll panel into view and thread to bottom when permission request appears
+  // Scroll panel into view when permission request appears (don't force scroll-to-bottom
+  // if user is browsing history — permission is pinned at bottom of overlay anyway)
   useEffect(() => {
     if (pendingCommand) {
       requestAnimationFrame(() => {
         panelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-        scrollToBottom();
+        if (!userScrolledUpRef.current) {
+          scrollToBottom();
+        }
       });
     }
   }, [pendingCommand, scrollToBottom]);
@@ -1353,6 +1439,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     const isError =
                       step.step === "error" || step.step === "failed";
                     const isDone = step.step === "done";
+                    const isPlan = step.step === "plan";
                     const isQuestion = step.step === "question";
                     const isReadTerminal = step.step === "read_terminal";
                     const isExecuted = step.step === "executed" || isReadTerminal;
@@ -1380,6 +1467,9 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       execCommand = step.output.slice(0, sepIdx);
                       execOutput = step.output.slice(sepIdx + 5);
                     }
+
+                    // Hide completed thinking steps — shown during streaming only
+                    if (isThought) return null;
 
                     // Stopped: render a tiny inline indicator, not a full step block
                     if (isStopped) {
@@ -1412,6 +1502,10 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                               ? isLight
                                 ? "border-green-300"
                                 : "border-green-500/30"
+                              : isPlan
+                                ? isLight
+                                  ? "border-indigo-300"
+                                  : "border-indigo-500/30"
                               : isSummarizing || isSummarized
                                 ? isLight
                                   ? "border-purple-300"
@@ -1464,6 +1558,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             <AlertTriangle className="w-3 h-3 text-red-400" />
                           ) : isDone ? (
                             <Check className="w-3 h-3 text-green-400" />
+                          ) : isPlan ? (
+                            <ListOrdered className="w-3 h-3 text-indigo-400" />
                           ) : isSummarizing ? (
                             <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
                           ) : isSummarized ? (
@@ -1495,6 +1591,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                     ? "text-red-400"
                                     : isDone
                                       ? "text-green-400"
+                                      : isPlan
+                                        ? "text-indigo-400"
                                       : isSummarizing || isSummarized
                                         ? "text-purple-400"
                                         : isSystem
@@ -1783,7 +1881,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             }
                             return null;
                           })()
-                        ) : isDone || isSystem || isQuestion || isSummarized ? (
+                        ) : isDone || isPlan || isSystem || isQuestion || isSummarized ? (
                           <LinkifiedDoneContent
                             content={step.output}
                             className={`text-[11px] leading-relaxed ${isLight ? "markdown-light text-gray-700" : "text-gray-300"}`}

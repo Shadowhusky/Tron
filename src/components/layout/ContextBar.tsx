@@ -76,7 +76,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const { sessions, updateSessionConfig, updateSession, openSettingsTab, refreshCwd } = useLayout();
   const { resolvedTheme: theme } = useTheme();
   const { config: appConfig } = useConfig();
-  const { agentThread, setAgentThread, isAgentRunning, setIsAgentRunning, setIsOverlayVisible } = useAgent(sessionId);
+  const { agentThread, setAgentThread, isAgentRunning, setIsOverlayVisible } = useAgent(sessionId);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [showSummarizeToast, setShowSummarizeToast] = useState(false);
@@ -352,9 +352,9 @@ const ContextBar: React.FC<ContextBarProps> = ({
     isSummarizingRef.current = true;
     setIsSummarizing(true);
 
-    // For auto-summarize: claim the agent panel so user prompts queue
+    // For auto-summarize: show progress in agent thread but don't claim agent running state
+    // (that would turn the send button into a non-functional stop button)
     if (auto) {
-      setIsAgentRunning(true);
       setIsOverlayVisible(true);
       setAgentThread((prev) => [...prev, { step: "summarizing", output: "Summarizing context..." }]);
     }
@@ -420,9 +420,6 @@ const ContextBar: React.FC<ContextBarProps> = ({
     } finally {
       isSummarizingRef.current = false;
       setIsSummarizing(false);
-      if (auto) {
-        setIsAgentRunning(false);
-      }
     }
   };
 

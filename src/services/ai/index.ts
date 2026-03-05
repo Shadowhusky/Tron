@@ -11,7 +11,6 @@ import {
   detectTuiProgram,
   describeKeys as describeKeysUtil,
   autoCdCommand,
-  isDuplicateScaffold,
   attemptTuiExit,
   type TerminalState,
 } from "../../utils/terminalState";
@@ -305,6 +304,28 @@ class AIService {
     // File-based persistence handled by the caller via ConfigContext.updateConfig()
   }
 
+  /** Mark a model as having thinking capability (detected at runtime via thinking tags). */
+  markModelAsThinking(provider: string, model: string): void {
+    const key = `${provider}:${model}`;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.DETECTED_THINKING_MODELS);
+      const set: string[] = raw ? JSON.parse(raw) : [];
+      if (set.includes(key)) return;
+      set.push(key);
+      localStorage.setItem(STORAGE_KEYS.DETECTED_THINKING_MODELS, JSON.stringify(set));
+    } catch { /* non-critical */ }
+  }
+
+  /** Check if a model was detected as having thinking capability at runtime. */
+  isDetectedThinkingModel(provider: string, model: string): boolean {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.DETECTED_THINKING_MODELS);
+      if (!raw) return false;
+      const set: string[] = JSON.parse(raw);
+      return set.includes(`${provider}:${model}`);
+    } catch { return false; }
+  }
+
   /** Build JSON headers for OpenAI-compatible APIs, optionally including Bearer auth. */
   private jsonHeaders(apiKey?: string): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -448,6 +469,11 @@ class AIService {
     ];
     if (visionModels.some((p) => p.test(modelLower))) {
       caps.push("vision");
+    }
+
+    // Merge runtime-detected thinking capability
+    if (!caps.includes("thinking") && this.isDetectedThinkingModel(provider || this.config.provider, modelName)) {
+      caps.push("thinking");
     }
 
     return caps;
@@ -641,6 +667,12 @@ class AIService {
     for (const result of results) {
       if (result.status === "fulfilled") {
         models.push(...result.value);
+      }
+    }
+    // Merge runtime-detected thinking capability into model list
+    for (const m of models) {
+      if (!m.capabilities?.includes("thinking") && this.isDetectedThinkingModel(m.provider, m.name)) {
+        m.capabilities = [...(m.capabilities || []), "thinking"];
       }
     }
     return models;
@@ -1165,7 +1197,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
             model: model,
-            max_tokens: 1024,
+            max_tokens: 4096,
             system: systemPrompt,
             messages: [{ role: "user", content: prompt }],
           }),
@@ -1187,7 +1219,8 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           throw new Error(
             `${CLOUD_PROVIDERS[provider]?.label || provider} API Key required`,
           );
-        return await this.openAIChatSimple(
+        const thinkEnabled = options?.thinking ?? false;
+        const result = await this.streamOpenAIChat(
           provider,
           model,
           apiKey || "",
@@ -1195,9 +1228,19 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt },
           ],
-          300,
+          (token, thinking) => {
+            if (thinking && options?.onThinking) options.onThinking(thinking);
+            if (token && onToken) onToken(token);
+          },
+          signal,
+          undefined,
           providerUsesBaseUrl(provider) ? baseUrl : undefined,
+          thinkEnabled,
         );
+        if (result.thinking && options?.onThinking) {
+          // Ensure thinking text was delivered (some paths accumulate without callback)
+        }
+        return result.content.trim();
       }
 
       throw new Error(
@@ -1728,6 +1771,7 @@ RULES:
 9. IMAGES: User-mentioned images were analyzed in a prior step. Use the description — don't try to access them.
 10. TAB TITLE: Include "_tab_title": "2-5 word title" in JSON response. Update as task evolves.
 11. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation is reference — don't re-execute previous actions.
+12. PLANNING: For complex tasks (multi-file creation, full project setup, multi-step workflows), output a brief plan as your FIRST response using final_answer with "_plan":true. List numbered steps (what you'll do, in order). Then immediately proceed to execute. Keep the plan under 10 lines. For simple tasks (single command, one file edit, quick check), skip planning and execute directly.
 ${agentPrompt}
 `,
         },
@@ -1790,7 +1834,7 @@ ${agentPrompt}
     // Loop detection: track recent actions to break repetitive patterns
     const recentActions: string[] = [];
     let loopBreaks = 0; // Escalating loop counter
-    const blockedActions = new Set<string>(); // Actions that triggered loop detection — permanently blocked
+    let recentlyBlockedAction: string | null = null; // Last action blocked by loop detection — cleared after any different action succeeds
     // Progress tracking
     let lastProgressStep = 0;
     let commandsSucceeded = 0;
@@ -1834,10 +1878,71 @@ ${agentPrompt}
 
       // 1. Get LLM Response (streaming for Ollama)
       let thinkingText = "";
+
+      // Thinking-tag interceptor: detects <think>/<thinking>/<thought> in regular
+      // token stream (e.g. LM Studio) and reroutes to thinking accumulator.
+      const thinkTagOpenRe = /^<(think|thinking|thought)>/i;
+      const thinkTagCloseRe = /<\/(think|thinking|thought)>/i;
+      let _inThinkTag = false;
+      let _tokenBuf = ""; // buffer for detecting opening tag at stream start
+      const interceptThinkingTokens = (
+        token: string,
+        thinkingAcc: { value: string },
+        contentAcc: { value: string },
+      ) => {
+        _tokenBuf += token;
+        // Detect opening tag at start of stream
+        if (!_inThinkTag && _tokenBuf.length <= 30) {
+          if (thinkTagOpenRe.test(_tokenBuf.trimStart())) {
+            _inThinkTag = true;
+            // Persist this model as a thinking model for future sessions
+            this.markModelAsThinking(provider, model);
+            const afterTag = _tokenBuf.trimStart().replace(thinkTagOpenRe, "");
+            if (afterTag) {
+              thinkingAcc.value += afterTag;
+              onUpdate("streaming_thinking", thinkingAcc.value);
+            }
+            return;
+          }
+          // Partial tag — wait for more
+          if (/^<(t|th|thi|thin|think|thinki|thinkin|thinking|thou|thoug|though|thought)$/i.test(_tokenBuf.trimStart())) {
+            return;
+          }
+        }
+        if (_inThinkTag) {
+          const closeMatch = _tokenBuf.match(thinkTagCloseRe);
+          if (closeMatch) {
+            const closeIdx = _tokenBuf.indexOf(closeMatch[0]);
+            _inThinkTag = false;
+            // Anything after closing tag is real content
+            const afterClose = _tokenBuf.substring(closeIdx + closeMatch[0].length);
+            // Flush thinking (strip the close tag from token)
+            const thinkPart = token.replace(thinkTagCloseRe, "").replace(/[\s\S]*$/, "");
+            if (thinkPart) {
+              thinkingAcc.value += thinkPart;
+              onUpdate("streaming_thinking", thinkingAcc.value);
+            }
+            if (afterClose.trim()) {
+              contentAcc.value += afterClose;
+              onUpdate("streaming_response", contentAcc.value);
+            }
+            // Reset buffer to only content after close
+            _tokenBuf = afterClose;
+          } else {
+            thinkingAcc.value += token;
+            onUpdate("streaming_thinking", thinkingAcc.value);
+          }
+          return;
+        }
+        contentAcc.value += token;
+        onUpdate("streaming_response", contentAcc.value);
+      };
+
       try {
         if (provider === "ollama") {
           let thinkingAccumulated = "";
-          let contentAccumulated = "";
+          const thinkAcc = { value: "" };
+          const contentAcc = { value: "" };
           const result = await this.streamOllamaChat(
             baseUrl || "http://localhost:11434",
             model,
@@ -1848,8 +1953,7 @@ ${agentPrompt}
                 onUpdate("streaming_thinking", thinkingAccumulated);
               }
               if (token) {
-                contentAccumulated += token;
-                onUpdate("streaming_response", contentAccumulated);
+                interceptThinkingTokens(token, thinkAcc, contentAcc);
               }
             },
             signal,
@@ -1857,10 +1961,11 @@ ${agentPrompt}
             thinkingEnabled,
             apiKey,
           );
-          responseText = result.content;
-          thinkingText = result.thinking;
-          if (thinkingAccumulated) {
-            onUpdate("thinking_complete", thinkingAccumulated);
+          // Use intercepted content if thinking tags were detected in token stream
+          responseText = thinkAcc.value ? contentAcc.value : result.content;
+          thinkingText = result.thinking || thinkAcc.value;
+          if (thinkingAccumulated || thinkAcc.value) {
+            onUpdate("thinking_complete", thinkingAccumulated || thinkAcc.value);
           } else {
             // For non-thinking models: ensure thinking state is cleared
             onUpdate("thinking_done", "");
@@ -1953,7 +2058,11 @@ ${agentPrompt}
         ) {
           // OpenAI-compatible cloud providers with streaming
           let thinkingAccumulated = "";
-          let contentAccumulated = "";
+          // Reset interceptor state for this provider branch
+          _inThinkTag = false;
+          _tokenBuf = "";
+          const oaiThinkAcc = { value: "" };
+          const oaiContentAcc = { value: "" };
           const result = await this.streamOpenAIChat(
             provider,
             model,
@@ -1965,8 +2074,7 @@ ${agentPrompt}
                 onUpdate("streaming_thinking", thinkingAccumulated);
               }
               if (token) {
-                contentAccumulated += token;
-                onUpdate("streaming_response", contentAccumulated);
+                interceptThinkingTokens(token, oaiThinkAcc, oaiContentAcc);
               }
             },
             signal,
@@ -1974,10 +2082,10 @@ ${agentPrompt}
             baseUrl,
             thinkingEnabled,
           );
-          responseText = result.content;
-          thinkingText = result.thinking;
-          if (thinkingAccumulated) {
-            onUpdate("thinking_complete", thinkingAccumulated);
+          responseText = oaiThinkAcc.value ? oaiContentAcc.value : result.content;
+          thinkingText = result.thinking || oaiThinkAcc.value;
+          if (thinkingAccumulated || oaiThinkAcc.value) {
+            onUpdate("thinking_complete", thinkingAccumulated || oaiThinkAcc.value);
           } else {
             onUpdate("thinking_done", "");
           }
@@ -2012,6 +2120,9 @@ ${agentPrompt}
         });
         continue;
       }
+
+      // Strip any remaining thinking tags from response text (providers that embed them inline)
+      responseText = responseText.replace(/<(think|thinking|thought)>[\s\S]*?<\/(think|thinking|thought)>/gi, "").trim();
 
       // 2. Parse Tool Call — try content first, then extract from thinking
       let action: any;
@@ -2312,13 +2423,17 @@ ${agentPrompt}
             text: action.text,
           });
 
-      // Block actions that previously triggered loop detection
-      if (actionKey && blockedActions.has(actionKey)) {
+      // Block the most recently looped action — cleared once a different action runs
+      if (actionKey && recentlyBlockedAction === actionKey) {
         history.push({
           role: "user",
-          content: `BLOCKED: "${action.tool}" with these parameters was previously blocked due to looping. You MUST use a different tool or different parameters. If you cannot proceed, use final_answer.`,
+          content: `BLOCKED: "${action.tool}" with these parameters was just blocked due to looping. You MUST use a different tool or different parameters. If you cannot proceed, use final_answer.`,
         });
         continue;
+      }
+      // Agent moved on to a different action — clear the block
+      if (actionKey && recentlyBlockedAction && actionKey !== recentlyBlockedAction) {
+        recentlyBlockedAction = null;
       }
 
       if (actionKey) recentActions.push(actionKey);
@@ -2352,8 +2467,8 @@ ${agentPrompt}
 
       if (isConsecutiveLoop || isAlternatingLoop) {
         loopBreaks++;
-        // Permanently block this action from being retried
-        if (actionKey) blockedActions.add(actionKey);
+        // Temporarily block this action — cleared when agent tries something different
+        if (actionKey) recentlyBlockedAction = actionKey;
         recentActions.length = 0;
 
         // Escalating response
@@ -2379,6 +2494,22 @@ ${agentPrompt}
       }
 
       // 3. Execute Tool
+
+      // Planning step: model outputs a plan before executing — show it and continue
+      if (action.tool === "final_answer" && action._plan) {
+        const planContent = action.content || "";
+        onUpdate("plan", planContent, action);
+        history.push({
+          role: "assistant",
+          content: responseText,
+        });
+        history.push({
+          role: "user",
+          content: "Plan acknowledged. Now execute it step by step.",
+        });
+        continue;
+      }
+
       if (action.tool === "final_answer") {
         // Reject premature completion: scaffolded a project but never wrote any code
         if (usedScaffold && !wroteFiles) {
@@ -2570,7 +2701,25 @@ ${agentPrompt}
           });
           continue;
         }
-        return { success: true, message: action.content, type: "success", payload: action };
+        // Fix mismatched server URLs: if final_answer mentions localhost:PORT but
+        // terminal shows a different port, correct it (common with small models)
+        let finalMessage: string = action.content || "";
+        if (terminalBusy && /localhost:\d+/.test(finalMessage)) {
+          try {
+            const termOut = await readTerminal(30);
+            const termPorts = [...termOut.matchAll(/localhost:(\d+)/g)].map(m => m[1]);
+            const msgPorts = [...finalMessage.matchAll(/localhost:(\d+)/g)].map(m => m[1]);
+            if (termPorts.length > 0 && msgPorts.length > 0) {
+              const actualPort = termPorts[termPorts.length - 1]; // last seen port
+              for (const wrongPort of msgPorts) {
+                if (wrongPort !== actualPort && termPorts.indexOf(wrongPort) === -1) {
+                  finalMessage = finalMessage.replaceAll(`localhost:${wrongPort}`, `localhost:${actualPort}`);
+                }
+              }
+            }
+          } catch { /* non-critical */ }
+        }
+        return { success: true, message: finalMessage, type: "success", payload: action };
       }
 
       if (action.tool === "ask_question") {
@@ -2780,24 +2929,7 @@ ${agentPrompt}
             }
           }
 
-          // Prevent duplicate run_in_terminal commands (e.g. re-scaffolding)
           let runCmd = action.command;
-          if (
-            executedCommands.has(runCmd) ||
-            isDuplicateScaffold(runCmd, executedCommands)
-          ) {
-            onUpdate(
-              "failed",
-              `Blocked: duplicate command "${runCmd.slice(0, 80)}"`,
-              action
-            );
-            history.push({
-              role: "user",
-              content: `Error: You already ran a similar command ("${runCmd}"). If the project directory doesn't exist at the expected location, create it manually with mkdir via execute_command, then use write_file to create files. Do NOT re-scaffold.`,
-            });
-            consecutiveGuardBlocks++;
-            continue;
-          }
           executedCommands.add(runCmd);
           const isScaffoldCmd = /\b(create|init)\b/i.test(runCmd);
 
@@ -3627,21 +3759,6 @@ ${agentPrompt}
             consecutiveGuardBlocks++;
             continue;
           }
-        }
-
-        // Only block duplicate scaffold commands in execute_command — read-only commands (ls, cat, find) are safe to re-run
-        if (isDuplicateScaffold(cmd, executedCommands)) {
-          onUpdate(
-            "failed",
-            `Blocked: duplicate scaffold command "${cmd.slice(0, 80)}"`,
-            action
-          );
-          history.push({
-            role: "user",
-            content: `Error: You already ran a similar scaffold command. The project may already exist. Check with ls or use write_file to create files manually if the scaffold put files in an unexpected location.`,
-          });
-          consecutiveGuardBlocks++;
-          continue;
         }
 
         // After scaffolding, only block mkdir (write_file handles directories)

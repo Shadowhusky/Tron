@@ -48,6 +48,7 @@ interface LayoutContextType {
   updateSplitSizes: (path: number[], sizes: number[]) => void;
   openSettingsTab: (section?: string) => void;
   openBrowserTab: (url: string, title?: string) => void;
+  openEditorTab: (filePath: string) => void;
   /** Which settings section to show when settings tab opens. */
   pendingSettingsSection: string | null;
   clearPendingSettingsSection: () => void;
@@ -596,6 +597,29 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId(newTabId);
   };
 
+  const openEditorTab = (filePath: string) => {
+    // If an editor tab for this path is already open, focus it
+    const existing = tabsRef.current.find((t) => {
+      if (t.root.type !== "leaf") return false;
+      return t.root.contentType === "editor" && t.root.editorPath === filePath;
+    });
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const newTabId = uuid();
+    const sessionId = `editor-${newTabId}`;
+    const fileName = filePath.split(/[/\\]/).pop() || filePath;
+    const newTab: Tab = {
+      id: newTabId,
+      title: fileName,
+      root: { type: "leaf", sessionId, contentType: "editor", editorPath: filePath },
+      activeSessionId: sessionId,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTabId);
+  };
+
   const openBrowserTab = (url: string, title?: string) => {
     const newTabId = uuid();
     const sessionId = `browser-${newTabId}`;
@@ -836,7 +860,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const closeSession = (sessionId: string) => {
-    if (sessionId === "settings" || sessionId.startsWith("ssh-connect") || sessionId.startsWith("browser-")) return; // pseudo-sessions
+    if (sessionId === "settings" || sessionId.startsWith("ssh-connect") || sessionId.startsWith("browser-") || sessionId.startsWith("editor-")) return; // pseudo-sessions
 
     if (window.electron) {
       window.electron.ipcRenderer.send(IPC.TERMINAL_CLOSE, sessionId);
@@ -1345,6 +1369,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         updateSplitSizes,
         openSettingsTab,
         openBrowserTab,
+        openEditorTab,
         pendingSettingsSection,
         clearPendingSettingsSection,
         reorderTabs,
