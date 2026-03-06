@@ -2949,6 +2949,11 @@ ${agentPrompt}
               if (afterState === "idle") {
                 terminalBusy = false;
                 consecutiveBusy = 0;
+                // Mark previous terminal output as stale
+                history.push({
+                  role: "user",
+                  content: `(Previous server stopped. All prior terminal output and error messages are STALE — only trust output from commands after this point.)`,
+                });
                 // Fall through to execute the command
               } else {
                 history.push({
@@ -3250,7 +3255,7 @@ ${agentPrompt}
             } else {
               history.push({
                 role: "user",
-                content: `${output}\n\n✅ A server/daemon process is running successfully. The process has started and is serving. You MUST use final_answer NOW to report the result to the user. Do NOT write more files, do NOT call read_terminal again — the server is running and the task is COMPLETE.`,
+                content: `${output}\n\n✅ A server/daemon process is running successfully with NO errors. Ignore any previous error messages in the conversation — they are from an older server run and no longer relevant. You MUST use final_answer NOW to report the result to the user. Do NOT write more files, do NOT call read_terminal again — the server is running and the task is COMPLETE.`,
               });
             }
           } else if (termState === "idle") {
@@ -3969,7 +3974,7 @@ ${agentPrompt}
           if (mkdirMatch) lastWriteDir = mkdirMatch[1];
           onUpdate("executed", cmd + "\n---\n" + output, action);
           const serverNote = stoppedServerForExec
-            ? "\n\n⚠️ NOTE: A dev server was automatically stopped to run this command. If you need the server running again, restart it with run_in_terminal."
+            ? "\n\n⚠️ NOTE: A dev server was automatically stopped to run this command. If you need the server running again, restart it with run_in_terminal.\n⚠️ IMPORTANT: All previous terminal output (including any error messages from the old server) is STALE. Only trust output from THIS command and future commands."
             : "";
           history.push({
             role: "user",
