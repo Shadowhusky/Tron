@@ -312,11 +312,14 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     ],
   );
 
-  // Stop running agent
+  // Stop running agent — only when focus is NOT inside the terminal (xterm textarea)
+  // so that Ctrl+C in the terminal sends SIGINT to PTY without also stopping the agent
   useHotkey(
     "stopAgent",
     () => {
       if (!isActive || !isAgentRunning) return;
+      const el = document.activeElement;
+      if (el instanceof HTMLTextAreaElement && el.closest(".xterm")) return;
       stopAgentRaw();
     },
     [isActive, isAgentRunning, stopAgentRaw],

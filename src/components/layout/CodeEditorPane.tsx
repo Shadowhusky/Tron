@@ -218,8 +218,8 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath }) 
         </button>
       </div>
 
-      {/* Editor body */}
-      <div className="flex-1 relative min-h-0 overflow-hidden">
+      {/* Editor body — absolute positioning gives CodeMirror a concrete pixel height */}
+      <div className="flex-1 relative min-h-0">
         {loading && (
           <div className={`absolute inset-0 z-10 flex items-center justify-center ${isLight ? "bg-gray-50" : "bg-[#0a0a0a]"}`}>
             <RotateCw className={`h-5 w-5 animate-spin ${isLight ? "text-gray-400" : "text-gray-500"}`} />
@@ -234,26 +234,27 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath }) 
           </div>
         )}
         {!loading && !error && (
-          <CodeMirror
-            value={content}
-            onChange={setContent}
-            extensions={langExtensions}
-            theme={isLight ? "light" : "dark"}
-            height="100%"
-            style={{ height: "100%" }}
-            basicSetup={{
-              lineNumbers: true,
-              highlightActiveLineGutter: true,
-              highlightActiveLine: true,
-              foldGutter: true,
-              bracketMatching: true,
-              closeBrackets: true,
-              autocompletion: false,
-              indentOnInput: true,
-              syntaxHighlighting: true,
-              searchKeymap: true,
-            }}
-          />
+          <div className="absolute inset-0">
+            <CodeMirror
+              value={content}
+              onChange={setContent}
+              extensions={langExtensions}
+              theme={isLight ? "light" : "dark"}
+              height="100%"
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLineGutter: true,
+                highlightActiveLine: true,
+                foldGutter: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: false,
+                indentOnInput: true,
+                syntaxHighlighting: true,
+                searchKeymap: true,
+              }}
+            />
+          </div>
         )}
       </div>
     </div>

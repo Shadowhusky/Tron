@@ -748,9 +748,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       // Suppress outgoing writes during reconnect (prevents DSR corruption)
       if (suppressOutgoingRef.current) return;
 
-      if (data === "\u0003" && isAgentRunningRef.current) {
-        stopAgentRef.current?.();
-      }
+      // Ctrl+C in terminal only sends to PTY — agent stop is handled by SmartInput only
 
       if (!activityFired && data === "\r") {
         activityFired = true;

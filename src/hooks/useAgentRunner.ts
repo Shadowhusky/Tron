@@ -616,12 +616,14 @@ ${prompt}
             command: cmd,
           });
 
-          // Timeout — process is still running (not killed). Agent can interact via send_text + read_terminal.
+          // Timeout — process is still running (not killed). Agent should monitor with read_terminal.
           if (result.exitCode === 124) {
             const partial = result.stdout || "";
-            return partial
-              ? `(Command is still running. Output so far:)\n${partial}\n\n(Use send_text to respond to prompts, then read_terminal to check the result. For dev servers, use run_in_terminal instead.)`
-              : "(Command is running with no output yet. Use read_terminal to check later.)";
+            // Prefix with __TIMEOUT__ so agent loop knows to set terminalBusy = true
+            const msg = partial
+              ? `(Command is still running — this is normal for long operations like docker, builds, installs. Output so far:)\n${partial}\n\n(Use read_terminal to monitor progress. The process may take several minutes. Do NOT run another execute_command or Ctrl+C — wait patiently.)`
+              : "(Command is running with no output yet. Use read_terminal to check progress — it may take a while.)";
+            return "__TIMEOUT__" + msg;
           }
 
           // Error
@@ -784,7 +786,12 @@ ${prompt}
               const updated = [...prev];
 
               // "read_terminal" → merge into the last read_terminal entry in current run (single collapsible row)
+              // Also remove any trailing streaming entry that showed the raw JSON tool call
               if (step === "read_terminal") {
+                // Remove trailing streaming entry (the raw `{"tool":"read_terminal",...}` JSON)
+                while (updated.length > 0 && updated[updated.length - 1].step === "streaming") {
+                  updated.pop();
+                }
                 for (let j = updated.length - 1; j >= 0; j--) {
                   if (updated[j].step === "separator") break; // don't merge across runs
                   if (updated[j].step === "read_terminal") {
@@ -811,7 +818,7 @@ ${prompt}
                 }
               }
 
-              // Transform streaming entry in-place if present, otherwise append
+              // Transform last streaming entry in-place, remove any others
               let lastStreamIdx = -1;
               for (let j = updated.length - 1; j >= 0; j--) {
                 if (updated[j].step === "streaming") {
@@ -821,7 +828,8 @@ ${prompt}
               }
               if (lastStreamIdx >= 0) {
                 updated[lastStreamIdx] = { step, output, payload };
-                return updated;
+                // Remove any remaining streaming entries (from retries)
+                return updated.filter((s, i) => i === lastStreamIdx || s.step !== "streaming");
               }
               return [...updated, { step, output, payload }];
             });

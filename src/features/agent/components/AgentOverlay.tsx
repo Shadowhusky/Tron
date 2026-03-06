@@ -35,6 +35,29 @@ import TokenHeatBar from "./TokenHeatBar";
 // Configure marked for minimal, safe output
 marked.setOptions({ breaks: true, gfm: true });
 
+/** Live countdown for read_terminal backoff — shows "next check in Xs" */
+function ReadTerminalCountdown({ nextCheckMs, checkCount, isLight }: { nextCheckMs: number; checkCount: number; isLight: boolean }) {
+  const [remaining, setRemaining] = useState(Math.ceil(nextCheckMs / 1000));
+  useEffect(() => {
+    if (nextCheckMs <= 0) return;
+    setRemaining(Math.ceil(nextCheckMs / 1000));
+    const start = Date.now();
+    const id = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const left = Math.max(0, Math.ceil((nextCheckMs - elapsed) / 1000));
+      setRemaining(left);
+      if (left <= 0) clearInterval(id);
+    }, 200);
+    return () => clearInterval(id);
+  }, [nextCheckMs, checkCount]);
+  if (remaining <= 0) return null;
+  return (
+    <span className={`text-[10px] font-mono tabular-nums ml-1.5 ${isLight ? "text-blue-400" : "text-blue-400/70"}`}>
+      next check in {remaining}s
+    </span>
+  );
+}
+
 /** Extract human-readable progress from partial/complete streaming JSON */
 function describeStreamingContent(raw: string): {
   label: string;
@@ -847,6 +870,34 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     return () => observer.disconnect();
   }, []);
 
+  // Fade-out for completed thinking steps — visible for 1.5s then collapse over 0.8s
+  const [fadingThoughts, setFadingThoughts] = useState<Map<number, "visible" | "fading">>(new Map());
+  const fadingTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const prevStepsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    const prevSteps = prevStepsRef.current;
+    const curSteps = agentThread.map((s) => s.step);
+    prevStepsRef.current = curSteps;
+
+    for (let i = 0; i < curSteps.length; i++) {
+      if (curSteps[i] === "thought" && prevSteps[i] === "thinking" && !fadingTimersRef.current.has(i)) {
+        setFadingThoughts((prev) => new Map(prev).set(i, "visible"));
+        const t1 = setTimeout(() => {
+          setFadingThoughts((prev) => new Map(prev).set(i, "fading"));
+          const t2 = setTimeout(() => {
+            setFadingThoughts((prev) => { const next = new Map(prev); next.delete(i); return next; });
+            fadingTimersRef.current.delete(i);
+          }, 800);
+          fadingTimersRef.current.set(i, t2);
+        }, 1500);
+        fadingTimersRef.current.set(i, t1);
+      }
+    }
+  }, [agentThread]);
+
+  useEffect(() => () => { fadingTimersRef.current.forEach((t) => clearTimeout(t)); }, []);
+
   // Collapsible executed steps: track which step indices are collapsed
   const [collapsedSteps, setCollapsedSteps] = useState<Set<number>>(new Set());
   // Collapsible run groups (previous agent runs): track by runIdx
@@ -1468,8 +1519,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       execOutput = step.output.slice(sepIdx + 5);
                     }
 
-                    // Hide completed thinking steps — shown during streaming only
-                    if (isThought) return null;
+                    // Hide completed thinking steps — show briefly then fade out
+                    if (isThought && !fadingThoughts.has(globalIdx)) return null;
 
                     // Stopped: render a tiny inline indicator, not a full step block
                     if (isStopped) {
@@ -1490,9 +1541,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       );
                     }
 
+                    const thoughtPhase = isThought ? fadingThoughts.get(globalIdx) : undefined;
+
                     return (
                       <div
                         key={key}
+                        style={thoughtPhase === "fading"
+                          ? { opacity: 0, maxHeight: 0, overflow: "hidden", padding: 0, margin: 0, transition: "opacity 0.4s ease-out, max-height 0.8s ease-out, padding 0.8s ease-out" }
+                          : thoughtPhase === "visible"
+                            ? { opacity: 0.7, maxHeight: 200, overflow: "hidden", transition: "opacity 0.3s ease-in" }
+                            : undefined}
                         className={`border-l-2 pl-4 py-2 ${
                           isError
                             ? isLight
@@ -1628,6 +1686,9 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                   ? "Sent input to terminal"
                                   : step.output.split("\n")[0].slice(0, 120)}
                             </span>
+                          )}
+                          {isReadTerminal && isAgentRunning && step.payload?._nextCheckMs > 0 && (
+                            <ReadTerminalCountdown nextCheckMs={step.payload._nextCheckMs} checkCount={step.payload._checkCount || 0} isLight={isLight} />
                           )}
                           {(isThinkingStep ||
                             isStreamingStep ||

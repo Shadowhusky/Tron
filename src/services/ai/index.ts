@@ -2496,18 +2496,25 @@ ${agentPrompt}
       // 3. Execute Tool
 
       // Planning step: model outputs a plan before executing — show it and continue
-      if (action.tool === "final_answer" && action._plan) {
-        const planContent = action.content || "";
+      // Handles both {"tool":"final_answer","_plan":true,...} and {"_plan":true,"content":"...","_action":{...}}
+      if (action._plan && action.content) {
+        const planContent = action.content;
         onUpdate("plan", planContent, action);
         history.push({
           role: "assistant",
           content: responseText,
         });
-        history.push({
-          role: "user",
-          content: "Plan acknowledged. Now execute it step by step.",
-        });
-        continue;
+        // If the model embedded a follow-up tool call in _action, use it as the next action
+        if (action._action && action._action.tool) {
+          action = action._action;
+          // Fall through to tool dispatch below
+        } else {
+          history.push({
+            role: "user",
+            content: "Plan acknowledged. Now execute it step by step.",
+          });
+          continue;
+        }
       }
 
       if (action.tool === "final_answer") {
@@ -2769,35 +2776,73 @@ ${agentPrompt}
 
       if (action.tool === "run_in_terminal") {
         try {
-          // Pre-flight TUI check — catch TUI programs started outside agent loop
-          // (user may have launched a TUI manually; terminalBusy would be false)
+          // Pre-flight check — catch running servers/TUI programs before writing to terminal
           if (!terminalBusy) {
             const pfOutput = await readTerminal(30);
             const pfState = classifyTerminalOutput(pfOutput || "");
-            // Skip TUI detection if terminal is idle — shell prompt means no TUI running
-            const tui = pfState !== "idle" ? detectTuiProgram(pfOutput || "") : null;
-            if (tui) {
-              onUpdate("executed", `Exiting TUI "${tui}"…`, action);
-              const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
-              if (result.exited) {
-                onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
-                tuiExitFailures = 0;
-                // TUI exited — let the command proceed (don't continue)
-              } else {
-                tuiExitFailures++;
-                if (tuiExitFailures >= 2) {
-                  onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
-                  history.push({
-                    role: "user",
-                    content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
-                  });
-                } else {
-                  history.push({
-                    role: "user",
-                    content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
-                  });
-                }
+
+            // Server/daemon running — stop it first
+            if (pfState === "server") {
+              onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
+              await writeToTerminal("\x03", true);
+              let waitAttempts = 0;
+              while (waitAttempts < 15) {
+                await new Promise((r) => setTimeout(r, 500));
+                const checkState = classifyTerminalOutput(await readTerminal(10) || "");
+                if (checkState === "idle") break;
+                waitAttempts++;
+              }
+              const afterState = classifyTerminalOutput(await readTerminal(10) || "");
+              if (afterState !== "idle") {
+                onUpdate("failed", `Server still running after Ctrl+C — command not executed`, action);
+                history.push({
+                  role: "user",
+                  content: `(Command NOT executed — a server/dev process is running in the terminal and could not be stopped with Ctrl+C. You must stop it first: use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,
+                });
                 continue;
+              }
+            } else if (pfState === "busy") {
+              // Try Ctrl+C to recover — can't write to a busy terminal cleanly
+              onUpdate("executing", `Stopping running process to run: ${(action.command || "").slice(0, 60)}…`, action);
+              await writeToTerminal("\x03", true);
+              let bWait = 0;
+              while (bWait < 15) {
+                await new Promise((r) => setTimeout(r, 500));
+                const cs = classifyTerminalOutput(await readTerminal(10) || "");
+                if (cs === "idle") break;
+                bWait++;
+              }
+              const abState = classifyTerminalOutput(await readTerminal(10) || "");
+              if (abState !== "idle") {
+                terminalBusy = true;
+              }
+            }
+
+            // TUI detection
+            if (pfState !== "idle" && pfState !== "server") {
+              const tui = detectTuiProgram(pfOutput || "");
+              if (tui) {
+                onUpdate("executed", `Exiting TUI "${tui}"…`, action);
+                const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
+                if (result.exited) {
+                  onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
+                  tuiExitFailures = 0;
+                } else {
+                  tuiExitFailures++;
+                  if (tuiExitFailures >= 2) {
+                    onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
+                    history.push({
+                      role: "user",
+                      content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
+                    });
+                  } else {
+                    history.push({
+                      role: "user",
+                      content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
+                    });
+                  }
+                  continue;
+                }
               }
             }
           }
@@ -2861,7 +2906,7 @@ ${agentPrompt}
                     content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)`,
                   });
                   // Don't continue — let the original command execute
-                } else if (consecutiveBusy >= 5) {
+                } else if (consecutiveBusy >= 10) {
                   // Stuck for too long — stop polling and tell agent to change approach
                   onUpdate(
                     "executed",
@@ -2870,7 +2915,7 @@ ${agentPrompt}
                   );
                   history.push({
                     role: "user",
-                    content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input not detected as a prompt. You MUST either:\n1. Use send_text("\\x03") to Ctrl+C the process\n2. Use send_text to provide input\n3. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
+                    content: `(Terminal has been busy for ${consecutiveBusy} consecutive checks. The process may be stalled or waiting for input. You should either:\n1. Use read_terminal one more time to check if there's a prompt or error\n2. Use send_text("\\x03") to Ctrl+C the process if it appears stuck\n3. Use send_text to provide input if the process is waiting for a response\n4. Use final_answer to report the current state\nDo NOT attempt more run_in_terminal or execute_command calls.)`,
                   });
                   consecutiveGuardBlocks++;
                   continue;
@@ -2884,35 +2929,35 @@ ${agentPrompt}
                   );
                   history.push({
                     role: "user",
-                    content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
+                    content: `(Command NOT executed — terminal is busy running a process. Use ONLY read_terminal to monitor progress. Do NOT use execute_command or run_in_terminal until the process finishes. Be patient — builds, installs, and docker operations can take several minutes.)\nCurrent output:\n${output}`,
                   });
                   continue;
                 }
               }
             } else if (state === "server") {
-              // Dev server / listener running — don't silently kill it
-              consecutiveBusy++;
-              if (consecutiveBusy >= 3 || (usedScaffold && wroteFiles)) {
-                // Task is likely done — dev server is running with code written
-                onUpdate(
-                  "warning",
-                  "Dev server is already running — task may be complete",
-                  action
-                );
+              // Dev server running — auto-stop it so the command can execute
+              onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
+              await writeToTerminal("\x03", true);
+              let sWait = 0;
+              while (sWait < 15) {
+                await new Promise((r) => setTimeout(r, 500));
+                const cs = classifyTerminalOutput(await readTerminal(10) || "");
+                if (cs === "idle") break;
+                sWait++;
+              }
+              const afterState = classifyTerminalOutput(await readTerminal(10) || "");
+              if (afterState === "idle") {
+                terminalBusy = false;
+                consecutiveBusy = 0;
+                // Fall through to execute the command
+              } else {
                 history.push({
                   role: "user",
-                  content: `STOP: The dev server is running and you have ${wroteFiles ? "already written code" : "not written code yet"}. You have tried to run commands ${consecutiveBusy} times while the server is active.\n${wroteFiles ? "The task appears COMPLETE. Use final_answer NOW to confirm the project is running." : "Do NOT stop the server. Use write_file NOW to implement the user's requested features — the dev server will hot-reload your code automatically."}\nDo NOT attempt more run_in_terminal or execute_command calls — only write_file and final_answer.`,
+                  content: `(Command NOT executed — server could not be stopped with Ctrl+C. Use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,
                 });
                 consecutiveGuardBlocks++;
                 continue;
               }
-              onUpdate("warning", "Terminal busy: Dev server running", action);
-              history.push({
-                role: "user",
-                content: `(Command NOT executed — dev server is running.${usedScaffold ? " You can still use write_file to add/edit code — the dev server will hot-reload automatically." : ""} If you need to run a different terminal command, use send_text("\\x03") to stop the server first. Use final_answer when the task is complete.)`,
-              });
-              consecutiveGuardBlocks++;
-              continue;
             } else {
               // idle — process finished on its own; read output so agent knows what happened
               consecutiveBusy = 0;
@@ -2994,7 +3039,7 @@ ${agentPrompt}
           );
           history.push({
             role: "user",
-            content: `(Command started in terminal. Initial output:\n${snapshot || "(no output yet)"}\n\nYou MUST use read_terminal to monitor progress. Do NOT run another command until this one finishes or you explicitly stop it with send_text("\\x03").)`,
+            content: `(Command started in terminal. Initial output:\n${snapshot || "(no output yet)"}\n\nIMPORTANT: You MUST use read_terminal repeatedly to monitor progress until the process finishes (terminal returns to idle/prompt state). Do NOT use execute_command or run_in_terminal — the terminal is occupied. Do NOT send Ctrl+C unless the process is clearly stuck or the user asks you to stop it. Long-running commands like docker, npm install, builds etc. can take several minutes — be patient.)`,
           });
         } catch (err: any) {
           terminalBusy = false; // Reset — command never actually ran
@@ -3102,74 +3147,87 @@ ${agentPrompt}
       if (action.tool === "read_terminal") {
         try {
           const lines = typeof action.lines === "number" ? action.lines : 50;
-          const output = await readTerminal(lines);
 
-          // Check if user clicked "Continue" — inject signal into history
-          if ((globalThis as any).__tronAgentContinue) {
-            (globalThis as any).__tronAgentContinue = false;
-            identicalReadCount = 0;
-            lastReadTerminalOutput = "";
-            onUpdate("executed", `User confirmed ready — continuing`, action);
-            history.push({
-              role: "user",
-              content: `${output}\n\n✅ The user has confirmed they completed the required action (e.g. finished browser login, entered input). The terminal output above shows the current state. Proceed with the task.`,
-            });
-            continue;
-          }
+          // When terminal is busy, loop internally with backoff until idle/done.
+          // This prevents the LLM from seeing partial output and firing new commands.
+          const MAX_BUSY_POLLS = 60; // Safety cap (~5 min at max backoff)
+          let busyPolls = 0;
+          let output = "";
+          let termState: string = "busy";
+          let tuiProgram: string | null = null;
 
-          // Track consecutive identical outputs for smart backoff
-          const outputTrimmed = (output || "").trim();
-          if (
-            outputTrimmed === lastReadTerminalOutput &&
-            outputTrimmed.length > 0
-          ) {
-            identicalReadCount++;
-          } else {
-            lastReadTerminalOutput = outputTrimmed;
-            identicalReadCount = 0;
-          }
+          while (true) {
+            if (signal?.aborted) throw new Error("Agent aborted by user.");
 
-          // Smart backoff: exponential delay 500ms → 1s → 2s → 3s (capped at 4s)
-          if (readTerminalCount > 0) {
-            const backoffMs = Math.min(500 * Math.pow(1.5, readTerminalCount - 1), 4000);
+            output = await readTerminal(lines);
+
+            // Check if user clicked "Continue"
+            if ((globalThis as any).__tronAgentContinue) {
+              (globalThis as any).__tronAgentContinue = false;
+              identicalReadCount = 0;
+              lastReadTerminalOutput = "";
+              onUpdate("executed", `User confirmed ready — continuing`, action);
+              history.push({
+                role: "user",
+                content: `${output}\n\n✅ The user has confirmed they completed the required action (e.g. finished browser login, entered input). The terminal output above shows the current state. Proceed with the task.`,
+              });
+              break;
+            }
+
+            // Track consecutive identical outputs
+            const outputTrimmed = (output || "").trim();
+            if (outputTrimmed === lastReadTerminalOutput && outputTrimmed.length > 0) {
+              identicalReadCount++;
+            } else {
+              lastReadTerminalOutput = outputTrimmed;
+              identicalReadCount = 0;
+            }
+
+            termState = classifyTerminalOutput(output || "");
+            tuiProgram = termState !== "idle" ? detectTuiProgram(output || "") : null;
+
+            // If terminal is busy (process running) and we came from run_in_terminal,
+            // poll internally instead of returning to the LLM
+            // Break on 3+ identical reads — process is idle/stalled, not actively busy
+            const shouldPollInternally = terminalBusy && termState === "busy" && !tuiProgram && busyPolls < MAX_BUSY_POLLS && identicalReadCount < 3;
+
+            // Smart backoff: 2s → 3s → 5s → 8s → 10s (capped)
+            const backoffMs = Math.min(2000 + 1000 * busyPolls, 10000);
+            readTerminalCount++;
+            busyPolls++;
+
+            // Update UI — single merged entry with countdown
+            const previewLines = output
+              ? output.split("\n").filter((l) => l.trim()).slice(-3)
+              : [];
+            const firstLine = previewLines[0]?.slice(0, 100) || "(No output)";
+            const fullPreview = previewLines.join("\n").slice(0, 300) || "(No output)";
+            const suffix = readTerminalCount > 1 ? ` (${readTerminalCount}x)` : "";
+            onUpdate(
+              "read_terminal",
+              `Checking terminal${suffix}: ${firstLine}\n---\n${fullPreview}`,
+              { ...action, _nextCheckMs: shouldPollInternally ? backoffMs : 0, _checkCount: readTerminalCount }
+            );
+
+            if (!shouldPollInternally) break; // Terminal done or special state — return to LLM
+
             await new Promise((r) => setTimeout(r, backoffMs));
           }
-          readTerminalCount++;
 
-          // Show a useful preview — use "read_terminal" step so UI merges consecutive reads
-          const previewLines = output
-            ? output
-              .split("\n")
-              .filter((l) => l.trim())
-              .slice(-3)
-            : [];
-          const firstLine = previewLines[0]?.slice(0, 100) || "(No output)";
-          const fullPreview =
-            previewLines.join("\n").slice(0, 300) || "(No output)";
-          const suffix =
-            readTerminalCount > 1
-              ? ` (${readTerminalCount}x)`
-              : "";
-          onUpdate(
-            "read_terminal",
-            `Checking terminal${suffix}: ${firstLine}\n---\n${fullPreview}`,
-            action
-          );
-
-          // Detect terminal state and TUI programs
-          // Only run TUI detection when terminal is NOT idle — stale buffer content
-          // (box-drawing chars, old TUI output) causes false positives when shell prompt is visible
-          const termState = classifyTerminalOutput(output || "");
-          const tuiProgram = termState !== "idle" ? detectTuiProgram(output || "") : null;
+          // Already handled by "Continue" button above
+          if ((globalThis as any).__tronAgentContinue === false && identicalReadCount === 0 && termState !== "busy") {
+            // Was handled inside the loop — skip duplicate push
+            if (history[history.length - 1]?.content?.includes("confirmed they completed")) {
+              continue;
+            }
+          }
 
           if (tuiProgram) {
-            // Full-screen TUI program detected — inform agent
             history.push({
               role: "user",
               content: `${output}\n\n⚠️ A TUI program is running: **${tuiProgram}**. The terminal is NOT at a shell prompt.\n- If your current task is UNRELATED to ${tuiProgram}: use execute_command or run_in_terminal for your next command — the system will automatically exit the TUI first.\n- If your task IS related to ${tuiProgram}: interact directly using send_text with appropriate keystrokes, then read_terminal to verify.`,
             });
           } else if (termState === "input_needed") {
-            // After 3+ identical reads with input_needed, force agent to use ask_question
             if (identicalReadCount >= 3) {
               history.push({
                 role: "user",
@@ -3182,16 +3240,40 @@ ${agentPrompt}
               });
             }
           } else if (termState === "server" && identicalReadCount >= 1) {
-            // Running server/daemon with stable output — task is likely done
+            // Check if server output contains errors — don't declare success if there are errors
+            const hasErrors = /\bError\b|ERR!|ENOENT|Cannot find|Failed to|Internal server error|FATAL|panic|Segmentation fault/i.test(output || "");
+            if (hasErrors) {
+              history.push({
+                role: "user",
+                content: `${output}\n\n⚠️ A server/dev process is running but the output contains ERRORS. Do NOT declare success — review the errors above and fix them. You may need to edit source files (use write_file or edit_file) to resolve the issues. The dev server will hot-reload automatically after you save changes.`,
+              });
+            } else {
+              history.push({
+                role: "user",
+                content: `${output}\n\n✅ A server/daemon process is running successfully. The process has started and is serving. You MUST use final_answer NOW to report the result to the user. Do NOT write more files, do NOT call read_terminal again — the server is running and the task is COMPLETE.`,
+              });
+            }
+          } else if (termState === "idle") {
+            // Process finished — clear busy flag and return output
+            terminalBusy = false;
             history.push({
               role: "user",
-              content: `${output}\n\n✅ A server/daemon process is running successfully. The process has started and is serving. You MUST use final_answer NOW to report the result to the user. Do NOT write more files, do NOT call read_terminal again — the server is running and the task is COMPLETE.`,
+              content: output
+                ? `${output}\n\n✅ The terminal process has finished (terminal is idle). Review the output above and proceed.`
+                : "(Process finished with no output)",
             });
           } else if (identicalReadCount >= 3) {
-            // Terminal busy with unchanged output — likely a running process
+            // Stable output — likely a server/daemon with static error output, or a stalled process
+            terminalBusy = false;
             history.push({
               role: "user",
-              content: `${output}\n\n⚠️ Terminal output has been identical for ${identicalReadCount} consecutive reads. The process is running with stable output — the task is likely complete. You MUST use final_answer to report the current state to the user. Do NOT keep calling read_terminal with unchanged output.`,
+              content: `${output}\n\n⚠️ Terminal output has been unchanged for ${identicalReadCount} consecutive reads. A process is running but not producing new output (likely a dev server showing errors). You can now proceed: use execute_command or run_in_terminal for your next command — the system will stop the process automatically if needed. Or use final_answer if the task is complete.`,
+            });
+          } else if (busyPolls >= MAX_BUSY_POLLS) {
+            terminalBusy = false;
+            history.push({
+              role: "user",
+              content: `${output}\n\n⚠️ Terminal has been monitored for ${busyPolls} checks (~5 minutes). The process may be stalled. You should either use send_text("\\x03") to stop it, or use final_answer to report the current state.`,
             });
           } else {
             history.push({
@@ -3576,33 +3658,87 @@ ${agentPrompt}
           continue;
         }
 
-        // Pre-flight TUI check — catch TUI programs started outside agent loop
+        // Pre-flight check — catch running servers/TUI programs before sentinel-based exec
+        let stoppedServerForExec = false;
         if (!terminalBusy) {
           const pfOutput = await readTerminal(30);
           const pfState = classifyTerminalOutput(pfOutput || "");
-          // Skip TUI detection if terminal is idle — shell prompt means no TUI running
-          const tui = pfState !== "idle" ? detectTuiProgram(pfOutput || "") : null;
-          if (tui) {
-            onUpdate("executed", `Exiting TUI "${tui}"…`, action);
-            const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
-            if (result.exited) {
-              onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
-              tuiExitFailures = 0;
-            } else {
-              tuiExitFailures++;
-              if (tuiExitFailures >= 2) {
-                onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
-                history.push({
-                  role: "user",
-                  content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
-                });
-              } else {
-                history.push({
-                  role: "user",
-                  content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
-                });
+
+          // Server/daemon running — stop it first so the command runs in a shell, not the server's stdin
+          if (pfState === "server" || pfState === "busy") {
+            if (pfState === "server") {
+              onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
+              await writeToTerminal("\x03", true); // Ctrl+C to stop server
+              // Wait for terminal to return to idle
+              let waitAttempts = 0;
+              while (waitAttempts < 15) {
+                await new Promise((r) => setTimeout(r, 500));
+                const checkState = classifyTerminalOutput(await readTerminal(10) || "");
+                if (checkState === "idle") break;
+                waitAttempts++;
               }
-              continue;
+              const afterState = classifyTerminalOutput(await readTerminal(10) || "");
+              if (afterState !== "idle") {
+                // Server didn't stop — tell agent to handle manually
+                onUpdate("failed", `Server still running after Ctrl+C — command not executed`, action);
+                history.push({
+                  role: "user",
+                  content: `(Command NOT executed — a server/dev process is running in the terminal and could not be stopped with Ctrl+C. You must stop it first: use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry the command.)`,
+                });
+                continue;
+              }
+              // Server stopped — fall through to execute the command
+              stoppedServerForExec = true;
+              terminalBusy = false;
+            } else {
+              // busy (not server) — process running, try Ctrl+C to recover
+              // Sentinel-based exec can't work with a busy terminal either
+              onUpdate("executing", `Stopping running process to run: ${(action.command || "").slice(0, 60)}…`, action);
+              await writeToTerminal("\x03", true);
+              let waitAttempts = 0;
+              while (waitAttempts < 15) {
+                await new Promise((r) => setTimeout(r, 500));
+                const checkState = classifyTerminalOutput(await readTerminal(10) || "");
+                if (checkState === "idle") break;
+                waitAttempts++;
+              }
+              const afterBusyState = classifyTerminalOutput(await readTerminal(10) || "");
+              if (afterBusyState === "idle") {
+                // Process stopped — fall through to execute the command
+                stoppedServerForExec = true;
+                terminalBusy = false;
+              } else {
+                // Still busy — set flag and let handler deal with it
+                terminalBusy = true;
+              }
+            }
+          }
+
+          // TUI detection — skip if idle (shell prompt means no TUI running)
+          if (pfState !== "idle" && pfState !== "server") {
+            const tui = detectTuiProgram(pfOutput || "");
+            if (tui) {
+              onUpdate("executed", `Exiting TUI "${tui}"…`, action);
+              const result = await attemptTuiExit(tui, writeToTerminal, readTerminal);
+              if (result.exited) {
+                onUpdate("executed", `Exited ${tui} (${result.attempts.join(" → ")})`, action);
+                tuiExitFailures = 0;
+              } else {
+                tuiExitFailures++;
+                if (tuiExitFailures >= 2) {
+                  onUpdate("executed", `Cannot exit TUI "${tui}" — asking user`, action);
+                  history.push({
+                    role: "user",
+                    content: `(Auto-exit failed ${tuiExitFailures} times for TUI "${tui}". You MUST use ask_question NOW to tell the user to manually close the TUI program, then wait for their confirmation before retrying.)`,
+                  });
+                } else {
+                  history.push({
+                    role: "user",
+                    content: `(Command NOT executed — TUI "${tui}" still running after exit attempts: ${result.attempts.join(" → ")}. Use send_text to exit manually, then read_terminal to confirm idle.)`,
+                  });
+                }
+                continue;
+              }
             }
           }
         }
@@ -3665,7 +3801,7 @@ ${agentPrompt}
                   content: `(Previous terminal process finished. Output:\n${finishedOutput}\n)`,
                 });
                 // Don't continue — let the original command execute
-              } else if (consecutiveBusy >= 5) {
+              } else if (consecutiveBusy >= 10) {
                 onUpdate(
                   "executed",
                   `(Terminal busy for ${consecutiveBusy} checks — skipping command)`,
@@ -3686,34 +3822,36 @@ ${agentPrompt}
                 );
                 history.push({
                   role: "user",
-                  content: `(Command NOT executed because terminal is busy running a process. Here is the current output instead:)\n${output}\n\n(Use send_text to interact or Ctrl+C to stop it.)`,
+                  content: `(Command NOT executed — terminal is busy running a process. Use ONLY read_terminal to monitor progress. Do NOT use execute_command or run_in_terminal until the process finishes. Be patient — builds, installs, and docker operations can take several minutes.)\nCurrent output:\n${output}`,
                 });
                 continue;
               }
             }
           } else if (state === "server") {
-            // Dev server is running — warn agent, cap consecutive attempts
-            consecutiveBusy++;
-            if (consecutiveBusy >= 3 || (usedScaffold && wroteFiles)) {
-              onUpdate(
-                "warning",
-                "Dev server is already running — task may be complete",
-                action
-              );
+            // Dev server is running — auto-stop it so the command can execute
+            onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
+            await writeToTerminal("\x03", true);
+            let waitAttempts = 0;
+            while (waitAttempts < 15) {
+              await new Promise((r) => setTimeout(r, 500));
+              const checkState = classifyTerminalOutput(await readTerminal(10) || "");
+              if (checkState === "idle") break;
+              waitAttempts++;
+            }
+            const afterState = classifyTerminalOutput(await readTerminal(10) || "");
+            if (afterState === "idle") {
+              terminalBusy = false;
+              stoppedServerForExec = true;
+              // Fall through to execute the command
+            } else {
+              // Server didn't stop — block and tell agent
               history.push({
                 role: "user",
-                content: `STOP: The dev server is running and you have ${wroteFiles ? "already written code" : "not written code yet"}. You have tried to run commands ${consecutiveBusy} times while the server is active.\n${wroteFiles ? "The task appears COMPLETE. Use final_answer NOW." : "Do NOT stop the server. Use write_file NOW to implement the user's requested features — the dev server will hot-reload your code automatically."}\nDo NOT attempt more run_in_terminal or execute_command calls — only write_file and final_answer.`,
+                content: `(Command NOT executed — server could not be stopped with Ctrl+C. Use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,
               });
               consecutiveGuardBlocks++;
               continue;
             }
-            onUpdate("warning", "Terminal busy: Dev server running", action);
-            history.push({
-              role: "user",
-              content: `Terminal is busy running a server. You cannot run execute_command while the server is active.${usedScaffold ? "\nYou CAN still use write_file to add/edit code — the dev server will hot-reload your changes automatically." : ""}\nIf the task is complete, use "final_answer".\nIf you need to run a different terminal command, use send_text("\\x03") to stop the server first.`,
-            });
-            consecutiveGuardBlocks++;
-            continue;
           } else {
             // idle — process already finished; read output so agent knows what happened
             consecutiveBusy = 0;
@@ -3807,6 +3945,19 @@ ${agentPrompt}
         onUpdate("executing", cmd, action);
         try {
           let output = await executeCommand(cmd);
+
+          // Detect timeout — process is still running in terminal
+          if (output && output.startsWith("__TIMEOUT__")) {
+            output = output.slice("__TIMEOUT__".length);
+            terminalBusy = true;
+            onUpdate("executed", cmd + "\n---\n" + output, action);
+            history.push({
+              role: "user",
+              content: `${output}\n\nIMPORTANT: The command is STILL RUNNING in the terminal. Use read_terminal to monitor progress. Do NOT run execute_command or Ctrl+C — wait patiently.`,
+            });
+            continue;
+          }
+
           if (!output || output.trim() === "") {
             output = "(Command executed successfully with no output)";
           }
@@ -3817,9 +3968,12 @@ ${agentPrompt}
           const mkdirMatch = cmd.match(/\bmkdir\s+(?:-p\s+)?([^\s&;|]+)/);
           if (mkdirMatch) lastWriteDir = mkdirMatch[1];
           onUpdate("executed", cmd + "\n---\n" + output, action);
+          const serverNote = stoppedServerForExec
+            ? "\n\n⚠️ NOTE: A dev server was automatically stopped to run this command. If you need the server running again, restart it with run_in_terminal."
+            : "";
           history.push({
             role: "user",
-            content: `Command Output: \n${output} `,
+            content: `Command Output: \n${output}${serverNote}`,
           });
         } catch (err: any) {
           const isDeny = err.message === "User denied command execution.";

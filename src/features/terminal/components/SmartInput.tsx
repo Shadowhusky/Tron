@@ -930,6 +930,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
   };
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ctrl+C: Stop agent if running
+    if (e.key === "c" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (isLoading || isAgentRunning)) {
+      e.preventDefault();
+      if (isLoading && adviceAbortRef.current) {
+        adviceAbortRef.current.abort();
+      } else {
+        stopAgent?.();
+      }
+      return;
+    }
+
     // Tab / Right Arrow: Accept Ghost Text OR Selected Completion OR Placeholder
     // Strict Tab behavior: Only accept, never cycle
     if (
