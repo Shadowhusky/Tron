@@ -71,6 +71,10 @@ interface LayoutContextType {
   setConfirmHandler: (handler: (message: string) => Promise<boolean>) => void;
   /** Trigger an immediate CWD refresh for a session (or the active session). */
   refreshCwd: (sessionId?: string) => Promise<void>;
+  /** Split current pane with a pixel-agents visualization pane. */
+  splitWithPixelAgents: (direction: SplitDirection) => void;
+  /** Open a standalone pixel-agents tab (or focus existing one). */
+  openPixelAgentsTab: () => void;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -332,8 +336,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             node: LayoutNode,
           ): Promise<LayoutNode | null> => {
             if (node.type === "leaf") {
-              // If settings node, just restore
-              if (node.contentType === "settings") {
+              // Non-PTY content types — restore as-is (no terminal session needed)
+              if (node.contentType === "settings" || node.contentType === "pixel-agents" || node.contentType === "browser" || node.contentType === "editor") {
                 return node;
               }
 
@@ -767,6 +771,71 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
+  // Split with pixel-agents visualization
+  const splitWithPixelAgents = (direction: SplitDirection) => {
+    const tab = getActiveTab();
+    if (!tab || !tab.activeSessionId) return;
+
+    // Single-instance guard: check if pixel-agents pane already exists
+    const hasPixelAgents = (node: LayoutNode): boolean => {
+      if (node.type === "leaf") return node.contentType === "pixel-agents";
+      return node.children.some(hasPixelAgents);
+    };
+    if (hasPixelAgents(tab.root)) return; // already open
+
+    const pixelAgentsId = `pixel-agents-${uuid()}`;
+
+    const splitNode = (node: LayoutNode, targetId: string): LayoutNode => {
+      if (node.type === "leaf") {
+        if (node.sessionId === targetId) {
+          return {
+            type: "split",
+            direction,
+            children: [
+              node,
+              { type: "leaf", sessionId: pixelAgentsId, contentType: "pixel-agents" },
+            ],
+            sizes: [60, 40],
+          };
+        }
+        return node;
+      }
+      return { ...node, children: node.children.map((child) => splitNode(child, targetId)) };
+    };
+
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId
+          ? { ...t, root: splitNode(t.root, t.activeSessionId!) }
+          : t,
+      ),
+    );
+  };
+
+  // Open a standalone pixel-agents tab (or focus existing)
+  const openPixelAgentsTab = () => {
+    // Check if pixel-agents tab already exists
+    const hasPixelAgents = (node: LayoutNode): boolean => {
+      if (node.type === "leaf") return node.contentType === "pixel-agents";
+      return node.children.some(hasPixelAgents);
+    };
+    const existing = tabs.find((t) => hasPixelAgents(t.root));
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+
+    const pixelAgentsId = `pixel-agents-${uuid()}`;
+    const newTab: Tab = {
+      id: uuid(),
+      title: "Pixel Agents",
+      root: { type: "leaf", sessionId: pixelAgentsId, contentType: "pixel-agents" },
+      activeSessionId: pixelAgentsId,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTab.id);
+  };
+
   // Close Active Pane Logic
   const closeActivePane = () => {
     const tab = getActiveTab();
@@ -860,7 +929,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const closeSession = (sessionId: string) => {
-    if (sessionId === "settings" || sessionId.startsWith("ssh-connect") || sessionId.startsWith("browser-") || sessionId.startsWith("editor-")) return; // pseudo-sessions
+    if (sessionId === "settings" || sessionId.startsWith("ssh-connect") || sessionId.startsWith("browser-") || sessionId.startsWith("editor-") || sessionId.startsWith("pixel-agents")) return; // pseudo-sessions
 
     if (window.electron) {
       window.electron.ipcRenderer.send(IPC.TERMINAL_CLOSE, sessionId);
@@ -1387,6 +1456,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         isHydrated,
         setConfirmHandler,
         refreshCwd,
+        splitWithPixelAgents,
+        openPixelAgentsTab,
       }}
     >
       {children}
