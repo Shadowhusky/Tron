@@ -388,15 +388,21 @@ export function installRemoteRouting(): void {
     };
   }
 
-  // Replace the frozen window.electron with a shallow copy containing our wrapper.
-  // contextBridge.exposeInMainWorld deep-freezes the object, so we can't mutate
-  // ipcRenderer in place — but we CAN replace window.electron on window itself.
-  const electronCopy: any = {};
-  for (const key of Object.keys(window.electron)) {
-    electronCopy[key] = (window.electron as any)[key];
+  // Replace window.electron with a shallow copy containing our wrapped ipcRenderer.
+  // In web mode (ws-bridge), window.electron is a regular writable property — this works.
+  // In Electron mode, contextBridge.exposeInMainWorld freezes it (non-writable,
+  // non-configurable) — assignment throws. Remote routing is only needed for
+  // web-mode remote connections, so we silently skip in Electron.
+  try {
+    const electronCopy: any = {};
+    for (const key of Object.keys(window.electron)) {
+      electronCopy[key] = (window.electron as any)[key];
+    }
+    electronCopy.ipcRenderer = wrapped;
+    (window as any).electron = electronCopy;
+  } catch {
+    // Electron's contextBridge froze window.electron — remote routing unavailable.
   }
-  electronCopy.ipcRenderer = wrapped;
-  (window as any).electron = electronCopy;
 }
 
 /**
