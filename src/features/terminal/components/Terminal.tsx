@@ -142,7 +142,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     ]);
     const editorFiles = new Set(["Makefile","Dockerfile",".gitignore",".dockerignore"]);
 
-    const activateFilePath = async (filePath: string, event: MouseEvent) => {
+    const activateFilePath = async (filePath: string) => {
       let resolved = filePath;
 
       // Resolve relative paths against session CWD
@@ -166,9 +166,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           detail: { filePath: resolved, sourceSessionId: sessionId },
         }));
       } else {
-        window.dispatchEvent(new CustomEvent("tron:linkClicked", {
-          detail: { url: `file://${resolved}`, x: event.clientX, y: event.clientY },
-        }));
+        // Non-editor file or directory — open directly in system file manager
+        if (window.electron?.ipcRenderer) {
+          window.electron.ipcRenderer.invoke("shell.showItemInFolder", resolved)?.catch(() => {
+            window.electron?.ipcRenderer?.invoke("shell.openPath", resolved)?.catch(() => {});
+          });
+        }
       }
     };
 
@@ -195,8 +198,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             links.push({
               range: { start: { x: startCol, y: lineNumber }, end: { x: endCol, y: lineNumber } },
               text: matched,
-              activate(event) {
-                activateFilePath(matched, event as MouseEvent);
+              activate() {
+                activateFilePath(matched);
               },
             });
           }

@@ -233,7 +233,18 @@ const AppContent = () => {
   useEffect(() => {
     const handler = (e: Event) => {
       const { url, x, y } = (e as CustomEvent).detail;
-      if (url) requestAnimationFrame(() => setLinkPopover({ url, x: x ?? 0, y: y ?? 0 }));
+      if (!url) return;
+      // file:// URLs — open directly in system file manager, skip popover
+      if (url.startsWith("file://")) {
+        const filePath = decodeURIComponent(url.replace(/^file:\/\//, ""));
+        if (window.electron?.ipcRenderer) {
+          window.electron.ipcRenderer.invoke("shell.showItemInFolder", filePath)?.catch(() => {
+            window.electron?.ipcRenderer?.invoke("shell.openPath", filePath)?.catch(() => {});
+          });
+        }
+        return;
+      }
+      requestAnimationFrame(() => setLinkPopover({ url, x: x ?? 0, y: y ?? 0 }));
     };
     window.addEventListener("tron:linkClicked", handler);
     return () => window.removeEventListener("tron:linkClicked", handler);

@@ -16,6 +16,7 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
   const [url, setUrl] = useState(initialUrl);
   const [inputUrl, setInputUrl] = useState(initialUrl);
   const [loading, setLoading] = useState(true);
+  const [blocked, setBlocked] = useState(false);
 
   const navigate = useCallback((newUrl: string) => {
     let normalized = newUrl.trim();
@@ -31,6 +32,7 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
     setUrl(normalized);
     setInputUrl(normalized);
     setLoading(true);
+    setBlocked(false);
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -41,13 +43,20 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
 
   const handleLoad = () => {
     setLoading(false);
-    // Try to read iframe URL (may fail due to cross-origin)
+    // Try to read iframe URL — if cross-origin blocks access AND the iframe
+    // loaded about:blank, the site likely blocked framing via CSP/X-Frame-Options.
     try {
       const iframeUrl = iframeRef.current?.contentWindow?.location.href;
       if (iframeUrl && iframeUrl !== "about:blank") {
         setInputUrl(iframeUrl);
+        setBlocked(false);
+      } else if (iframeUrl === "about:blank" && url !== "about:blank") {
+        // CSP frame-ancestors or X-Frame-Options blocked the load
+        setBlocked(true);
       }
-    } catch { /* cross-origin — ignore */ }
+    } catch {
+      // Cross-origin — can't read URL, but iframe loaded something, not blocked
+    }
   };
 
   const t = themeClass;
@@ -136,11 +145,37 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
 
       {/* iframe */}
       <div className="flex-1 relative min-h-0">
-        {loading && (
+        {loading && !blocked && (
           <div className={`absolute inset-0 z-10 flex items-center justify-center ${
             resolvedTheme === "light" ? "bg-gray-50" : "bg-[#0a0a0a]"
           }`}>
             <RotateCw className={`h-5 w-5 animate-spin ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`} />
+          </div>
+        )}
+        {blocked && (
+          <div className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 ${
+            resolvedTheme === "light" ? "bg-gray-50 text-gray-600" : "bg-[#0a0a0a] text-gray-400"
+          }`}>
+            <Globe className="h-8 w-8 opacity-40" />
+            <p className="text-sm">This site cannot be embedded</p>
+            <p className="text-xs opacity-60 max-w-[280px] text-center">The site's security policy prevents it from being displayed in a frame.</p>
+            <button
+              onClick={() => {
+                if (window.electron?.ipcRenderer?.invoke) {
+                  window.electron.ipcRenderer.invoke("shell.openExternal", url)?.catch(() => {});
+                } else {
+                  window.open(url, "_blank", "noopener,noreferrer");
+                }
+              }}
+              className={`mt-1 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                resolvedTheme === "light"
+                  ? "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                  : "bg-white/10 hover:bg-white/15 text-gray-300"
+              }`}
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open in Browser
+            </button>
           </div>
         )}
         <iframe
