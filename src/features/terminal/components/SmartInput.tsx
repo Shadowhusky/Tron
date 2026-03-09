@@ -172,6 +172,24 @@ const AdviceThinkingBlock: React.FC<{
   );
 };
 
+/** Sync fallback classification for Enter-time when mode state is stale.
+ *  Called when isDefinitelyNaturalLanguage and isCommand both returned false,
+ *  AND the auto-detect effect hasn't classified this exact value yet. */
+function classifyAtEnter(finalVal: string): "command" | "agent" {
+  const words = finalVal.split(/\s+/);
+  const fw = words[0];
+  // Known executable used without command syntax → agent (imperative verb)
+  if (isKnownExecutable(fw)) return "agent";
+  // Capitalized first word → natural language
+  if (words.length >= 2 && /^[A-Z]/.test(fw)) return "agent";
+  // In scanned commands cache → check if imperative use
+  if (isScannedCommand(fw)) return isLikelyImperative(finalVal) ? "agent" : "command";
+  // If we get here, the word isn't in any known command list.
+  // The async auto-detect would also default to "agent" for unknown words.
+  // Sending to agent is safe — it can execute commands if needed.
+  return "agent";
+}
+
 const SmartInput: React.FC<SmartInputProps> = ({
   onSend,
   onRunAgent,
@@ -262,6 +280,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const [mode, setMode] = useState<"command" | "advice" | "agent">(
     defaultAgentMode ? "agent" : "command",
   );
+  // Track which value the mode was last classified for — detects stale mode at Enter time
+  const modeClassifiedForRef = useRef("");
 
   const [isLoading, setIsLoading] = useState(false);
   const adviceAbortRef = useRef<AbortController | null>(null);
@@ -525,7 +545,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       } catch {
         // Non-critical, silently ignore
       }
-    }, 3000);
+    }, 500);
     return () => {
       if (placeholderTimerRef.current)
         clearTimeout(placeholderTimerRef.current);
@@ -601,15 +621,20 @@ const SmartInput: React.FC<SmartInputProps> = ({
   useEffect(() => {
     if (!isAuto) return;
 
+    const classifyAndSet = (m: "command" | "advice" | "agent") => {
+      setMode(m);
+      modeClassifiedForRef.current = value;
+    };
+
     // When auto-detect is disabled, exit auto mode entirely
     if (!aiBehavior.autoDetect) {
       setIsAuto(false);
-      setMode("command");
+      classifyAndSet("command");
       return;
     }
 
     if (value.trim() === "") {
-      setMode("command");
+      classifyAndSet("command");
       setCompletions([]);
       setShowCompletions(false);
       return;
@@ -617,13 +642,13 @@ const SmartInput: React.FC<SmartInputProps> = ({
 
     // 1. If input is clearly natural language, skip everything
     if (isDefinitelyNaturalLanguage(value)) {
-      setMode("agent");
+      classifyAndSet("agent");
       return;
     }
 
     // 2. Static classifier (fast, handles known commands)
     if (isCommand(value)) {
-      setMode("command");
+      classifyAndSet("command");
       return;
     }
 
@@ -635,7 +660,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
     // it means we deliberately classified it as Agent. DO NOT check PATH.
     // "isKnownExecutable" needs to be imported
     if (isKnownExecutable(firstWord)) {
-      setMode("agent");
+      classifyAndSet("agent");
       return;
     }
 
@@ -648,17 +673,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
       /^[A-Z]/.test(firstWord) &&
       !isKnownExecutable(firstWord)
     ) {
-      setMode("agent");
+      classifyAndSet("agent");
       return;
     }
 
     // 4. Check scanned commands cache (instant, no IPC)
     if (isScannedCommand(firstWord)) {
       if (isLikelyImperative(value)) {
-        setMode("agent");
+        classifyAndSet("agent");
         return;
       }
-      setMode("command");
+      classifyAndSet("command");
       return;
     }
 
@@ -669,11 +694,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
         window.electron.ipcRenderer
           .checkCommand(words[0])
           .then((exists: boolean) => {
-            setMode(exists && !isLikelyImperative(value) ? "command" : "agent");
+            classifyAndSet(exists && !isLikelyImperative(value) ? "command" : "agent");
           })
-          .catch(() => setMode("agent"));
+          .catch(() => classifyAndSet("agent"));
       } else {
-        setMode("agent");
+        classifyAndSet("agent");
       }
     }, 150);
 
@@ -1226,9 +1251,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
         return;
       }
 
-      const finalVal = value.trim();
+      // Read from DOM textarea directly — React state `value` may be stale
+      // when the user types fast and hits Enter before startTransition flushes.
+      const domVal = (inputRef.current?.value ?? "").trim();
+      const finalVal = domVal || value.trim();
       const hasImages = attachedImages.length > 0;
       if (finalVal === "" && !hasImages) return;
+
+      // Sync React state to the DOM value we're about to send
+      if (domVal && domVal !== value.trim()) {
+        setValue(domVal);
+      }
 
       // Mark session as active (enables AI placeholder after first command)
       hasActivityRef.current = true;
@@ -1276,16 +1309,19 @@ const SmartInput: React.FC<SmartInputProps> = ({
       }
 
       // Execute based on active mode.
-      // Re-classify synchronously to prevent stale mode from async PATH checks.
-      // The useEffect that sets mode runs after paint, so if the user types fast
-      // (e.g. "l" → 150ms → PATH check sets "agent" → "s" + Enter before effect
-      // re-classifies to "command"), the mode state can be stale.
+      // Re-classify synchronously because onChange uses startTransition,
+      // so React state (`value`, `mode`) may lag the DOM when typing fast.
+      // `finalVal` reads from DOM first, so it's always current.
       const effectiveMode = isAuto
         ? isDefinitelyNaturalLanguage(finalVal)
           ? "agent"
           : isCommand(finalVal)
             ? "command"
-            : mode
+            // If mode was classified for this exact input, trust it;
+            // otherwise fall back to full sync classification
+            : modeClassifiedForRef.current === finalVal
+              ? mode
+              : classifyAtEnter(finalVal)
         : mode;
 
       // When awaiting an agent answer (continuation), force agent mode regardless of classifier
