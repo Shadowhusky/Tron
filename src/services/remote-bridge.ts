@@ -285,106 +285,118 @@ export function installRemoteRouting(): void {
   if (!window.electron?.ipcRenderer) return;
 
   const ipc = window.electron.ipcRenderer;
-  const originalInvoke = ipc.invoke.bind(ipc);
-  const originalSend = ipc.send.bind(ipc);
-  const originalOn = ipc.on.bind(ipc);
+
+  // The Electron context bridge freezes ipcRenderer — properties are read-only.
+  // Create a mutable wrapper that delegates to the original, then replace the
+  // reference on window.electron so all consumers get routed transparently.
+  const original = {
+    invoke: ipc.invoke.bind(ipc),
+    send: ipc.send.bind(ipc),
+    on: ipc.on.bind(ipc),
+    getHistory: ipc.getHistory?.bind(ipc),
+    getCwd: ipc.getCwd?.bind(ipc),
+    exec: ipc.exec?.bind(ipc),
+    execInTerminal: ipc.execInTerminal?.bind(ipc),
+    getCompletions: ipc.getCompletions?.bind(ipc),
+    getSystemInfo: ipc.getSystemInfo?.bind(ipc),
+  };
+
+  // Build the wrapped ipcRenderer with remote routing
+  const wrapped: any = {};
+
+  // Copy all existing properties from the original (checkCommand, etc.)
+  for (const key of Object.keys(ipc)) {
+    const val = (ipc as any)[key];
+    wrapped[key] = typeof val === "function" ? val.bind(ipc) : val;
+  }
 
   // Wrap invoke — route to remote if session is remote
-  ipc.invoke = (channel: string, data?: any): Promise<any> => {
+  wrapped.invoke = (channel: string, data?: any): Promise<any> => {
     const sessionId = extractSessionId(channel, data);
     if (sessionId) {
       const conn = getRemoteConnection(sessionId);
-      if (conn) {
-        return conn.invoke(channel, data);
-      }
+      if (conn) return conn.invoke(channel, data);
     }
-    return originalInvoke(channel, data);
+    return original.invoke(channel, data);
   };
 
   // Wrap send — route to remote if session is remote
-  ipc.send = (channel: string, data: any): void => {
+  wrapped.send = (channel: string, data: any): void => {
     const sessionId = extractSessionId(channel, data);
     if (sessionId) {
       const conn = getRemoteConnection(sessionId);
-      if (conn) {
-        conn.send(channel, data);
-        return;
-      }
+      if (conn) { conn.send(channel, data); return; }
     }
-    originalSend(channel, data);
+    original.send(channel, data);
   };
 
-  // Wrap on — for events like terminal.incomingData and terminal.exit,
-  // we need to listen on BOTH local and all remote connections.
-  // Remote connections forward events to the local event system.
-  ipc.on = (channel: string, func: Listener): (() => void) => {
-    const localCleanup = originalOn(channel, func);
-
-    // Also register on all active remote connections
+  // Wrap on — listen on both local and all remote connections
+  wrapped.on = (channel: string, func: Listener): (() => void) => {
+    const localCleanup = original.on(channel, func);
     const remoteCleanups: (() => void)[] = [];
     for (const conn of connections.values()) {
       remoteCleanups.push(conn.on(channel, func));
     }
-
-    return () => {
-      localCleanup();
-      remoteCleanups.forEach(c => c());
-    };
+    return () => { localCleanup(); remoteCleanups.forEach(c => c()); };
   };
 
-  // Also wrap typed helpers that bypass invoke
-  if (ipc.getHistory) {
-    const origGetHistory = ipc.getHistory.bind(ipc);
-    ipc.getHistory = (sessionId: string) => {
+  // Wrap typed helpers that bypass invoke
+  if (original.getHistory) {
+    wrapped.getHistory = (sessionId: string) => {
       const conn = getRemoteConnection(sessionId);
       if (conn) return conn.invoke("terminal.getHistory", sessionId);
-      return origGetHistory(sessionId);
+      return original.getHistory!(sessionId);
     };
   }
-  if (ipc.getCwd) {
-    const origGetCwd = ipc.getCwd.bind(ipc);
-    ipc.getCwd = (sessionId: string) => {
+  if (original.getCwd) {
+    wrapped.getCwd = (sessionId: string) => {
       const conn = getRemoteConnection(sessionId);
       if (conn) return conn.invoke("terminal.getCwd", sessionId);
-      return origGetCwd(sessionId);
+      return original.getCwd!(sessionId);
     };
   }
-  if (ipc.exec) {
-    const origExec = ipc.exec.bind(ipc);
-    ipc.exec = (sessionId: string, command: string) => {
+  if (original.exec) {
+    wrapped.exec = (sessionId: string, command: string) => {
       const conn = getRemoteConnection(sessionId);
       if (conn) return conn.invoke("terminal.exec", { sessionId, command });
-      return origExec(sessionId, command);
+      return original.exec!(sessionId, command);
     };
   }
-  if (ipc.execInTerminal) {
-    const origExecInTerminal = ipc.execInTerminal.bind(ipc);
-    ipc.execInTerminal = (sessionId: string, command: string) => {
+  if (original.execInTerminal) {
+    wrapped.execInTerminal = (sessionId: string, command: string) => {
       const conn = getRemoteConnection(sessionId);
       if (conn) return conn.invoke("terminal.execInTerminal", { sessionId, command });
-      return origExecInTerminal(sessionId, command);
+      return original.execInTerminal!(sessionId, command);
     };
   }
-  if (ipc.getCompletions) {
-    const origGetCompletions = ipc.getCompletions.bind(ipc);
-    ipc.getCompletions = (prefix: string, cwd?: string, sessionId?: string) => {
+  if (original.getCompletions) {
+    wrapped.getCompletions = (prefix: string, cwd?: string, sessionId?: string) => {
       if (sessionId) {
         const conn = getRemoteConnection(sessionId);
         if (conn) return conn.invoke("terminal.getCompletions", { prefix, cwd, sessionId });
       }
-      return origGetCompletions(prefix, cwd, sessionId);
+      return original.getCompletions!(prefix, cwd, sessionId);
     };
   }
-  if (ipc.getSystemInfo) {
-    const origGetSystemInfo = ipc.getSystemInfo.bind(ipc);
-    ipc.getSystemInfo = (sessionId?: string) => {
+  if (original.getSystemInfo) {
+    wrapped.getSystemInfo = (sessionId?: string) => {
       if (sessionId) {
         const conn = getRemoteConnection(sessionId);
         if (conn) return conn.invoke("terminal.getSystemInfo", sessionId);
       }
-      return origGetSystemInfo(sessionId);
+      return original.getSystemInfo!(sessionId);
     };
   }
+
+  // Replace the frozen window.electron with a shallow copy containing our wrapper.
+  // contextBridge.exposeInMainWorld deep-freezes the object, so we can't mutate
+  // ipcRenderer in place — but we CAN replace window.electron on window itself.
+  const electronCopy: any = {};
+  for (const key of Object.keys(window.electron)) {
+    electronCopy[key] = (window.electron as any)[key];
+  }
+  electronCopy.ipcRenderer = wrapped;
+  (window as any).electron = electronCopy;
 }
 
 /**
