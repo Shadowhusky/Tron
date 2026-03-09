@@ -305,30 +305,92 @@ function extToLang(filePath: string): string {
   return map[ext] || "";
 }
 
-/** Pre-process text to linkify absolute file paths for markdown rendering */
+/** Pre-process text to linkify absolute file paths for markdown rendering.
+ *  Aligned with Terminal.tsx link provider — supports ~, $, @, +, [], (),
+ *  spaces in interior path segments, and trailing punctuation cleanup. */
 function linkifyPaths(text: string): string {
-  // Unix paths: /foo/bar/file.ext or /foo/bar/ or /foo/bar
-  // Requires at least 2 path segments to avoid false positives on lone /word
-  // Skip paths that are part of URLs (preceded by :// or a word char like .com/path)
-  // Also skip paths already inside markdown links [...](...) or after (
-  let result = text.replace(
-    /(?<!\[)(?<!\()(?<!\/)(?<!\w)(\/[\w._-]+(?:\/[\w._-]*)*)/g,
-    (match) => {
-      // Require at least 2 segments (e.g. /foo/bar not just /foo)
-      const segments = match.split("/").filter(Boolean);
-      if (segments.length < 2) return match;
-      return `[${match}](file://${encodeURI(match)})`;
-    },
+  // Segment chars matching Terminal.tsx: \w . $ @ + ~ - [ ] ( )
+  const S = "[\\w.$@+~\\-\\[\\]()]";
+  const interiorSeg = "/" + S + "+(?:\\s+" + S + "+)*(?=/)";
+  const finalSeg = "/" + S + "+";
+  const absUnixRe = new RegExp(
+    "(?<![\\[(:@\\w])" + // skip markdown links, URLs, word chars before
+    "(?:" + interiorSeg + ")+" + finalSeg + "(?:\\.\\w+)?",
+    "g",
   );
-  // Windows paths: C:\foo\bar\file.ext or C:\foo\bar (drive letter + backslash path)
-  result = result.replace(
-    /(?<!\[)(?<!\()([A-Z]:\\(?:[\w ._-]+\\)*[\w ._-]+)/gi,
-    (match) => {
-      const segments = match.split(/[/\\]/).filter(Boolean);
-      if (segments.length < 2) return match;
-      return `[${match}](file:///${encodeURI(match.replace(/\\/g, "/"))})`;
-    },
+  const winRe = new RegExp(
+    "(?<![\\[(])" +
+    "[A-Z]:\\\\(?:" + S + "+\\\\)*" + S + "+(?:\\.\\w+)?",
+    "gi",
   );
+  const relRe = new RegExp(
+    "(?<![\\[(:@\\w])" +
+    "(?:\\.\\/)?(?:" + S + "+\\/){1,}" + S + "+\\.\\w+",
+    "g",
+  );
+
+  const knownExts = new Set([
+    "js","mjs","cjs","jsx","ts","mts","cts","tsx","py","pyw","json","jsonc",
+    "c","h","cpp","cc","cxx","hpp","hxx","html","htm","svg","xml",
+    "css","scss","less","md","mdx","rs","java","yaml","yml","toml","ini",
+    "cfg","conf","sh","bash","zsh","fish","txt","log","env","sql",
+    "vue","svelte","rb","php","go","swift","kt","kts",
+    "app","dmg","exe","pkg","deb","rpm","zip","tar","gz","bz2","xz",
+    "7z","rar","iso","img","bin","so","dylib","dll","o","a","wasm","map","lock","pid",
+  ]);
+
+  const cleanTrailing = (p: string): string => {
+    let cleaned = p;
+    while (/[.,;:!?)\]}>]$/.test(cleaned)) {
+      const ext = cleaned.split(".").pop()?.toLowerCase() || "";
+      if (knownExts.has(ext)) break;
+      cleaned = cleaned.slice(0, -1);
+    }
+    return cleaned;
+  };
+
+  // Collect all matches with offsets, deduplicate overlaps
+  const rawMatches: { start: number; end: number; text: string }[] = [];
+  for (const regex of [absUnixRe, winRe, relRe]) {
+    regex.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(text)) !== null) {
+      let matched = m[0];
+      if (/^https?:\/\//i.test(matched)) continue;
+      matched = cleanTrailing(matched);
+      if (matched.length < 3) continue;
+      const segments = matched.split(/[/\\]/).filter(Boolean);
+      if (segments.length < 2) continue;
+      rawMatches.push({ start: m.index, end: m.index + matched.length, text: matched });
+    }
+  }
+
+  // Deduplicate: overlapping matches keep longest
+  rawMatches.sort((a, b) => a.start - b.start || b.end - a.end);
+  const deduped: typeof rawMatches = [];
+  for (const m of rawMatches) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && m.start < prev.end) {
+      if (m.end - m.start > prev.end - prev.start) deduped[deduped.length - 1] = m;
+    } else {
+      deduped.push(m);
+    }
+  }
+
+  // Build result by replacing matches with markdown links (right-to-left to preserve offsets)
+  let result = text;
+  for (let i = deduped.length - 1; i >= 0; i--) {
+    const { start, text: matched } = deduped[i];
+    const end = start + matched.length;
+    // Skip if already inside a markdown link
+    const before = result.slice(Math.max(0, start - 2), start);
+    if (before.endsWith("](") || before.endsWith("](file://")) continue;
+    const isWin = /^[A-Z]:\\/i.test(matched);
+    const uri = isWin
+      ? `file:///${encodeURI(matched.replace(/\\/g, "/"))}`
+      : `file://${encodeURI(matched)}`;
+    result = result.slice(0, start) + `[${matched}](${uri})` + result.slice(end);
+  }
   return result;
 }
 

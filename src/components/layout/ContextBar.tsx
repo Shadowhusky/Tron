@@ -12,7 +12,7 @@ import { abbreviateHome, isWindows, isElectronApp, isTouchDevice } from "../../u
 import { themeClass } from "../../utils/theme";
 import { stripAnsi } from "../../utils/contextCleaner";
 import { classifyTerminalOutput, detectTuiProgram } from "../../utils/terminalState";
-import { useAllConfiguredModels } from "../../hooks/useModels";
+import { useAllConfiguredModels, useThinkingModelInvalidation } from "../../hooks/useModels";
 import FolderPickerModal from "../ui/FolderPickerModal";
 
 // SVG Ring component for context usage visualization
@@ -118,6 +118,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const ctxRingRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLDivElement>(null);
   const { data: availableModels = [] } = useAllConfiguredModels();
+  useThinkingModelInvalidation();
   const activeModel = availableModels.length > 0 ? rawModel : null;
 
   const displayModels = React.useMemo(() => {

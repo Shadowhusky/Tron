@@ -1,5 +1,7 @@
 import { useTheme } from "../../contexts/ThemeContext";
 import { useConfig } from "../../contexts/ConfigContext";
+import { useLayout } from "../../contexts/LayoutContext";
+import type { LayoutNode } from "../../types";
 import { themeClass } from "../../utils/theme";
 import { useAgentStatuses, type AgentStatus } from "../hooks/useTronAgentBridge";
 
@@ -18,7 +20,7 @@ const TOOL_LABEL: Record<string, string> = {
   read_terminal: "reading output",
 };
 
-function AgentDot({ agent, resolvedTheme }: { agent: AgentStatus; resolvedTheme: string }) {
+function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resolvedTheme: string; onClick?: () => void }) {
   const statusText = agent.permission
     ? "needs approval"
     : agent.active
@@ -27,7 +29,13 @@ function AgentDot({ agent, resolvedTheme }: { agent: AgentStatus; resolvedTheme:
 
   return (
     <span
-      className={`inline-flex items-center gap-1 font-mono text-[10px] leading-none transition-colors duration-300 ${
+      className={`inline-flex items-center gap-1 font-mono text-[10px] leading-none transition-colors duration-300 cursor-pointer rounded px-1 -mx-1 ${
+        themeClass(resolvedTheme, {
+          dark: "hover:bg-white/5",
+          light: "hover:bg-gray-200/60",
+          modern: "hover:bg-white/5",
+        })
+      } ${
         agent.permission
           ? "text-yellow-400"
           : themeClass(resolvedTheme, {
@@ -36,7 +44,8 @@ function AgentDot({ agent, resolvedTheme }: { agent: AgentStatus; resolvedTheme:
               modern: agent.active ? "text-green-300/80" : "text-white/15",
             })
       }`}
-      title={`${agent.label}: ${statusText}`}
+      title={`${agent.label}: ${statusText} — click to switch`}
+      onClick={onClick}
     >
       <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${agent.permission
         ? "bg-yellow-400 animate-pulse"
@@ -56,16 +65,25 @@ function AgentDot({ agent, resolvedTheme }: { agent: AgentStatus; resolvedTheme:
   );
 }
 
+/** Check if a layout tree contains a given sessionId. */
+function treeHasSession(node: LayoutNode, sessionId: string): boolean {
+  if (node.type === "leaf") return node.sessionId === sessionId;
+  return node.children.some(c => treeHasSession(c, sessionId));
+}
+
 export default function AgentStatusBar() {
   const { resolvedTheme } = useTheme();
   const { config } = useConfig();
+  const { tabs, selectTab } = useLayout();
   const statuses = useAgentStatuses();
 
-  // Only render if user has enabled the status bar
   if (!config.showAgentStatusBar) return null;
-
-  // Hide entirely when no sessions have had agent activity
   if (statuses.length === 0) return null;
+
+  const switchToAgent = (sessionId: string) => {
+    const tab = tabs.find(t => treeHasSession(t.root, sessionId));
+    if (tab) selectTab(tab.id);
+  };
 
   return (
     <div
@@ -80,12 +98,16 @@ export default function AgentStatusBar() {
       )}`}
     >
       {[...statuses].sort((a, b) => {
-        // Active/permission first, then idle; preserve relative order within groups
         const aScore = a.permission ? 2 : a.active ? 1 : 0;
         const bScore = b.permission ? 2 : b.active ? 1 : 0;
         return bScore - aScore;
       }).map(agent => (
-        <AgentDot key={agent.sessionId} agent={agent} resolvedTheme={resolvedTheme} />
+        <AgentDot
+          key={agent.sessionId}
+          agent={agent}
+          resolvedTheme={resolvedTheme}
+          onClick={() => switchToAgent(agent.sessionId)}
+        />
       ))}
     </div>
   );

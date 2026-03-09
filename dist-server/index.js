@@ -83,6 +83,48 @@ app.use(compression({
 }));
 const server = http.createServer(app);
 // ---------------------------------------------------------------------------
+// Frame-check endpoint — HEAD request to detect X-Frame-Options / CSP
+// frame-ancestors. Used by BrowserPane to avoid CSP console errors.
+// ---------------------------------------------------------------------------
+app.get("/api/frame-check", async (req, res) => {
+    const url = req.query.url;
+    if (!url) {
+        res.json({ embeddable: false });
+        return;
+    }
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            res.json({ embeddable: false });
+            return;
+        }
+        const resp = await fetch(url, {
+            method: "HEAD",
+            redirect: "follow",
+            signal: AbortSignal.timeout(5000),
+        });
+        const xfo = (resp.headers.get("x-frame-options") || "").toLowerCase();
+        if (xfo === "deny" || xfo === "sameorigin") {
+            res.json({ embeddable: false });
+            return;
+        }
+        const csp = resp.headers.get("content-security-policy") || "";
+        const fa = csp.match(/frame-ancestors\s+([^;]+)/i);
+        if (fa) {
+            const val = fa[1].trim().toLowerCase();
+            if (val === "'none'" || val === "'self'") {
+                res.json({ embeddable: false });
+                return;
+            }
+        }
+        res.json({ embeddable: true });
+    }
+    catch {
+        // Can't reach or timeout — let iframe try
+        res.json({ embeddable: true });
+    }
+});
+// ---------------------------------------------------------------------------
 // AI provider HTTP proxy — routes browser requests to AI providers through
 // the server, avoiding CORS issues (cloud providers like Anthropic block
 // browser-origin requests) and auth issues for local providers.

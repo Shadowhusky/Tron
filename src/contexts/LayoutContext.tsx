@@ -96,6 +96,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const tabsRef = useRef(tabs);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
 
+  // Tab visit history — most recent at end. Used to jump to last-visited tab on close.
+  const tabHistoryRef = useRef<string[]>([]);
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+
   // Track which sessions were live-PTY reconnects (PTY survived in server memory).
   // Used to set the `reconnected` flag accurately — avoids false positives when
   // a fresh PTY is created with the same session ID after grace period expiry.
@@ -731,10 +736,33 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     // Synchronously update tabsRef so checkAllTabs doesn't see ghost tabs
     tabsRef.current = tabsRef.current.filter(t => t.id !== tabId);
 
+    // Determine next tab BEFORE updating state, using refs for latest values
+    const currentTabs = tabsRef.current;
+    const remainingTabs = currentTabs.filter(t => t.id !== tabId);
+    const isClosingActive = tabId === activeTabIdRef.current;
+
+    if (isClosingActive && remainingTabs.length > 0) {
+      // Walk back through visit history to find the most recently visited tab
+      const remaining = new Set(remainingTabs.map(t => t.id));
+      const h = tabHistoryRef.current;
+      let nextTab = "";
+      while (h.length > 0) {
+        const candidate = h.pop()!;
+        if (remaining.has(candidate)) {
+          nextTab = candidate;
+          break;
+        }
+      }
+      if (!nextTab) nextTab = remainingTabs[remainingTabs.length - 1].id;
+      setActiveTabId(nextTab);
+    }
+
+    // Clean closed tab from history
+    tabHistoryRef.current = tabHistoryRef.current.filter(id => id !== tabId);
+
     setTabs((prev) => {
       const newTabs = prev.filter((t) => t.id !== tabId);
       if (newTabs.length === 0) {
-        // In SSH-only mode, create a new connect tab
         if (isSshOnly()) {
           if (!creatingTabRef.current) {
             creatingTabRef.current = true;
@@ -744,24 +772,32 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           }
           return newTabs;
         }
-        // Always keep at least one tab open — create outside the updater to avoid StrictMode double-call
         if (!creatingTabRef.current) {
           creatingTabRef.current = true;
-          // Use setTimeout to escape the setState updater — createTab is async and calls setTabs itself
           setTimeout(() => {
             createTab().finally(() => { creatingTabRef.current = false; });
           }, 0);
         }
         return newTabs;
       }
-      if (tabId === activeTabId) {
-        setActiveTabId(newTabs[newTabs.length - 1].id);
-      }
       return newTabs;
     });
   };
 
-  const selectTab = (tabId: string) => setActiveTabId(tabId);
+  const selectTab = (tabId: string) => {
+    setActiveTabId((prev) => {
+      if (prev && prev !== tabId) {
+        // Push previous tab to history stack (dedup: remove if already present)
+        const h = tabHistoryRef.current;
+        const idx = h.indexOf(prev);
+        if (idx !== -1) h.splice(idx, 1);
+        h.push(prev);
+        // Cap history length
+        if (h.length > 50) h.shift();
+      }
+      return tabId;
+    });
+  };
 
   const reorderTabs = (fromIndex: number, toIndex: number) => {
     setTabs((prev) => {

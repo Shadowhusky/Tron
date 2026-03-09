@@ -313,6 +313,8 @@ class AIService {
       if (set.includes(key)) return;
       set.push(key);
       localStorage.setItem(STORAGE_KEYS.DETECTED_THINKING_MODELS, JSON.stringify(set));
+      // Notify listeners so UI updates capabilities immediately (no refresh needed)
+      window.dispatchEvent(new CustomEvent("tron:thinkingModelDetected", { detail: { provider, model } }));
     } catch { /* non-critical */ }
   }
 
@@ -2162,8 +2164,14 @@ ${agentPrompt}
           );
         }
       } catch (e: any) {
-        if (signal?.aborted || e.name === "AbortError") {
+        if (signal?.aborted) {
           throw new Error("Agent aborted by user.");
+        }
+        // AbortError from timeout or model failure — NOT a user abort, treat as API error
+        if (e.name === "AbortError" && !signal?.aborted) {
+          const label = CLOUD_PROVIDERS[provider]?.label || provider;
+          onUpdate("error", `${label} error: ${e.message || "Request timed out"}`);
+          return { success: false, message: `${label}: ${e.message || "Request timed out"}` };
         }
         const label = CLOUD_PROVIDERS[provider]?.label || provider;
         // "Failed to fetch" = CORS/network failure — unrecoverable, fail immediately
@@ -2871,6 +2879,7 @@ ${agentPrompt}
                 });
                 continue;
               }
+              onUpdate("executed", `Stopped server`, action);
             } else if (pfState === "busy") {
               // Try Ctrl+C to recover — can't write to a busy terminal cleanly
               onUpdate("executing", `Stopping running process to run: ${(action.command || "").slice(0, 60)}…`, action);
@@ -2885,6 +2894,9 @@ ${agentPrompt}
               const abState = classifyTerminalOutput(await readTerminal(10) || "");
               if (abState !== "idle") {
                 terminalBusy = true;
+                onUpdate("executed", `Stopping running process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
+              } else {
+                onUpdate("executed", `Stopped running process`, action);
               }
             }
 
@@ -3019,6 +3031,7 @@ ${agentPrompt}
               if (afterState === "idle") {
                 terminalBusy = false;
                 consecutiveBusy = 0;
+                onUpdate("executed", `Stopped server`, action);
                 // Mark previous terminal output as stale
                 history.push({
                   role: "user",
@@ -3026,6 +3039,7 @@ ${agentPrompt}
                 });
                 // Fall through to execute the command
               } else {
+                onUpdate("failed", `Server could not be stopped with Ctrl+C`, action);
                 history.push({
                   role: "user",
                   content: `(Command NOT executed — server could not be stopped with Ctrl+C. Use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,
@@ -3763,6 +3777,7 @@ ${agentPrompt}
                 continue;
               }
               // Server stopped — fall through to execute the command
+              onUpdate("executed", `Stopped server`, action);
               stoppedServerForExec = true;
               terminalBusy = false;
             } else {
@@ -3780,10 +3795,12 @@ ${agentPrompt}
               const afterBusyState = classifyTerminalOutput(await readTerminal(10) || "");
               if (afterBusyState === "idle") {
                 // Process stopped — fall through to execute the command
+                onUpdate("executed", `Stopped running process`, action);
                 stoppedServerForExec = true;
                 terminalBusy = false;
               } else {
                 // Still busy — set flag and let handler deal with it
+                onUpdate("executed", `Stopping running process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
                 terminalBusy = true;
               }
             }
@@ -3917,9 +3934,11 @@ ${agentPrompt}
             if (afterState === "idle") {
               terminalBusy = false;
               stoppedServerForExec = true;
+              onUpdate("executed", `Stopped server`, action);
               // Fall through to execute the command
             } else {
               // Server didn't stop — block and tell agent
+              onUpdate("failed", `Server could not be stopped with Ctrl+C`, action);
               history.push({
                 role: "user",
                 content: `(Command NOT executed — server could not be stopped with Ctrl+C. Use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,

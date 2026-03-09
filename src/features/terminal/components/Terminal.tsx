@@ -126,10 +126,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // (src/components/DataTable.tsx, routes/$id/index.tsx, app/[slug]/page.tsx).
     // Relative paths resolved against session CWD at click time.
     //
-    // Segment chars: \w . $ @ + - [ ] ( )  — covers Remix ($id), Next.js
-    // ([id]), SvelteKit (+page), route groups ((auth)), scoped pkgs (@foo).
-    const S = "[\\w.$@+\\-\\[\\]()]"; // path segment char
-    const absUnixRe  = new RegExp("(?:/" + S + "+){2,}(?:\\.\\w+)?", "g");
+    // Segment chars: \w . $ @ + ~ - [ ] ( )  — covers Remix ($id), Next.js
+    // ([id]), SvelteKit (+page), route groups ((auth)), scoped pkgs (@foo),
+    // macOS iCloud paths (com~apple~CloudDocs).
+    // Spaces allowed within interior segments (between two /) but not in the
+    // final segment, to avoid capturing trailing sentence text.
+    const S = "[\\w.$@+~\\-\\[\\]()]"; // path segment char (no space)
+    const interiorSeg = "/" + S + "+(?:\\s+" + S + "+)*(?=/)"; // spaces ok, lookahead for next /
+    const finalSeg = "/" + S + "+"; // no spaces in last segment
+    const absUnixRe  = new RegExp("(?:" + interiorSeg + ")+" + finalSeg + "(?:\\.\\w+)?", "g");
     const winRe      = new RegExp("[A-Z]:\\\\(?:" + S + "+\\\\)*" + S + "+(?:\\.\\w+)?", "gi");
     const relRe      = new RegExp("(?:\\.\\/)?(?:" + S + "+\\/){1,}" + S + "+\\.\\w+", "g");
 
@@ -141,6 +146,23 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       "vue","svelte","rb","php","go","swift","kt","kts",
     ]);
     const editorFiles = new Set(["Makefile","Dockerfile",".gitignore",".dockerignore"]);
+    const knownExts = new Set([...editorExts, "app","dmg","exe","pkg","deb","rpm","zip","tar","gz","bz2","xz","7z","rar","iso","img","bin","so","dylib","dll","o","a","wasm","map","lock","pid"]);
+
+    /** Strip trailing sentence punctuation that isn't part of a real file extension. */
+    const cleanTrailing = (p: string): string => {
+      // Repeatedly strip trailing punctuation: .  ,  ;  :  !  ?  )
+      // But preserve if the part after last / contains a known extension ending
+      let cleaned = p;
+      while (/[.,;:!?)\]}>]$/.test(cleaned)) {
+        const candidate = cleaned.slice(0, -1);
+        // If stripping would remove a known extension's last char, check if the
+        // original ending is actually part of a valid ext (e.g. "file.app" — don't strip)
+        const ext = cleaned.split(".").pop()?.toLowerCase() || "";
+        if (knownExts.has(ext)) break;
+        cleaned = candidate;
+      }
+      return cleaned;
+    };
 
     const activateFilePath = async (filePath: string) => {
       let resolved = filePath;
@@ -177,30 +199,82 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     term.registerLinkProvider({
       provideLinks(lineNumber, callback) {
-        const line = term.buffer.active.getLine(lineNumber - 1);
-        if (!line) { callback(undefined); return; }
-        const text = line.translateToString();
-        const links: import("@xterm/xterm").ILink[] = [];
+        const buf = term.buffer.active;
+        const cols = term.cols;
+
+        // Gather the logical line: join this row with any continuation rows
+        // that have isWrapped=true. Also track the starting row.
+        let startRow = lineNumber - 1;
+        // Walk backwards to find the first row of this logical line
+        while (startRow > 0) {
+          const prev = buf.getLine(startRow);
+          if (!prev || !prev.isWrapped) break;
+          startRow--;
+        }
+        // Only process from the first row of each logical line to avoid duplicates
+        if (startRow !== lineNumber - 1) { callback(undefined); return; }
+
+        const rowTexts: string[] = [];
+        let row = startRow;
+        do {
+          const rl = buf.getLine(row);
+          if (!rl) break;
+          rowTexts.push(rl.translateToString());
+          row++;
+        } while (row < buf.length && buf.getLine(row)?.isWrapped);
+        const fullText = rowTexts.join("");
+        const totalRows = rowTexts.length;
+
+        // Collect raw matches with character offsets, then deduplicate overlaps
+        const rawMatches: { start: number; end: number; text: string }[] = [];
         for (const regex of [absUnixRe, winRe, relRe]) {
           regex.lastIndex = 0;
           let m: RegExpExecArray | null;
-          while ((m = regex.exec(text)) !== null) {
-            const matched = m[0];
-            // Skip URLs
+          while ((m = regex.exec(fullText)) !== null) {
+            let matched = m[0];
             if (/^https?:\/\//i.test(matched)) continue;
-            // Relative paths must end with a known editor extension
+            matched = cleanTrailing(matched);
+            if (matched.length < 3) continue;
             if (regex === relRe) {
               const ext = matched.split(".").pop()?.toLowerCase() || "";
               if (!editorExts.has(ext)) continue;
             }
-            const startCol = m.index + 1;
-            const endCol = startCol + matched.length - 1;
+            rawMatches.push({ start: m.index, end: m.index + matched.length, text: matched });
+          }
+        }
+
+        // Deduplicate: when matches overlap, keep the longest one
+        rawMatches.sort((a, b) => a.start - b.start || b.end - a.end);
+        const deduped: typeof rawMatches = [];
+        for (const m of rawMatches) {
+          const prev = deduped[deduped.length - 1];
+          if (prev && m.start < prev.end) {
+            // Overlapping — keep the longer match
+            if (m.end - m.start > prev.end - prev.start) {
+              deduped[deduped.length - 1] = m;
+            }
+          } else {
+            deduped.push(m);
+          }
+        }
+
+        const links: import("@xterm/xterm").ILink[] = [];
+        for (const { start: matchStart, end: matchEnd, text: matched } of deduped) {
+          if (totalRows === 1) {
             links.push({
-              range: { start: { x: startCol, y: lineNumber }, end: { x: endCol, y: lineNumber } },
+              range: { start: { x: matchStart + 1, y: lineNumber }, end: { x: matchEnd, y: lineNumber } },
               text: matched,
-              activate() {
-                activateFilePath(matched);
-              },
+              activate() { activateFilePath(matched); },
+            });
+          } else {
+            const startY = startRow + 1 + Math.floor(matchStart / cols);
+            const startX = (matchStart % cols) + 1;
+            const endY = startRow + 1 + Math.floor((matchEnd - 1) / cols);
+            const endX = ((matchEnd - 1) % cols) + 1;
+            links.push({
+              range: { start: { x: startX, y: startY }, end: { x: endX, y: endY } },
+              text: matched,
+              activate() { activateFilePath(matched); },
             });
           }
         }

@@ -108,6 +108,18 @@ export function useAgentRunner(
   // Fetch capabilities when model changes (session-level or global)
   const effectiveModel = session?.aiConfig?.model || aiService.getConfig().model;
   const effectiveProvider = session?.aiConfig?.provider || aiService.getConfig().provider;
+  // Re-check capabilities when a thinking model is detected at runtime
+  const [thinkingBump, setThinkingBump] = useState(0);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { provider, model } = (e as CustomEvent).detail;
+      if (provider === effectiveProvider && model === effectiveModel) {
+        setThinkingBump((n) => n + 1);
+      }
+    };
+    window.addEventListener("tron:thinkingModelDetected", handler);
+    return () => window.removeEventListener("tron:thinkingModelDetected", handler);
+  }, [effectiveProvider, effectiveModel]);
   useEffect(() => {
     if (effectiveModel && (effectiveProvider === "ollama" || effectiveProvider === "lmstudio")) {
       const baseUrl = session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
@@ -144,7 +156,7 @@ export function useAgentRunner(
     } else {
       setModelCapabilities([]);
     }
-  }, [effectiveModel, effectiveProvider]);
+  }, [effectiveModel, effectiveProvider, thinkingBump]);
 
   // Ref to track latest alwaysAllowSession inside async closures
   const alwaysAllowRef = useRef(alwaysAllowSession);
@@ -870,9 +882,8 @@ ${prompt}
     } catch (error: any) {
       // Clear streaming buffer (don't flush stale data on error/abort)
       clearStreamBuffer();
-      const isAbort =
-        error.name === "AbortError" ||
-        error.message?.toLowerCase().includes("abort");
+      // Only treat as abort if the controller was explicitly aborted by stopAgent()
+      const isAbort = controller.signal.aborted;
       if (!isAbort) {
         // Only add error for non-abort failures.
         // Abort is handled by stopAgent() which already adds a "stopped" step.

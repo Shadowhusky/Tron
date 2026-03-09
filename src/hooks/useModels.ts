@@ -1,7 +1,21 @@
+import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AIModel } from "../types";
 import { aiService } from "../services/ai";
 import { useConfig } from "../contexts/ConfigContext";
+
+/** Invalidate model queries when a thinking model is detected at runtime. */
+export function useThinkingModelInvalidation() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const handler = () => {
+      queryClient.invalidateQueries({ queryKey: ["allConfiguredModels"] });
+      queryClient.invalidateQueries({ queryKey: ["modelsWithCaps"] });
+    };
+    window.addEventListener("tron:thinkingModelDetected", handler);
+    return () => window.removeEventListener("tron:thinkingModelDetected", handler);
+  }, [queryClient]);
+}
 
 /** Fetch the model list from a single provider. */
 export function useModels(baseUrl?: string, provider?: string, apiKey?: string) {
