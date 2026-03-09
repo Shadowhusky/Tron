@@ -1640,6 +1640,29 @@ const SettingsPane = () => {
                     ))}
                   </div>
                 </div>
+
+                {/* Agent Status Bar toggle */}
+                <div className={cardClass}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className={`text-xs font-medium ${t.textMuted}`}>Agent Status Bar</label>
+                      <p className={`text-[10px] ${t.textFaint} mt-0.5`}>Show a status row below the tab bar with agent activity</p>
+                    </div>
+                    <button
+                      role="switch"
+                      aria-checked={!!appConfig.showAgentStatusBar}
+                      onClick={() => updateAppConfig({ showAgentStatusBar: !appConfig.showAgentStatusBar })}
+                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${appConfig.showAgentStatusBar
+                        ? "bg-blue-500"
+                        : resolvedTheme === "light" ? "bg-gray-300" : "bg-white/20"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${appConfig.showAgentStatusBar ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+                      />
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 

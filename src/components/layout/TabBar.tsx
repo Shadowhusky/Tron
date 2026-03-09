@@ -27,6 +27,7 @@ interface TabBarProps {
   onDuplicateTab?: (tabId: string) => Promise<void>;
   onSaveTab?: (tabId: string) => Promise<void>;
   onLoadSavedTab?: () => void;
+  onCreateRemote?: () => void;
 }
 
 const TabBar: React.FC<TabBarProps> = ({
@@ -46,6 +47,7 @@ const TabBar: React.FC<TabBarProps> = ({
   onDuplicateTab,
   onSaveTab,
   onLoadSavedTab,
+  onCreateRemote,
 }) => {
   // Confirm helper — uses styled modal if available, falls back to window.confirm
   const confirm = async (msg: string) =>
@@ -547,6 +549,37 @@ const TabBar: React.FC<TabBarProps> = ({
                     SSH Connection
                   </button>
                 </Popover.Close>
+                {onCreateRemote && (
+                  <Popover.Close asChild>
+                    <button
+                      data-testid="tab-create-remote"
+                      onClick={onCreateRemote}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                        resolvedTheme,
+                        {
+                          dark: "hover:bg-white/10",
+                          modern: "hover:bg-white/20",
+                          light: "hover:bg-gray-100",
+                        },
+                      )}`}
+                    >
+                      <svg
+                        className="h-4 w-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                        />
+                      </svg>
+                      Remote Server
+                    </button>
+                  </Popover.Close>
+                )}
                 {onLoadSavedTab && (
                   <>
                     <div

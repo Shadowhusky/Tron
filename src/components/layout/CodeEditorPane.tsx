@@ -14,6 +14,7 @@ import type { Extension } from "@codemirror/state";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import { themeClass } from "../../utils/theme";
+import { getRemoteConnection } from "../../services/remote-bridge";
 
 /** Map file extension to CodeMirror language extension. */
 function getLanguageExtension(filePath: string): Extension[] {
@@ -69,9 +70,11 @@ function getLanguageExtension(filePath: string): Extension[] {
 interface CodeEditorPaneProps {
   sessionId: string;
   filePath: string;
+  /** Terminal session that spawned this editor — used to route file reads through remote bridge. */
+  sourceSessionId?: string;
 }
 
-const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath }) => {
+const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, sourceSessionId }) => {
   const { resolvedTheme } = useTheme();
   const { closePane } = useLayout();
   const [content, setContent] = useState("");
@@ -94,7 +97,10 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath }) 
 
     (async () => {
       try {
-        const result = await window.electron?.ipcRenderer?.invoke("file.readFile", { filePath });
+        const conn = sourceSessionId ? getRemoteConnection(sourceSessionId) : null;
+        const result = conn
+          ? await conn.invoke("file.readFile", { filePath })
+          : await window.electron?.ipcRenderer?.invoke("file.readFile", { filePath });
         if (cancelled) return;
         if (result?.success) {
           setContent(result.content);
@@ -110,14 +116,17 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath }) 
     })();
 
     return () => { cancelled = true; };
-  }, [filePath]);
+  }, [filePath, sourceSessionId]);
 
   // Save file
   const handleSave = useCallback(async () => {
     if (!isModified || saving) return;
     setSaving(true);
     try {
-      const result = await window.electron?.ipcRenderer?.invoke("file.writeFile", { filePath, content });
+      const conn = sourceSessionId ? getRemoteConnection(sourceSessionId) : null;
+      const result = conn
+        ? await conn.invoke("file.writeFile", { filePath, content })
+        : await window.electron?.ipcRenderer?.invoke("file.writeFile", { filePath, content });
       if (result?.success) {
         setSavedContent(content);
         setSaveFlash(true);
@@ -130,7 +139,7 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath }) 
     } finally {
       setSaving(false);
     }
-  }, [filePath, content, isModified, saving]);
+  }, [filePath, content, isModified, saving, sourceSessionId]);
 
   // Cmd/Ctrl+S keyboard shortcut
   useEffect(() => {

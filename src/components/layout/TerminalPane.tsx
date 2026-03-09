@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check } from "lucide-react";
+import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -757,7 +757,17 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 resolvedTheme={resolvedTheme}
               />
             )}
-            {!isSSH && (
+            {!isSSH && session?.remoteUrl && (
+              <span className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider ${themeClass(resolvedTheme, {
+                dark: "bg-purple-500/15 text-purple-300",
+                modern: "bg-purple-500/20 text-purple-200",
+                light: "bg-purple-100 text-purple-600",
+              })}`}>
+                <Monitor className="h-2.5 w-2.5" />
+                Remote
+              </span>
+            )}
+            {!isSSH && !session?.remoteUrl && (
               <Folder
                 className={`h-3 w-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}
               />

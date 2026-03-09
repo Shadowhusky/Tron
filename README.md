@@ -196,6 +196,8 @@ Tron's agent is designed for **everyday terminal tasks** — running commands, e
 | **Budget cloud** | Kimi, GLM, MiniMax | Great balance of cost and capability. Handle most agent tasks well — command execution, file editing, debugging. Good daily drivers. |
 | **Premium cloud** | Claude, GPT, Gemini | Excellent but overkill for typical terminal agent work. Better suited for direct coding conversations. |
 
+> **Context length matters for local models.** The agent sends terminal history, file contents, and tool results as context. If your model's context window is too small (e.g. 2K–4K tokens), it may fail mid-task — especially when writing or editing files. For local models, use at least **8K context** (16K+ recommended). In Ollama, you can increase context with `OLLAMA_NUM_CTX=16384` or by setting `num_ctx` in a Modelfile. LM Studio has a context length slider in model settings. Cloud models handle this automatically.
+
 > **Tip for complex coding:** Rather than using a premium model through Tron's agent, run a dedicated coding agent like [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) or [Codex](https://github.com/openai/codex) directly inside Tron's terminal. Tron's session persistence means you can start a long coding session, close the browser, and come back to it later — the agent keeps running and all output is preserved.
 
 ## Keyboard Shortcuts

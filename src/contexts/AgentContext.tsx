@@ -58,7 +58,12 @@ class AgentStore {
   public activeSessionIdsForNotifs = new Set<string>();
   private notificationListeners = new Set<() => void>();
 
+  // Unique ID for identity checks across lazy-loaded chunks
+  readonly storeId = Math.random().toString(36).slice(2, 8);
+
   getSnapshot = () => this.states;
+
+  getListenerCount = () => this.listeners.size;
 
   getSessionSnapshot = (sessionId: string) => {
     return this.states.get(sessionId) || defaultState;
@@ -173,14 +178,19 @@ class AgentStore {
       permissionResolve: null,
       isOverlayVisible: true,
       agentThread: (() => {
+        const inflightSteps = ["executing", "streaming", "streaming_thinking", "streaming_response", "thinking"];
+        const removeOnStop = ["streaming_thinking", "streaming_response", "thinking", "thought"];
         const hadInflight = current.agentThread.some(
-          (s) => s.step === "executing" || s.step === "streaming"
+          (s) => inflightSteps.includes(s.step)
         );
-        const cleaned = current.agentThread.map((s) =>
-          s.step === "executing" || s.step === "streaming"
-            ? { ...s, step: "stopped" as const }
-            : s
-        );
+        // Remove transient thinking/streaming steps, convert executing/streaming to stopped
+        const cleaned = current.agentThread
+          .filter((s) => !removeOnStop.includes(s.step))
+          .map((s) =>
+            s.step === "executing" || s.step === "streaming"
+              ? { ...s, step: "stopped" as const }
+              : s
+          );
         return hadInflight
           ? cleaned
           : [...cleaned, { step: "stopped", output: "Stopped" }];
@@ -335,6 +345,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [store] = useState(() => new AgentStore());
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__agentStore = store;
   const hasLoadedRef = useRef(false);
 
   useEffect(() => {
@@ -362,7 +374,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
 
       if (hasThread || hasDraft || hasHeight) {
         const persistableThread = state.agentThread.filter(
-          (s) => s.step !== "thinking",
+          (s) => s.step !== "thinking" && s.step !== "streaming",
         );
         serializable[id] = {
           agentThread: persistableThread,

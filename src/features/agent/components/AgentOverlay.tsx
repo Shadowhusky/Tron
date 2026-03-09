@@ -87,14 +87,13 @@ function describeStreamingContent(raw: string): {
 
   if (toolMatch) {
     const tool = toolMatch[1];
-    if (tool === "execute_command") return { label: "Planning command" };
-    if (tool === "run_in_terminal")
-      return { label: "Planning terminal action" };
+    if (tool === "execute_command") return { label: "Preparing command" };
+    if (tool === "run_in_terminal") return { label: "Preparing command" };
     if (tool === "write_file") return { label: "Preparing file write" };
     if (tool === "read_file") return { label: "Preparing file read" };
     if (tool === "edit_file") return { label: "Preparing file edit" };
     if (tool === "final_answer") return { label: "Composing answer" };
-    return { label: `Planning: ${tool}` };
+    return { label: `Preparing: ${tool}` };
   }
 
   return { label: "Responding" };
@@ -871,9 +870,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   }, []);
 
   // Fade-out for completed thinking steps — visible for 1.5s then collapse over 0.8s
-  const [fadingThoughts, setFadingThoughts] = useState<Map<number, "visible" | "fading">>(new Map());
+  const [fadingThoughts, setFadingThoughts] = useState<Map<number, "visible" | "fading" | "collapsing">>(new Map());
   const fadingTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const thoughtHeightsRef = useRef<Map<number, number>>(new Map());
   const prevStepsRef = useRef<string[]>([]);
+
+  // Measure thought element heights for smooth collapse
+  const measureThoughtRef = useCallback((el: HTMLDivElement | null, idx: number) => {
+    if (el) thoughtHeightsRef.current.set(idx, el.offsetHeight);
+  }, []);
 
   useEffect(() => {
     const prevSteps = prevStepsRef.current;
@@ -882,13 +887,21 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
     for (let i = 0; i < curSteps.length; i++) {
       if (curSteps[i] === "thought" && prevSteps[i] === "thinking" && !fadingTimersRef.current.has(i)) {
+        // Phase 1: visible (1.5s)
         setFadingThoughts((prev) => new Map(prev).set(i, "visible"));
         const t1 = setTimeout(() => {
+          // Phase 2: fade opacity (0.4s)
           setFadingThoughts((prev) => new Map(prev).set(i, "fading"));
           const t2 = setTimeout(() => {
-            setFadingThoughts((prev) => { const next = new Map(prev); next.delete(i); return next; });
-            fadingTimersRef.current.delete(i);
-          }, 800);
+            // Phase 3: collapse height (0.3s)
+            setFadingThoughts((prev) => new Map(prev).set(i, "collapsing"));
+            const t3 = setTimeout(() => {
+              setFadingThoughts((prev) => { const next = new Map(prev); next.delete(i); return next; });
+              thoughtHeightsRef.current.delete(i);
+              fadingTimersRef.current.delete(i);
+            }, 350);
+            fadingTimersRef.current.set(i, t3);
+          }, 400);
           fadingTimersRef.current.set(i, t2);
         }, 1500);
         fadingTimersRef.current.set(i, t1);
@@ -1325,7 +1338,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 : liveHeight !== undefined || overlayHeight
                   ? "flex-col"
                   : "max-h-[60%] flex-col"
-              : "h-auto cursor-pointer hover:opacity-100 opacity-90"
+              : "h-auto flex-col cursor-pointer hover:opacity-100 opacity-90"
           } overflow-hidden border-t flex shadow-lg z-20 ${
             isLight
               ? "bg-white/95 border-gray-200 text-gray-900"
@@ -1519,10 +1532,34 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       execOutput = step.output.slice(sepIdx + 5);
                     }
 
-                    // Hide completed thinking steps — show briefly then fade out
+                    // Hide completed thinking steps
                     if (isThought && !fadingThoughts.has(globalIdx)) return null;
 
                     // Stopped: render a tiny inline indicator, not a full step block
+                    // Structured plan — render as checklist
+                    if (isPlan && step.payload?.steps?.length > 0) {
+                      return (
+                        <div
+                          key={key}
+                          className={`border-l-2 pl-4 py-2 ${isLight ? "border-indigo-300" : "border-indigo-500/30"}`}
+                        >
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <ListOrdered className={`w-3 h-3 ${isLight ? "text-indigo-500" : "text-indigo-400"}`} />
+                            <span className={`uppercase font-bold text-[10px] tracking-wider ${isLight ? "text-indigo-500" : "text-indigo-400"}`}>
+                              Plan
+                            </span>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            {(step.payload.steps as string[]).map((s: string, i: number) => (
+                              <span key={i} className={`text-[11px] leading-relaxed ${isLight ? "text-gray-700" : "text-gray-300"}`}>
+                                {i + 1}. {s}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+
                     if (isStopped) {
                       return (
                         <div
@@ -1542,15 +1579,19 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     }
 
                     const thoughtPhase = isThought ? fadingThoughts.get(globalIdx) : undefined;
+                    const measuredH = thoughtHeightsRef.current.get(globalIdx);
 
                     return (
                       <div
                         key={key}
-                        style={thoughtPhase === "fading"
-                          ? { opacity: 0, maxHeight: 0, overflow: "hidden", padding: 0, margin: 0, transition: "opacity 0.4s ease-out, max-height 0.8s ease-out, padding 0.8s ease-out" }
-                          : thoughtPhase === "visible"
-                            ? { opacity: 0.7, maxHeight: 200, overflow: "hidden", transition: "opacity 0.3s ease-in" }
-                            : undefined}
+                        ref={thoughtPhase === "visible" ? (el: HTMLDivElement | null) => measureThoughtRef(el, globalIdx) : undefined}
+                        style={thoughtPhase === "collapsing"
+                          ? { opacity: 0, maxHeight: 0, overflow: "hidden", paddingTop: 0, paddingBottom: 0, transition: "max-height 0.3s ease-out, padding 0.3s ease-out" }
+                          : thoughtPhase === "fading"
+                            ? { opacity: 0, maxHeight: measuredH ?? 200, overflow: "hidden", transition: "opacity 0.4s ease-out" }
+                            : thoughtPhase === "visible"
+                              ? { opacity: 0.7, maxHeight: measuredH ?? 200, overflow: "hidden", transition: "opacity 0.3s ease-in" }
+                              : undefined}
                         className={`border-l-2 pl-4 py-2 ${
                           isError
                             ? isLight
@@ -1560,10 +1601,6 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                               ? isLight
                                 ? "border-green-300"
                                 : "border-green-500/30"
-                              : isPlan
-                                ? isLight
-                                  ? "border-indigo-300"
-                                  : "border-indigo-500/30"
                               : isSummarizing || isSummarized
                                 ? isLight
                                   ? "border-purple-300"
@@ -1616,8 +1653,6 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             <AlertTriangle className="w-3 h-3 text-red-400" />
                           ) : isDone ? (
                             <Check className="w-3 h-3 text-green-400" />
-                          ) : isPlan ? (
-                            <ListOrdered className="w-3 h-3 text-indigo-400" />
                           ) : isSummarizing ? (
                             <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
                           ) : isSummarized ? (
@@ -1649,8 +1684,6 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                     ? "text-red-400"
                                     : isDone
                                       ? "text-green-400"
-                                      : isPlan
-                                        ? "text-indigo-400"
                                       : isSummarizing || isSummarized
                                         ? "text-purple-400"
                                         : isSystem
@@ -1942,7 +1975,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             }
                             return null;
                           })()
-                        ) : isDone || isPlan || isSystem || isQuestion || isSummarized ? (
+                        ) : isDone || isSystem || isQuestion || isSummarized ? (
                           <LinkifiedDoneContent
                             content={step.output}
                             className={`text-[11px] leading-relaxed ${isLight ? "markdown-light text-gray-700" : "text-gray-300"}`}

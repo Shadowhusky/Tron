@@ -75,6 +75,9 @@ export const sel = {
   tabCreateTerminal: '[data-testid="tab-create-terminal"]',
   tabCreateSSH: '[data-testid="tab-create-ssh"]',
 
+  // Agent Status Bar
+  agentStatusBar: '[data-testid="agent-status-bar"]',
+
   // Saved Tabs
   tabSaveRemote: '[data-testid="tab-save-remote"]',
   tabLoadSaved: '[data-testid="tab-load-saved"]',

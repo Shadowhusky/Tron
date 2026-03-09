@@ -52,15 +52,8 @@ export function useAgentRunner(
 
   // Persisted agent state for resuming after ask_question
   const continuationRef = useRef<AgentContinuation | null>(null);
-  // Track whether tab title has been generated and by whom
-  const titleSourceRef = useRef<"none" | "terminal" | "agent" | "user">(
-    session?.title !== "Terminal" && !!session?.title ? "user" : "none"
-  );
-
-  useEffect(() => {
-    // Reset title tracking when session mounts/switches
-    titleSourceRef.current = session?.title !== "Terminal" && !!session?.title ? "user" : "none";
-  }, [sessionId, session?.title]);
+  /** Check if the tab title is locked (agent-generated or user-renamed). */
+  const isTitleLocked = () => session?.titleLocked === true;
 
   // Streaming throttle — buffers token-level setAgentThread calls (max ~10/sec)
   const streamBufferRef = useRef<{
@@ -112,45 +105,46 @@ export function useAgentRunner(
     buf.step = null;
   };
 
-  // Fetch capabilities when session config model changes
+  // Fetch capabilities when model changes (session-level or global)
+  const effectiveModel = session?.aiConfig?.model || aiService.getConfig().model;
+  const effectiveProvider = session?.aiConfig?.provider || aiService.getConfig().provider;
   useEffect(() => {
-    const model = session?.aiConfig?.model || aiService.getConfig().model;
-    const provider =
-      session?.aiConfig?.provider || aiService.getConfig().provider;
-    if (model && (provider === "ollama" || provider === "lmstudio")) {
-      const baseUrl =
-        session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
-      aiService.getModelCapabilities(model, baseUrl, provider).then(setModelCapabilities);
-    } else if (model) {
-      // Cloud providers — infer capabilities from model name / provider
-      const m = model.toLowerCase();
+    if (effectiveModel && (effectiveProvider === "ollama" || effectiveProvider === "lmstudio")) {
+      const baseUrl = session?.aiConfig?.baseUrl || aiService.getConfig().baseUrl;
+      aiService.getModelCapabilities(effectiveModel, baseUrl, effectiveProvider).then((caps) => {
+        // Also check runtime-detected thinking models (from <think> tags seen in previous responses)
+        if (!caps.includes("thinking") && aiService.isDetectedThinkingModel(effectiveProvider, effectiveModel)) {
+          caps.push("thinking");
+        }
+        setModelCapabilities(caps);
+      });
+    } else if (effectiveModel) {
+      const m = effectiveModel.toLowerCase();
       const caps: string[] = [];
-      // Known thinking/reasoning models
       if (
-        provider === "anthropic" || provider === "anthropic-compat" || // All modern Claude models support extended thinking
-        /\b(o[134]|reasoner|thinking|r1|qwq)\b/.test(m) ||           // OpenAI o-series, DeepSeek reasoner, QwQ
-        /\bgemini.*\b/.test(m)                                        // Gemini models support thinking
+        effectiveProvider === "anthropic" || effectiveProvider === "anthropic-compat" ||
+        effectiveProvider === "openai-compat" ||                           // Local models commonly support thinking
+        /\b(o[134]|reasoner|thinking|r1|qwq|qwen)\b/.test(m) ||
+        /\bgemini.*\b/.test(m)
       ) {
         caps.push("thinking");
       }
-      // Vision support — most modern cloud models support it
       if (
-        provider === "anthropic" || provider === "anthropic-compat" || // Claude 3+ all support vision
-        provider === "openai" ||                                       // GPT-4o, GPT-4V, etc.
-        provider === "gemini" ||                                       // Gemini models
+        effectiveProvider === "anthropic" || effectiveProvider === "anthropic-compat" ||
+        effectiveProvider === "openai" ||
+        effectiveProvider === "gemini" ||
         /\b(claude-3|gpt-4|gemini|pixtral|llava)\b/.test(m)
       ) {
         caps.push("vision");
       }
-      // Also check runtime-detected thinking models
-      if (!caps.includes("thinking") && provider && aiService.isDetectedThinkingModel(provider, model)) {
+      if (!caps.includes("thinking") && effectiveProvider && aiService.isDetectedThinkingModel(effectiveProvider, effectiveModel)) {
         caps.push("thinking");
       }
       setModelCapabilities(caps);
     } else {
       setModelCapabilities([]);
     }
-  }, [session?.aiConfig?.model, session?.aiConfig?.provider]);
+  }, [effectiveModel, effectiveProvider]);
 
   // Ref to track latest alwaysAllowSession inside async closures
   const alwaysAllowRef = useRef(alwaysAllowSession);
@@ -214,8 +208,7 @@ export function useAgentRunner(
       return;
     }
 
-    if (titleSourceRef.current === "none" && sessionId) {
-      titleSourceRef.current = "terminal";
+    if (!isTitleLocked() && sessionId && session?.title === "Terminal") {
       const cmdStr = cmd.trim();
       const title = cmdStr.length > 20 ? cmdStr.substring(0, 20) + "..." : cmdStr;
       renameTab(sessionId, title);
@@ -235,8 +228,7 @@ export function useAgentRunner(
       return;
     }
 
-    if (titleSourceRef.current === "none" && sessionId) {
-      titleSourceRef.current = "terminal";
+    if (!isTitleLocked() && sessionId && session?.title === "Terminal") {
       const cmdStr = cmd.trim();
       const title = cmdStr.length > 20 ? cmdStr.substring(0, 20) + "..." : cmdStr;
       renameTab(sessionId, title);
@@ -353,6 +345,7 @@ export function useAgentRunner(
     registerAbortController(controller);
 
     setIsAgentRunning(true);
+    window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: true } }));
     const modelSupportsThinking = modelCapabilities?.includes("thinking") ?? false;
     if (thinkingEnabled && modelSupportsThinking) {
       setIsThinking(true);
@@ -365,12 +358,8 @@ export function useAgentRunner(
       : prompt;
     setAgentThread((prev) => [...prev, { step: "separator", output: separatorOutput }]);
 
-    // Set fallback tab title from agent prompt (agent may override via _tab_title later)
-    if (titleSourceRef.current === "none" && sessionId && prompt.trim()) {
-      titleSourceRef.current = "terminal";
-      const title = prompt.trim().length > 20 ? prompt.trim().substring(0, 20) + "..." : prompt.trim();
-      renameTab(sessionId, title);
-    }
+    // Tab title will be generated after agent finishes (local models can't handle concurrent requests)
+    const shouldGenerateTitle = !isTitleLocked() && sessionId && prompt.trim() && aiBehavior.aiTabTitles;
 
     // --- Image analysis shortcut: bypass agent loop entirely ---
     if (images && images.length > 0) {
@@ -432,6 +421,7 @@ export function useAgentRunner(
         }
       } finally {
         setIsAgentRunning(false);
+        window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
         setIsThinking(false);
       }
       return;
@@ -747,20 +737,6 @@ ${prompt}
           // Non-streaming step: flush any pending buffer first
           flushStreamBuffer();
 
-          if (step === "set_tab_title") {
-            if (!aiBehavior.aiTabTitles) return;
-            const isUnknown = output.toLowerCase().includes("unknown") || output.toLowerCase().includes("unclear");
-            if (
-              titleSourceRef.current !== "user" &&
-              sessionId &&
-              !isUnknown
-            ) {
-              titleSourceRef.current = "agent";
-              renameTab(sessionId, output);
-            }
-            return;
-          }
-
           if (step === "thinking_complete") {
             // Replace the last thinking entry with finalized thought (search backwards)
             setAgentThread((prev) => {
@@ -781,57 +757,42 @@ ${prompt}
             // Always show thinking indicator — even for non-thinking models
             setIsThinking(true);
           } else {
-            // Real step arrived — update in-place where possible to avoid layout shift
-            setAgentThread((prev) => {
-              const updated = [...prev];
+            // Plan: replace streaming entry with structured plan step
+            if (step === "plan") {
+              setAgentThread((prev) => {
+                const cleaned = prev.filter(s => s.step !== "streaming");
+                return [...cleaned, { step: "plan", output: "", payload }];
+              });
+              return;
+            }
 
-              // "read_terminal" → merge into the last read_terminal entry in current run (single collapsible row)
-              // Also remove any trailing streaming entry that showed the raw JSON tool call
+            // Real step arrived — clean all streaming entries, then update
+            setAgentThread((prev) => {
+              const cleaned = prev.filter(s => s.step !== "streaming");
+
+              // "read_terminal" → merge into the last read_terminal entry in current run
               if (step === "read_terminal") {
-                // Remove trailing streaming entry (the raw `{"tool":"read_terminal",...}` JSON)
-                while (updated.length > 0 && updated[updated.length - 1].step === "streaming") {
-                  updated.pop();
-                }
-                for (let j = updated.length - 1; j >= 0; j--) {
-                  if (updated[j].step === "separator") break; // don't merge across runs
-                  if (updated[j].step === "read_terminal") {
-                    updated[j] = { step, output, payload };
-                    return updated;
+                for (let j = cleaned.length - 1; j >= 0; j--) {
+                  if (cleaned[j].step === "separator") break;
+                  if (cleaned[j].step === "read_terminal") {
+                    cleaned[j] = { step, output, payload };
+                    return cleaned;
                   }
                 }
-                return [...updated, { step, output, payload }];
+                return [...cleaned, { step, output, payload }];
               }
 
               // "executed"/"failed" → transform the preceding "executing" entry in-place
               if (step === "executed" || step === "failed") {
-                let lastExecIdx = -1;
-                for (let j = updated.length - 1; j >= 0; j--) {
-                  if (updated[j].step === "executing") {
-                    lastExecIdx = j;
-                    break;
+                for (let j = cleaned.length - 1; j >= 0; j--) {
+                  if (cleaned[j].step === "executing") {
+                    cleaned[j] = { step, output, payload };
+                    return cleaned;
                   }
-                }
-                if (lastExecIdx >= 0) {
-                  updated[lastExecIdx] = { step, output, payload };
-                  // Remove any leftover streaming entries
-                  return updated.filter((s) => s.step !== "streaming");
                 }
               }
 
-              // Transform last streaming entry in-place, remove any others
-              let lastStreamIdx = -1;
-              for (let j = updated.length - 1; j >= 0; j--) {
-                if (updated[j].step === "streaming") {
-                  lastStreamIdx = j;
-                  break;
-                }
-              }
-              if (lastStreamIdx >= 0) {
-                updated[lastStreamIdx] = { step, output, payload };
-                // Remove any remaining streaming entries (from retries)
-                return updated.filter((s, i) => i === lastStreamIdx || s.step !== "streaming");
-              }
-              return [...updated, { step, output, payload }];
+              return [...cleaned, { step, output, payload }];
             });
             setIsThinking(false);
           }
@@ -866,6 +827,7 @@ ${prompt}
 
       // Ensure successful completion clears active state
       setIsAgentRunning(false);
+      window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
 
       // Update Agent Thread with Final Status — atomic: transform streaming in-place + add final step
       const finalStep =
@@ -879,21 +841,9 @@ ${prompt}
         (finalAnswer.success ? "Task Completed" : "Task Failed");
 
       setAgentThread((prev) => {
-        // Try to replace last streaming entry in-place
-        let lastStreamIdx = -1;
-        for (let j = prev.length - 1; j >= 0; j--) {
-          if (prev[j].step === "streaming" || prev[j].step === "streaming_response") {
-            lastStreamIdx = j;
-            break;
-          }
-        }
-        if (lastStreamIdx >= 0) {
-          const updated = [...prev];
-          updated[lastStreamIdx] = { step: finalStep, output: finalOutput, payload: finalAnswer.payload };
-          return updated;
-        }
-        // No streaming entry — just append
-        return [...prev, { step: finalStep, output: finalOutput, payload: finalAnswer.payload }];
+        // Remove leftover streaming entries
+        const cleaned = prev.filter(s => s.step !== "streaming" && s.step !== "streaming_response");
+        return [...cleaned, { step: finalStep, output: finalOutput, payload: finalAnswer.payload }];
       });
 
       // Persist Agent Conclusion to Session State (Invisible Context)
@@ -905,7 +855,18 @@ ${prompt}
         });
       }
 
-      // Tab title already generated at start of first run (titleGeneratedRef)
+      // Generate smart tab title now that the model is free
+      if (shouldGenerateTitle) {
+        const titleContext = finalAnswer.message
+          ? `${prompt}\n[AGENT RESPONSE]: ${finalAnswer.message.slice(0, 200)}`
+          : prompt;
+        aiService.generateTabTitle(titleContext, session?.aiConfig).then((t) => {
+          if (t) {
+            renameTab(sessionId, t);
+            updateSession(sessionId, { titleLocked: true });
+          }
+        });
+      }
     } catch (error: any) {
       // Clear streaming buffer (don't flush stale data on error/abort)
       clearStreamBuffer();
@@ -917,10 +878,11 @@ ${prompt}
         // Abort is handled by stopAgent() which already adds a "stopped" step.
         console.error(error);
         setAgentThread((prev) => [
-          ...prev,
+          ...prev.filter(s => s.step !== "streaming" && s.step !== "streaming_response"),
           { step: "error", output: `Error: ${error.message}` },
         ]);
         setIsAgentRunning(false);
+        window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
       }
       // For aborts, stopAgent() already set isAgentRunning=false and added the stopped step
     } finally {

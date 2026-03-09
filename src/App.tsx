@@ -20,11 +20,13 @@ import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import SavedTabsModal from "./components/layout/SavedTabsModal";
+import RemoteConnectionModal from "./components/layout/RemoteConnectionModal";
 import Modal from "./components/ui/Modal";
 import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
 import { isTouchDevice } from "./utils/platform";
 import { ExternalLink, PanelRight } from "lucide-react";
+import AgentStatusBar from "./pixel-agents/components/AgentStatusBar";
 
 /**
  * On mobile, the virtual keyboard shrinks the visible area but the browser
@@ -94,11 +96,13 @@ const AppContent = () => {
     openSettingsTab,
     openBrowserTab,
     openEditorTab,
+    createRemoteTab,
     reorderTabs,
     updateSessionConfig,
     discardPersistedLayout,
     isHydrated,
     renameTab,
+    updateSession,
     updateTabColor,
     duplicateTab,
     createSSHTab,
@@ -116,6 +120,7 @@ const AppContent = () => {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [showSavedTabs, setShowSavedTabs] = useState(false);
+  const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [sshToast, setSshToast] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -237,8 +242,8 @@ const AppContent = () => {
   // Open code editor tab from file path clicks (agent overlay, etc.)
   useEffect(() => {
     const handler = (e: Event) => {
-      const { filePath } = (e as CustomEvent).detail;
-      if (filePath) openEditorTab(filePath);
+      const { filePath, sourceSessionId } = (e as CustomEvent).detail;
+      if (filePath) openEditorTab(filePath, sourceSessionId);
     };
     window.addEventListener("tron:openEditorTab", handler);
     return () => window.removeEventListener("tron:openEditorTab", handler);
@@ -392,12 +397,15 @@ const AppContent = () => {
         onOpenSettings={openSettingsTab}
         isTabDirty={isTabDirty}
         onConfirmClose={confirmHandler}
-        onRenameTab={renameTab}
+        onRenameTab={(sid, title) => { renameTab(sid, title); updateSession(sid, { titleLocked: true }); }}
         onUpdateTabColor={updateTabColor}
         onDuplicateTab={handleDuplicateTab}
         onSaveTab={handleSaveTab}
         onLoadSavedTab={() => setShowSavedTabs(true)}
+        onCreateRemote={() => setShowRemoteModal(true)}
       />
+
+      <AgentStatusBar />
 
       {/* Main Workspace — all tabs stay mounted to preserve terminal state */}
       <div className="flex-1 relative overflow-hidden">
@@ -479,6 +487,21 @@ const AppContent = () => {
         resolvedTheme={resolvedTheme}
         onLoad={handleLoadSavedTab}
         onClose={() => setShowSavedTabs(false)}
+      />
+
+      <RemoteConnectionModal
+        show={showRemoteModal}
+        resolvedTheme={resolvedTheme}
+        onConnect={async (url) => {
+          try {
+            await createRemoteTab(url);
+            setShowRemoteModal(false);
+          } catch (err: any) {
+            // Error is shown in the modal
+            throw err;
+          }
+        }}
+        onClose={() => setShowRemoteModal(false)}
       />
 
       {/* Generic confirm modal (replaces window.confirm for tab close etc.) */}

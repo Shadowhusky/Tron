@@ -17,6 +17,7 @@ import { onServerReconnect } from "../services/ws-bridge";
 import { matchesHotkey } from "../hooks/useHotkey";
 import { useConfig } from "./ConfigContext";
 import { isElectronApp } from "../utils/platform";
+import { connectRemote, createRemotePTY, unregisterRemoteSession } from "../services/remote-bridge";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -48,7 +49,8 @@ interface LayoutContextType {
   updateSplitSizes: (path: number[], sizes: number[]) => void;
   openSettingsTab: (section?: string) => void;
   openBrowserTab: (url: string, title?: string) => void;
-  openEditorTab: (filePath: string) => void;
+  openEditorTab: (filePath: string, sourceSessionId?: string) => void;
+  createRemoteTab: (url: string) => Promise<void>;
   /** Which settings section to show when settings tab opens. */
   pendingSettingsSection: string | null;
   clearPendingSettingsSection: () => void;
@@ -71,10 +73,6 @@ interface LayoutContextType {
   setConfirmHandler: (handler: (message: string) => Promise<boolean>) => void;
   /** Trigger an immediate CWD refresh for a session (or the active session). */
   refreshCwd: (sessionId?: string) => Promise<void>;
-  /** Split current pane with a pixel-agents visualization pane. */
-  splitWithPixelAgents: (direction: SplitDirection) => void;
-  /** Open a standalone pixel-agents tab (or focus existing one). */
-  openPixelAgentsTab: () => void;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -249,6 +247,27 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           },
           {} as Record<string, string>,
         ),
+        sessionRemoteUrls: Array.from(sessions.entries()).reduce(
+          (acc, [id, session]) => {
+            if (session.remoteUrl) acc[id] = session.remoteUrl;
+            return acc;
+          },
+          {} as Record<string, string>,
+        ),
+        sessionTitles: Array.from(sessions.entries()).reduce(
+          (acc, [id, session]) => ({
+            ...acc,
+            [id]: session.title,
+          }),
+          {} as Record<string, string>,
+        ),
+        sessionTitleLocked: Array.from(sessions.entries()).reduce(
+          (acc, [id, session]) => {
+            if (session.titleLocked) acc[id] = true;
+            return acc;
+          },
+          {} as Record<string, boolean>,
+        ),
       };
       localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
       // Also back up layout to server (survives localStorage loss, private mode, etc.)
@@ -271,6 +290,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         sessionSummaries: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: { summary: sess.contextSummary, sourceLength: sess.contextSummarySourceLength } }), {} as Record<string, { summary?: string; sourceLength?: number } | undefined>),
         sessionDirtyFlags: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.dirty ?? false }), {} as Record<string, boolean>),
         sessionSSHProfileIds: Array.from(s.entries()).reduce((acc, [sid, sess]) => { if (sess.sshProfileId) acc[sid] = sess.sshProfileId; return acc; }, {} as Record<string, string>),
+        sessionRemoteUrls: Array.from(s.entries()).reduce((acc, [sid, sess]) => { if (sess.remoteUrl) acc[sid] = sess.remoteUrl; return acc; }, {} as Record<string, string>),
+        sessionTitles: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.title }), {} as Record<string, string>),
+        sessionTitleLocked: Array.from(s.entries()).reduce((acc, [sid, sess]) => { if (sess.titleLocked) acc[sid] = true; return acc; }, {} as Record<string, boolean>),
       };
       window.electron?.ipcRenderer?.writeSessions?.({ _layout: state })?.catch?.(() => {});
     }, 30000);
@@ -337,7 +359,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           ): Promise<LayoutNode | null> => {
             if (node.type === "leaf") {
               // Non-PTY content types — restore as-is (no terminal session needed)
-              if (node.contentType === "settings" || node.contentType === "pixel-agents" || node.contentType === "browser" || node.contentType === "editor") {
+              if (node.contentType === "settings" || node.contentType === "browser" || node.contentType === "editor") {
                 return node;
               }
 
@@ -349,11 +371,25 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
               const wasDirty =
                 (parsed.sessionDirtyFlags || {})[oldId] ?? false;
               const sshProfileId = (parsed.sessionSSHProfileIds || {})[oldId];
+              const remoteUrl = (parsed.sessionRemoteUrls || {})[oldId];
+              const titleLocked = (parsed.sessionTitleLocked || {})[oldId] ?? false;
 
               let newId: string;
-              let sessionTitle = "Terminal";
+              const savedTitle = (parsed.sessionTitles || {})[oldId];
+              let sessionTitle = savedTitle || "Terminal";
 
-              if (sshProfileId) {
+              if (remoteUrl) {
+                // Remote session — reconnect to remote Tron server
+                try {
+                  const connectionId = await connectRemote(remoteUrl);
+                  newId = await createRemotePTY(connectionId, 80, 30, cwd);
+                  sessionTitle = new URL(remoteUrl).host || "Remote";
+                  console.log(`Reconnected remote session: ${oldId} → ${newId} (${remoteUrl})`);
+                } catch (err: any) {
+                  console.warn(`Failed to reconnect remote session ${oldId}:`, err.message);
+                  return null; // Drop this leaf — remote reconnect failed
+                }
+              } else if (sshProfileId) {
                 // SSH session — reconnect via profile
                 try {
                   const ipc = window.electron?.ipcRenderer;
@@ -392,6 +428,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
               newSessions.set(newId, {
                 id: newId,
                 title: sessionTitle,
+                titleLocked,
                 cwd,
                 aiConfig: config,
                 interactions: interactions || [],
@@ -399,6 +436,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 contextSummarySourceLength: summaryConstant?.sourceLength,
                 dirty: wasDirty,
                 sshProfileId,
+                remoteUrl,
                 // Mark as reconnected only if we reattached to a live PTY
                 // (server confirmed the PTY was still alive). This avoids false
                 // positives when a fresh PTY is created with the same session ID
@@ -601,7 +639,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveTabId(newTabId);
   };
 
-  const openEditorTab = (filePath: string) => {
+  const openEditorTab = (filePath: string, sourceSessionId?: string) => {
     // If an editor tab for this path is already open, focus it
     const existing = tabsRef.current.find((t) => {
       if (t.root.type !== "leaf") return false;
@@ -617,7 +655,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     const newTab: Tab = {
       id: newTabId,
       title: fileName,
-      root: { type: "leaf", sessionId, contentType: "editor", editorPath: filePath },
+      root: { type: "leaf", sessionId, contentType: "editor", editorPath: filePath, sourceSessionId },
       activeSessionId: sessionId,
     };
     setTabs((prev) => [...prev, newTab]);
@@ -634,6 +672,38 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       root: { type: "leaf", sessionId, contentType: "browser", url },
       activeSessionId: sessionId,
     };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTabId);
+  };
+
+  const createRemoteTab = async (url: string) => {
+    // Connect to the remote Tron server via WebSocket
+    const connectionId = await connectRemote(url);
+
+    // Create a PTY session on the remote server
+    const sessionId = await createRemotePTY(connectionId, 80, 30);
+
+    let label = "Remote";
+    try { label = new URL(url).host || "Remote"; } catch { /* use default */ }
+
+    const defaultConfig = aiService.getConfig();
+    setSessions((prev) =>
+      new Map(prev).set(sessionId, {
+        id: sessionId,
+        title: label,
+        aiConfig: defaultConfig,
+        remoteUrl: url,
+      }),
+    );
+
+    const newTabId = uuid();
+    const newTab: Tab = {
+      id: newTabId,
+      title: label,
+      root: { type: "leaf", sessionId },
+      activeSessionId: sessionId,
+    };
+
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTabId);
   };
@@ -771,71 +841,6 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
-  // Split with pixel-agents visualization
-  const splitWithPixelAgents = (direction: SplitDirection) => {
-    const tab = getActiveTab();
-    if (!tab || !tab.activeSessionId) return;
-
-    // Single-instance guard: check if pixel-agents pane already exists
-    const hasPixelAgents = (node: LayoutNode): boolean => {
-      if (node.type === "leaf") return node.contentType === "pixel-agents";
-      return node.children.some(hasPixelAgents);
-    };
-    if (hasPixelAgents(tab.root)) return; // already open
-
-    const pixelAgentsId = `pixel-agents-${uuid()}`;
-
-    const splitNode = (node: LayoutNode, targetId: string): LayoutNode => {
-      if (node.type === "leaf") {
-        if (node.sessionId === targetId) {
-          return {
-            type: "split",
-            direction,
-            children: [
-              node,
-              { type: "leaf", sessionId: pixelAgentsId, contentType: "pixel-agents" },
-            ],
-            sizes: [60, 40],
-          };
-        }
-        return node;
-      }
-      return { ...node, children: node.children.map((child) => splitNode(child, targetId)) };
-    };
-
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === activeTabId
-          ? { ...t, root: splitNode(t.root, t.activeSessionId!) }
-          : t,
-      ),
-    );
-  };
-
-  // Open a standalone pixel-agents tab (or focus existing)
-  const openPixelAgentsTab = () => {
-    // Check if pixel-agents tab already exists
-    const hasPixelAgents = (node: LayoutNode): boolean => {
-      if (node.type === "leaf") return node.contentType === "pixel-agents";
-      return node.children.some(hasPixelAgents);
-    };
-    const existing = tabs.find((t) => hasPixelAgents(t.root));
-    if (existing) {
-      setActiveTabId(existing.id);
-      return;
-    }
-
-    const pixelAgentsId = `pixel-agents-${uuid()}`;
-    const newTab: Tab = {
-      id: uuid(),
-      title: "Pixel Agents",
-      root: { type: "leaf", sessionId: pixelAgentsId, contentType: "pixel-agents" },
-      activeSessionId: pixelAgentsId,
-    };
-    setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(newTab.id);
-  };
-
   // Close Active Pane Logic
   const closeActivePane = () => {
     const tab = getActiveTab();
@@ -931,9 +936,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const closeSession = (sessionId: string) => {
     if (sessionId === "settings" || sessionId.startsWith("ssh-connect") || sessionId.startsWith("browser-") || sessionId.startsWith("editor-") || sessionId.startsWith("pixel-agents")) return; // pseudo-sessions
 
+    // Close the terminal on local or remote server (routing handled by remote-bridge)
     if (window.electron) {
       window.electron.ipcRenderer.send(IPC.TERMINAL_CLOSE, sessionId);
     }
+    // Clean up remote session routing if applicable
+    unregisterRemoteSession(sessionId);
+
     setSessions((prev) => {
       const next = new Map(prev);
       next.delete(sessionId);
@@ -1064,6 +1073,16 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setTabs((prev) =>
       prev.map((t) => (t.activeSessionId === sessionId ? { ...t, title } : t)),
     );
+    // Keep session title in sync so it survives refresh
+    setSessions((prev) => {
+      const s = prev.get(sessionId);
+      if (s && s.title !== title) {
+        const next = new Map(prev);
+        next.set(sessionId, { ...s, title });
+        return next;
+      }
+      return prev;
+    });
   };
 
   /** Update the color flag for a tab */
@@ -1439,6 +1458,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         openSettingsTab,
         openBrowserTab,
         openEditorTab,
+        createRemoteTab,
         pendingSettingsSection,
         clearPendingSettingsSection,
         reorderTabs,
@@ -1456,8 +1476,6 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         isHydrated,
         setConfirmHandler,
         refreshCwd,
-        splitWithPixelAgents,
-        openPixelAgentsTab,
       }}
     >
       {children}

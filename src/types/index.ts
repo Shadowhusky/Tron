@@ -85,6 +85,7 @@ export interface TronConfig {
   aiBehavior?: AIBehavior;
   webServer?: WebServerConfig;
   autoUpdate?: boolean;
+  showAgentStatusBar?: boolean;
 }
 
 // --- SSH Types ---
@@ -113,12 +114,14 @@ export type SSHConnectionStatus = "connected" | "disconnected" | "connecting" | 
 export interface TerminalSession {
   id: string; // PTY Session ID
   title: string;
+  titleLocked?: boolean; // true once agent or user has set a meaningful title (survives refresh)
   cwd?: string;
   aiConfig?: AIConfig;
   dirty?: boolean; // true once user has entered commands
   contextSummary?: string; // Auto-generated summary of older context
   contextSummarySourceLength?: number; // Length of the original text that was summarized
   sshProfileId?: string;  // If set, this is a remote SSH session
+  remoteUrl?: string;     // If set, this session is on a remote Tron server
   reconnected?: boolean; // true if session was reconnected to an existing PTY (page refresh)
   /** Saved terminal history to restore when loading a saved tab. Written to xterm on mount. */
   pendingHistory?: string;
@@ -132,7 +135,7 @@ export interface TerminalSession {
 export type SplitDirection = "horizontal" | "vertical";
 
 export type LayoutNode =
-  | { type: "leaf"; sessionId: string; contentType?: "terminal" | "settings" | "ssh-connect" | "browser" | "editor"; url?: string; editorPath?: string }
+  | { type: "leaf"; sessionId: string; contentType?: "terminal" | "settings" | "ssh-connect" | "browser" | "editor"; url?: string; editorPath?: string; sourceSessionId?: string }
   | {
     type: "split";
     direction: SplitDirection;

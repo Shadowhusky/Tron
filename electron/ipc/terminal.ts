@@ -941,9 +941,11 @@ export function registerTerminalHandlers(
         const clearChar = os.platform() === "win32" ? "\x1b" : "\x15";
         session.write(clearChar);
 
-        // Stall detection: if no new PTY output for 3s, assume process is
+        // Stall detection: if no new PTY output for 8s, assume process is
         // waiting for input. Return early so agent can interact via send_text.
         // Do NOT kill the process — mark session as occupied instead.
+        // 8s is generous enough to handle docker progress bars, npm install, etc.
+        // that may pause briefly between output bursts.
         const resetStallTimer = () => {
           if (stallTimer) clearTimeout(stallTimer);
           stallTimer = setTimeout(() => {
@@ -958,7 +960,7 @@ export function registerTerminalHandlers(
                 exitCode: 124,
               });
             }
-          }, 3000);
+          }, 8000);
         };
 
         const disposable = session.onData((data: string) => {
@@ -986,7 +988,7 @@ export function registerTerminalHandlers(
         session.write(wrappedCommand + "\r");
         resetStallTimer();
 
-        // Hard timeout after 30s — safety net
+        // Hard timeout after 120s — safety net (long builds, docker pull, etc.)
         const hardTimer = setTimeout(() => {
           if (!resolved) {
             resolved = true;
@@ -999,7 +1001,7 @@ export function registerTerminalHandlers(
               exitCode: 124,
             });
           }
-        }, 30000);
+        }, 120000);
       });
     },
   );

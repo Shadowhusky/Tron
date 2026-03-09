@@ -157,7 +157,7 @@ function isOpenAICompatible(provider: string): boolean {
   return (
     !isAnthropicProtocol(provider) &&
     provider !== "ollama" &&
-    provider in CLOUD_PROVIDERS
+    (provider in CLOUD_PROVIDERS || provider === "lmstudio")
   );
 }
 
@@ -960,6 +960,11 @@ class AIService {
       }
     }
 
+    // Explicitly disable thinking when not requested (local models with thinking capability)
+    if (thinking === false && !useCompletions && !useResponses) {
+      body.chat_template_kwargs = { enable_thinking: false };
+    }
+
     const response = await proxyFetch(url, {
       method: "POST",
       headers: this.jsonHeaders(apiKey || undefined),
@@ -1341,7 +1346,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
         return result.length <= 80 ? result : "";
       }
 
-      // OpenAI-compatible providers — stream so placeholder appears progressively
+      // OpenAI-compatible providers (including lmstudio) — stream so placeholder appears progressively
       if (
         isOpenAICompatible(provider) &&
         (apiKey || providerUsesBaseUrl(provider))
@@ -1350,6 +1355,9 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           { role: "system", content: systemPrompt },
           { role: "user", content: userContent },
         ];
+        // Track whether we're past the thinking phase
+        let pastThinking = false;
+        let thinkBuffer = "";
         const result = await this.streamOpenAIChat(
           provider,
           model,
@@ -1357,18 +1365,39 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           messages,
           onToken
             ? (token) => {
-              if (token) onToken(token);
+              if (!token) return;
+              // Buffer tokens until we detect end of thinking (models embed thinking in content)
+              if (!pastThinking) {
+                thinkBuffer += token;
+                // Check if thinking ended: <think>/<thinking>/<thought>...</close> pattern
+                const closeRe = /<\/(think|thinking|thought)>/i;
+                if (closeRe.test(thinkBuffer)) {
+                  const afterThink = thinkBuffer.split(closeRe).pop()?.trim() || "";
+                  if (afterThink) onToken(afterThink);
+                  pastThinking = true;
+                } else if (thinkBuffer.length > 500) {
+                  // No think tags — likely inline thinking. Don't stream anything until done.
+                  pastThinking = false;
+                }
+                return;
+              }
+              onToken(token);
             }
             : undefined,
           combinedSignal,
           undefined,
           baseUrl,
+          false, // disable thinking for placeholder
         );
-        const raw = result.content.trim();
-        const clean = raw
-          .replace(/^`+|`+$/g, "")
-          .split("\n")[0]
-          .trim();
+        // Strip thinking from final content
+        let raw = result.content.trim();
+        raw = raw.replace(/<(think|thinking|thought)>[\s\S]*?<\/(think|thinking|thought)>/gi, "").trim();
+        // If multi-line (inline thinking), take last short line
+        const lines = raw.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+        const lastClean = lines.length > 1
+          ? (lines.filter(l => l.length <= 80 && !/^[\d*\-•]/.test(l) && !l.includes(":")).pop() || lines[lines.length - 1])
+          : (lines[0] || "");
+        const clean = lastClean.replace(/^`+|`+$/g, "").trim();
         return clean.length <= 80 ? clean : "";
       }
     } catch {
@@ -1377,7 +1406,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     return "";
   }
 
-  /** Generate a very short tab title (2-5 words) from the user's prompt. Fire-and-forget safe. */
+  /** Generate a very short tab title (2-5 words) from the user's prompt. Uses streaming, no token limit. */
   async generateTabTitle(
     prompt: string,
     sessionConfig?: AIConfig,
@@ -1387,37 +1416,65 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     const model = cfg.model;
     const apiKey = cfg.apiKey || this.config.apiKey;
     const baseUrl = providerUsesBaseUrl(provider) ? cfg.baseUrl : undefined;
-    const systemPrompt = `Generate a very short title (2-5 words, max 25 chars) for a terminal session based on the user's task. Output ONLY the title, no quotes, no punctuation, no explanation. Examples: "Fix Login Bug", "Setup Docker", "Git Rebase Main", "Deploy API".`;
+    const systemPrompt = `Generate a short tab name that summarizes the conversation below. Output ONLY the name, nothing else.`;
+
+    // Strip thinking artifacts and extract a clean short title
+    const cleanTitle = (raw: string): string => {
+      let text = raw.trim();
+      text = text.replace(/<(think|thinking|thought)>[\s\S]*?<\/(think|thinking|thought)>/gi, "").trim();
+      const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+      if (lines.length > 1) {
+        const candidate = lines.filter(l => l.length >= 2 && l.length <= 30 && !/^[\d*\-•]/.test(l) && !l.includes(":")).pop();
+        if (candidate) text = candidate;
+      }
+      text = text.replace(/^["'`*]+|["'`*]+$/g, "");
+      return text.length >= 2 && text.length <= 30 ? text : "";
+    };
+
+    const abortCtrl = new AbortController();
+    const timeout = setTimeout(() => abortCtrl.abort(), 30000);
+    const messages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: `[USER PROMPT]: ${prompt.slice(0, 200)}` },
+    ];
+
+    // Shared streaming callback: strips thinking on the fly, aborts once we have a valid title
+    let contentAcc = "";
+    let inThink = false;
+    const earlyResult = { value: "" };
+    const onToken = (token: string, thinking?: string) => {
+      // If native thinking field (e.g. ollama), skip it
+      if (thinking) return;
+      if (!token) return;
+      // Detect and skip thinking tags embedded in content
+      if (!inThink && /<(think|thinking|thought)>/i.test(token)) {
+        inThink = true;
+        return;
+      }
+      if (inThink) {
+        if (/<\/(think|thinking|thought)>/i.test(token)) {
+          inThink = false;
+          const after = token.split(/<\/(think|thinking|thought)>/i).pop()?.trim() || "";
+          if (after) contentAcc += after;
+        }
+        return;
+      }
+      contentAcc += token;
+      // Check if we have a valid title yet — abort early if so
+      const candidate = cleanTitle(contentAcc);
+      if (candidate) {
+        earlyResult.value = candidate;
+        abortCtrl.abort();
+      }
+    };
 
     try {
       if (provider === "ollama") {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-        try {
-          const response = await proxyFetch(
-            `${baseUrl || "http://localhost:11434"}/api/generate`,
-            {
-              method: "POST",
-              headers: this.jsonHeaders(apiKey),
-              body: JSON.stringify({
-                model,
-                prompt: `${systemPrompt}\n\nUser task: ${prompt.slice(0, 200)}\n\nTitle:`,
-                stream: false,
-              }),
-              signal: controller.signal,
-            },
-          );
-          clearTimeout(timeout);
-          if (!response.ok) return "";
-          const data = await response.json();
-          const result = (data.response || "")
-            .trim()
-            .replace(/^["'`]+|["'`]+$/g, "");
-          return result.length > 0 && result.length <= 30 ? result : "";
-        } catch {
-          clearTimeout(timeout);
-          return "";
-        }
+        await this.streamOllamaChat(
+          baseUrl || "http://localhost:11434", model, messages,
+          onToken, abortCtrl.signal, undefined, false, apiKey,
+        );
+        return earlyResult.value || cleanTitle(contentAcc);
       }
 
       if (
@@ -1428,40 +1485,51 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
           method: "POST",
           headers: this.anthropicHeaders(apiKey),
           body: JSON.stringify({
-            model,
-            max_tokens: 15,
-            system: systemPrompt,
+            model, max_tokens: 4096, stream: true, system: systemPrompt,
             messages: [{ role: "user", content: prompt.slice(0, 200) }],
           }),
+          signal: abortCtrl.signal,
         });
-        const data = await response.json();
-        const result = (data.content?.[0]?.text || "")
-          .trim()
-          .replace(/^["'`]+|["'`]+$/g, "");
-        return result.length > 0 && result.length <= 30 ? result : "";
+        if (!response.ok) return "";
+        const reader = response.body?.getReader();
+        if (!reader) return "";
+        const decoder = new TextDecoder();
+        let buf = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split("\n"); buf = lines.pop() || "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              try {
+                const evt = JSON.parse(line.slice(6));
+                if (evt.type === "content_block_delta") onToken(evt.delta?.text || "");
+              } catch { /* skip */ }
+            }
+            if (earlyResult.value) break;
+          }
+        } finally { reader.releaseLock(); }
+        return earlyResult.value || cleanTitle(contentAcc);
       }
 
-      // OpenAI-compatible providers — no max_tokens (crashes some local models)
       if (
         isOpenAICompatible(provider) &&
         (apiKey || providerUsesBaseUrl(provider))
       ) {
-        const result = await this.openAIChatSimple(
-          provider,
-          model,
-          apiKey || "",
-          [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: prompt.slice(0, 200) },
-          ],
-          undefined,
-          baseUrl,
+        await this.streamOpenAIChat(
+          provider, model, apiKey || "", messages,
+          onToken, abortCtrl.signal, undefined, baseUrl,
         );
-        const clean = result.replace(/^["'`]+|["'`]+$/g, "");
-        return clean.length > 0 && clean.length <= 30 ? clean : "";
+        return earlyResult.value || cleanTitle(contentAcc);
       }
     } catch {
-      // Non-critical
+      // Abort or timeout — return whatever we collected
+      if (earlyResult.value) return earlyResult.value;
+      return cleanTitle(contentAcc);
+    } finally {
+      clearTimeout(timeout);
     }
     return "";
   }
@@ -1769,9 +1837,8 @@ RULES:
 7. SCAFFOLDING: Let scaffolding tools create directories — don't mkdir first. Use non-interactive flags (--yes). If directory exists and conflicts, clean it first.
 8. CONTEXT: Check [PROJECT FILES] before creating files. Don't recreate existing files or re-scaffold existing projects — use edit_file to modify.
 9. IMAGES: User-mentioned images were analyzed in a prior step. Use the description — don't try to access them.
-10. TAB TITLE: Include "_tab_title": "2-5 word title" in JSON response. Update as task evolves.
-11. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation is reference — don't re-execute previous actions.
-12. PLANNING: For complex tasks (multi-file creation, full project setup, multi-step workflows), output a brief plan as your FIRST response using final_answer with "_plan":true. List numbered steps (what you'll do, in order). Then immediately proceed to execute. Keep the plan under 10 lines. For simple tasks (single command, one file edit, quick check), skip planning and execute directly.
+10. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation is reference — don't re-execute previous actions.
+11. CONVERSATIONAL: If the user sends a greeting (hi, hello, hey) or casual chat with NO task, respond with a brief friendly reply via final_answer. Do NOT explore files, run commands, or take any action.
 ${agentPrompt}
 `,
         },
@@ -1900,7 +1967,7 @@ ${agentPrompt}
             const afterTag = _tokenBuf.trimStart().replace(thinkTagOpenRe, "");
             if (afterTag) {
               thinkingAcc.value += afterTag;
-              onUpdate("streaming_thinking", thinkingAcc.value);
+              if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAcc.value);
             }
             return;
           }
@@ -1920,7 +1987,7 @@ ${agentPrompt}
             const thinkPart = token.replace(thinkTagCloseRe, "").replace(/[\s\S]*$/, "");
             if (thinkPart) {
               thinkingAcc.value += thinkPart;
-              onUpdate("streaming_thinking", thinkingAcc.value);
+              if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAcc.value);
             }
             if (afterClose.trim()) {
               contentAcc.value += afterClose;
@@ -1930,7 +1997,7 @@ ${agentPrompt}
             _tokenBuf = afterClose;
           } else {
             thinkingAcc.value += token;
-            onUpdate("streaming_thinking", thinkingAcc.value);
+            if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAcc.value);
           }
           return;
         }
@@ -1964,10 +2031,10 @@ ${agentPrompt}
           // Use intercepted content if thinking tags were detected in token stream
           responseText = thinkAcc.value ? contentAcc.value : result.content;
           thinkingText = result.thinking || thinkAcc.value;
-          if (thinkingAccumulated || thinkAcc.value) {
+          if (thinkingEnabled && (thinkingAccumulated || thinkAcc.value)) {
             onUpdate("thinking_complete", thinkingAccumulated || thinkAcc.value);
           } else {
-            // For non-thinking models: ensure thinking state is cleared
+            // For non-thinking models or thinking disabled: ensure thinking state is cleared
             onUpdate("thinking_done", "");
           }
         } else if (
@@ -2047,7 +2114,7 @@ ${agentPrompt}
           }
           responseText = contentAccumulated;
           thinkingText = thinkingAccumulated;
-          if (thinkingAccumulated) {
+          if (thinkingEnabled && thinkingAccumulated) {
             onUpdate("thinking_complete", thinkingAccumulated);
           } else {
             onUpdate("thinking_done", "");
@@ -2084,7 +2151,7 @@ ${agentPrompt}
           );
           responseText = oaiThinkAcc.value ? oaiContentAcc.value : result.content;
           thinkingText = result.thinking || oaiThinkAcc.value;
-          if (thinkingAccumulated || oaiThinkAcc.value) {
+          if (thinkingEnabled && (thinkingAccumulated || oaiThinkAcc.value)) {
             onUpdate("thinking_complete", thinkingAccumulated || oaiThinkAcc.value);
           } else {
             onUpdate("thinking_done", "");
@@ -2303,25 +2370,15 @@ ${agentPrompt}
 
       action = tryParseJson(responseText);
       // Fallback: model may put JSON in thinking instead of content
-      if (!action?.tool && thinkingText) {
+      if (!action?.tool && !action?._plan && thinkingText) {
         action = tryParseJson(thinkingText);
       }
 
-      // Handle auto tab naming requested in the prompt
-      if (action && action._tab_title) {
-        onUpdate("set_tab_title", action._tab_title, action);
-        delete action._tab_title;
-        // If _tab_title was the ONLY content (no tool call), skip this iteration
-        // without counting as a parse failure — model will send the real tool call next
-        if (!action.tool && Object.keys(action).length === 0) {
-          history.push({ role: "assistant", content: responseText || "" });
-          history.push({ role: "user", content: "Good. Now proceed with the actual tool call." });
-          continue;
-        }
-      }
-
+      // Plan responses don't need a tool — they'll be handled before tool dispatch
+      if (action && action._plan) {
+        // pass through to plan handler below
+      } else if (!action || !action.tool) {
       // Coerce tool-less objects or plain conversational text into proper tool calls
-      if (!action || !action.tool) {
         if (!action) {
           const trimmed = (responseText || "").trim();
           if (trimmed && !trimmed.includes("{")) {
@@ -2374,7 +2431,7 @@ ${agentPrompt}
         }
       }
 
-      if (!action || !action.tool) {
+      if ((!action || !action.tool) && !(action && action._plan)) {
         parseFailures++;
 
         // After enough failures, treat raw text as a final answer rather than erroring
@@ -2495,27 +2552,40 @@ ${agentPrompt}
 
       // 3. Execute Tool
 
-      // Planning step: model outputs a plan before executing — show it and continue
-      // Handles both {"tool":"final_answer","_plan":true,...} and {"_plan":true,"content":"...","_action":{...}}
-      if (action._plan && action.content) {
-        const planContent = action.content;
-        onUpdate("plan", planContent, action);
-        history.push({
-          role: "assistant",
-          content: responseText,
-        });
-        // If the model embedded a follow-up tool call in _action, use it as the next action
+      // Plan step: structured plan with steps array
+      // Only accept plans if the user explicitly asked for one AND agent hasn't executed anything yet
+      const userAskedForPlan = /\b(plan\b|make a plan|outline the|break\s*down)/i.test(prompt);
+      if (action._plan && !userAskedForPlan) {
+        // Model spontaneously planned — discard and treat as if it should just execute
+        delete action._plan;
+        delete action.steps;
+      }
+      if (action._plan && executedCommands.size === 0 && !wroteFiles) {
+        // Extract steps: prefer explicit array, fallback to parsing numbered lines from content
+        let planSteps: string[] = Array.isArray(action.steps) ? action.steps : [];
+        if (planSteps.length === 0 && typeof action.content === "string") {
+          planSteps = action.content
+            .split("\n")
+            .map((l: string) => l.replace(/^\s*\d+[.)]\s*/, "").trim())
+            .filter((l: string) => l.length > 0);
+        }
+        if (planSteps.length === 0) planSteps = ["Plan received"];
+        onUpdate("plan", "", { steps: planSteps });
+        history.push({ role: "assistant", content: responseText });
+        // If model embedded a follow-up tool call, use it
         if (action._action && action._action.tool) {
           action = action._action;
-          // Fall through to tool dispatch below
         } else {
-          history.push({
-            role: "user",
-            content: "Plan acknowledged. Now execute it step by step.",
-          });
+          history.push({ role: "user", content: "Plan received. Now execute each step in order." });
           continue;
         }
       }
+
+      // Clean plan metadata from action before tool dispatch
+      delete action._plan;
+      delete action.steps;
+      delete action._action;
+      delete action._step_done;
 
       if (action.tool === "final_answer") {
         // Reject premature completion: scaffolded a project but never wrote any code
@@ -2549,8 +2619,8 @@ ${agentPrompt}
           .toLowerCase()
           .trim();
         const isShortAck =
-          userTask.length <= 12 &&
-          /^(ok|okay|yes|no|sure|thanks|thank you|got it|alright|go|do it|good|great|cool|nice|fine|yep|nope|done|next)$/i.test(
+          userTask.length <= 20 &&
+          /^(ok|okay|yes|no|sure|thanks|thank you|got it|alright|go|do it|good|great|cool|nice|fine|yep|nope|done|next|hi|hey|hello|sup|yo|what'?s up|howdy|greetings|good (morning|afternoon|evening)|hiya|hola)$/i.test(
             userTask,
           );
 

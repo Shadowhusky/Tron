@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { initWebSocketBridge, modeReady } from './services/ws-bridge'
+import { installRemoteRouting } from './services/remote-bridge'
 import './index.css'
 import App from './App.tsx'
 
@@ -10,6 +11,10 @@ const queryClient = new QueryClient()
 // In web mode (no Electron), install WebSocket shim and wait for mode
 // detection before rendering so LayoutContext knows the deployment mode.
 initWebSocketBridge()
+
+// Install remote IPC routing — wraps ipcRenderer to transparently route
+// remote session calls through their remote server's WebSocket.
+installRemoteRouting()
 
 async function boot() {
   // In Electron mode, initWebSocketBridge is a no-op and modeReady

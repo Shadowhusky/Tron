@@ -155,10 +155,12 @@ function invoke(channel: string, data?: any): Promise<any> {
   }
   return new Promise((resolve, reject) => {
     const id = uuid();
+    // 120s for long-running commands (docker build, npm install, etc.)
+    // Short timeout caused premature failures for legitimate operations.
     const timer = setTimeout(() => {
       pendingInvokes.delete(id);
       reject(new Error(`IPC invoke timeout: ${channel}`));
-    }, 30000);
+    }, 120000);
 
     pendingInvokes.set(id, { resolve, reject, timer });
     sendRaw(JSON.stringify({ type: "invoke", id, channel, data }));

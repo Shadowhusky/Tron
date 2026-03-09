@@ -720,7 +720,7 @@ export async function execInTerminal(sessionId, command, pushEvent) {
                     finishExec();
                     resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: 124 });
                 }
-            }, 3000);
+            }, 8000);
         };
         const disposable = session.onData((data) => {
             output += data;
@@ -750,7 +750,7 @@ export async function execInTerminal(sessionId, command, pushEvent) {
                 finishExec();
                 resolve({ stdout: cleanExecOutput(output, sentinel), exitCode: 124 });
             }
-        }, 30000);
+        }, 120000);
     });
 }
 function cleanExecOutput(raw, sentinel) {

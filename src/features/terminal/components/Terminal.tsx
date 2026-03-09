@@ -121,45 +121,82 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
 
-    // File path link provider — makes absolute paths clickable in terminal output
-    const filePathRegex = /(?:\/[\w._-]+){2,}(?:\.\w+)?/g; // Unix: /foo/bar or /foo/bar.ext
-    const winPathRegex = /[A-Z]:\\(?:[\w._-]+\\)*[\w._-]+(?:\.\w+)?/gi; // Windows: C:\foo\bar.ext
+    // File path link provider — makes file paths clickable in terminal output.
+    // Supports absolute (/foo/bar.ts, C:\foo\bar.ts) and relative paths
+    // (src/components/DataTable.tsx, routes/$id/index.tsx, app/[slug]/page.tsx).
+    // Relative paths resolved against session CWD at click time.
+    //
+    // Segment chars: \w . $ @ + - [ ] ( )  — covers Remix ($id), Next.js
+    // ([id]), SvelteKit (+page), route groups ((auth)), scoped pkgs (@foo).
+    const S = "[\\w.$@+\\-\\[\\]()]"; // path segment char
+    const absUnixRe  = new RegExp("(?:/" + S + "+){2,}(?:\\.\\w+)?", "g");
+    const winRe      = new RegExp("[A-Z]:\\\\(?:" + S + "+\\\\)*" + S + "+(?:\\.\\w+)?", "gi");
+    const relRe      = new RegExp("(?:\\.\\/)?(?:" + S + "+\\/){1,}" + S + "+\\.\\w+", "g");
+
+    const editorExts = new Set([
+      "js","mjs","cjs","jsx","ts","mts","cts","tsx","py","pyw","json","jsonc",
+      "c","h","cpp","cc","cxx","hpp","hxx","html","htm","svg","xml",
+      "css","scss","less","md","mdx","rs","java","yaml","yml","toml","ini",
+      "cfg","conf","sh","bash","zsh","fish","txt","log","env","sql",
+      "vue","svelte","rb","php","go","swift","kt","kts",
+    ]);
+    const editorFiles = new Set(["Makefile","Dockerfile",".gitignore",".dockerignore"]);
+
+    const activateFilePath = async (filePath: string, event: MouseEvent) => {
+      let resolved = filePath;
+
+      // Resolve relative paths against session CWD
+      const isRelative = !filePath.startsWith("/") && !/^[A-Z]:\\/i.test(filePath);
+      if (isRelative) {
+        try {
+          const cwd = await window.electron?.ipcRenderer?.getCwd?.(sessionId);
+          if (cwd) {
+            resolved = cwd.replace(/\/+$/, "") + "/" + filePath;
+          }
+        } catch { /* use as-is */ }
+      }
+
+      const ext = resolved.split(".").pop()?.toLowerCase() || "";
+      const baseName = resolved.split(/[/\\]/).pop() || "";
+
+      if (editorExts.has(ext) || editorFiles.has(baseName)) {
+        // Pass sourceSessionId so CodeEditorPane can route file reads
+        // through the remote bridge when this is a remote terminal session.
+        window.dispatchEvent(new CustomEvent("tron:openEditorTab", {
+          detail: { filePath: resolved, sourceSessionId: sessionId },
+        }));
+      } else {
+        window.dispatchEvent(new CustomEvent("tron:linkClicked", {
+          detail: { url: `file://${resolved}`, x: event.clientX, y: event.clientY },
+        }));
+      }
+    };
+
     term.registerLinkProvider({
       provideLinks(lineNumber, callback) {
         const line = term.buffer.active.getLine(lineNumber - 1);
         if (!line) { callback(undefined); return; }
         const text = line.translateToString();
         const links: import("@xterm/xterm").ILink[] = [];
-        for (const regex of [filePathRegex, winPathRegex]) {
+        for (const regex of [absUnixRe, winRe, relRe]) {
           regex.lastIndex = 0;
           let m: RegExpExecArray | null;
           while ((m = regex.exec(text)) !== null) {
+            const matched = m[0];
+            // Skip URLs
+            if (/^https?:\/\//i.test(matched)) continue;
+            // Relative paths must end with a known editor extension
+            if (regex === relRe) {
+              const ext = matched.split(".").pop()?.toLowerCase() || "";
+              if (!editorExts.has(ext)) continue;
+            }
             const startCol = m.index + 1;
-            const endCol = startCol + m[0].length - 1;
-            const filePath = m[0];
+            const endCol = startCol + matched.length - 1;
             links.push({
               range: { start: { x: startCol, y: lineNumber }, end: { x: endCol, y: lineNumber } },
-              text: filePath,
+              text: matched,
               activate(event) {
-                const ext = filePath.split(".").pop()?.toLowerCase() || "";
-                const baseName = filePath.split(/[/\\]/).pop() || "";
-                // Check if it's a supported editor file
-                const editorExts = new Set([
-                  "js","mjs","cjs","jsx","ts","mts","cts","tsx","py","pyw","json","jsonc",
-                  "c","h","cpp","cc","cxx","hpp","hxx","html","htm","svg","xml",
-                  "css","scss","less","md","mdx","rs","java","yaml","yml","toml","ini",
-                  "cfg","conf","sh","bash","zsh","fish","txt","log","env","sql",
-                  "vue","svelte","rb","php","go","swift","kt","kts",
-                ]);
-                const editorFiles = new Set(["Makefile","Dockerfile",".gitignore",".dockerignore"]);
-                if (editorExts.has(ext) || editorFiles.has(baseName)) {
-                  window.dispatchEvent(new CustomEvent("tron:openEditorTab", { detail: { filePath } }));
-                } else {
-                  // Show link popover for non-editor files
-                  window.dispatchEvent(new CustomEvent("tron:linkClicked", {
-                    detail: { url: `file://${filePath}`, x: event.clientX, y: event.clientY },
-                  }));
-                }
+                activateFilePath(matched, event as MouseEvent);
               },
             });
           }
