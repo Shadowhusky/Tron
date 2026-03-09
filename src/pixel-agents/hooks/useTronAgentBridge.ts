@@ -2,416 +2,391 @@ import { useEffect, useRef, useContext, useState, useCallback } from "react";
 import { AgentContext } from "../../contexts/AgentContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import { IPC } from "../../constants/ipc";
-import type { AgentStep } from "../../types";
-import { OfficeState } from "../engine/officeState";
-import { createDefaultLayout } from "../layout/layoutSerializer";
+import type { AgentStep, Tab, LayoutNode } from "../../types";
 
-/** Map the latest agent thread step to character activity */
+/** Agent status for a single terminal session */
+export interface AgentStatus {
+  sessionId: string;
+  label: string;
+  active: boolean;
+  tool: string | null;
+  permission: boolean;
+}
+
+// ── Tool detection ──────────────────────────────────────────────────────────
+
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1B\[[0-9;?]*[a-zA-Z]|\x1B\].*?(?:\x07|\x1B\\)|\x1B[()][0-2]|\x1B[>=<]|\x1B\x1B|\x0F|\x0E/g;
+function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
+
+/** Claude Code tool bullet — must appear at start-of-line (after newline or start of chunk).
+ *  Using `(?:^|\\n)\\s*` anchor prevents matching tool names in mid-line prose. */
+const CC_PREFIX = `(?:^|\\n)\\s*[⏺⏵►▶●]`;
+
+/** All known Claude Code tool display names → internal category.
+ *  Covers both old names (WebFetch, WebSearch) and new short names (Fetch, Search). */
+const TOOL_NAMES: [string, string][] = [
+  // File operations
+  ["Read", "read_file"],
+  ["Write", "write_file"],
+  ["Edit", "edit_file"],
+  ["MultiEdit", "edit_file"],
+  // Search / browse
+  ["Glob", "list_dir"],
+  ["Grep", "search_dir"],
+  ["LS", "list_dir"],
+  ["ToolSearch", "search_dir"],
+  // Shell
+  ["Bash", "execute_command"],
+  ["BashOutput", "execute_command"],
+  ["KillShell", "execute_command"],
+  ["Skill", "execute_command"],
+  ["SlashCommand", "execute_command"],
+  // Web — both old (WebSearch/WebFetch) and new (Search/Fetch) display names
+  ["WebSearch", "web_search"],
+  ["WebFetch", "web_search"],
+  ["Search", "web_search"],
+  ["Fetch", "web_search"],
+  // Agents / tasks
+  ["Agent", "agent"],
+  ["Explore", "search_dir"],
+  ["Task", "agent"],
+  ["TaskCreate", "agent"],
+  ["TaskUpdate", "agent"],
+  ["TaskList", "agent"],
+  ["TaskGet", "agent"],
+  ["TaskOutput", "agent"],
+  ["TaskStop", "agent"],
+  // Notebook
+  ["NotebookEdit", "edit_file"],
+  ["NotebookRead", "read_file"],
+  // Todo
+  ["TodoRead", "read_file"],
+  ["TodoWrite", "write_file"],
+  // Planning / thinking
+  ["Plan", "thinking"],
+  ["ExitPlanMode", "thinking"],
+  ["EnterPlanMode", "thinking"],
+  // Cron
+  ["CronCreate", "execute_command"],
+  ["CronDelete", "execute_command"],
+  ["CronList", "list_dir"],
+  // User interaction
+  ["AskUser", "ask_question"],
+  ["AskUserQuestion", "ask_question"],
+];
+
+// Build regex arrays — longer names first to avoid prefix conflicts
+const sortedToolNames = [...TOOL_NAMES].sort((a, b) => b[0].length - a[0].length);
+
+const TOOL_CALL_RE: [RegExp, string][] = sortedToolNames.map(([name, cat]) =>
+  [new RegExp(`${CC_PREFIX}\\s*${name}\\b`), cat],
+);
+// Also match "Web Search" / "Web Fetch" (space-separated display variants)
+TOOL_CALL_RE.push(
+  [new RegExp(`${CC_PREFIX}\\s*Web\\s+Search\\b`), "web_search"],
+  [new RegExp(`${CC_PREFIX}\\s*Web\\s+Fetch\\b`), "web_search"],
+);
+
+const EXTRA_TOOL_RE: [RegExp, string][] = [
+  [/"tool":\s*"(Read|read_file|NotebookRead|TodoRead)"/, "read_file"],
+  [/"tool":\s*"(Write|write_file|TodoWrite)"/, "write_file"],
+  [/"tool":\s*"(Edit|MultiEdit|edit_file|NotebookEdit)"/, "edit_file"],
+  [/"tool":\s*"(Bash|BashOutput|KillShell|execute_command|run_in_terminal|Skill|SlashCommand)"/, "execute_command"],
+  [/"tool":\s*"(Glob|LS|list_dir)"/, "list_dir"],
+  [/"tool":\s*"(Grep|ToolSearch|search_dir)"/, "search_dir"],
+  [/"tool":\s*"(WebSearch|WebFetch|Search|Fetch|web_search)"/, "web_search"],
+  [/"tool":\s*"(Agent|Explore|Task|TaskCreate|TaskUpdate|TaskList|TaskGet|TaskOutput|TaskStop)"/, "agent"],
+  [/"tool":\s*"(Plan|ExitPlanMode|EnterPlanMode|exit_plan_mode)"/, "thinking"],
+  [/"tool":\s*"(AskUser|AskUserQuestion|ask_question)"/, "ask_question"],
+  [/"tool":\s*"(CronCreate|CronDelete|CronList)"/, "execute_command"],
+];
+
+/** Claude Code thinking: spinner chars (· ✢ ✳ ✶ ✻ ✽) + random verb + … */
+const THINKING_RE = /[·✢✳✶✻✽]\s+[A-Z][a-z]+[….]/;
+
+/** Claude Code permission prompt — "Allow ToolName(...)" or "Allow mcp__..." */
+const PERMISSION_RE = /Allow\s+(?:Bash|Read|Edit|MultiEdit|Write|Glob|Grep|Fetch|Search|WebFetch|WebSearch|Agent|Explore|Task|Skill|NotebookEdit|mcp__)\b/;
+
+const sessionLookback = new Map<string, string>();
+const LOOKBACK_MAX = 150;
+
+interface DetectResult {
+  tool: string | null;
+  permission: boolean;
+}
+
+function detectToolFromChunk(sessionId: string, rawData: string): DetectResult {
+  const stripped = stripAnsi(rawData);
+  const prev = sessionLookback.get(sessionId) || "";
+  const text = prev + stripped;
+
+  // Check for permission prompt first (highest priority)
+  const hasPermission = PERMISSION_RE.test(text);
+
+  // Check for tool patterns in the combined lookback + current chunk
+  for (const [re, tool] of TOOL_CALL_RE) {
+    if (re.test(text)) {
+      sessionLookback.delete(sessionId);
+      return { tool, permission: hasPermission };
+    }
+  }
+  for (const [re, tool] of EXTRA_TOOL_RE) {
+    if (re.test(stripped)) {
+      sessionLookback.delete(sessionId);
+      return { tool, permission: hasPermission };
+    }
+  }
+  if (THINKING_RE.test(stripped)) {
+    sessionLookback.delete(sessionId);
+    return { tool: "thinking", permission: false };
+  }
+  // Permission prompt without a tool match — still counts as activity
+  if (hasPermission) {
+    sessionLookback.delete(sessionId);
+    return { tool: null, permission: true };
+  }
+
+  // No match — keep the lookback for the next chunk (tool name may be split)
+  sessionLookback.set(sessionId, text.length > LOOKBACK_MAX
+    ? text.slice(text.length - LOOKBACK_MAX) : text);
+  return { tool: null, permission: false };
+}
+
+// ── Tron agent activity derivation ──────────────────────────────────────────
+
 function deriveActivity(
   isAgentRunning: boolean,
   isThinking: boolean,
   pendingCommand: string | null,
   steps: AgentStep[],
-): {
-  isActive: boolean;
-  tool: string | null;
-  bubbleType: "permission" | "waiting" | null;
-} {
-  if (pendingCommand !== null) {
-    return { isActive: true, tool: null, bubbleType: "permission" };
-  }
-  if (!isAgentRunning) {
-    return { isActive: false, tool: null, bubbleType: null };
-  }
-  // Check thread steps for the most recent actionable step
+): { active: boolean; tool: string | null; permission: boolean } {
+  if (pendingCommand !== null) return { active: true, tool: null, permission: true };
+  if (!isAgentRunning) return { active: false, tool: null, permission: false };
   for (let i = steps.length - 1; i >= 0; i--) {
     const { step, payload } = steps[i];
     const tool: string | null = payload?.tool || null;
     switch (step) {
       case "executing":
       case "executed":
-        return { isActive: true, tool, bubbleType: null };
+        return { active: true, tool, permission: false };
       case "read_terminal":
-        return { isActive: true, tool: "read_terminal", bubbleType: null };
-      case "streaming":
-      case "streaming_response":
-        return { isActive: true, tool: null, bubbleType: null };
+        return { active: true, tool: "read_terminal", permission: false };
       case "thinking":
       case "streaming_thinking":
       case "thought":
       case "thinking_complete":
-        return { isActive: true, tool: isThinking ? "thinking" : null, bubbleType: null };
-      case "done":
-      case "error":
-      case "failed":
-        return { isActive: true, tool: null, bubbleType: null };
+        return { active: true, tool: isThinking ? "thinking" : null, permission: false };
       case "plan":
-        return { isActive: true, tool: null, bubbleType: "waiting" };
+        return { active: true, tool: null, permission: false };
       default:
+        if (step === "streaming" || step === "streaming_response" || step === "done" || step === "error" || step === "failed")
+          return { active: true, tool: null, permission: false };
         continue;
     }
   }
-  // No actionable step — fall back to thinking state
-  if (isThinking) {
-    return { isActive: true, tool: "thinking", bubbleType: null };
-  }
-  return { isActive: true, tool: null, bubbleType: null };
+  if (isThinking) return { active: true, tool: "thinking", permission: false };
+  return { active: true, tool: null, permission: false };
 }
 
-/** Cooldown (ms) after last terminal data before marking session inactive */
-const TERMINAL_IDLE_MS = 3000;
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
-/** ANSI escape code stripper — handles CSI, OSC, charset, mode, and doubled escapes */
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1B\[[0-9;?]*[a-zA-Z]|\x1B\].*?(?:\x07|\x1B\\)|\x1B[()][0-2]|\x1B[>=<]|\x1B\x1B|\x0F|\x0E/g;
-function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
-
-/**
- * Detect tool usage from Claude Code CLI terminal output.
- *
- * Claude Code CLI renders tool calls as:
- *   ⏺ Read(src/foo.ts)           — ⏺ (U+23FA) prefix + PascalCase tool name + parens
- *   ⏺ Bash(echo hello)
- *   ⏺ WebSearch("query")
- * Results appear as:
- *   ⎿  (output)                   — ⎿ (U+23BF) prefix
- * Thinking indicator:
- *   ✻ Pondering…                  — spinner char (· ✢ ✳ ✶ ✻ ✽) + random verb + …
- *   (184 possible verbs: Pondering, Cogitating, Noodling, Thinking, Brewing, etc.)
- *
- * Terminal data arrives in small chunks, so we keep a small lookback buffer
- * per session to catch tool headers split across chunk boundaries.
- */
-
-// ── Claude Code CLI tool call prefix: ⏺ (U+23FA) ──
-// Also accept similar-looking chars in case of font/rendering variations
-const CC_PREFIX = `[⏺⏵►▶●]`;
-
-// Tool patterns: ⏺ + ToolName + ( — high specificity, no false positives
-const TOOL_CALL_RE: [RegExp, string][] = [
-  [new RegExp(`${CC_PREFIX}\\s*Read\\b`), "read_file"],
-  [new RegExp(`${CC_PREFIX}\\s*Glob\\b`), "list_dir"],
-  [new RegExp(`${CC_PREFIX}\\s*Grep\\b`), "search_dir"],
-  [new RegExp(`${CC_PREFIX}\\s*WebSearch\\b`), "web_search"],
-  [new RegExp(`${CC_PREFIX}\\s*WebFetch\\b`), "web_search"],
-  [new RegExp(`${CC_PREFIX}\\s*Agent\\b`), "agent"],
-  [new RegExp(`${CC_PREFIX}\\s*Explore\\b`), "search_dir"],
-  [new RegExp(`${CC_PREFIX}\\s*Write\\b`), "write_file"],
-  [new RegExp(`${CC_PREFIX}\\s*Edit\\b`), "edit_file"],
-  [new RegExp(`${CC_PREFIX}\\s*Bash\\b`), "execute_command"],
-  [new RegExp(`${CC_PREFIX}\\s*Plan\\b`), "thinking"],
-  [new RegExp(`${CC_PREFIX}\\s*Skill\\b`), "execute_command"],
-  [new RegExp(`${CC_PREFIX}\\s*NotebookEdit\\b`), "edit_file"],
-  [new RegExp(`${CC_PREFIX}\\s*TaskCreate\\b`), "write_file"],
-  [new RegExp(`${CC_PREFIX}\\s*TaskUpdate\\b`), "edit_file"],
-  [new RegExp(`${CC_PREFIX}\\s*TaskList\\b`), "list_dir"],
-  [new RegExp(`${CC_PREFIX}\\s*TaskGet\\b`), "read_file"],
-  [new RegExp(`${CC_PREFIX}\\s*AskUser`), "ask_question"],
-  // Also match "Web Search" with space (seen in some versions)
-  [new RegExp(`${CC_PREFIX}\\s*Web\\s+Search\\b`), "web_search"],
-  [new RegExp(`${CC_PREFIX}\\s*Web\\s+Fetch\\b`), "web_search"],
-];
-
-// Additional patterns without prefix (JSON, Tron agent, etc.)
-const EXTRA_TOOL_RE: [RegExp, string][] = [
-  // JSON tool call patterns
-  [/"tool":\s*"(Read|read_file)"/, "read_file"],
-  [/"tool":\s*"(Write|write_file)"/, "write_file"],
-  [/"tool":\s*"(Edit|edit_file)"/, "edit_file"],
-  [/"tool":\s*"(Bash|execute_command|run_in_terminal)"/, "execute_command"],
-  [/"tool":\s*"(Glob|list_dir)"/, "list_dir"],
-  [/"tool":\s*"(Grep|search_dir)"/, "search_dir"],
-  [/"tool":\s*"(WebSearch|WebFetch|web_search)"/, "web_search"],
-  [/"tool":\s*"(Agent|Explore)"/, "agent"],
-  // Tron's built-in agent tool patterns
-  [/\bexecuting.*?execute_command\b/i, "execute_command"],
-  [/\bexecuting.*?read_file\b/i, "read_file"],
-  [/\bexecuting.*?write_file\b/i, "write_file"],
-  [/\bexecuting.*?edit_file\b/i, "edit_file"],
-  [/\bexecuting.*?search_dir\b/i, "search_dir"],
-  [/\bexecuting.*?list_dir\b/i, "list_dir"],
-  [/\bexecuting.*?web_search\b/i, "web_search"],
-  [/\bexecuting.*?ask_question\b/i, "ask_question"],
-];
-
-/**
- * Claude Code thinking indicator: spinner char + random verb + ellipsis.
- * Spinner chars: · ✢ ✳ ✶ ✻ ✽
- * Verbs: ~184 words like Pondering, Cogitating, Noodling, Brewing, Thinking, etc.
- * Match: any of those spinner chars followed by a capitalized word and … or ...
- */
-const THINKING_RE = /[·✢✳✶✻✽]\s+[A-Z][a-z]+[….]/;
-
-/** Per-session lookback for cross-chunk tool header detection */
-const sessionLookback = new Map<string, string>();
-const LOOKBACK_MAX = 150;
-
-/**
- * Detect tool from the current data chunk + small lookback.
- * Checks ⏺-prefixed tool patterns first (high priority), then thinking (low priority).
- * Returns null if nothing matches.
- */
-function detectToolFromChunk(sessionId: string, rawData: string): string | null {
-  const stripped = stripAnsi(rawData);
-  const prev = sessionLookback.get(sessionId) || "";
-  const text = prev + stripped;
-
-  // Update lookback (keep tail only)
-  sessionLookback.set(sessionId, text.length > LOOKBACK_MAX
-    ? text.slice(text.length - LOOKBACK_MAX) : text);
-
-  // 1. ⏺-prefixed tool calls (checked against lookback + chunk for cross-chunk splits)
-  for (const [re, tool] of TOOL_CALL_RE) {
-    if (re.test(text)) return tool;
+/** Find the tab title that contains a given sessionId */
+function findTabTitle(tabs: Tab[], sessionId: string): string | null {
+  const containsSession = (node: LayoutNode): boolean => {
+    if (node.type === "leaf") return node.sessionId === sessionId;
+    return node.children.some(containsSession);
+  };
+  for (const tab of tabs) {
+    if (containsSession(tab.root)) return tab.title;
   }
-
-  // 2. Extra patterns (JSON, Tron agent — current chunk only)
-  for (const [re, tool] of EXTRA_TOOL_RE) {
-    if (re.test(stripped)) return tool;
-  }
-
-  // 3. Low priority: Claude Code thinking indicator (spinner char + verb)
-  if (THINKING_RE.test(stripped)) return "thinking";
-
   return null;
 }
 
+// ── Main hook ───────────────────────────────────────────────────────────────
 
-export interface BridgeDebugInfo {
-  storeExists: boolean;
-  version: number;
-  layoutSessionCount: number;
-  storeId: string;
-  terminalActive: string[];
-  trackedSessions: { sessionId: string; charId: number; agentActive: boolean; termActive: boolean; tool: string | null; charState: number; isActive: boolean }[];
-}
+const TOOL_STICKY_MS = 2000;
+/** How long after last terminal data before we consider an external agent idle */
+const EXTERNAL_IDLE_MS = 3000;
 
-export function useTronAgentBridge(officeState: OfficeState): BridgeDebugInfo {
+export function useAgentStatuses(): AgentStatus[] {
   const store = useContext(AgentContext);
   const { sessions, tabs } = useLayout();
-  const sessionToCharId = useRef(new Map<string, number>());
-  const nextCharId = useRef(1);
+  const [statuses, setStatuses] = useState<AgentStatus[]>([]);
 
-  // Track terminal activity via IPC data events
-  const terminalLastActive = useRef(new Map<string, number>());
   const terminalDetectedTool = useRef(new Map<string, string | null>());
-  /** Timestamp of last specific (non-thinking) tool detection per session */
   const terminalToolTimestamp = useRef(new Map<string, number>());
-  const [version, setVersion] = useState(0);
+  const terminalPermission = useRef(new Map<string, boolean>());
 
-  /** How long a specific tool detection stays "sticky" before "thinking" can override */
-  const TOOL_STICKY_MS = 2000;
+  // Track which sessions have an actively running agent (via tron:agent-activity events)
+  const agentRunning = useRef(new Set<string>());
 
-  // Ref to track if data changed since last reconciliation (avoids React batching issues)
-  const dataChangedRef = useRef(false);
+  // Track which sessions have EVER had agent activity (persists until session removed)
+  const everHadAgent = useRef(new Set<string>());
 
-  // Listen for terminal incoming data — marks sessions as active + detects tools
+  // Track last terminal data timestamp per session — used to detect external agent activity
+  const terminalLastData = useRef(new Map<string, number>());
+
+  // Per-session: timestamp when detection should start (skips history replay & post-stop data)
+  const sessionDetectAfter = useRef(new Map<string, number>());
+
+  /** Grace period for history replay on page refresh / reconnect */
+  const HISTORY_GRACE_MS = 3000;
+  /** Cooldown after Tron agent stops — ignore trailing terminal data */
+  const STOP_COOLDOWN_MS = 2000;
+
+  // Listen for terminal incoming data — detect tools AND track activity for external agents
   useEffect(() => {
     if (!window.electron?.ipcRenderer?.on) return;
-    const cleanup = window.electron.ipcRenderer.on(
+    return window.electron.ipcRenderer.on(
       IPC.TERMINAL_INCOMING_DATA,
       ({ id, data }: { id: string; data: string }) => {
-        terminalLastActive.current.set(id, Date.now());
-        const tool = detectToolFromChunk(id, data);
-        if (tool) {
+        const now = Date.now();
+
+        // On first data from a session, set a grace period to skip history replay
+        if (!sessionDetectAfter.current.has(id)) {
+          sessionDetectAfter.current.set(id, now + HISTORY_GRACE_MS);
+        }
+
+        // Skip detection during grace / cooldown period
+        const detectAfter = sessionDetectAfter.current.get(id)!;
+        if (now < detectAfter) return;
+
+        // Try tool detection — tool patterns are the only signal for external agents
+        const { tool, permission } = detectToolFromChunk(id, data);
+
+        // Track permission state from external agents (Claude Code "Allow ..." prompts)
+        terminalPermission.current.set(id, permission);
+
+        if (tool || permission) {
+          // Only tool/permission matches count as activity — this ensures the
+          // EXTERNAL_IDLE_MS timeout actually works. Non-tool data (shell prompts,
+          // cursor blinks) must NOT refresh the timestamp, otherwise idle detection
+          // never triggers after the agent finishes.
+          terminalLastData.current.set(id, now);
+
           if (tool === "thinking") {
-            const lastSpecificTs = terminalToolTimestamp.current.get(id) ?? 0;
-            if (Date.now() - lastSpecificTs > TOOL_STICKY_MS) {
+            const lastTs = terminalToolTimestamp.current.get(id) ?? 0;
+            if (now - lastTs > TOOL_STICKY_MS) {
               terminalDetectedTool.current.set(id, tool);
             }
-          } else {
+          } else if (tool) {
             terminalDetectedTool.current.set(id, tool);
-            terminalToolTimestamp.current.set(id, Date.now());
+            terminalToolTimestamp.current.set(id, now);
           }
-        } else if (terminalDetectedTool.current.get(id) === "thinking") {
-          // Active output with no tool match — model is working, not thinking
-          terminalDetectedTool.current.set(id, null);
         }
-        dataChangedRef.current = true;
       },
     );
-    return cleanup;
-  }, []);
+  }, [store]);
 
-  // Listen for direct agent activity events from useAgentRunner
+  // Listen for Tron agent activity events — authoritative source for running state
   useEffect(() => {
     const handler = (e: Event) => {
       const { sessionId, running } = (e as CustomEvent).detail;
       if (running) {
-        terminalLastActive.current.set(sessionId, Date.now());
+        agentRunning.current.add(sessionId);
+      } else {
+        agentRunning.current.delete(sessionId);
+        // Clear all state when agent stops
+        terminalDetectedTool.current.delete(sessionId);
+        terminalToolTimestamp.current.delete(sessionId);
+        terminalPermission.current.delete(sessionId);
+        terminalLastData.current.delete(sessionId);
+        sessionLookback.delete(sessionId);
+        // Set cooldown so trailing terminal data doesn't re-trigger detection
+        sessionDetectAfter.current.set(sessionId, Date.now() + STOP_COOLDOWN_MS);
       }
-      dataChangedRef.current = true;
     };
     window.addEventListener("tron:agent-activity", handler);
     return () => window.removeEventListener("tron:agent-activity", handler);
   }, []);
 
-  // Initialize layout on mount
-  useEffect(() => {
-    if (!officeState.layout) {
-      officeState.rebuildFromLayout(createDefaultLayout());
-    }
-  }, [officeState]);
-
-  // Reconcile sessions → characters on a 500ms interval.
-  // This avoids React state batching issues — terminal data events update refs
-  // directly, and the interval picks up changes reliably.
+  // Reconcile on 500ms interval
   const reconcile = useCallback(() => {
-    if (!officeState.layout) {
-      officeState.rebuildFromLayout(createDefaultLayout());
-    }
-    const map = sessionToCharId.current;
     const allStates = store ? store.getSnapshot() : new Map();
     const now = Date.now();
 
-    // Get all terminal session IDs (exclude pseudo-sessions)
-    const activeSessionIds = new Set<string>();
+    const result: AgentStatus[] = [];
     for (const [id] of sessions) {
       if (id === "settings" || id.startsWith("ssh-connect") || id.startsWith("browser-") || id.startsWith("editor-") || id.startsWith("pixel-agents")) continue;
-      activeSessionIds.add(id);
-    }
 
-    // Build a label for each session from its tab title
-    // Walk each tab's layout tree to map leaf sessionIds to the tab's title
-    const sessionToTabTitle = new Map<string, string>();
-    const collectLeaves = (node: any, title: string) => {
-      if (node.type === "leaf") {
-        sessionToTabTitle.set(node.sessionId, title);
-      } else if (node.children) {
-        for (const child of node.children) collectLeaves(child, title);
-      }
-    };
-    for (const tab of tabs) {
-      collectLeaves(tab.root, tab.title || "Terminal");
-    }
+      // Use tab title as label (#4), fall back to session title
+      const tabTitle = findTabTitle(tabs, id);
+      const label = tabTitle || sessions.get(id)?.title || "Terminal";
 
-    const sessionTitles = new Map<string, string>();
-    const titleCounts = new Map<string, number>();
-    for (const sessionId of activeSessionIds) {
-      const baseTitle = sessionToTabTitle.get(sessionId) || sessions.get(sessionId)?.title || "Terminal";
-      titleCounts.set(baseTitle, (titleCounts.get(baseTitle) || 0) + 1);
-    }
-    const titleIndex = new Map<string, number>();
-    for (const sessionId of activeSessionIds) {
-      const baseTitle = sessionToTabTitle.get(sessionId) || sessions.get(sessionId)?.title || "Terminal";
-      if ((titleCounts.get(baseTitle) || 0) > 1) {
-        const idx = (titleIndex.get(baseTitle) || 0) + 1;
-        titleIndex.set(baseTitle, idx);
-        sessionTitles.set(sessionId, `${baseTitle} ${idx}`);
-      } else {
-        sessionTitles.set(sessionId, baseTitle);
-      }
-    }
-
-    // Add new sessions as characters
-    for (const sessionId of activeSessionIds) {
-      if (!map.has(sessionId)) {
-        const charId = nextCharId.current++;
-        map.set(sessionId, charId);
-        const label = sessionTitles.get(sessionId) || `Session ${charId}`;
-        officeState.addAgent(charId, label);
-      }
-    }
-
-    // Remove departed sessions
-    for (const [sessionId, charId] of map) {
-      if (!activeSessionIds.has(sessionId)) {
-        officeState.removeAgent(charId);
-        map.delete(sessionId);
-        terminalToolTimestamp.current.delete(sessionId);
-        sessionLookback.delete(sessionId);
-      }
-    }
-
-    // Update activity based on terminal data + agent state
-    for (const [sessionId, charId] of map) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const agentState = allStates.get(sessionId) as any;
-      const lastActive = terminalLastActive.current.get(sessionId);
-      const isTerminalActive = lastActive != null && (now - lastActive) < TERMINAL_IDLE_MS;
+      const agentState = allStates.get(id) as any;
 
-      // Update label (uses disambiguated title)
-      const ch = officeState.characters.get(charId);
-      if (ch) {
-        ch.label = sessionTitles.get(sessionId) || `Session ${charId}`;
+      // Mark sessions that have any agent state (running or past thread) as "ever had agent"
+      if (agentState?.isAgentRunning || agentState?.pendingCommand != null || agentState?.agentThread?.length > 0) {
+        everHadAgent.current.add(id);
       }
 
-      // Terminal data activity takes priority (covers external tools like Claude CLI)
-      if (isTerminalActive && !agentState?.isAgentRunning) {
-        const detectedTool = terminalDetectedTool.current.get(sessionId) ?? null;
-        officeState.setAgentActive(charId, true, detectedTool);
-        officeState.setBubble(charId, null);
-        continue;
-      }
-
-      // Then check AgentStore for Tron's built-in agent
-      if (agentState) {
+      // Tron's built-in agent (authoritative — uses AgentStore state)
+      if (agentState?.isAgentRunning || agentState?.pendingCommand != null) {
         const { isAgentRunning, isThinking, pendingCommand, agentThread } = agentState;
-        const activity = deriveActivity(isAgentRunning, isThinking, pendingCommand, agentThread);
-        officeState.setAgentActive(charId, activity.isActive, activity.tool);
-        officeState.setBubble(charId, activity.bubbleType);
+        const act = deriveActivity(isAgentRunning, isThinking, pendingCommand, agentThread);
+        // Overlay tool from terminal detection if Tron agent has no specific tool
+        if (act.active && !act.tool) {
+          act.tool = terminalDetectedTool.current.get(id) ?? null;
+        }
+        result.push({ sessionId: id, label, ...act });
         continue;
       }
 
-      // No activity
-      officeState.setAgentActive(charId, false);
-      officeState.setBubble(charId, null);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, tabs, store, officeState]);
+      // External agent (Claude Code CLI etc.) — detected via terminal data flow
+      // A session is considered externally active if:
+      // 1. We got an explicit tron:agent-activity start event, OR
+      // 2. We've seen agent tool patterns in terminal data recently (within EXTERNAL_IDLE_MS)
+      const lastData = terminalLastData.current.get(id);
+      const isExternalActive = agentRunning.current.has(id) ||
+        (lastData != null && (now - lastData) < EXTERNAL_IDLE_MS);
 
-  // Run reconciliation on a 500ms interval — picks up terminal data ref changes,
-  // agent store changes, and decays idle sessions, all in one loop.
-  useEffect(() => {
-    reconcile(); // initial run
-    const interval = setInterval(() => {
-      // Decay idle terminal sessions
-      const now = Date.now();
-      for (const [id, lastTs] of terminalLastActive.current) {
-        if (now - lastTs > TERMINAL_IDLE_MS) {
-          terminalLastActive.current.delete(id);
-          terminalDetectedTool.current.delete(id);
-          terminalToolTimestamp.current.delete(id);
-          sessionLookback.delete(id);
-          dataChangedRef.current = true;
+      if (isExternalActive) {
+        everHadAgent.current.add(id);
+        result.push({
+          sessionId: id,
+          label,
+          active: true,
+          tool: terminalDetectedTool.current.get(id) ?? null,
+          permission: terminalPermission.current.get(id) ?? false,
+        });
+        continue;
+      }
+
+      // Clean up stale external agent state
+      if (lastData != null && (now - lastData) >= EXTERNAL_IDLE_MS) {
+        terminalLastData.current.delete(id);
+        terminalDetectedTool.current.delete(id);
+        terminalToolTimestamp.current.delete(id);
+        terminalPermission.current.delete(id);
+        sessionLookback.delete(id);
+      }
+
+      // Only show sessions that have had agent activity at some point
+      if (everHadAgent.current.has(id)) {
+        result.push({ sessionId: id, label, active: false, tool: null, permission: false });
+      }
+    }
+
+    setStatuses(prev => {
+      // Only update if something actually changed to avoid re-renders (#2)
+      if (prev.length !== result.length) return result;
+      for (let i = 0; i < result.length; i++) {
+        const a = prev[i], b = result[i];
+        if (a.sessionId !== b.sessionId || a.active !== b.active || a.tool !== b.tool || a.permission !== b.permission || a.label !== b.label) {
+          return result;
         }
       }
-      reconcile();
-      if (dataChangedRef.current) {
-        setVersion(v => v + 1); // trigger re-render for debug info
-        dataChangedRef.current = false;
-      }
-    }, 500);
+      return prev;
+    });
+  }, [sessions, tabs, store]);
+
+  useEffect(() => {
+    reconcile();
+    const interval = setInterval(reconcile, 500);
     return () => clearInterval(interval);
   }, [reconcile]);
 
-  // Compute debug info during render
-  const allStates = store ? store.getSnapshot() : new Map<string, unknown>();
-  const now = Date.now();
-  const debugInfo: BridgeDebugInfo = {
-    storeExists: !!store,
-    version,
-    layoutSessionCount: sessions.size,
-    storeId: store?.storeId ?? "none",
-    terminalActive: Array.from(terminalLastActive.current.entries())
-      .filter(([, ts]) => now - ts < TERMINAL_IDLE_MS)
-      .map(([id]) => id.slice(0, 8)),
-    trackedSessions: Array.from(sessionToCharId.current.entries()).map(([sid, cid]) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const agentState = allStates.get(sid) as any;
-      const ch = officeState.characters.get(cid);
-      const lastActive = terminalLastActive.current.get(sid);
-      const isTermActive = lastActive != null && (now - lastActive) < TERMINAL_IDLE_MS;
-      return {
-        sessionId: sid.slice(0, 8),
-        charId: cid,
-        agentActive: agentState?.isAgentRunning ?? false,
-        termActive: isTermActive,
-        tool: terminalDetectedTool.current.get(sid) ?? (agentState?.isAgentRunning ? (ch?.currentTool ?? null) : null),
-        charState: ch?.state ?? -1,
-        isActive: ch?.isActive ?? false,
-      };
-    }),
-  };
-  return debugInfo;
+  return statuses;
 }
