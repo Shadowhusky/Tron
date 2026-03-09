@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { overlay } from "../../utils/motion";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
@@ -85,7 +86,8 @@ const Modal: React.FC<ModalProps> = ({
 }) => {
   const divider = dividerCls(resolvedTheme);
 
-  return (
+  // Portal to document.body to escape stacking contexts (e.g. split panes)
+  return createPortal(
     <AnimatePresence>
       {show && (
         <motion.div
@@ -94,7 +96,11 @@ const Modal: React.FC<ModalProps> = ({
           animate="visible"
           exit="exit"
           className={`fixed inset-0 ${zIndex} flex items-center justify-center bg-black/60`}
-          onClick={onClose}
+          onMouseDown={(e) => {
+            // Only dismiss on direct backdrop clicks — not clicks that propagated
+            // from the trigger button through the portal (click-through bug)
+            if (e.target === e.currentTarget) onClose();
+          }}
         >
           <motion.div
             data-testid={testId}
@@ -105,7 +111,7 @@ const Modal: React.FC<ModalProps> = ({
               transition: { duration: 0.15, ease: "easeOut" },
             }}
             exit={{ opacity: 0, y: 6, transition: { duration: 0.1 } }}
-            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             className={`w-full ${maxWidth} mx-4 overflow-hidden ${panelTheme(resolvedTheme)}`}
           >
             {/* Header */}
@@ -139,7 +145,8 @@ const Modal: React.FC<ModalProps> = ({
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 };
 
