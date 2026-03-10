@@ -10,6 +10,7 @@ import { cleanContextForAI } from "../utils/contextCleaner";
 import { isDangerousCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
 import { readScreenBuffer } from "../services/terminalBuffer";
+import { getRemoteConnection } from "../services/remote-bridge";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -469,16 +470,32 @@ export function useAgentRunner(
         let projectFiles = "";
 
         if (window.electron) {
-          // Detect platform for cross-platform file listing command
-          const listCommand = isWindows()
+          const isRemote = !!session?.remoteUrl;
+          const isSSH = !!session?.sshProfileId;
+          const isRemoteOrSSH = isRemote || isSSH;
+
+          // For remote/SSH sessions, always use Unix commands (remote servers are Linux/macOS).
+          // Only use PowerShell commands for local Windows sessions.
+          const useWindowsCommands = !isRemoteOrSSH && isWindows();
+          const listCommand = useWindowsCommands
             ? 'Get-ChildItem -Recurse -Depth 2 -Name -Exclude node_modules,.git,dist,.next,__pycache__,venv,.venv,build | Select-Object -First 100'
             : "find . -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' -not -path '*/build/*' 2>/dev/null | head -100";
+
+          // For remote server tabs, fetch system paths from the remote server.
+          // config.getSystemPaths is not session-routed, so we must invoke it
+          // directly on the remote connection.
+          const remoteConn = isRemote ? getRemoteConnection(sessionId) : null;
+          const pathsFetcher = remoteConn
+            ? remoteConn.invoke("config.getSystemPaths").catch(() => null)
+            : isSSH
+              ? Promise.resolve(null) // SSH sessions don't need local system paths
+              : window.electron.ipcRenderer.invoke(IPC.CONFIG_GET_SYSTEM_PATHS).catch(() => null);
 
           // Run fetches in parallel for speed
           const [rawHistory, fetchedCwd, paths, dirListing, sysInfo] = await Promise.all([
             window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_HISTORY, sessionId),
             window.electron.ipcRenderer.invoke(IPC.TERMINAL_GET_CWD, sessionId),
-            window.electron.ipcRenderer.invoke(IPC.CONFIG_GET_SYSTEM_PATHS).catch(() => null),
+            pathsFetcher,
             // Get project file listing so the agent knows what already exists
             window.electron.ipcRenderer.invoke(IPC.TERMINAL_EXEC, {
               sessionId,
@@ -494,8 +511,7 @@ export function useAgentRunner(
             projectFiles = dirListing.stdout.trim();
           }
 
-          if (paths && !session?.sshProfileId) {
-            // Only show local system paths for local sessions — irrelevant for SSH
+          if (paths) {
             systemPathsStr = `
 System Paths:
 - Home: ${paths.home}
@@ -510,13 +526,15 @@ System Paths:
             const platformNames: Record<string, string> = {
               darwin: "macOS", win32: "Windows", linux: "Linux",
             };
-            const sshLabel = session?.sshProfileId ? " [Remote SSH Session]" : "";
-            systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}${sshLabel}\n`;
+            const remoteLabel = isSSH ? " [Remote SSH Session]" : isRemote ? " [Remote Server]" : "";
+            systemPathsStr += `\nSystem: ${platformNames[sysInfo.platform] || sysInfo.platform} (${sysInfo.arch}), Shell: ${sysInfo.shell}${remoteLabel}\n`;
           }
 
-          // SSH session: inform agent about remote context
-          if (session?.sshProfileId) {
+          // Remote sessions: inform agent about remote context
+          if (isSSH) {
             systemPathsStr += `\n[REMOTE SSH SESSION] You are connected to a remote machine via SSH. All commands (execute_command, run_in_terminal) run on the remote host. All file tools (read_file, write_file, edit_file, list_dir, search_dir) work on the remote host.\n`;
+          } else if (isRemote) {
+            systemPathsStr += `\n[REMOTE SERVER] You are connected to a remote Tron server. All commands and file operations run on the remote host, not the local machine.\n`;
           }
         }
 
