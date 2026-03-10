@@ -66,7 +66,9 @@ function saveJsonMap(filePath: string, map: Map<string, Record<string, unknown>>
   ensureDataDir();
   const obj: Record<string, unknown> = {};
   for (const [k, v] of map) obj[k] = v;
-  try { fs.writeFileSync(filePath, JSON.stringify(obj), "utf-8"); } catch { /* best effort */ }
+  // Atomic write: tmp file + rename to avoid corruption on crash
+  const tmpPath = filePath + ".tmp";
+  try { fs.writeFileSync(tmpPath, JSON.stringify(obj), "utf-8"); fs.renameSync(tmpPath, filePath); } catch { /* best effort */ }
 }
 
 const savedTabsFile = path.join(tronDataDir, "saved-tabs.json");

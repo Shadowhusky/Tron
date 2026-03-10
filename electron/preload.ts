@@ -142,6 +142,8 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("sessions.read") as Promise<Record<string, unknown> | null>,
     writeSessions: (data: Record<string, unknown>) =>
       ipcRenderer.invoke("sessions.write", data) as Promise<boolean>,
+    writeSessionsSync: (data: Record<string, unknown>) =>
+      ipcRenderer.sendSync("sessions.writeSync", data) as boolean,
     getSystemPaths: () =>
       ipcRenderer.invoke("config.getSystemPaths") as Promise<Record<string, string>>,
     getSystemInfo: (sessionId?: string) =>

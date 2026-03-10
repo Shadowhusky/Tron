@@ -19,6 +19,12 @@ if (require("electron-squirrel-startup")) {
   app.quit();
 }
 
+// In dev mode, use a separate userData directory so the dev app doesn't
+// conflict with a running packaged app (LevelDB locks on localStorage).
+if (!app.isPackaged && process.env.NODE_ENV !== "test" && process.env.NODE_ENV !== "production") {
+  app.setPath("userData", path.join(app.getPath("userData"), "dev"));
+}
+
 // Ensure Playwright E2E tests do not mutate the user's real application state
 if (process.env.TRON_TEST_PROFILE) {
   const fs = require("fs");

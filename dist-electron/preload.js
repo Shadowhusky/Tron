@@ -123,6 +123,7 @@ electron_1.contextBridge.exposeInMainWorld("electron", {
         // Sessions (agent state)
         readSessions: () => electron_1.ipcRenderer.invoke("sessions.read"),
         writeSessions: (data) => electron_1.ipcRenderer.invoke("sessions.write", data),
+        writeSessionsSync: (data) => electron_1.ipcRenderer.sendSync("sessions.writeSync", data),
         getSystemPaths: () => electron_1.ipcRenderer.invoke("config.getSystemPaths"),
         getSystemInfo: (sessionId) => electron_1.ipcRenderer.invoke("terminal.getSystemInfo", sessionId),
         // System

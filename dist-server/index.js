@@ -62,8 +62,11 @@ function saveJsonMap(filePath, map) {
     const obj = {};
     for (const [k, v] of map)
         obj[k] = v;
+    // Atomic write: tmp file + rename to avoid corruption on crash
+    const tmpPath = filePath + ".tmp";
     try {
-        fs.writeFileSync(filePath, JSON.stringify(obj), "utf-8");
+        fs.writeFileSync(tmpPath, JSON.stringify(obj), "utf-8");
+        fs.renameSync(tmpPath, filePath);
     }
     catch { /* best effort */ }
 }

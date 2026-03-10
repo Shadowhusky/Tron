@@ -44,8 +44,8 @@ function registerConfigHandlers() {
     });
     // --- Agent Session State ---
     electron_1.ipcMain.handle("sessions.read", async () => {
+        const sessionsPath = getSessionsPath();
         try {
-            const sessionsPath = getSessionsPath();
             if (!fs_1.default.existsSync(sessionsPath))
                 return null;
             const raw = fs_1.default.readFileSync(sessionsPath, "utf-8");
@@ -53,13 +53,23 @@ function registerConfigHandlers() {
         }
         catch (e) {
             console.error("Failed to read sessions:", e);
+            // If main file is corrupt (e.g. crash mid-write before atomic rename was adopted),
+            // try the .tmp file which may contain a valid previous write
+            try {
+                const tmpPath = sessionsPath + ".tmp";
+                if (fs_1.default.existsSync(tmpPath)) {
+                    const raw = fs_1.default.readFileSync(tmpPath, "utf-8");
+                    return JSON.parse(raw);
+                }
+            }
+            catch { /* both corrupt — give up */ }
             return null;
         }
     });
-    electron_1.ipcMain.handle("sessions.write", async (_event, data) => {
+    /** Shared write logic — atomic tmp+rename */
+    function writeSessionsSync(data) {
         try {
             const sessionsPath = getSessionsPath();
-            // Merge top-level keys (allows multiple contexts to coexist: _layout, _agent, etc.)
             let existing = {};
             try {
                 if (fs_1.default.existsSync(sessionsPath)) {
@@ -67,13 +77,25 @@ function registerConfigHandlers() {
                 }
             }
             catch { /* start fresh if corrupt */ }
-            fs_1.default.writeFileSync(sessionsPath, JSON.stringify({ ...existing, ...data }, null, 2), "utf-8");
+            // Atomic write: write to tmp file then rename, so a crash mid-write
+            // never corrupts the sessions file (rename is atomic on most filesystems).
+            const tmpPath = sessionsPath + ".tmp";
+            fs_1.default.writeFileSync(tmpPath, JSON.stringify({ ...existing, ...data }, null, 2), "utf-8");
+            fs_1.default.renameSync(tmpPath, sessionsPath);
             return true;
         }
         catch (e) {
             console.error("Failed to write sessions:", e);
             return false;
         }
+    }
+    electron_1.ipcMain.handle("sessions.write", async (_event, data) => {
+        return writeSessionsSync(data);
+    });
+    // Synchronous write — blocks renderer but guarantees data is on disk before returning.
+    // Used by the reactive layout save so force-quit can't lose state.
+    electron_1.ipcMain.on("sessions.writeSync", (event, data) => {
+        event.returnValue = writeSessionsSync(data);
     });
     // --- Saved Tabs (cross-device snapshots) ---
     // Use ~/.tron/ (same path as web server) so Electron and web mode share the same file.

@@ -273,14 +273,16 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           },
           {} as Record<string, boolean>,
         ),
+        savedAt: Date.now(),
       };
       localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
-      // Also back up layout to server (survives localStorage loss, private mode, etc.)
+      // Async backup to file (survives localStorage loss, private mode, etc.)
       window.electron?.ipcRenderer?.writeSessions?.({ _layout: state })?.catch?.(() => { });
     }
   }, [tabs, activeTabId, sessions]);
 
-  // Periodic crash-resilience save (every 30s) — safety net for force-quit / kill -9
+  // Periodic crash-resilience save (every 5s) — safety net for force-quit / kill -9.
+  // Uses atomic file writes (write-then-rename) so a crash mid-write never corrupts the file.
   const periodicSaveRef = useRef<{ tabs: Tab[]; activeTabId: string; sessions: Map<string, TerminalSession> }>({ tabs, activeTabId, sessions });
   periodicSaveRef.current = { tabs, activeTabId, sessions };
   useEffect(() => {
@@ -291,6 +293,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         tabs: t.map((tab) => ({ ...tab })),
         activeTabId: aId,
         sessionCwds: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.cwd || "" }), {} as Record<string, string>),
+        sessionConfigs: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.aiConfig }), {} as Record<string, any>),
         sessionInteractions: Object.fromEntries(Array.from(s.entries()).map(([sid, sess]) => [sid, sess.interactions])),
         sessionSummaries: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: { summary: sess.contextSummary, sourceLength: sess.contextSummarySourceLength } }), {} as Record<string, { summary?: string; sourceLength?: number } | undefined>),
         sessionDirtyFlags: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.dirty ?? false }), {} as Record<string, boolean>),
@@ -298,9 +301,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         sessionRemoteUrls: Array.from(s.entries()).reduce((acc, [sid, sess]) => { if (sess.remoteUrl) acc[sid] = sess.remoteUrl; return acc; }, {} as Record<string, string>),
         sessionTitles: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.title }), {} as Record<string, string>),
         sessionTitleLocked: Array.from(s.entries()).reduce((acc, [sid, sess]) => { if (sess.titleLocked) acc[sid] = true; return acc; }, {} as Record<string, boolean>),
+        savedAt: Date.now(),
       };
       window.electron?.ipcRenderer?.writeSessions?.({ _layout: state })?.catch?.(() => {});
-    }, 30000);
+    }, 5000);
     return () => clearInterval(id);
   }, []);
 
@@ -334,11 +338,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           if (isSshOnly()) { createConnectTab(); } else { createTab(); }
           return;
         }
-        // Try server-backed layout (survives localStorage loss / private mode)
-        if (sessionsData && (sessionsData as any)._layout) {
-          const serverLayout = (sessionsData as any)._layout;
-          // Sync to localStorage so downstream code can use it
-          localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(serverLayout));
+        // File-backed layout is a FALLBACK only — localStorage is the primary
+        // source because it's written synchronously and survives app crashes.
+        // Only use the file when localStorage is empty (private mode, storage
+        // cleared, first launch after migration, etc.).
+        if (!localStorage.getItem(STORAGE_KEYS.LAYOUT) && sessionsData && (sessionsData as any)._layout) {
+          localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify((sessionsData as any)._layout));
         }
       } catch { /* ignore — continue with normal hydration */ }
 

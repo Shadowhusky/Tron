@@ -228,7 +228,12 @@ const handleLinkClick = (e: React.MouseEvent) => {
     if (EDITOR_EXTENSIONS.has(ext) || EDITOR_EXTENSIONS.has(baseName)) {
       window.dispatchEvent(new CustomEvent("tron:openEditorTab", { detail: { filePath } }));
     } else {
-      window.electron?.ipcRenderer?.invoke("shell.openPath", filePath);
+      // Non-editor file or directory — reveal in file manager (same as terminal)
+      if (window.electron?.ipcRenderer) {
+        window.electron.ipcRenderer.invoke("shell.showItemInFolder", filePath)?.catch(() => {
+          window.electron?.ipcRenderer?.invoke("shell.openPath", filePath)?.catch(() => {});
+        });
+      }
     }
   } else if (href.startsWith("http://") || href.startsWith("https://")) {
     window.dispatchEvent(new CustomEvent("tron:linkClicked", {
