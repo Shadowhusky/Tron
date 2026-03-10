@@ -311,25 +311,38 @@ function extToLang(filePath: string): string {
 }
 
 /** Pre-process text to linkify absolute file paths for markdown rendering.
- *  Aligned with Terminal.tsx link provider — supports ~, $, @, +, [], (),
- *  spaces in interior path segments, and trailing punctuation cleanup. */
+ *  Aligned with Terminal.tsx link provider — supports ~, $, @, +, [], {},
+ *  spaces in interior path segments, and trailing punctuation cleanup.
+ *  Also joins paths that wrap across lines (newline + optional whitespace
+ *  between path segments). */
 function linkifyPaths(text: string): string {
-  // Segment chars matching Terminal.tsx: \w . $ @ + ~ - [ ] ( )
-  const S = "[\\w.$@+~\\-\\[\\]()]";
+  // Step 0: Join paths broken across lines.
+  // A path segment ending at EOL followed by optional whitespace + continuation
+  // that starts with a valid path char (not a new sentence) is rejoined.
+  // e.g. "src/services/\n  league/file.ts" → "src/services/league/file.ts"
+  // Only join when the line ends with "/" or "\" (clear path continuation).
+  const joined = text.replace(/([/\\])[ \t]*\n[ \t]*/g, "$1");
+
+  // Segment chars: \w . $ @ + ~ - [ ] { }
+  // Deliberately excludes ( ) to avoid matching wrapper syntax like Update(path)
+  const S = "[\\w.$@+~\\-\\[\\]{}]";
   const interiorSeg = "/" + S + "+(?:\\s+" + S + "+)*(?=/)";
   const finalSeg = "/" + S + "+";
   const absUnixRe = new RegExp(
-    "(?<![\\[(:@\\w])" + // skip markdown links, URLs, word chars before
+    "(?<![\\[:@\\w/])" + // skip markdown links, URLs, word chars, prior slash
     "(?:" + interiorSeg + ")+" + finalSeg + "(?:\\.\\w+)?",
     "g",
   );
   const winRe = new RegExp(
-    "(?<![\\[(])" +
+    "(?<![\\[\\w])" +
     "[A-Z]:\\\\(?:" + S + "+\\\\)*" + S + "+(?:\\.\\w+)?",
     "gi",
   );
+  // Relative paths: must contain a slash and end with an extension.
+  // Since ( ) are excluded from S, the match can't swallow wrapper syntax
+  // like "Update(src/path.ts)" — it correctly extracts just "src/path.ts".
   const relRe = new RegExp(
-    "(?<![\\[(:@\\w])" +
+    "(?<![\\[:@\\w])" +
     "(?:\\.\\/)?(?:" + S + "+\\/){1,}" + S + "+\\.\\w+",
     "g",
   );
@@ -346,6 +359,7 @@ function linkifyPaths(text: string): string {
 
   const cleanTrailing = (p: string): string => {
     let cleaned = p;
+    // Strip trailing punctuation and balanced wrappers that aren't part of the path
     while (/[.,;:!?)\]}>]$/.test(cleaned)) {
       const ext = cleaned.split(".").pop()?.toLowerCase() || "";
       if (knownExts.has(ext)) break;
@@ -359,7 +373,7 @@ function linkifyPaths(text: string): string {
   for (const regex of [absUnixRe, winRe, relRe]) {
     regex.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = regex.exec(text)) !== null) {
+    while ((m = regex.exec(joined)) !== null) {
       let matched = m[0];
       if (/^https?:\/\//i.test(matched)) continue;
       matched = cleanTrailing(matched);
@@ -383,7 +397,7 @@ function linkifyPaths(text: string): string {
   }
 
   // Build result by replacing matches with markdown links (right-to-left to preserve offsets)
-  let result = text;
+  let result = joined;
   for (let i = deduped.length - 1; i >= 0; i--) {
     const { start, text: matched } = deduped[i];
     const end = start + matched.length;
