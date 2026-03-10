@@ -6,7 +6,8 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader } from "../../../services/terminalBuffer";
-import { isElectronApp, isTouchDevice } from "../../../utils/platform";
+import { isElectronApp, isTouchDevice, normalizePath } from "../../../utils/platform";
+import { isRemoteSession } from "../../../services/remote-bridge";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -173,7 +174,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         try {
           const cwd = await window.electron?.ipcRenderer?.getCwd?.(sessionId);
           if (cwd) {
-            resolved = cwd.replace(/\/+$/, "") + "/" + filePath;
+            resolved = normalizePath(cwd.replace(/\/+$/, "") + "/" + filePath);
           }
         } catch { /* use as-is */ }
       }
@@ -654,10 +655,30 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         handleEcho,
       );
 
-      // Restore history FIRST, then register incoming data listener,
-      // then resize. This order prevents:
-      // 1. Duplication from listener + history race condition
-      // 2. Duplicate prompts from resize-triggered shell re-renders
+      // In web mode (WS bridge) or Electron remote sessions, register the
+      // incoming data listener IMMEDIATELY to capture PTY output during the
+      // async getHistory() round-trip. Over WebSocket, the latency is high
+      // enough that the shell prompt arrives before getHistory resolves and
+      // is lost. In local Electron mode, IPC is near-instant so we register
+      // after history (original behavior — prevents duplication on reconnect).
+      const isWebBridge = !isElectronApp() || isRemoteSession(sessionId);
+      let earlyDataBuf: string[] | null = isWebBridge ? [] : null;
+
+      if (isWebBridge) {
+        removeIncomingListener = window.electron.ipcRenderer.on(
+          IPC.TERMINAL_INCOMING_DATA,
+          ({ id, data }: { id: string; data: string }) => {
+            if (id === sessionId) {
+              if (earlyDataBuf) {
+                earlyDataBuf.push(data);
+              } else {
+                term.write(data);
+              }
+            }
+          },
+        );
+      }
+
       const finishSetup = (history?: string, knownReconnect = false) => {
           if (!mounted) return;
 
@@ -679,23 +700,28 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             suppressOutgoingRef.current = true;
           }
 
-          // Write history to xterm BEFORE registering the incoming data listener.
-          // On page reload (mobile OS kill, manual refresh), xterm is brand new
-          // with an empty buffer — this restores previous terminal output.
+          // Write history to xterm first (restores previous output on reload)
           if (effectiveHistory) {
             term.write(effectiveHistory);
           }
 
-          // Register the incoming data listener — data flows freely so xterm
-          // renders content behind the loading overlay (no visual flicker)
-          removeIncomingListener = window.electron.ipcRenderer.on(
-            IPC.TERMINAL_INCOMING_DATA,
-            ({ id, data }: { id: string; data: string }) => {
-              if (id === sessionId) {
-                term.write(data);
-              }
-            },
-          );
+          // Web mode: flush early data that arrived during getHistory round-trip
+          if (earlyDataBuf && earlyDataBuf.length > 0) {
+            for (const chunk of earlyDataBuf) term.write(chunk);
+          }
+          earlyDataBuf = null; // switch to direct write mode
+
+          // Electron mode: register listener after history (original behavior)
+          if (!isWebBridge) {
+            removeIncomingListener = window.electron.ipcRenderer.on(
+              IPC.TERMINAL_INCOMING_DATA,
+              ({ id, data }: { id: string; data: string }) => {
+                if (id === sessionId) {
+                  term.write(data);
+                }
+              },
+            );
+          }
 
           if (isReconnect) {
             // Fit locally to get correct dimensions

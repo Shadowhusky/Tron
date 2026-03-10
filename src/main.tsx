@@ -8,6 +8,19 @@ import App from './App.tsx'
 
 const queryClient = new QueryClient()
 
+// Electron preload exposes the API as frozen "_electronBridge" (contextBridge).
+// Copy it to a writable "window.electron" so remote-bridge.ts can swap
+// ipcRenderer with a routing wrapper for remote server connections.
+if ((window as any)._electronBridge && !(window as any).electron) {
+  const bridge = (window as any)._electronBridge;
+  const ipcCopy: any = {};
+  for (const key of Object.keys(bridge.ipcRenderer)) {
+    const val = bridge.ipcRenderer[key];
+    ipcCopy[key] = typeof val === 'function' ? val.bind(bridge.ipcRenderer) : val;
+  }
+  (window as any).electron = { ipcRenderer: ipcCopy };
+}
+
 // In web mode (no Electron), install WebSocket shim and wait for mode
 // detection before rendering so LayoutContext knows the deployment mode.
 initWebSocketBridge()

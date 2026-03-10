@@ -65,6 +65,36 @@ export function isAbsolutePath(p: string): boolean {
 }
 
 /**
+ * Normalize a file path by resolving `.` and `..` segments.
+ * Works in browser context (no Node.js path module).
+ * Handles both Unix (/) and Windows (\) separators.
+ */
+export function normalizePath(p: string): string {
+  const isWin = p.includes("\\");
+  const sep = isWin ? "\\" : "/";
+  const parts = p.split(/[/\\]/);
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === "." || part === "") {
+      // Keep empty first part for absolute paths (leading /)
+      if (resolved.length === 0 && !isWin) resolved.push("");
+      continue;
+    }
+    if (part === ".." && resolved.length > 0 && resolved[resolved.length - 1] !== "..") {
+      // Don't pop past root
+      if (resolved.length === 1 && resolved[0] === "") continue;
+      resolved.pop();
+    } else {
+      resolved.push(part);
+    }
+  }
+  const result = resolved.join(sep);
+  // Ensure Unix absolute paths start with /
+  if (!isWin && p.startsWith("/") && !result.startsWith("/")) return "/" + result;
+  return result || (isWin ? "." : "/");
+}
+
+/**
  * Abbreviate home directory in a path for display.
  * Handles macOS (/Users/foo), Linux (/home/foo), and Windows (C:\Users\foo).
  */

@@ -1216,8 +1216,31 @@ export function registerTerminalHandlers(
   // List directory structure safely without OS-specific commands (ls/dir)
   ipcMain.handle(
     "file.listDir",
-    async (_event, { dirPath }: { dirPath: string }) => {
+    async (_event, { dirPath, sessionId }: { dirPath: string; sessionId?: string }) => {
       try {
+        // SSH session — list remote directory via SSH exec
+        if (sessionId && sshSessionIds.has(sessionId)) {
+          const sshSession = sshSessions.get(sessionId);
+          if (!sshSession) return { success: false, error: "SSH session not found" };
+          const result = await sshSession.exec(
+            `ls -1ap ${dirPath.replace(/'/g, "'\\''")} 2>/dev/null`,
+            5000,
+          );
+          if (result.exitCode !== 0) {
+            return { success: false, error: result.stderr.trim() || `Failed to list: ${dirPath}` };
+          }
+          const lines = result.stdout.split("\n").filter((l: string) => l && l !== "./" && l !== "../");
+          const contents = lines.map((line: string) => {
+            const isDir = line.endsWith("/");
+            return { name: isDir ? line.slice(0, -1) : line, isDirectory: isDir };
+          });
+          contents.sort((a: any, b: any) => {
+            if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
+            return a.isDirectory ? -1 : 1;
+          });
+          return { success: true, contents };
+        }
+
         if (!fs.existsSync(dirPath)) {
           return { success: false, error: `Directory not found: ${dirPath}` };
         }

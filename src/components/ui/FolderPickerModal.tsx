@@ -9,6 +9,8 @@ interface FolderPickerModalProps {
   resolvedTheme: ResolvedTheme;
   initialPath?: string;
   mode?: "directory" | "file";
+  /** Session ID — passed to file.listDir so remote/SSH sessions browse the correct filesystem. */
+  sessionId?: string;
   onSelect: (path: string) => void;
   onClose: () => void;
 }
@@ -59,6 +61,7 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
   resolvedTheme,
   initialPath,
   mode = "directory",
+  sessionId,
   onSelect,
   onClose,
 }) => {
@@ -77,7 +80,9 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
     setSelectedFile(null);
     try {
       const resolved = await resolveHome(dirPath);
-      const result = await window.electron?.ipcRenderer?.invoke("file.listDir", { dirPath: resolved });
+      const payload: any = { dirPath: resolved };
+      if (sessionId) payload.sessionId = sessionId;
+      const result = await window.electron?.ipcRenderer?.invoke("file.listDir", payload);
       if (result?.success && result.contents) {
         setEntries(result.contents);
         setCurrentPath(resolved);

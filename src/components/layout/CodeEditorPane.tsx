@@ -243,13 +243,14 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
           </div>
         )}
         {!loading && !error && (
-          <div className="absolute inset-0">
+          <div className="absolute inset-0 overflow-hidden">
             <CodeMirror
               value={content}
               onChange={setContent}
               extensions={langExtensions}
               theme={isLight ? "light" : "dark"}
               height="100%"
+              style={{ height: "100%", overflow: "auto" }}
               basicSetup={{
                 lineNumbers: true,
                 highlightActiveLineGutter: true,

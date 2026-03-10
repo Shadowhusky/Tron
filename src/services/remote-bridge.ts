@@ -389,10 +389,9 @@ export function installRemoteRouting(): void {
   }
 
   // Replace window.electron with a shallow copy containing our wrapped ipcRenderer.
-  // In web mode (ws-bridge), window.electron is a regular writable property — this works.
-  // In Electron mode, contextBridge.exposeInMainWorld freezes it (non-writable,
-  // non-configurable) — assignment throws. Remote routing is only needed for
-  // web-mode remote connections, so we silently skip in Electron.
+  // window.electron is a regular writable property in both modes:
+  // - Web mode: set by ws-bridge.ts
+  // - Electron mode: copied from frozen _electronBridge to writable window.electron in main.tsx
   try {
     const electronCopy: any = {};
     for (const key of Object.keys(window.electron)) {
@@ -401,7 +400,7 @@ export function installRemoteRouting(): void {
     electronCopy.ipcRenderer = wrapped;
     (window as any).electron = electronCopy;
   } catch {
-    // Electron's contextBridge froze window.electron — remote routing unavailable.
+    // Should not happen — window.electron is writable in both modes
   }
 }
 

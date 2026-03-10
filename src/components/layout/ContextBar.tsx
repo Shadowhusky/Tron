@@ -511,13 +511,14 @@ const ContextBar: React.FC<ContextBarProps> = ({
           className="flex items-center gap-1.5 overflow-hidden cursor-pointer group/path"
           title={`Current directory: ${cwd}\nClick to change`}
           onClick={async () => {
-            // Try native folder dialog first (Electron)
-            const selected = await window.electron?.ipcRenderer?.selectFolder?.(cwd) ?? null;
-            if (!selected && !isElectronApp()) {
-              // Web mode — native dialog not available, show folder picker modal
+            // Remote/SSH sessions must use FolderPickerModal to browse the correct filesystem
+            const isRemoteOrSSH = !!(session?.remoteUrl || session?.sshProfileId);
+            if (isRemoteOrSSH || !isElectronApp()) {
               setShowFolderPicker(true);
               return;
             }
+            // Try native folder dialog (Electron local sessions)
+            const selected = await window.electron?.ipcRenderer?.selectFolder?.(cwd) ?? null;
             if (selected) cdToDirectory(selected);
           }}
         >
@@ -960,6 +961,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
         resolvedTheme={theme}
         initialPath={cwd}
         mode="directory"
+        sessionId={sessionId}
         onSelect={(dir) => cdToDirectory(dir)}
         onClose={() => setShowFolderPicker(false)}
       />

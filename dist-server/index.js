@@ -455,7 +455,7 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
         case "file.editFile":
             return terminal.editFile(data.filePath, data.search, data.replace);
         case "file.listDir":
-            return terminal.listDir(data.dirPath);
+            return terminal.listDir(data.dirPath, data.sessionId);
         case "file.searchDir":
             return terminal.searchDir(data.dirPath, data.query);
         case "log.saveSessionLog":

@@ -83,7 +83,11 @@ const invokeSet = new Set<string>(ALLOWED_INVOKE_CHANNELS);
 const sendSet = new Set<string>(ALLOWED_SEND_CHANNELS);
 const receiveSet = new Set<string>(ALLOWED_RECEIVE_CHANNELS);
 
-contextBridge.exposeInMainWorld("electron", {
+// Use Object.defineProperty instead of contextBridge.exposeInMainWorld so that
+// remote-bridge.ts can replace window.electron.ipcRenderer with a routing wrapper.
+// contextBridge freezes the property (non-writable, non-configurable), which prevents
+// IPC routing for remote server connections from within the Electron app.
+const electronAPI = {
   ipcRenderer: {
     invoke: (channel: InvokeChannel, data?: any) => {
       if (!invokeSet.has(channel)) {
@@ -244,4 +248,10 @@ contextBridge.exposeInMainWorld("electron", {
     readClipboardImage: () =>
       ipcRenderer.invoke("clipboard.readImage") as Promise<string | null>,
   },
-});
+};
+
+// Expose via contextBridge to "_electronBridge" (frozen/read-only).
+// main.tsx copies this to a writable "window.electron" so that
+// remote-bridge.ts can swap ipcRenderer with a routing wrapper
+// for remote server connections.
+contextBridge.exposeInMainWorld("_electronBridge", electronAPI);

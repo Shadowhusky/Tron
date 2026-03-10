@@ -955,8 +955,31 @@ export function editFile(filePath: string, search: string, replace: string): { s
   }
 }
 
-export function listDir(dirPath: string): { success: boolean; contents?: { name: string; isDirectory: boolean }[]; error?: string } {
+export async function listDir(dirPath: string, sessionId?: string): Promise<{ success: boolean; contents?: { name: string; isDirectory: boolean }[]; error?: string }> {
   try {
+    // SSH session — list remote directory via SSH exec
+    if (sessionId && sshSessionIds.has(sessionId)) {
+      const sshSession = sshSessions.get(sessionId);
+      if (!sshSession) return { success: false, error: "SSH session not found" };
+      const result = await sshSession.exec(
+        `ls -1ap ${dirPath.replace(/'/g, "'\\''")} 2>/dev/null`,
+        5000,
+      );
+      if (result.exitCode !== 0) {
+        return { success: false, error: result.stderr.trim() || `Failed to list: ${dirPath}` };
+      }
+      const lines = result.stdout.split("\n").filter((l: string) => l && l !== "./" && l !== "../");
+      const contents = lines.map((line: string) => {
+        const isDir = line.endsWith("/");
+        return { name: isDir ? line.slice(0, -1) : line, isDirectory: isDir };
+      });
+      contents.sort((a: any, b: any) => {
+        if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
+        return a.isDirectory ? -1 : 1;
+      });
+      return { success: true, contents };
+    }
+
     if (!fs.existsSync(dirPath)) return { success: false, error: `Directory not found: ${dirPath}` };
     const stats = fs.statSync(dirPath);
     if (!stats.isDirectory()) return { success: false, error: `Not a directory: ${dirPath}` };

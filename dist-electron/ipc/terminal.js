@@ -1141,8 +1141,29 @@ function registerTerminalHandlers(getMainWindow) {
         }
     });
     // List directory structure safely without OS-specific commands (ls/dir)
-    electron_1.ipcMain.handle("file.listDir", async (_event, { dirPath }) => {
+    electron_1.ipcMain.handle("file.listDir", async (_event, { dirPath, sessionId }) => {
         try {
+            // SSH session — list remote directory via SSH exec
+            if (sessionId && ssh_1.sshSessionIds.has(sessionId)) {
+                const sshSession = ssh_1.sshSessions.get(sessionId);
+                if (!sshSession)
+                    return { success: false, error: "SSH session not found" };
+                const result = await sshSession.exec(`ls -1ap ${dirPath.replace(/'/g, "'\\''")} 2>/dev/null`, 5000);
+                if (result.exitCode !== 0) {
+                    return { success: false, error: result.stderr.trim() || `Failed to list: ${dirPath}` };
+                }
+                const lines = result.stdout.split("\n").filter((l) => l && l !== "./" && l !== "../");
+                const contents = lines.map((line) => {
+                    const isDir = line.endsWith("/");
+                    return { name: isDir ? line.slice(0, -1) : line, isDirectory: isDir };
+                });
+                contents.sort((a, b) => {
+                    if (a.isDirectory === b.isDirectory)
+                        return a.name.localeCompare(b.name);
+                    return a.isDirectory ? -1 : 1;
+                });
+                return { success: true, contents };
+            }
             if (!fs_1.default.existsSync(dirPath)) {
                 return { success: false, error: `Directory not found: ${dirPath}` };
             }
