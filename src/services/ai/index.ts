@@ -3447,6 +3447,7 @@ ${agentPrompt}
               {
                 filePath,
                 content,
+                ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
               },
             );
           }
@@ -3500,6 +3501,7 @@ ${agentPrompt}
               "file.readFile",
               {
                 filePath,
+                ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
               },
             );
           }
@@ -3571,6 +3573,7 @@ ${agentPrompt}
                 filePath,
                 search,
                 replace,
+                ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
               },
             );
           }
@@ -3628,7 +3631,7 @@ ${agentPrompt}
           } else {
             const result = await (window as any).electron.ipcRenderer.invoke(
               "file.listDir",
-              { dirPath },
+              { dirPath, ...(options?.sessionId ? { sessionId: options.sessionId } : {}) },
             );
             if (!result.success) throw new Error(result.error || "Unknown list error");
             contents = result.contents
@@ -3682,7 +3685,7 @@ ${agentPrompt}
           } else {
             const result = await (window as any).electron.ipcRenderer.invoke(
               "file.searchDir",
-              { dirPath, query },
+              { dirPath, query, ...(options?.sessionId ? { sessionId: options.sessionId } : {}) },
             );
             if (!result.success) throw new Error(result.error || "Unknown search error");
             lines = result.results

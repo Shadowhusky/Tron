@@ -239,6 +239,8 @@ const SESSION_IN_OBJECT_CHANNELS = new Set([
   "terminal.exec",
   "terminal.execInTerminal",
   "terminal.getCompletions",
+  "terminal.readHistory",
+  "terminal.setHistory",
 ]);
 
 /** Channels where data is an object with an id field (send channels). */
