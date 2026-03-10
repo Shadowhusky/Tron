@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor } from "lucide-react";
+import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -676,6 +676,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           });
           // Remove after 10s if unused
           setTimeout(cleanup, 10000);
+        },
+      },
+      {
+        label: "Find",
+        icon: <Search className="h-3.5 w-3.5" />,
+        action: () => {
+          window.dispatchEvent(new CustomEvent("tron:terminalSearch", { detail: { sessionId } }));
         },
       },
       { separator: true as const },

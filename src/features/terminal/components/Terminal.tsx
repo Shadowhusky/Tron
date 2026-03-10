@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { SearchAddon } from "@xterm/addon-search";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
@@ -55,8 +56,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
   const { resolvedTheme } = useTheme();
   const { hotkeys } = useConfig();
+
+  // Search bar state
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Loading overlay — for web mode reconnected/restored sessions to mask
   // flicker from history replay / TUI redraw. Electron restores instantly.
@@ -119,8 +126,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }));
     });
 
+    const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
+    term.loadAddon(searchAddon);
+    searchAddonRef.current = searchAddon;
 
     // File path link provider — makes file paths clickable in terminal output.
     // Supports absolute (/foo/bar.ts, C:\foo\bar.ts) and relative paths
@@ -388,6 +398,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
       if (matches(overlayCombo)) {
         return false;
+      }
+      // Cmd+F / Ctrl+F — open terminal search
+      if (e.type === "keydown" && e.key.toLowerCase() === "f" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+        window.dispatchEvent(new CustomEvent("tron:terminalSearch", { detail: { sessionId } }));
+        return false;
+      }
+      // Escape — close search if open
+      if (e.type === "keydown" && e.key === "Escape") {
+        window.dispatchEvent(new CustomEvent("tron:terminalSearchClose", { detail: { sessionId } }));
       }
       // Let xterm handle Cmd/Ctrl+V natively — its internal paste handler
       // reads clipboardData synchronously (more reliable than async Clipboard
@@ -915,6 +934,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
+      searchAddonRef.current = null;
       resizeObserver.disconnect();
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
@@ -958,6 +978,35 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     return () => window.removeEventListener("tron:clearTerminal", handler);
   }, [sessionId]);
 
+  // ---- Terminal search open/close listeners ----
+  useEffect(() => {
+    const openHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId) {
+        setSearchVisible(true);
+        // Pre-fill with xterm selection if any
+        const sel = xtermRef.current?.getSelection();
+        if (sel) setSearchQuery(sel);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+    };
+    const closeHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId === sessionId) {
+        setSearchVisible(false);
+        searchAddonRef.current?.clearDecorations();
+
+        xtermRef.current?.focus();
+      }
+    };
+    window.addEventListener("tron:terminalSearch", openHandler);
+    window.addEventListener("tron:terminalSearchClose", closeHandler);
+    return () => {
+      window.removeEventListener("tron:terminalSearch", openHandler);
+      window.removeEventListener("tron:terminalSearchClose", closeHandler);
+    };
+  }, [sessionId]);
+
   // ---- Theme update — lightweight, no terminal recreation ----
   useEffect(() => {
     if (xtermRef.current) {
@@ -973,6 +1022,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   }, [isActive, focusTarget]);
 
   const theme = THEMES[resolvedTheme] || THEMES.dark;
+
+  // Search handlers
+  const doSearch = useCallback((query: string, direction: "next" | "prev" = "next") => {
+    if (!searchAddonRef.current || !query) {
+      searchAddonRef.current?.clearDecorations();
+      return;
+    }
+    const opts = { regex: false, caseSensitive: false, incremental: direction === "next", decorations: { matchOverviewRuler: "#888", activeMatchColorOverviewRuler: "#ffcc00", matchBackground: "#ffffff30", activeMatchBackground: "#ffcc0060" } };
+    if (direction === "prev") {
+      searchAddonRef.current.findPrevious(query, opts);
+    } else {
+      searchAddonRef.current.findNext(query, opts);
+    }
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchVisible(false);
+    searchAddonRef.current?.clearDecorations();
+    xtermRef.current?.focus();
+  }, []);
 
   return (
     <div
@@ -990,6 +1059,65 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         className={`absolute inset-0${loading ? " transition-opacity duration-300 ease-in" : ""}`}
         style={{ opacity: loading ? 0 : 1 }}
       />
+      {/* Terminal search bar */}
+      {searchVisible && (
+        <div
+          className="absolute top-1 right-2 z-20 flex items-center gap-1 rounded-lg px-2 py-1 shadow-lg border"
+          style={{
+            backgroundColor: theme?.background || "#0a0a0a",
+            borderColor: "rgba(255,255,255,0.15)",
+          }}
+        >
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              doSearch(e.target.value, "next");
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                doSearch(searchQuery, e.shiftKey ? "prev" : "next");
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                closeSearch();
+              }
+            }}
+            placeholder="Find…"
+            className="bg-transparent text-xs outline-none w-36 font-mono"
+            style={{ color: theme?.foreground || "#e5e7eb" }}
+            spellCheck={false}
+            autoFocus
+          />
+          <button
+            onClick={() => doSearch(searchQuery, "prev")}
+            className="p-0.5 rounded hover:bg-white/10 text-xs"
+            style={{ color: theme?.foreground || "#e5e7eb" }}
+            title="Previous (Shift+Enter)"
+          >
+            ▲
+          </button>
+          <button
+            onClick={() => doSearch(searchQuery, "next")}
+            className="p-0.5 rounded hover:bg-white/10 text-xs"
+            style={{ color: theme?.foreground || "#e5e7eb" }}
+            title="Next (Enter)"
+          >
+            ▼
+          </button>
+          <button
+            onClick={closeSearch}
+            className="p-0.5 rounded hover:bg-white/10 text-xs ml-0.5"
+            style={{ color: theme?.foreground || "#e5e7eb" }}
+            title="Close (Esc)"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Loading overlay — retro bash-style spinner */}
       <div
         className={`absolute inset-0 z-10 flex items-start p-5 transition-opacity duration-300 ease-out ${
