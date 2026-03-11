@@ -72,6 +72,7 @@ function saveJsonMap(filePath: string, map: Map<string, Record<string, unknown>>
 }
 
 const savedTabsFile = path.join(tronDataDir, "saved-tabs.json");
+const remoteProfilesFile = path.join(tronDataDir, "remote-servers.json");
 
 ensureDataDir();
 const clientSessions = loadJsonMap(sessionsFile);
@@ -451,6 +452,17 @@ async function handleInvoke(
       try {
         ensureDataDir();
         fs.writeFileSync(savedTabsFile, JSON.stringify(data, null, 2), "utf-8");
+        return true;
+      } catch { return false; }
+    case "remote.profiles.read":
+      try {
+        if (!fs.existsSync(remoteProfilesFile)) return [];
+        return JSON.parse(fs.readFileSync(remoteProfilesFile, "utf-8"));
+      } catch { return []; }
+    case "remote.profiles.write":
+      try {
+        ensureDataDir();
+        fs.writeFileSync(remoteProfilesFile, JSON.stringify(data, null, 2), "utf-8");
         return true;
       } catch { return false; }
     case "terminal.history.getStats":

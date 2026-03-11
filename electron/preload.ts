@@ -39,6 +39,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   "ssh.disconnect",
   "ssh.profiles.read",
   "ssh.profiles.write",
+  "remote.profiles.read",
+  "remote.profiles.write",
   "savedTabs.read",
   "savedTabs.write",
   "terminal.getShellHistory",
@@ -210,6 +212,10 @@ const electronAPI = {
       ipcRenderer.invoke("ssh.profiles.read") as Promise<any[]>,
     writeSSHProfiles: (profiles: any[]) =>
       ipcRenderer.invoke("ssh.profiles.write", profiles) as Promise<boolean>,
+    readRemoteProfiles: () =>
+      ipcRenderer.invoke("remote.profiles.read") as Promise<any[]>,
+    writeRemoteProfiles: (profiles: any[]) =>
+      ipcRenderer.invoke("remote.profiles.write", profiles) as Promise<boolean>,
     // Sync Tabs
     readSyncTabs: () =>
       ipcRenderer.invoke("savedTabs.read") as Promise<any[]>,

@@ -347,6 +347,10 @@ export function initWebSocketBridge() {
         invoke("ssh.profiles.read") as Promise<any[]>,
       writeSSHProfiles: (profiles: any[]) =>
         invoke("ssh.profiles.write", profiles) as Promise<boolean>,
+      readRemoteProfiles: () =>
+        invoke("remote.profiles.read") as Promise<any[]>,
+      writeRemoteProfiles: (profiles: any[]) =>
+        invoke("remote.profiles.write", profiles) as Promise<boolean>,
       // Terminal history stats
       getPersistedHistoryStats: () =>
         invoke("terminal.history.getStats") as Promise<{ fileCount: number; totalBytes: number }>,

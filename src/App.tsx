@@ -208,6 +208,13 @@ const AppContent = () => {
     return () => window.removeEventListener("tron:open-ssh-modal", handler);
   }, []);
 
+  // Listen for Remote modal open requests (from Settings)
+  useEffect(() => {
+    const handler = () => setShowRemoteModal(true);
+    window.addEventListener("tron:open-remote-modal", handler);
+    return () => window.removeEventListener("tron:open-remote-modal", handler);
+  }, []);
+
   // Listen for window close confirmation from Electron main process
   useEffect(() => {
     if (!window.electron?.ipcRenderer?.on) return;

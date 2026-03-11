@@ -115,6 +115,28 @@ export function registerConfigHandlers() {
     } catch { return false; }
   });
 
+  // --- Remote Server Profiles ---
+  const getRemoteProfilesPath = (): string => {
+    const dir = path.join(app.getPath("userData"), "remote-servers");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, "profiles.json");
+  };
+
+  ipcMain.handle("remote.profiles.read", async () => {
+    try {
+      const filePath = getRemoteProfilesPath();
+      if (!fs.existsSync(filePath)) return [];
+      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch { return []; }
+  });
+
+  ipcMain.handle("remote.profiles.write", async (_event, profiles: any[]) => {
+    try {
+      fs.writeFileSync(getRemoteProfilesPath(), JSON.stringify(profiles, null, 2), "utf-8");
+      return true;
+    } catch { return false; }
+  });
+
   // --- System Paths ---
   ipcMain.handle("config.getSystemPaths", async () => {
     return {

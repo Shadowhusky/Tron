@@ -71,6 +71,7 @@ const NAV_SECTIONS_BASE = [
   { id: "web-server", label: "Web Server", icon: Wifi },
   { id: "updates", label: "Updates", icon: Download },
   { id: "ssh", label: "SSH", icon: Globe },
+  { id: "remote", label: "Remote Servers", icon: Monitor },
   { id: "storage", label: "Storage", icon: HardDrive },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 ] as const;
@@ -171,6 +172,92 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
                   onClick={() => deleteProfile(p.id)}
                   className={`p-1 rounded transition-colors ${t.surfaceHover} text-red-400 hover:text-red-300`}
                   title="Delete profile"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Remote Servers Sub-component ---
+function RemoteServersSection({ cardClass, t, resolvedTheme }: {
+  cardClass: string;
+  t: any;
+  resolvedTheme: string;
+}) {
+  const [profiles, setProfiles] = useState<any[]>([]);
+  const refreshProfiles = useCallback(() => {
+    const ipc = window.electron?.ipcRenderer;
+    if ((ipc as any)?.readRemoteProfiles) {
+      (ipc as any).readRemoteProfiles().then(setProfiles).catch(() => { });
+    } else {
+      ipc?.invoke("remote.profiles.read").then(setProfiles).catch(() => { });
+    }
+  }, []);
+  useEffect(() => {
+    refreshProfiles();
+    window.addEventListener("focus", refreshProfiles);
+    window.addEventListener("tron:remote-profiles-changed", refreshProfiles);
+    return () => {
+      window.removeEventListener("focus", refreshProfiles);
+      window.removeEventListener("tron:remote-profiles-changed", refreshProfiles);
+    };
+  }, [refreshProfiles]);
+  const deleteProfile = async (id: string) => {
+    const updated = profiles.filter((p: any) => p.id !== id);
+    const ipc = window.electron?.ipcRenderer;
+    if ((ipc as any)?.writeRemoteProfiles) {
+      await (ipc as any).writeRemoteProfiles(updated);
+    } else {
+      await ipc?.invoke("remote.profiles.write", updated);
+    }
+    setProfiles(updated);
+    window.dispatchEvent(new CustomEvent("tron:remote-profiles-changed"));
+  };
+  const openRemoteModal = () => {
+    window.dispatchEvent(new CustomEvent("tron:open-remote-modal"));
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+          <Monitor className="w-3.5 h-3.5" />
+          Remote Servers
+        </h3>
+        <button
+          onClick={openRemoteModal}
+          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+          title="New Remote Connection"
+        >
+          <Plus className="w-3 h-3" />
+          New
+        </button>
+      </div>
+      {profiles.length === 0 ? (
+        <div className={`${cardClass} text-center py-4`}>
+          <p className={`text-xs ${t.textMuted}`}>No saved remote servers</p>
+          <p className={`text-[10px] ${t.textFaint} mt-1`}>
+            Add a remote Tron server to get started
+          </p>
+        </div>
+      ) : (
+        <div className={`${cardClass} divide-y ${resolvedTheme === "light" ? "divide-gray-100" : "divide-white/5"}`}>
+          {profiles.map((p: any) => (
+            <div key={p.id} className="flex items-center justify-between py-2 first:pt-0 last:pb-0">
+              <div className="flex-1 min-w-0">
+                <div className={`text-xs font-medium truncate ${t.text}`}>{p.name || "Unnamed"}</div>
+                <div className={`text-[10px] ${t.textFaint}`}>{p.url}</div>
+              </div>
+              <div className="flex items-center gap-1.5 ml-2">
+                <button
+                  onClick={() => deleteProfile(p.id)}
+                  className={`p-1 rounded transition-colors ${t.surfaceHover} text-red-400 hover:text-red-300`}
+                  title="Delete server"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -1687,6 +1774,15 @@ const SettingsPane = () => {
             {/* SSH Profiles */}
             {activeSection === "ssh" && (
               <SSHProfilesSection
+                cardClass={cardClass}
+                t={t}
+                resolvedTheme={resolvedTheme}
+              />
+            )}
+
+            {/* Remote Servers */}
+            {activeSection === "remote" && (
+              <RemoteServersSection
                 cardClass={cardClass}
                 t={t}
                 resolvedTheme={resolvedTheme}

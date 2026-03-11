@@ -109,6 +109,15 @@ export interface SSHConnectionConfig {
 
 export type SSHConnectionStatus = "connected" | "disconnected" | "connecting" | "reconnecting";
 
+// --- Remote Server Types ---
+
+export interface RemoteServerProfile {
+  id: string;
+  name: string;
+  url: string;          // e.g. http://192.168.1.10:3888
+  lastConnected?: number;
+}
+
 // --- Terminal & Layout Types ---
 
 export interface TerminalSession {
