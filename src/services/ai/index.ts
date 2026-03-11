@@ -2691,18 +2691,14 @@ ${agentPrompt}
       history.push({ role: "assistant", content: JSON.stringify(action) });
 
       // Loop detection: track recent actions and break repetitive patterns
-      // read_terminal is excluded — its output changes over time (monitoring processes)
-      const actionKey =
-        action.tool === "read_terminal"
-          ? null
-          : JSON.stringify({
-            tool: action.tool,
-            path: action.path,
-            command: action.command,
-            text: action.text,
-            query: action.query,
-            url: action.url,
-          });
+      const actionKey = JSON.stringify({
+        tool: action.tool,
+        path: action.path,
+        command: action.command,
+        text: action.text,
+        query: action.query,
+        url: action.url,
+      });
 
       // Block the most recently looped action — cleared once a different action runs
       if (actionKey && recentlyBlockedAction === actionKey) {
@@ -2720,9 +2716,9 @@ ${agentPrompt}
       if (actionKey) recentActions.push(actionKey);
       if (recentActions.length > 8) recentActions.shift();
 
-      // Consecutive loop: same action 2 times in a row (catch on 2nd attempt). 
-      // For send_text, allow up to 5 repetitions to support menu navigation (e.g., arrow keys)
-      const maxConsecutive = action.tool === "send_text" ? 5 : 2;
+      // Consecutive loop: same action N times in a row.
+      // send_text: 5 (menu navigation), read_terminal: 5 (monitoring), others: 2
+      const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 2;
       let isConsecutiveLoop = false;
       if (actionKey != null && recentActions.length >= maxConsecutive) {
         isConsecutiveLoop = true;
