@@ -202,6 +202,11 @@ export function getRemoteUrl(sessionId: string): string | null {
   return conn?.url ?? null;
 }
 
+/** Get the connection ID for a remote session (for creating sibling PTYs). */
+export function getRemoteConnectionId(sessionId: string): string | null {
+  return sessionRoutes.get(sessionId) ?? null;
+}
+
 /** Unregister a remote session (on close). */
 export function unregisterRemoteSession(sessionId: string): void {
   sessionRoutes.delete(sessionId);

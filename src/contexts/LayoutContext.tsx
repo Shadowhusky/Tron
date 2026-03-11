@@ -17,7 +17,7 @@ import { onServerReconnect } from "../services/ws-bridge";
 import { matchesHotkey } from "../hooks/useHotkey";
 import { useConfig } from "./ConfigContext";
 import { isElectronApp } from "../utils/platform";
-import { connectRemote, createRemotePTY, unregisterRemoteSession } from "../services/remote-bridge";
+import { connectRemote, createRemotePTY, getRemoteConnectionId, unregisterRemoteSession } from "../services/remote-bridge";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -823,25 +823,51 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     // Prevent split if settings active
     if (tab.activeSessionId === "settings") return;
 
-    // Gateway mode: no local PTY to split into
-    if (isSshOnly()) return;
+    const currentSession = sessions.get(tab.activeSessionId);
+    const sessionConfig = currentSession?.aiConfig || aiService.getConfig();
 
     // Current session CWD — fetch fresh from server to avoid stale/truncated paths
-    const currentSession = sessions.get(tab.activeSessionId);
     let cwd = currentSession?.cwd;
     try {
       const freshCwd = await window.electron?.ipcRenderer?.getCwd(tab.activeSessionId);
       if (freshCwd) cwd = freshCwd;
     } catch { /* fall back to cached cwd */ }
 
-    const newSessionId = await createPTY(cwd);
-    const sessionConfig = currentSession?.aiConfig || aiService.getConfig();
+    let newSessionId: string;
+    let newTitle = "Terminal";
+
+    if (currentSession?.remoteUrl) {
+      // Remote server session — create a new PTY on the same remote server
+      const connId = getRemoteConnectionId(tab.activeSessionId);
+      if (!connId) return; // Connection lost
+      newSessionId = await createRemotePTY(connId, 80, 30, cwd);
+      newTitle = currentSession.title || "Remote";
+    } else if (currentSession?.sshProfileId) {
+      // SSH session — create a new SSH connection to the same host
+      const ipc = window.electron?.ipcRenderer;
+      if (!ipc) return;
+      const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
+      const profiles: SSHConnectionConfig[] = await readFn() || [];
+      const profile = profiles.find((p) => p.id === currentSession.sshProfileId);
+      if (!profile) return; // Profile deleted
+      const connectFn = (ipc as any).connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
+      const result = await connectFn({ ...profile, cols: 80, rows: 30 });
+      newSessionId = result.sessionId;
+      newTitle = profile.name || `${profile.username}@${profile.host}`;
+    } else {
+      // Local session
+      if (isSshOnly()) return; // Gateway mode: no local PTY
+      newSessionId = await createPTY(cwd);
+    }
+
     setSessions((prev) =>
       new Map(prev).set(newSessionId, {
         id: newSessionId,
-        title: "Terminal",
+        title: newTitle,
         cwd,
         aiConfig: sessionConfig,
+        ...(currentSession?.remoteUrl ? { remoteUrl: currentSession.remoteUrl } : {}),
+        ...(currentSession?.sshProfileId ? { sshProfileId: currentSession.sshProfileId } : {}),
       }),
     );
 
@@ -1148,22 +1174,46 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         const oldSessionId = node.sessionId;
         const oldSession = sessions.get(oldSessionId);
 
-        // Let's create a new completely disconnected PTY running in the same CWD
         // Fetch fresh cwd from server to avoid stale/truncated paths
         let cwd = oldSession?.cwd;
         try {
           const freshCwd = await window.electron?.ipcRenderer?.getCwd(oldSessionId);
           if (freshCwd) cwd = freshCwd;
         } catch { /* fall back to cached cwd */ }
-        const newSessionId = await createPTY(cwd);
+
+        let newSessionId: string;
+        let newTitle = oldSession?.title || "Terminal";
+
+        if (oldSession?.remoteUrl) {
+          // Remote server session — create PTY on the same remote server
+          const connId = getRemoteConnectionId(oldSessionId);
+          if (!connId) return node; // Connection lost — keep original
+          newSessionId = await createRemotePTY(connId, 80, 30, cwd);
+        } else if (oldSession?.sshProfileId) {
+          // SSH session — create a new SSH connection to the same host
+          const ipc = window.electron?.ipcRenderer;
+          if (!ipc) return node;
+          const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
+          const profiles: SSHConnectionConfig[] = await readFn() || [];
+          const profile = profiles.find((p) => p.id === oldSession.sshProfileId);
+          if (!profile) return node; // Profile deleted
+          const connectFn = (ipc as any).connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
+          const result = await connectFn({ ...profile, cols: 80, rows: 30 });
+          newSessionId = result.sessionId;
+          newTitle = profile.name || `${profile.username}@${profile.host}`;
+        } else {
+          newSessionId = await createPTY(cwd);
+        }
 
         // Copy configs only — not terminal/agent history
         setSessions((prev) =>
           new Map(prev).set(newSessionId, {
             id: newSessionId,
-            title: oldSession?.title || "Terminal",
+            title: newTitle,
             cwd,
             aiConfig: oldSession?.aiConfig || aiService.getConfig(),
+            ...(oldSession?.remoteUrl ? { remoteUrl: oldSession.remoteUrl } : {}),
+            ...(oldSession?.sshProfileId ? { sshProfileId: oldSession.sshProfileId } : {}),
           }),
         );
         return { ...node, sessionId: newSessionId };
