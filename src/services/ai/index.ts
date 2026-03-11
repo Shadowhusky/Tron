@@ -3577,6 +3577,11 @@ ${agentPrompt}
             content: `Read Failed: ${err.message} `,
           });
         }
+        // Throttle: when terminal is busy, delay before next LLM call to avoid rapid API calls
+        if (terminalBusy) {
+          const throttleMs = Math.min(2000 + 1000 * readTerminalCount, 8000);
+          await new Promise((r) => setTimeout(r, throttleMs));
+        }
         continue;
       }
 
