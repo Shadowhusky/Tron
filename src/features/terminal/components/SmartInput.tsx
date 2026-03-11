@@ -1801,6 +1801,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 // No images in clipboardData — try server-side IPC first (most
                 // reliable in web mode), then navigator.clipboard.read() as
                 // fallback. Don't preventDefault — let native text paste happen.
+                // Skip async image check if the paste event carries any text or
+                // file data — prevents attaching a stale clipboard image when user
+                // copies a file in Finder (macOS puts file icon on clipboard).
+                const cd = e.clipboardData;
+                if (cd && (cd.getData("text/plain") || cd.getData("text/uri-list")
+                    || cd.types.includes("Files"))) return;
                 (async () => {
                   // IPC: server reads system clipboard directly (bypasses browser restrictions)
                   try {
