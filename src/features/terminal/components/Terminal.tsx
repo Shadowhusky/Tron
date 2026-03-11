@@ -518,29 +518,25 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
     }
 
-    // DESKTOP GUARD: timer-based guard on mousedown / textarea focus (less
-    // aggressive — desktop doesn't have the touch-scroll/DOM-scroll split).
-    let scrollGuardPos = -1;
-    let scrollGuardTimer: ReturnType<typeof setTimeout> | undefined;
-    const scrollGuard = () => {
-      if (xtermViewport && scrollGuardPos >= 0 &&
-          Math.abs(xtermViewport.scrollTop - scrollGuardPos) > 50) {
-        xtermViewport.scrollTop = scrollGuardPos;
+    // DESKTOP GUARD: persistent scroll guard that catches sudden scroll-to-top
+    // jumps from ANY cause — user interaction, xterm internals (alternate buffer
+    // switches, TUI redraws), or focus events. Tracks last known good position
+    // and reverts jumps >50px to scrollTop=0.
+    let desktopGuardPos = 0;
+    let desktopGuardRaf = 0;
+    const desktopScrollGuard = !isTouch && xtermViewport ? () => {
+      const vp = xtermViewport!;
+      if (desktopGuardPos > 50 && vp.scrollTop === 0) {
+        // Sudden jump to top — revert on next frame to avoid fighting xterm
+        cancelAnimationFrame(desktopGuardRaf);
+        const restoreTo = desktopGuardPos;
+        desktopGuardRaf = requestAnimationFrame(() => { vp.scrollTop = restoreTo; });
+      } else {
+        desktopGuardPos = vp.scrollTop;
       }
-    };
-    const armScrollGuard = !isTouch ? () => {
-      if (!xtermViewport) return;
-      scrollGuardPos = xtermViewport.scrollTop;
-      xtermViewport.addEventListener("scroll", scrollGuard);
-      clearTimeout(scrollGuardTimer);
-      scrollGuardTimer = setTimeout(() => {
-        xtermViewport.removeEventListener("scroll", scrollGuard);
-        scrollGuardPos = -1;
-      }, 300);
     } : null;
-    if (armScrollGuard) {
-      el.addEventListener("mousedown", armScrollGuard);
-      xtermTextarea?.addEventListener("focus", armScrollGuard);
+    if (desktopScrollGuard) {
+      xtermViewport!.addEventListener("scroll", desktopScrollGuard);
     }
 
     // Track whether user is scrolled up from bottom (for scroll-to-bottom button).
@@ -604,6 +600,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         const wasAtBottom = buf.viewportY >= buf.baseY;
         const savedViewportY = buf.viewportY;
 
+        // Suppress desktop scroll guard during fit() — fit() may briefly set
+        // scrollTop to 0 before we restore it, which would trigger the guard.
+        desktopGuardPos = 0;
         fitAddonRef.current.fit();
 
         // Restore scroll position to prevent visible jump during resize.
@@ -613,6 +612,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         } else {
           xtermRef.current.scrollToLine(savedViewportY);
         }
+        // Re-arm guard with restored position
+        if (xtermViewport) desktopGuardPos = xtermViewport.scrollTop;
         const { cols, rows } = xtermRef.current;
 
         if (
@@ -940,11 +941,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       vv?.removeEventListener("resize", onViewportResize);
       clearTimeout(viewportResizeTimer);
       if (preventPageScroll) window.removeEventListener("scroll", preventPageScroll);
-      if (armScrollGuard) {
-        el.removeEventListener("mousedown", armScrollGuard);
-        xtermTextarea?.removeEventListener("focus", armScrollGuard);
-        xtermViewport?.removeEventListener("scroll", scrollGuard);
-        clearTimeout(scrollGuardTimer);
+      if (desktopScrollGuard) {
+        xtermViewport?.removeEventListener("scroll", desktopScrollGuard);
+        cancelAnimationFrame(desktopGuardRaf);
       }
       // Restore original textarea focus + clean up mobile listeners
       if (xtermTextarea && origTextareaFocus) {
