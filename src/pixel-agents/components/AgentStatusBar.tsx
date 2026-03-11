@@ -40,7 +40,7 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
           ? "text-yellow-400"
           : themeClass(resolvedTheme, {
               dark: agent.active ? "text-green-400/80" : "text-white/20",
-              light: agent.active ? "text-gray-700" : "text-gray-300",
+              light: agent.active ? "text-green-700" : "text-gray-400",
               modern: agent.active ? "text-green-300/80" : "text-white/15",
             })
       }`}
@@ -50,12 +50,12 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
       <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${agent.permission
         ? "bg-yellow-400 animate-pulse"
         : agent.active
-          ? `${themeClass(resolvedTheme, { dark: "bg-green-400", light: "bg-gray-700", modern: "bg-green-300" })} animate-pulse`
+          ? `${themeClass(resolvedTheme, { dark: "bg-green-400", light: "bg-green-500", modern: "bg-green-300" })} animate-pulse`
           : themeClass(resolvedTheme, { dark: "bg-white/20", light: "bg-gray-300", modern: "bg-white/15" })
       }`} />
       <span className={`max-w-[150px] truncate ${agent.permission ? "text-yellow-300" : themeClass(resolvedTheme, {
         dark: "text-white/30",
-        light: "text-gray-400",
+        light: "text-gray-500",
         modern: "text-white/20",
       })}`}>
         {agent.label}

@@ -88,6 +88,22 @@ TOOL_CALL_RE.push(
   [new RegExp(`${CC_PREFIX}\\s*Web\\s+Fetch\\b`), "web_search"],
 );
 
+// Compact/gerund-form tool display: "⏺ Reading 1 file…", "⏺ Writing to 2 files…",
+// "⏺ Editing 3 files…", "⏺ Searching…", "⏺ Running…", etc.
+const GERUND_TOOL_RE: [RegExp, string][] = [
+  [new RegExp(`${CC_PREFIX}\\s*Reading\\b`), "read_file"],
+  [new RegExp(`${CC_PREFIX}\\s*Writing\\b`), "write_file"],
+  [new RegExp(`${CC_PREFIX}\\s*Editing\\b`), "edit_file"],
+  [new RegExp(`${CC_PREFIX}\\s*Searching\\b`), "search_dir"],
+  [new RegExp(`${CC_PREFIX}\\s*Running\\b`), "execute_command"],
+  [new RegExp(`${CC_PREFIX}\\s*Listing\\b`), "list_dir"],
+  [new RegExp(`${CC_PREFIX}\\s*Fetching\\b`), "web_search"],
+  [new RegExp(`${CC_PREFIX}\\s*Launching\\b`), "agent"],
+  [new RegExp(`${CC_PREFIX}\\s*Spawning\\b`), "agent"],
+  [new RegExp(`${CC_PREFIX}\\s*Planning\\b`), "thinking"],
+  [new RegExp(`${CC_PREFIX}\\s*Thinking\\b`), "thinking"],
+];
+
 const EXTRA_TOOL_RE: [RegExp, string][] = [
   [/"tool":\s*"(Read|read_file|NotebookRead|TodoRead)"/, "read_file"],
   [/"tool":\s*"(Write|write_file|TodoWrite)"/, "write_file"],
@@ -131,6 +147,12 @@ function detectToolFromChunk(sessionId: string, rawData: string): DetectResult {
       return { tool, permission: hasPermission };
     }
   }
+  for (const [re, tool] of GERUND_TOOL_RE) {
+    if (re.test(text)) {
+      sessionLookback.delete(sessionId);
+      return { tool, permission: hasPermission };
+    }
+  }
   for (const [re, tool] of EXTRA_TOOL_RE) {
     if (re.test(stripped)) {
       sessionLookback.delete(sessionId);
@@ -163,6 +185,8 @@ function deriveActivity(
 ): { active: boolean; tool: string | null; permission: boolean } {
   if (pendingCommand !== null) return { active: true, tool: null, permission: true };
   if (!isAgentRunning) return { active: false, tool: null, permission: false };
+  // isThinking takes priority — model is actively generating thinking tokens
+  if (isThinking) return { active: true, tool: "thinking", permission: false };
   for (let i = steps.length - 1; i >= 0; i--) {
     const { step, payload } = steps[i];
     const tool: string | null = payload?.tool || null;
@@ -172,20 +196,27 @@ function deriveActivity(
         return { active: true, tool, permission: false };
       case "read_terminal":
         return { active: true, tool: "read_terminal", permission: false };
-      case "thinking":
       case "streaming_thinking":
+      case "thinking":
+        return { active: true, tool: "thinking", permission: false };
+      case "streaming":
+      case "streaming_response":
+        // Agent is generating response text (after thinking, before tool call parsed)
+        return { active: true, tool: "thinking", permission: false };
       case "thought":
       case "thinking_complete":
-        return { active: true, tool: isThinking ? "thinking" : null, permission: false };
       case "plan":
         return { active: true, tool: null, permission: false };
+      case "done":
+      case "error":
+      case "failed":
+      case "stopped":
+        // Agent finished — treat as inactive even if isAgentRunning hasn't toggled yet
+        return { active: false, tool: null, permission: false };
       default:
-        if (step === "streaming" || step === "streaming_response" || step === "done" || step === "error" || step === "failed")
-          return { active: true, tool: null, permission: false };
         continue;
     }
   }
-  if (isThinking) return { active: true, tool: "thinking", permission: false };
   return { active: true, tool: null, permission: false };
 }
 

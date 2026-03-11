@@ -951,9 +951,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   }, []);
 
   // Fade-out for completed thinking steps — visible for 1.5s then collapse over 0.8s
-  const [fadingThoughts, setFadingThoughts] = useState<Map<number, "visible" | "fading" | "collapsing">>(new Map());
+  const [fadingThoughts, setFadingThoughts] = useState<Map<number, "visible" | "fading">>(new Map());
   const fadingTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const thoughtHeightsRef = useRef<Map<number, number>>(new Map());
+  // Tracks thoughts whose fade animation has completed — these should be hidden (zero-height)
+  const [hiddenThoughts, setHiddenThoughts] = useState<Set<number>>(new Set());
   const prevStepsRef = useRef<string[]>([]);
 
   // Measure thought element heights for smooth collapse
@@ -968,20 +970,39 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
     for (let i = 0; i < curSteps.length; i++) {
       if (curSteps[i] === "thought" && prevSteps[i] === "thinking" && !fadingTimersRef.current.has(i)) {
+        // When a new thought appears, immediately collapse any still-fading older thoughts
+        // to prevent stacking (e.g. during parse retries or rapid model responses).
+        setFadingThoughts((prev) => {
+          const next = new Map<number, "visible" | "fading">();
+          const toHide: number[] = [];
+          // Keep only the new one; collapse all others immediately
+          for (const [idx, phase] of prev) {
+            if (idx !== i && (phase === "visible" || phase === "fading")) {
+              // Cancel timers for old thoughts
+              const oldTimer = fadingTimersRef.current.get(idx);
+              if (oldTimer) clearTimeout(oldTimer);
+              fadingTimersRef.current.delete(idx);
+              toHide.push(idx);
+            } else {
+              next.set(idx, phase);
+            }
+          }
+          if (toHide.length > 0) {
+            setHiddenThoughts((prev) => { const s = new Set(prev); toHide.forEach((idx) => s.add(idx)); return s; });
+          }
+          return next;
+        });
         // Phase 1: visible (1.5s)
         setFadingThoughts((prev) => new Map(prev).set(i, "visible"));
         const t1 = setTimeout(() => {
           // Phase 2: fade opacity (0.4s)
           setFadingThoughts((prev) => new Map(prev).set(i, "fading"));
           const t2 = setTimeout(() => {
-            // Phase 3: collapse height (0.3s)
-            setFadingThoughts((prev) => new Map(prev).set(i, "collapsing"));
-            const t3 = setTimeout(() => {
-              setFadingThoughts((prev) => { const next = new Map(prev); next.delete(i); return next; });
-              thoughtHeightsRef.current.delete(i);
-              fadingTimersRef.current.delete(i);
-            }, 350);
-            fadingTimersRef.current.set(i, t3);
+            // Mark as hidden — virtualizer will reclaim the slot
+            setFadingThoughts((prev) => { const next = new Map(prev); next.delete(i); return next; });
+            setHiddenThoughts((prev) => { const next = new Set(prev); next.add(i); return next; });
+            thoughtHeightsRef.current.delete(i);
+            fadingTimersRef.current.delete(i);
           }, 400);
           fadingTimersRef.current.set(i, t2);
         }, 1500);
@@ -1014,13 +1035,23 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     const newSteps = agentThread.slice(prevAutoCollapseLen.current);
     prevAutoCollapseLen.current = agentThread.length;
 
-    // Only collapse previous executed steps when a new run starts (separator).
-    // Within a run, steps stay expanded so the user can review results.
+    // Only collapse executed steps from OLDER runs when a new run starts (separator).
+    // The immediately preceding run's steps stay expanded so the user can review.
     // Skip any that the user has manually expanded.
     const shouldCollapse = newSteps.some((s) => s.step === "separator");
     if (shouldCollapse) {
+      // Find where the immediately preceding run started (last separator before the new ones)
+      const prevLen = agentThread.length - newSteps.length;
+      let prevRunStart = 0;
+      for (let i = prevLen - 1; i >= 0; i--) {
+        if (agentThread[i].step === "separator") {
+          prevRunStart = i + 1;
+          break;
+        }
+      }
       const toCollapse = new Set(collapsedSteps);
-      for (let i = 0; i < agentThread.length - newSteps.length; i++) {
+      // Only collapse steps BEFORE the previous run (older runs)
+      for (let i = 0; i < prevRunStart; i++) {
         if (
           (agentThread[i].step === "executed" || agentThread[i].step === "read_terminal") &&
           !manuallyExpandedRef.current.has(i)
@@ -1358,7 +1389,6 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     },
     paddingStart: 16,
     paddingEnd: 16,
-    gap: 8,
     overscan: 3,
   });
 
@@ -1614,7 +1644,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     }
 
                     // Hide completed thinking steps
-                    if (isThought && !fadingThoughts.has(globalIdx)) return null;
+                    if (isThought && hiddenThoughts.has(globalIdx)) return null;
 
                     // Stopped: render a tiny inline indicator, not a full step block
                     // Structured plan — render as checklist
@@ -1666,9 +1696,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       <div
                         key={key}
                         ref={thoughtPhase === "visible" ? (el: HTMLDivElement | null) => measureThoughtRef(el, globalIdx) : undefined}
-                        style={thoughtPhase === "collapsing"
-                          ? { opacity: 0, maxHeight: 0, overflow: "hidden", paddingTop: 0, paddingBottom: 0, transition: "max-height 0.3s ease-out, padding 0.3s ease-out" }
-                          : thoughtPhase === "fading"
+                        style={thoughtPhase === "fading"
                             ? { opacity: 0, maxHeight: measuredH ?? 200, overflow: "hidden", transition: "opacity 0.4s ease-out" }
                             : thoughtPhase === "visible"
                               ? { opacity: 0.7, maxHeight: measuredH ?? 200, overflow: "hidden", transition: "opacity 0.3s ease-in" }
@@ -2325,6 +2353,28 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       {virtualizer.getVirtualItems().map((vRow) => {
                         const item = flatItems[vRow.index];
                         if (!item) return null;
+                        // Hidden thoughts (animation completed): measure as 0 so virtualizer reclaims space
+                        const isHiddenThought = item.kind === "step"
+                          && (item.step.step === "thought" || item.step.step === "thinking")
+                          && hiddenThoughts.has(item.globalIdx);
+                        if (isHiddenThought) {
+                          return (
+                            <div
+                              key={vRow.key}
+                              data-index={vRow.index}
+                              ref={virtualizer.measureElement}
+                              style={{
+                                position: "absolute",
+                                top: 0,
+                                left: 0,
+                                width: "100%",
+                                transform: `translateY(${vRow.start}px)`,
+                                height: 0,
+                                overflow: "hidden",
+                              }}
+                            />
+                          );
+                        }
                         return (
                           <div
                             key={vRow.key}
@@ -2337,6 +2387,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                               width: "100%",
                               transform: `translateY(${vRow.start}px)`,
                               padding: "0 16px",
+                              paddingBottom: 8,
                             }}
                           >
                             {item.kind === "step"

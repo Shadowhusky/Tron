@@ -46,6 +46,7 @@ electron/
     config.ts         # Config/session IPC handlers (readSessions, writeSessions)
     system.ts         # Folder picker, shell:openPath, shell:openExternal
     ai.ts             # AI connection test — cloud providers validate config only (no API call), local providers ping endpoint
+    web.ts            # Web search (Brave→DuckDuckGo→Startpage fallback) and web fetch IPC handlers
   preload.ts          # Context bridge with channel allowlist
 
 server/               # Web mode (Express + WebSocket, no Electron)
@@ -130,21 +131,29 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - `send_text` — sends keystrokes (arrow keys, Enter, Ctrl+C).
 - `read_terminal` — reads last N lines. Classifies terminal state (idle/busy/server/input_needed). Uses exponential backoff (500ms→4s). Consecutive reads merge into single UI entry via `"read_terminal"` step type.
 - `write_file` / `read_file` / `edit_file` / `list_dir` / `search_dir` — file ops via IPC (or shell commands over SSH).
+- `web_search` — searches the web via `web.search` IPC (Brave→DuckDuckGo→Startpage fallback chain). Results include hint to use them.
+- `web_fetch` — fetches a web page as plain text via `web.fetch` IPC. Agent is forbidden from calling external APIs (Yahoo Finance, etc.) via this or curl.
 - `ask_question` — returns `AgentContinuation` for conversation resumption.
-- `final_answer` — rejection filters: premature completion, unfinished work, error mentions.
+- `final_answer` — rejection filters: premature completion, unfinished work, future plans, error mentions, delegation.
 
 ### Safety Mechanisms
-- **Loop detection**: Blocks after 3 consecutive identical calls or A→B→A→B alternation. Escalates after 3 breaks.
+- **Loop detection**: Blocks after 2 consecutive identical calls (5 for `send_text`) or A→B→A→B alternation. `actionKey` includes `tool`, `path`, `command`, `text`, `query`, `url` — so `web_search` with different queries won't trigger. Escalates after 3 breaks.
 - **Circuit breaker**: After 3 consecutive guard blocks, forces final_answer.
 - **Busy-state backoff**: Exponential wait (2s–8s) when terminal is busy. After 5 checks, forces approach change.
 - **Server detection**: When `identicalReadCount >= 1` with server state, blocks further writes and forces final_answer.
-- **Parse error hiding**: Parse failures silently retry (up to 3x) without showing in agent overlay. After 3 failures, raw text becomes final_answer.
+- **Parse error hiding**: Parse failures silently retry (up to 5x) without showing in agent overlay. Emits `retract_thought` to remove the thought step from the failed parse attempt. After all retries, raw text becomes final_answer.
 - **Dangerous command detection**: Pattern-based + heuristic detection. Double-confirm for destructive operations. Permission request is pinned at bottom of the overlay (`shrink-0 max-h-[50%]`), thread history remains scrollable above it.
 - **Progress reflection**: Every 8 steps, if no progress in 6+ steps, injects reflection prompt.
 - **Context compaction**: Old tool results compressed after history exceeds 30 messages.
 - **Auto-cd**: Platform-aware (`&&` on Unix, `;` on Windows). Skips scaffold commands.
 - **Smarter TUI detection**: Pre-flight TUI checks in `run_in_terminal` and `execute_command` skip `detectTuiProgram()` when terminal is idle (`classifyTerminalOutput` returns `"idle"`). Prevents false positives from stale TUI artifacts (box-drawing chars, "claude", vim tildes) in scrollback after TUI has exited. Same gate in `read_terminal` handler.
 - **Agent task focus**: Prior interactions truncated to 80 chars each (6 most recent, not 10) in `useAgentRunner.ts`. Task boundary header strengthened: `[CURRENT TASK — focus ONLY on this, ignore all prior tasks above]`. `agent.md` includes `TASK FOCUS` directive.
+- **Agent environment context**: `useAgentRunner` injects `[ENVIRONMENT]` block with current date (dynamic via `toLocaleDateString`), CWD, and system paths. `rawUserTask` is passed separately to `runAgent` options to keep guard evaluation clean (not polluted by environment text).
+- **Thought lifecycle in AgentOverlay**: Thoughts fade via 2-phase animation: `visible` (1.5s) → `fading` (0.4s) → added to `hiddenThoughts` set. New thoughts immediately collapse older still-fading thoughts. `hiddenThoughts` (not `fadingThoughts`) controls zero-height rendering in the virtualizer — avoids React render-before-effect race where thoughts would flash hidden on first frame.
+- **Streaming cleanup**: `clear_streaming` event emitted at the start of each agent loop iteration. Removes leftover `streaming` entries (e.g. "Composing answer" from guard-rejected responses) before the next LLM call begins.
+- **Web search/fetch IPC**: Both Electron and web mode use `invoke("web.search")`/`invoke("web.fetch")` — routed through preload IPC (Electron) or WS bridge → server (web mode). Server implements search via `webSearchImpl()` with Brave→DuckDuckGo→Startpage fallback. Never use direct HTTP fetch to detect mode — both modes expose the same IPC interface.
+- **Offline tab restoration**: `main.tsx` races `modeReady` against 5s timeout. If server is unreachable, `LayoutContext` restores tabs from localStorage without PTY sessions (`serverDisconnected` state). On reconnect, PTY sessions are re-created via `onServerReconnect` callback. `ws-bridge.ts` exposes `onConnectionChange()` and `isServerConnected()` observables.
+- **Agent thinking always captured**: `thinking_complete` is emitted regardless of `thinkingEnabled` toggle — ensures thinking is always logged even when the UI toggle is off.
 
 ### Terminal State Classification (`src/utils/terminalState.ts`)
 - `idle` — shell prompt visible (`$`, `%`, `#`, `>`, `PS C:\>`, `C:\>`)

@@ -39,6 +39,8 @@ const ALLOWED_INVOKE_CHANNELS = [
     "ssh.disconnect",
     "ssh.profiles.read",
     "ssh.profiles.write",
+    "remote.profiles.read",
+    "remote.profiles.write",
     "savedTabs.read",
     "savedTabs.write",
     "terminal.getShellHistory",
@@ -54,6 +56,8 @@ const ALLOWED_INVOKE_CHANNELS = [
     "updater.getStatus",
     "updater.getVersion",
     "clipboard.readImage",
+    "web.search",
+    "web.fetch",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -146,6 +150,8 @@ const electronAPI = {
         disconnectSSH: (sessionId) => electron_1.ipcRenderer.invoke("ssh.disconnect", sessionId),
         readSSHProfiles: () => electron_1.ipcRenderer.invoke("ssh.profiles.read"),
         writeSSHProfiles: (profiles) => electron_1.ipcRenderer.invoke("ssh.profiles.write", profiles),
+        readRemoteProfiles: () => electron_1.ipcRenderer.invoke("remote.profiles.read"),
+        writeRemoteProfiles: (profiles) => electron_1.ipcRenderer.invoke("remote.profiles.write", profiles),
         // Sync Tabs
         readSyncTabs: () => electron_1.ipcRenderer.invoke("savedTabs.read"),
         writeSyncTabs: (tabs) => electron_1.ipcRenderer.invoke("savedTabs.write", tabs),

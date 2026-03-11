@@ -420,16 +420,18 @@ export async function createRemotePTY(
   cols: number,
   rows: number,
   cwd?: string,
-): Promise<string> {
+  reconnectId?: string,
+): Promise<{ sessionId: string; reconnected: boolean }> {
   const conn = connections.get(connectionId);
   if (!conn) throw new Error("Remote connection not found");
 
-  const result = await conn.invoke("terminal.create", { cols, rows, cwd });
+  const result = await conn.invoke("terminal.create", { cols, rows, cwd, reconnectId });
   // Server returns { sessionId, reconnected } or plain string
   const sessionId = typeof result === "object" && result?.sessionId
     ? result.sessionId
     : result as string;
+  const reconnected = typeof result === "object" && !!result?.reconnected;
   registerRemoteSession(sessionId, connectionId);
 
-  return sessionId;
+  return { sessionId, reconnected };
 }

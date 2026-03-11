@@ -96,6 +96,8 @@ const server = http.createServer(app);
 // frame-ancestors. Used by BrowserPane to avoid CSP console errors.
 // ---------------------------------------------------------------------------
 app.get("/api/frame-check", async (req, res) => {
+  // Allow cross-origin requests (Electron embedded server on localhost)
+  res.set("Access-Control-Allow-Origin", "*");
   const url = req.query.url as string;
   if (!url) { res.json({ embeddable: false }); return; }
   try {
@@ -128,6 +130,163 @@ app.get("/api/frame-check", async (req, res) => {
     // Can't reach or timeout — let iframe try
     res.json({ embeddable: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Web search/fetch helpers — used by both HTTP endpoints and WS invoke handler.
+// ---------------------------------------------------------------------------
+type SR = { title: string; url: string; snippet: string };
+const _stripTags = (s: string) => s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+
+async function webSearchImpl(q: string): Promise<{ results: SR[]; error?: string }> {
+  if (!q) return { results: [] };
+
+  // Try Brave Search first
+  try {
+    const resp = await fetch(`https://search.brave.com/search?q=${encodeURIComponent(q)}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(8000),
+      redirect: "follow",
+    });
+    const html = await resp.text();
+    if (!html.includes("PoW Captcha") && !html.includes("captcha")) {
+      const results: SR[] = [];
+      const blocks = html.split(/class="snippet\s+svelte/);
+      for (const block of blocks.slice(1, 10)) {
+        const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
+        const titleMatch = block.match(/class="[^"]*snippet-title[^"]*"[^>]*>([\s\S]*?)<\/div>/)
+          || block.match(/class="title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+        const descMatch = block.match(/class="snippet-description[^"]*"[^>]*>([\s\S]*?)<\/p>/)
+          || block.match(/class="content[^"]*line-clamp[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+        if (urlMatch && titleMatch) {
+          const url = urlMatch[1];
+          const title = _stripTags(titleMatch[1]);
+          const snippet = descMatch ? _stripTags(descMatch[1]).slice(0, 300) : "";
+          if (title && !url.includes("brave.com") && !url.includes("imgs.search")) {
+            results.push({ title, url, snippet });
+          }
+        }
+        if (results.length >= 7) break;
+      }
+      if (results.length > 0) return { results };
+    }
+  } catch { /* fall through to DDG */ }
+
+  // Fallback: duck-duck-scrape
+  try {
+    const DDG = await import("duck-duck-scrape");
+    const searchFn = DDG.search || DDG.default?.search;
+    if (searchFn) {
+      const data = await searchFn(q, { safeSearch: DDG.SafeSearchType?.MODERATE ?? 0 });
+      const results: SR[] = (data.results || []).slice(0, 7).map((r: any) => ({
+        title: r.title || "", url: r.url || r.href || "",
+        snippet: (r.description || r.body || "").slice(0, 300),
+      }));
+      if (results.length > 0) return { results };
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: Startpage (Google proxy)
+  try {
+    const spResp = await fetch("https://www.startpage.com/sp/search", {
+      method: "POST",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: `query=${encodeURIComponent(q)}&cat=web`,
+      signal: AbortSignal.timeout(8000),
+      redirect: "follow",
+    });
+    const spHtml = await spResp.text();
+    const spResults: SR[] = [];
+    const spBlocks = spHtml.split(/class="result\s+css/);
+    for (const block of spBlocks.slice(1, 10)) {
+      const titleMatch = block.match(/class="result-title result-link[^"]*"[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+      const descMatch = block.match(/<p[^>]*class="[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+      if (titleMatch) {
+        const url = titleMatch[1];
+        const title = _stripTags(titleMatch[2]).replace(/\.css-[a-z0-9]+\{[^}]*\}(@media[^{]*\{[^}]*\})?\s*/g, "").replace(/^[{}]\s*/g, "").trim();
+        const snippet = descMatch ? _stripTags(descMatch[1]).slice(0, 300) : "";
+        if (title && !url.includes("startpage.com")) {
+          spResults.push({ title, url, snippet });
+        }
+      }
+      if (spResults.length >= 7) break;
+    }
+    if (spResults.length > 0) return { results: spResults };
+  } catch { /* fall through */ }
+
+  return { results: [], error: "All search providers failed (rate limited). Try again later." };
+}
+
+async function webFetchImpl(url: string): Promise<{ content: string; error?: string; url?: string; truncated?: boolean }> {
+  if (!url) return { content: "", error: "No URL provided" };
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { content: "", error: "Only http/https URLs allowed" };
+    }
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,text/plain,application/json,*/*",
+      },
+      signal: AbortSignal.timeout(10000),
+      redirect: "follow",
+    });
+    const contentType = resp.headers.get("content-type") || "";
+    let text: string;
+    if (contentType.includes("json")) {
+      const json = await resp.json();
+      text = JSON.stringify(json, null, 2);
+    } else if (contentType.includes("html")) {
+      const html = await resp.text();
+      text = html
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[\s\S]*?<\/style>/gi, "")
+        .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+        .replace(/<header[\s\S]*?<\/header>/gi, "")
+        .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s+/g, " ")
+        .trim();
+    } else {
+      text = await resp.text();
+    }
+    const MAX_LEN = 15000;
+    const isTruncated = text.length > MAX_LEN;
+    return {
+      content: isTruncated ? text.slice(0, MAX_LEN) + "\n...(truncated)" : text,
+      url: resp.url,
+      truncated: isTruncated,
+    };
+  } catch (err: any) {
+    return { content: "", error: err.message };
+  }
+}
+
+// HTTP endpoints (kept for backward compatibility / direct HTTP access)
+app.get("/api/web-search", async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.json(await webSearchImpl(req.query.q as string));
+});
+
+app.get("/api/web-fetch", async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.json(await webFetchImpl(req.query.url as string));
 });
 
 // ---------------------------------------------------------------------------
@@ -481,6 +640,10 @@ async function handleInvoke(
       return terminal.scanCommands();
     case "terminal.getShellHistory":
       return terminal.getShellHistory();
+    case "web.search":
+      return webSearchImpl(data?.query || "");
+    case "web.fetch":
+      return webFetchImpl(data?.url || "");
     case "file.saveTempImage": {
       const tmpDir = path.join(os.tmpdir(), "tron-images");
       if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });

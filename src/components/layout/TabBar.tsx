@@ -28,6 +28,7 @@ interface TabBarProps {
   onSaveTab?: (tabId: string) => Promise<void>;
   onLoadSavedTab?: () => void;
   onCreateRemote?: () => void;
+  onCreateBrowser?: () => void;
 }
 
 const TabBar: React.FC<TabBarProps> = ({
@@ -48,6 +49,7 @@ const TabBar: React.FC<TabBarProps> = ({
   onSaveTab,
   onLoadSavedTab,
   onCreateRemote,
+  onCreateBrowser,
 }) => {
   // Confirm helper — uses styled modal if available, falls back to window.confirm
   const confirm = async (msg: string) =>
@@ -577,6 +579,25 @@ const TabBar: React.FC<TabBarProps> = ({
                         />
                       </svg>
                       Remote Server
+                    </button>
+                  </Popover.Close>
+                )}
+                {onCreateBrowser && (
+                  <Popover.Close asChild>
+                    <button
+                      data-testid="tab-create-browser"
+                      onClick={onCreateBrowser}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                        resolvedTheme,
+                        {
+                          dark: "hover:bg-white/10",
+                          modern: "hover:bg-white/20",
+                          light: "hover:bg-gray-100",
+                        },
+                      )}`}
+                    >
+                      <Globe className="h-4 w-4" />
+                      Web Browser
                     </button>
                   </Popover.Close>
                 )}

@@ -16,9 +16,17 @@ interface BrowserPaneProps {
  */
 async function canEmbed(targetUrl: string): Promise<boolean> {
   try {
-    // In Electron mode with embedded web server, or web mode — use server endpoint
-    const port = (window as any).__tronWebServerPort || 3888;
-    const res = await fetch(`http://localhost:${port}/api/frame-check?url=${encodeURIComponent(targetUrl)}`, {
+    // In web mode, use relative URL so it works from any hostname.
+    // In Electron mode, use the embedded web server on localhost.
+    let checkUrl: string;
+    if (!(window as any)._electronBridge) {
+      // Web mode — relative fetch goes to the same origin
+      checkUrl = `/api/frame-check?url=${encodeURIComponent(targetUrl)}`;
+    } else {
+      const port = (window as any).__tronWebServerPort || 3888;
+      checkUrl = `http://localhost:${port}/api/frame-check?url=${encodeURIComponent(targetUrl)}`;
+    }
+    const res = await fetch(checkUrl, {
       signal: AbortSignal.timeout(4000),
     });
     if (res.ok) {
@@ -63,7 +71,10 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
   const navigate = useCallback((newUrl: string) => {
     let normalized = newUrl.trim();
     if (!/^https?:\/\//i.test(normalized)) {
-      if (/^[a-z0-9-]+\.[a-z]{2,}/i.test(normalized)) {
+      // Looks like a URL: has a dot with TLD, or localhost, or IP address, or has a port
+      if (/^([a-z0-9-]+\.)+[a-z]{2,}/i.test(normalized) ||
+          /^localhost([:\/]|$)/i.test(normalized) ||
+          /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}([:\/]|$)/.test(normalized)) {
         normalized = `https://${normalized}`;
       } else {
         normalized = `https://www.google.com/search?q=${encodeURIComponent(normalized)}`;

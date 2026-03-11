@@ -69,6 +69,8 @@ interface LayoutContextType {
   /** Delete a saved tab snapshot from persistent storage. */
   deleteSavedTab: (savedTabId: string) => Promise<void>;
   isHydrated: boolean;
+  /** Server is unreachable — tabs restored from cache, terminal panes show retry overlay. */
+  serverDisconnected: boolean;
   /** Register a styled confirm dialog (replaces window.confirm for tab close). */
   setConfirmHandler: (handler: (message: string) => Promise<boolean>) => void;
   /** Trigger an immediate CWD refresh for a session (or the active session). */
@@ -160,6 +162,45 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     return `mock-${uuid()}`;
   };
 
+  // Server disconnected state — when true, tabs are restored from localStorage
+  // but have no PTY backing. Terminal panes show a retry overlay.
+  const [serverDisconnected, setServerDisconnected] = useState(false);
+
+  /** Restore tab structure from saved state WITHOUT creating PTY sessions.
+   *  Used when the server is unreachable on startup so tabs don't disappear. */
+  const restoreTabsOffline = (
+    savedTabs: Tab[],
+    savedCwds: Record<string, string>,
+    parsed: any,
+  ): { tabs: Tab[]; sessions: Map<string, TerminalSession> } | null => {
+    if (!savedTabs || savedTabs.length === 0) return null;
+    const offlineSessions = new Map<string, TerminalSession>();
+    // Keep existing session IDs from the saved layout — no PTY behind them
+    const collectSessions = (node: LayoutNode) => {
+      if (node.type === "leaf") {
+        if (node.contentType === "settings" || node.contentType === "browser" || node.contentType === "editor" || node.contentType === "ssh-connect") return;
+        const id = node.sessionId;
+        const config = (parsed.sessionConfigs || {})[id] || aiService.getConfig();
+        const savedTitle = (parsed.sessionTitles || {})[id];
+        offlineSessions.set(id, {
+          id,
+          title: savedTitle || "Terminal",
+          titleLocked: (parsed.sessionTitleLocked || {})[id] ?? false,
+          cwd: savedCwds[id],
+          aiConfig: config,
+          interactions: (parsed.sessionInteractions || {})[id] || [],
+          dirty: (parsed.sessionDirtyFlags || {})[id] ?? false,
+          sshProfileId: (parsed.sessionSSHProfileIds || {})[id],
+          remoteUrl: (parsed.sessionRemoteUrls || {})[id],
+        });
+      } else if (node.children) {
+        node.children.forEach(collectSessions);
+      }
+    };
+    savedTabs.forEach((tab) => collectSessions(tab.root));
+    return { tabs: savedTabs, sessions: offlineSessions };
+  };
+
   // Flag to disable auto-save when user chose "Exit Without Saving"
   const skipSaveRef = useRef(false);
   // Guard: prevent save effect from running before init has read saved state
@@ -184,6 +225,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   // before init has read it (save effect fires before init effect on first render)
   useEffect(() => {
     if (!initDoneRef.current) return; // Don't persist until initialization is complete
+    if (serverDisconnected) return; // Don't overwrite saved state while offline (sessions have no PTY backing)
     if (skipSaveRef.current) {
       // Actively clear any stale saved state after "Exit Without Saving"
       localStorage.removeItem(STORAGE_KEYS.LAYOUT);
@@ -392,7 +434,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 // Remote session — reconnect to remote Tron server
                 try {
                   const connectionId = await connectRemote(remoteUrl);
-                  newId = await createRemotePTY(connectionId, 80, 30, cwd);
+                  const result = await createRemotePTY(connectionId, 80, 30, cwd, oldId);
+                  newId = result.sessionId;
+                  if (result.reconnected) livePtyReconnectsRef.current.add(newId);
                   sessionTitle = new URL(remoteUrl).host || "Remote";
                   console.log(`Reconnected remote session: ${oldId} → ${newId} (${remoteUrl})`);
                 } catch (err: any) {
@@ -488,9 +532,36 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             setActiveTabId(parsed.activeTabId || regeneratedTabs[0].id);
             return;
           }
-          // All tabs failed to reconnect — fall through to create fresh tab
-        } catch (e) {
+          // All tabs failed to reconnect — try offline restore (keep tab structure without PTYs)
+          if (regeneratedTabs.length === 0) {
+            const offlineTabs = restoreTabsOffline(savedTabs, savedCwds, parsed);
+            if (offlineTabs) {
+              setSessions(offlineTabs.sessions);
+              setTabs(offlineTabs.tabs);
+              setActiveTabId(parsed.activeTabId || offlineTabs.tabs[0].id);
+              setServerDisconnected(true);
+              return;
+            }
+          }
+        } catch (e: any) {
           console.error("Failed to hydrate state:", e);
+          // If the error is a server connection issue, restore tabs offline
+          if (e?.message?.includes("unreachable") || e?.message?.includes("timeout") || e?.message?.includes("WebSocket")) {
+            const saved2 = localStorage.getItem(STORAGE_KEYS.LAYOUT);
+            if (saved2) {
+              try {
+                const parsed2 = JSON.parse(saved2);
+                const offlineTabs = restoreTabsOffline(parsed2.tabs || [], parsed2.sessionCwds || {}, parsed2);
+                if (offlineTabs) {
+                  setSessions(offlineTabs.sessions);
+                  setTabs(offlineTabs.tabs);
+                  setActiveTabId(parsed2.activeTabId || offlineTabs.tabs[0].id);
+                  setServerDisconnected(true);
+                  return;
+                }
+              } catch { /* fall through */ }
+            }
+          }
           localStorage.removeItem(STORAGE_KEYS.LAYOUT);
         }
       }
@@ -509,11 +580,16 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   // xterm instances keep their rendered content; we just need new PTYs behind them.
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const serverDisconnectedRef = useRef(serverDisconnected);
+  serverDisconnectedRef.current = serverDisconnected;
   useEffect(() => {
     onServerReconnect(async () => {
       const currentSessions = sessionsRef.current;
+      const wasDisconnected = serverDisconnectedRef.current;
       for (const [sessionId, session] of currentSessions) {
         if (sessionId === "settings" || sessionId.startsWith("ssh-connect")) continue;
+        // Skip remote sessions when reconnecting to local server
+        if (session.remoteUrl) continue;
 
         if (session.sshProfileId) {
           // SSH sessions need full reconnect via profile — skip for now
@@ -530,6 +606,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           console.warn(`[Layout] Failed to re-attach session ${sessionId.slice(0, 8)}…:`, err);
         }
       }
+      // Clear disconnected state — terminal panes will hide retry overlay
+      if (wasDisconnected) setServerDisconnected(false);
     });
   }, []);
 
@@ -691,7 +769,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     const connectionId = await connectRemote(url);
 
     // Create a PTY session on the remote server
-    const sessionId = await createRemotePTY(connectionId, 80, 30);
+    const { sessionId } = await createRemotePTY(connectionId, 80, 30);
 
     let label = "Remote";
     try { label = new URL(url).host || "Remote"; } catch { /* use default */ }
@@ -840,7 +918,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       // Remote server session — create a new PTY on the same remote server
       const connId = getRemoteConnectionId(tab.activeSessionId);
       if (!connId) return; // Connection lost
-      newSessionId = await createRemotePTY(connId, 80, 30, cwd);
+      const remoteResult = await createRemotePTY(connId, 80, 30, cwd);
+      newSessionId = remoteResult.sessionId;
       newTitle = currentSession.title || "Remote";
     } else if (currentSession?.sshProfileId) {
       // SSH session — create a new SSH connection to the same host
@@ -1188,7 +1267,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           // Remote server session — create PTY on the same remote server
           const connId = getRemoteConnectionId(oldSessionId);
           if (!connId) return node; // Connection lost — keep original
-          newSessionId = await createRemotePTY(connId, 80, 30, cwd);
+          const remoteResult = await createRemotePTY(connId, 80, 30, cwd);
+          newSessionId = remoteResult.sessionId;
         } else if (oldSession?.sshProfileId) {
           // SSH session — create a new SSH connection to the same host
           const ipc = window.electron?.ipcRenderer;
@@ -1565,6 +1645,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         loadSavedTab,
         deleteSavedTab,
         isHydrated,
+        serverDisconnected,
         setConfirmHandler,
         refreshCwd,
       }}

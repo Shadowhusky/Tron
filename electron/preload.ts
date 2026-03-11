@@ -56,6 +56,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   "updater.getStatus",
   "updater.getVersion",
   "clipboard.readImage",
+  "web.search",
+  "web.fetch",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [

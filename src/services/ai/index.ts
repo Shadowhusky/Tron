@@ -22,6 +22,7 @@ export interface AgentContinuation {
   executedCommands: string[];
   usedScaffold: boolean;
   wroteFiles: boolean;
+  usedWebTools?: boolean;
   lastWriteDir: string;
   terminalBusy: boolean;
 }
@@ -1779,7 +1780,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     thinkingEnabled: boolean = true,
     continuation?: AgentContinuation,
     images?: AttachedImage[],
-    options?: { isSSH?: boolean; sessionId?: string },
+    options?: { isSSH?: boolean; sessionId?: string; rawUserTask?: string },
     checkFilePermission?: (description: string) => Promise<void>,
   ): Promise<AgentResult> {
     const cfg = sessionConfig || this.config;
@@ -1799,6 +1800,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     let lastWriteDir: string;
     let usedScaffold: boolean;
     let wroteFiles: boolean;
+    let usedWebTools: boolean; // web_search/web_fetch count as "action taken" for lazy completion guard
     let terminalBusy: boolean;
 
     if (continuation) {
@@ -1809,6 +1811,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       lastWriteDir = continuation.lastWriteDir;
       usedScaffold = continuation.usedScaffold;
       wroteFiles = continuation.wroteFiles;
+      usedWebTools = continuation.usedWebTools ?? false;
       terminalBusy = continuation.terminalBusy;
     } else {
       history = [
@@ -1828,6 +1831,8 @@ TOOLS:
 9. {"tool":"list_dir","path":"/absolute/path"} — List directory. Use instead of ls/dir.
 10. {"tool":"search_dir","path":"/absolute/path","query":"..."} — Search text recursively. Use instead of grep.
 11. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — PREFERRED for modifying existing files. Exact search-and-replace. Multiple edit_file calls are better than rewriting with write_file.
+12. {"tool":"web_search","query":"..."} — Search the web. Use to look up error messages, library docs, API references, version compatibility. ALWAYS use this when you encounter an unfamiliar error 3+ times.
+13. {"tool":"web_fetch","url":"..."} — Fetch and read a web page. Returns plain text. Use after web_search to read documentation pages, Stack Overflow answers, etc. NEVER use this to call external APIs (Yahoo Finance, stock APIs, weather APIs, etc.) — only fetch human-readable web pages.
 
 RULES:
 1. Execute directly — never explain. Be autonomous: check system state yourself (ps, curl, lsof, ls) instead of asking the user.
@@ -1841,6 +1846,7 @@ RULES:
 9. IMAGES: User-mentioned images were analyzed in a prior step. Use the description — don't try to access them.
 10. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation is reference — don't re-execute previous actions.
 11. CONVERSATIONAL: If the user sends a greeting (hi, hello, hey) or casual chat with NO task, respond with a brief friendly reply via final_answer. Do NOT explore files, run commands, or take any action.
+12. NO EXTERNAL APIS: Never call external APIs directly (via curl, web_fetch, or execute_command). For information gathering, use web_search to find web pages, then web_fetch to read those pages. Do not construct API endpoint URLs (e.g. Yahoo Finance API, stock APIs, weather APIs, REST endpoints).
 ${agentPrompt}
 `,
         },
@@ -1890,6 +1896,7 @@ ${agentPrompt}
       lastWriteDir = "";
       usedScaffold = false;
       wroteFiles = false;
+      usedWebTools = false;
       terminalBusy = false;
     }
 
@@ -1915,6 +1922,63 @@ ${agentPrompt}
     let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
     let readTerminalCount = 0; // Total consecutive read_terminal calls (for UI merging + backoff)
 
+    // ── Repeated error / stagnation detection ──────────────────────────────
+    // Tracks error "signatures" (TypeError, SyntaxError, module not found, etc.)
+    // across both command failures (exit code != 0) and successful outputs that
+    // contain error stack traces. When the same error type recurs 3+ times, a
+    // strong intervention is injected telling the agent to investigate root cause.
+    const recentErrorSignatures: string[] = [];
+
+    /** Extract a canonical error signature from any text (stdout, stderr, error msg). */
+    const extractErrorSignature = (msg: string): string | null => {
+      // Common JS/TS runtime errors
+      const patterns: [RegExp, string][] = [
+        [/TypeError:\s*(.{0,80})/, "TypeError"],
+        [/SyntaxError:\s*(.{0,80})/, "SyntaxError"],
+        [/ReferenceError:\s*(.{0,80})/, "ReferenceError"],
+        [/RangeError:\s*(.{0,80})/, "RangeError"],
+        [/Cannot find module\s+'([^']{0,80})'/, "ModuleNotFound"],
+        // Python
+        [/ModuleNotFoundError:\s*(.{0,80})/, "ModuleNotFound"],
+        [/ImportError:\s*(.{0,80})/, "ImportError"],
+        [/NameError:\s*(.{0,80})/, "NameError"],
+        [/AttributeError:\s*(.{0,80})/, "AttributeError"],
+        // Rust / Go / general
+        [/error\[E\d+\]:\s*(.{0,80})/, "CompileError"],
+        [/cannot find (?:crate|package)\s+'?(.{0,60})'?/, "ModuleNotFound"],
+        // Generic "command not found"
+        [/command not found:\s*(.{0,60})/, "CommandNotFound"],
+        // Permissions
+        [/EACCES:\s*(.{0,80})/, "PermissionError"],
+        [/Permission denied/, "PermissionError"],
+      ];
+      for (const [re, prefix] of patterns) {
+        const m = msg.match(re);
+        if (m) return `${prefix}: ${m[1]?.trim() || m[0].trim()}`;
+      }
+      return null;
+    };
+
+    /**
+     * Record an error signature from any text (command output or error message).
+     * Returns an intervention prompt if the same error pattern has recurred 3+ times.
+     */
+    const checkRepeatedErrors = (text: string): string | null => {
+      const sig = extractErrorSignature(text);
+      if (!sig) return null;
+      recentErrorSignatures.push(sig);
+      // Keep only last 12
+      if (recentErrorSignatures.length > 12) recentErrorSignatures.shift();
+      // Fuzzy match: same error type prefix (e.g. "TypeError: chalk" matches "TypeError: chalk.cyan")
+      const prefix = sig.slice(0, Math.min(30, sig.indexOf(":") + 10));
+      const count = recentErrorSignatures.filter(s => s.startsWith(prefix)).length;
+      if (count >= 3) {
+        recentErrorSignatures.length = 0; // Reset so it doesn't fire every step
+        return `CRITICAL: The same error has occurred ${count} times: "${sig}"\n\nYou are stuck in an unproductive loop. STOP trying syntax variations and investigate the ROOT CAUSE:\n1. Check the library version: run a diagnostic command (e.g. "node -e \\"console.log(require('<pkg>/package.json').version)\\"", "pip show <pkg>", "cat Cargo.toml")\n2. Check if it's an ESM vs CommonJS issue (v5+ of many npm packages are ESM-only — require() won't work)\n3. Read the library's actual API for the installed version — don't guess\n4. If the library is incompatible, install a compatible version (e.g. "npm install chalk@4") or use a completely different library\n5. If nothing works, simplify: remove the dependency and use plain code instead\n\nDo NOT make the same kind of edit again without first diagnosing the issue.`;
+      }
+      return null;
+    };
+
     // "User ready / continue" signal from UI (e.g. Continue button in overlay)
     // Uses a global flag checked each read_terminal iteration
     (globalThis as any).__tronAgentContinue = false;
@@ -1939,6 +2003,9 @@ ${agentPrompt}
         });
         consecutiveGuardBlocks = 0;
       }
+      // Clear any leftover streaming entries from previous iteration (e.g. guard-rejected responses)
+      onUpdate("clear_streaming", "");
+
       if (thinkingEnabled) {
         onUpdate("thinking", "Agent is thinking...");
       }
@@ -2033,10 +2100,9 @@ ${agentPrompt}
           // Use intercepted content if thinking tags were detected in token stream
           responseText = thinkAcc.value ? contentAcc.value : result.content;
           thinkingText = result.thinking || thinkAcc.value;
-          if (thinkingEnabled && (thinkingAccumulated || thinkAcc.value)) {
+          if (thinkingAccumulated || thinkAcc.value) {
             onUpdate("thinking_complete", thinkingAccumulated || thinkAcc.value);
           } else {
-            // For non-thinking models or thinking disabled: ensure thinking state is cleared
             onUpdate("thinking_done", "");
           }
         } else if (
@@ -2116,7 +2182,7 @@ ${agentPrompt}
           }
           responseText = contentAccumulated;
           thinkingText = thinkingAccumulated;
-          if (thinkingEnabled && thinkingAccumulated) {
+          if (thinkingAccumulated) {
             onUpdate("thinking_complete", thinkingAccumulated);
           } else {
             onUpdate("thinking_done", "");
@@ -2153,7 +2219,7 @@ ${agentPrompt}
           );
           responseText = oaiThinkAcc.value ? oaiContentAcc.value : result.content;
           thinkingText = result.thinking || oaiThinkAcc.value;
-          if (thinkingEnabled && (thinkingAccumulated || oaiThinkAcc.value)) {
+          if (thinkingAccumulated || oaiThinkAcc.value) {
             onUpdate("thinking_complete", thinkingAccumulated || oaiThinkAcc.value);
           } else {
             onUpdate("thinking_done", "");
@@ -2228,7 +2294,9 @@ ${agentPrompt}
       // Known tool names — used to normalize {"tool_name": {...}} into {"tool": "tool_name", ...}
       const TOOL_NAMES = new Set([
         "execute_command", "run_in_terminal", "send_text", "read_terminal",
-        "write_file", "read_file", "edit_file", "list_dir", "search_dir", "ask_question", "final_answer",
+        "write_file", "read_file", "edit_file", "list_dir", "search_dir",
+        "web_search", "web_fetch",
+        "ask_question", "final_answer",
       ]);
 
       // If the model used a tool name as a top-level key (e.g. {"final_answer": {"content":"..."}})
@@ -2389,7 +2457,26 @@ ${agentPrompt}
       // Coerce tool-less objects or plain conversational text into proper tool calls
         if (!action) {
           const trimmed = (responseText || "").trim();
-          if (trimmed && !trimmed.includes("{")) {
+
+          // Detect bracket-style tool invocations: [read_terminal], [execute_command ls], etc.
+          // Some models output tool names in brackets instead of JSON.
+          const bracketMatch = trimmed.match(/^\[(\w+)\](.*)$/s);
+          if (bracketMatch && TOOL_NAMES.has(bracketMatch[1])) {
+            const toolName = bracketMatch[1];
+            const arg = bracketMatch[2].trim();
+            action = { tool: toolName };
+            if (toolName === "execute_command" || toolName === "run_in_terminal") {
+              action.command = arg || "echo 'no command provided'";
+            } else if (toolName === "read_terminal") {
+              action.lines = 50;
+            } else if (toolName === "final_answer") {
+              action.content = arg || "Done.";
+            } else if (toolName === "ask_question") {
+              action.question = arg || "Could you clarify?";
+            } else if (arg) {
+              action.content = arg;
+            }
+          } else if (trimmed && !trimmed.includes("{")) {
             // Plain text without JSON braces
             action = {};
             if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(trimmed) || trimmed.includes("?")) {
@@ -2442,35 +2529,46 @@ ${agentPrompt}
       if ((!action || !action.tool) && !(action && action._plan)) {
         parseFailures++;
 
-        // After enough failures, treat raw text as a final answer rather than erroring
-        if (parseFailures >= 3) {
-          const fallbackText = (responseText || thinkingText || "").trim();
-          // Reject if the text looks like a confused tool call attempt (JSON with "tool" key)
-          const hasToolCallJSON = /{"tool"\s*:/.test(fallbackText);
-          if (fallbackText.length > 0 && !hasToolCallJSON) {
-            return {
-              success: true,
-              message: fallbackText.slice(0, 2000),
-              type: "success",
-            };
+        // Remove the thought step that was just emitted for this failed parse attempt.
+        // Without this, each silent retry creates a visible thought in the overlay,
+        // causing repetitive thought spam (e.g. 14 consecutive thoughts before any action).
+        onUpdate("retract_thought", "");
+
+        // Inline retry: re-call the LLM without adding failed attempts to history.
+        // This avoids polluting context with bad output from weaker models.
+        // Only after all inline retries are exhausted do we add a correction to history.
+        const MAX_INLINE_RETRIES = 5;
+        if (parseFailures <= MAX_INLINE_RETRIES) {
+          // For the first few failures, retry inline (same history, no new messages)
+          // For the last attempt before giving up, add a correction hint to history
+          if (parseFailures === MAX_INLINE_RETRIES) {
+            const truncatedResponse = (responseText || "(empty)").slice(0, 500);
+            history.push({ role: "assistant", content: truncatedResponse });
+            history.push({
+              role: "user",
+              content:
+                'Error: Invalid response. You MUST respond with ONLY a JSON object. No markdown, no explanation, no thinking. Example: {"tool": "execute_command", "command": "ls"} or {"tool": "final_answer", "content": "Done."}',
+            });
           }
-          return {
-            success: false,
-            message:
-              "This model failed to follow the agent protocol (could not produce valid JSON tool calls). Try a more capable model.",
-          };
+          continue;
         }
 
-        // Silently retry — parse errors are internal recovery, not user-facing
-        // Truncate raw text in history to avoid wasting context on bad model output
-        const truncatedResponse = (responseText || "(empty)").slice(0, 500);
-        history.push({ role: "assistant", content: truncatedResponse });
-        history.push({
-          role: "user",
-          content:
-            'Error: Invalid response. You MUST respond with ONLY a JSON object. No markdown, no explanation, no thinking. Example: {"tool": "execute_command", "command": "ls"} or {"tool": "final_answer", "content": "Done."}',
-        });
-        continue;
+        // All retries exhausted — fall back gracefully
+        const fallbackText = (responseText || thinkingText || "").trim();
+        // If we got plain text that isn't a confused JSON tool call, use it as the answer
+        const hasToolCallJSON = /{"tool"\s*:/.test(fallbackText);
+        if (fallbackText.length > 0 && !hasToolCallJSON) {
+          return {
+            success: true,
+            message: fallbackText.slice(0, 2000),
+            type: "success",
+          };
+        }
+        return {
+          success: false,
+          message:
+            "This model failed to follow the agent protocol after multiple retries. Try a more capable model.",
+        };
       }
       parseFailures = 0; // Reset on successful parse
 
@@ -2486,6 +2584,8 @@ ${agentPrompt}
             path: action.path,
             command: action.command,
             text: action.text,
+            query: action.query,
+            url: action.url,
           });
 
       // Block the most recently looped action — cleared once a different action runs
@@ -2596,6 +2696,17 @@ ${agentPrompt}
       delete action._step_done;
 
       if (action.tool === "final_answer") {
+        // Reject if the content is clearly a tool name — model confused output format
+        const finalContent = (action.content || "").trim();
+        const toolNameMatch = finalContent.match(/^\[?(\w+)\]?$/);
+        if (toolNameMatch && TOOL_NAMES.has(toolNameMatch[1]) && toolNameMatch[1] !== "final_answer") {
+          history.push({
+            role: "user",
+            content: `Error: Your response "${finalContent}" looks like you intended to call the ${toolNameMatch[1]} tool, but you did not format it as JSON. Respond with ONLY a JSON object, e.g.: {"tool": "${toolNameMatch[1]}"${toolNameMatch[1] === "read_terminal" ? ', "lines": 50' : toolNameMatch[1] === "execute_command" ? ', "command": "your_command"' : ""}}`,
+          });
+          continue;
+        }
+
         // Reject premature completion: scaffolded a project but never wrote any code
         if (usedScaffold && !wroteFiles) {
           history.push({
@@ -2620,12 +2731,10 @@ ${agentPrompt}
           }
         }
 
-        // Extract user's actual task from the augmented prompt (which includes terminal output, prior conversation, etc.)
-        const rawPrompt = history[1]?.content || "";
-        const taskLineMatch = rawPrompt.match(/\nTask:\s*(.+)\s*$/);
-        const userTask = (taskLineMatch ? taskLineMatch[1] : rawPrompt)
-          .toLowerCase()
-          .trim();
+        // Use the raw user task passed directly from the caller — NOT extracted from the
+        // augmented prompt (which includes [ENVIRONMENT], [TERMINAL OUTPUT], etc. that
+        // pollute keyword matching and cause false guard rejections).
+        const userTask = (options?.rawUserTask || "").toLowerCase().trim();
         const isShortAck =
           userTask.length <= 20 &&
           /^(ok|okay|yes|no|sure|thanks|thank you|got it|alright|go|do it|good|great|cool|nice|fine|yep|nope|done|next|hi|hey|hello|sup|yo|what'?s up|howdy|greetings|good (morning|afternoon|evening)|hiya|hola)$/i.test(
@@ -2644,7 +2753,7 @@ ${agentPrompt}
           );
         // Detect future-tense plans: "I'll create...", "Let me check...", "I will implement..."
         const isFuturePlan =
-          /\b(i'll|i will|let me|i'm going to|i need to)\b.+\b(create|build|implement|check|modify|fix|write|set up|configure|update|install|make|add|start)\b/.test(
+          /\b(i'll|i will|let me|i'm going to|i need to)\b.+\b(create|build|implement|check|modify|fix|write|set up|configure|update|install|make|add|start|search|fetch|look|find|perform|do|run|try)\b/.test(
             answerText,
           );
         const mentionsError =
@@ -2716,6 +2825,7 @@ ${agentPrompt}
           /^[a-z][\w./-]*(\s+\S+)*$/i.test(trimmedAnswer) && // command-like pattern
           executedCommands.size === 0 &&
           !wroteFiles &&
+          !usedWebTools &&
           !terminalBusy &&
           !loopBreaks;
         if (looksLikeBareCommand && !isShortAck) {
@@ -2772,11 +2882,12 @@ ${agentPrompt}
           !isQuestionPattern &&
           actionKeywords.some((kw) => userTask.toLowerCase().includes(kw));
 
-        // If we executed no commands and wrote no files, almost certainly incomplete.
+        // If we executed no commands, wrote no files, and didn't use web tools, almost certainly incomplete.
         if (
           hasActionRequest &&
           executedCommands.size === 0 &&
           !wroteFiles &&
+          !usedWebTools &&
           !terminalBusy
         ) {
           // Silent retry — don't show guard rejection to user
@@ -2846,6 +2957,7 @@ ${agentPrompt}
             executedCommands: [...executedCommands],
             usedScaffold,
             wroteFiles,
+            usedWebTools,
             lastWriteDir,
             terminalBusy,
           },
@@ -3713,6 +3825,60 @@ ${agentPrompt}
         continue;
       }
 
+      if (action.tool === "web_search") {
+        const query = action.query || action.q;
+        if (!query) {
+          history.push({ role: "user", content: "web_search requires a 'query' parameter." });
+          continue;
+        }
+        onUpdate("executing", `Searching web: ${query}`, action);
+        try {
+          // Use IPC invoke — works in both Electron (preload IPC) and web mode (WS bridge → server)
+          const data: any = await (window as any).electron.ipcRenderer.invoke("web.search", { query });
+          const results = data.results || [];
+          if (results.length === 0) {
+            onUpdate("executed", `Web search: no results for "${query}"`, action);
+            history.push({ role: "user", content: `Web search for "${query}" returned no results.` });
+          } else {
+            const formatted = results.map((r: any, i: number) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n\n");
+            onUpdate("executed", `Web search: ${results.length} results for "${query}"`, action);
+            history.push({ role: "user", content: `Web search results for "${query}":\n\n${formatted}\n\nUse these results to answer the user's question. You may web_fetch any URL above for more details.` });
+            usedWebTools = true;
+          }
+        } catch (err: any) {
+          onUpdate("executed", `Web search failed: ${err.message}`, action);
+          history.push({ role: "user", content: `web_search failed: ${err.message}. Try using execute_command with curl instead.` });
+        }
+        continue;
+      }
+
+      if (action.tool === "web_fetch") {
+        const url = action.url;
+        if (!url) {
+          history.push({ role: "user", content: "web_fetch requires a 'url' parameter." });
+          continue;
+        }
+        onUpdate("executing", `Fetching: ${url.slice(0, 80)}`, action);
+        try {
+          // Use IPC invoke — works in both Electron (preload IPC) and web mode (WS bridge → server)
+          const data: any = await (window as any).electron.ipcRenderer.invoke("web.fetch", { url });
+          if (data.error) {
+            onUpdate("executed", `Fetch failed: ${data.error}`, action);
+            history.push({ role: "user", content: `web_fetch error: ${data.error}` });
+          } else {
+            const content = data.content || "";
+            const truncated = content.length > 12000 ? content.slice(0, 12000) + "\n\n[Content truncated — 12KB limit]" : content;
+            onUpdate("executed", `Fetched ${url.slice(0, 60)} (${content.length} chars)`, action);
+            history.push({ role: "user", content: `Content from ${url}:\n\n${truncated}` });
+            usedWebTools = true;
+          }
+        } catch (err: any) {
+          onUpdate("executed", `Web fetch failed: ${err.message}`, action);
+          history.push({ role: "user", content: `web_fetch failed: ${err.message}. Try using execute_command with curl instead.` });
+        }
+        continue;
+      }
+
       if (action.tool === "execute_command") {
         // Interactive commands MUST use run_in_terminal — sentinel exec can't handle TUI prompts.
         // Also check parts after `&&` or `;` to properly catch `cd foo && npm create`
@@ -4085,6 +4251,11 @@ ${agentPrompt}
               role: "user",
               content: `Command Failed: \n${err.message}`,
             });
+            // Check for repeated error patterns — force root-cause investigation
+            const intervention = checkRepeatedErrors(err.message);
+            if (intervention) {
+              history.push({ role: "user", content: intervention });
+            }
           }
         }
       }

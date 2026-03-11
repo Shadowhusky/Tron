@@ -40,8 +40,12 @@ async function boot() {
       setTimeout(() => loader.remove(), 300);
     }
   } else {
-    // Web — wait for server mode message or demo fallback
-    await modeReady;
+    // Web — wait for server mode message, but don't block forever if server is down.
+    // After 5s timeout, render anyway so the user sees their tabs with a retry overlay.
+    await Promise.race([
+      modeReady,
+      new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+    ]);
   }
 
   createRoot(document.getElementById('root')!).render(

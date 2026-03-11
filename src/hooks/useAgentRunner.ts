@@ -592,6 +592,7 @@ Respond with {"tool":"final_answer","content":"your detailed description of what
         } else {
           finalPrompt = `
 [ENVIRONMENT]
+Date: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
 Current Working Directory: ${cwd || "Unknown"}${systemPathsStr}
 ${projectFiles ? `\n[PROJECT FILES]\n${projectFiles}\n` : ""}
 [TERMINAL OUTPUT]
@@ -780,9 +781,29 @@ ${prompt}
               return [...prev, { step: "thought", output }];
             });
             setIsThinking(false);
+          } else if (step === "retract_thought") {
+            // Parse failed — remove the thought that was just emitted so it doesn't
+            // accumulate in the overlay during silent retries.
+            setAgentThread((prev) => {
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].step === "thought" || prev[i].step === "thinking") {
+                  const updated = [...prev];
+                  updated.splice(i, 1);
+                  return updated;
+                }
+              }
+              return prev;
+            });
+            setIsThinking(false);
           } else if (step === "thinking_done") {
             // No thinking content produced — just clear thinking state
             setIsThinking(false);
+          } else if (step === "clear_streaming") {
+            // Remove leftover streaming entries (e.g. from guard-rejected responses)
+            setAgentThread((prev) => {
+              const hasStreaming = prev.some(s => s.step === "streaming");
+              return hasStreaming ? prev.filter(s => s.step !== "streaming") : prev;
+            });
           } else if (step === "thinking") {
             // Always show thinking indicator — even for non-thinking models
             setIsThinking(true);
@@ -832,7 +853,7 @@ ${prompt}
         thinkingEnabled && modelSupportsThinking,
         currentContinuation || undefined,
         images,
-        { isSSH: !!session?.sshProfileId, sessionId },
+        { isSSH: !!session?.sshProfileId, sessionId, rawUserTask: prompt },
         async (description: string) => {
           if (alwaysAllowRef.current) return;
           setPendingCommand(description);

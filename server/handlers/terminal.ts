@@ -962,7 +962,7 @@ export async function listDir(dirPath: string, sessionId?: string): Promise<{ su
       const sshSession = sshSessions.get(sessionId);
       if (!sshSession) return { success: false, error: "SSH session not found" };
       const result = await sshSession.exec(
-        `ls -1ap ${dirPath.replace(/'/g, "'\\''")} 2>/dev/null`,
+        `ls -1ap '${dirPath.replace(/'/g, "'\\''")}'`,
         5000,
       );
       if (result.exitCode !== 0) {

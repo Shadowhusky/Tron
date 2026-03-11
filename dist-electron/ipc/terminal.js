@@ -1148,7 +1148,7 @@ function registerTerminalHandlers(getMainWindow) {
                 const sshSession = ssh_1.sshSessions.get(sessionId);
                 if (!sshSession)
                     return { success: false, error: "SSH session not found" };
-                const result = await sshSession.exec(`ls -1ap ${dirPath.replace(/'/g, "'\\''")} 2>/dev/null`, 5000);
+                const result = await sshSession.exec(`ls -1ap '${dirPath.replace(/'/g, "'\\''")}'`, 5000);
                 if (result.exitCode !== 0) {
                     return { success: false, error: result.stderr.trim() || `Failed to list: ${dirPath}` };
                 }

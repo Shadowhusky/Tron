@@ -146,6 +146,25 @@ const AppContent = () => {
   }, []);
   useEffect(() => { setConfirmHandler(confirmHandler); }, [setConfirmHandler, confirmHandler]);
 
+  // Warn before page refresh (Cmd+R) if there are active terminal sessions
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      // Check if any real terminal sessions exist (not settings, browser, editor, ssh-connect)
+      const hasActiveSessions = Array.from(sessionsRef.current.keys()).some(
+        (id) => !id.startsWith("settings") && !id.startsWith("browser-") && !id.startsWith("editor-") && !id.startsWith("ssh-connect") && !id.startsWith("pixel-agents"),
+      );
+      if (hasActiveSessions) {
+        e.preventDefault();
+        // Legacy browsers need returnValue set
+        e.returnValue = "You have active terminal sessions. Are you sure you want to reload?";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, []);
+
   useEffect(() => {
     if (!configLoaded) return; // Wait for file-based config before deciding
 
@@ -421,6 +440,7 @@ const AppContent = () => {
         onSaveTab={handleSaveTab}
         onLoadSavedTab={() => setShowSavedTabs(true)}
         onCreateRemote={() => setShowRemoteModal(true)}
+        onCreateBrowser={() => openBrowserTab("https://www.google.com", "Web")}
       />
 
       <AgentStatusBar />

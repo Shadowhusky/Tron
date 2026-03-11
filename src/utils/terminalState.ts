@@ -224,7 +224,10 @@ export function detectTuiProgram(output: string): string | null {
  * - "busy": process actively running (installing, building), should NOT interrupt
  */
 export function classifyTerminalOutput(output: string): TerminalState {
-  const lines = output.trim().split("\n");
+  const trimmed = output.trim();
+  // Empty or whitespace-only output → terminal is idle (fresh session, no process running)
+  if (!trimmed) return "idle";
+  const lines = trimmed.split("\n");
   const lastLines = lines.slice(-3).join("\n");
   const lastLine = lines.filter(l => l.trim()).slice(-1)[0]?.trim() || "";
   // Shell prompt at end → process finished, terminal idle

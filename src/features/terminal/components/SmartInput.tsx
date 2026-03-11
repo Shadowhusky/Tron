@@ -1953,7 +1953,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 {mode}
               </span>
             )}
-            {modelCapabilities?.includes("thinking") && !isOverlayVisible && (
+            {modelCapabilities?.includes("thinking") && !isOverlayVisible && mode !== "command" && (
               <button
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}
                 className={`rounded border px-1 py-px transition-colors ${

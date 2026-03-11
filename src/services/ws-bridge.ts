@@ -20,6 +20,21 @@ let connected = false;
 let connectionFailed = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_BEFORE_FAIL = 3;
+
+// Observable connection state for UI
+let _connectionListeners = new Set<(connected: boolean) => void>();
+/** Subscribe to connection state changes. Returns unsubscribe function. */
+export function onConnectionChange(cb: (connected: boolean) => void): () => void {
+  _connectionListeners.add(cb);
+  // Immediately notify current state
+  cb(connected && !connectionFailed);
+  return () => { _connectionListeners.delete(cb); };
+}
+export function isServerConnected(): boolean { return connected && !connectionFailed; }
+function _notifyConnectionChange() {
+  const state = connected && !connectionFailed;
+  for (const cb of _connectionListeners) cb(state);
+}
 const pendingInvokes = new Map<string, PendingInvoke>();
 const eventListeners = new Map<string, Set<Listener>>();
 const messageQueue: string[] = [];
@@ -64,6 +79,7 @@ function connect() {
     connected = true;
     connectionFailed = false;
     reconnectAttempts = 0;
+    _notifyConnectionChange();
     console.log("[WS Bridge] Connected");
     // Flush queued messages
     while (messageQueue.length > 0) {
@@ -119,8 +135,10 @@ function connect() {
   ws.onclose = () => {
     connected = false;
     reconnectAttempts++;
+    _notifyConnectionChange();
     if (reconnectAttempts >= MAX_RECONNECT_BEFORE_FAIL && !connectionFailed) {
       connectionFailed = true;
+      _notifyConnectionChange();
       console.warn("[WS Bridge] Server unreachable after", MAX_RECONNECT_BEFORE_FAIL, "attempts.");
       // Reject all pending invokes so the app doesn't hang
       for (const [id, pending] of pendingInvokes) {

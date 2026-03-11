@@ -95,7 +95,7 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sessionId]);
 
   // Load initial directory when modal opens
   useEffect(() => {

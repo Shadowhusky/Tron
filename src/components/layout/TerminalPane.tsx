@@ -46,6 +46,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     refreshCwd,
     splitUserAction,
     closePane,
+    serverDisconnected,
   } = useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
@@ -744,6 +745,32 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       onMouseDown={handlePaneFocus}
       className={`relative flex h-full w-full flex-col border border-transparent ${isActive ? "z-10 ring-1 ring-purple-500/50" : "opacity-80 hover:opacity-100"}`}
     >
+      {/* Server disconnected overlay — shown when tabs are restored offline */}
+      {serverDisconnected && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70">
+          <div className={`flex flex-col items-center gap-3 rounded-xl px-8 py-6 ${themeClass(resolvedTheme, {
+            dark: "bg-gray-900/90 border border-white/10",
+            modern: "bg-gray-900/80 border border-white/10 backdrop-blur-sm",
+            light: "bg-white/95 border border-gray-200 shadow-lg",
+          })}`}>
+            <div className={`text-sm font-medium ${resolvedTheme === "light" ? "text-gray-700" : "text-gray-200"}`}>
+              Server Disconnected
+            </div>
+            <div className={`text-xs ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+              Reconnecting automatically...
+            </div>
+            <div className="flex gap-1">
+              {[0, 150, 300].map((d) => (
+                <div
+                  key={d}
+                  className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse"
+                  style={{ animationDelay: `${d}ms` }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {isAgentMode ? (
         <>
           {/* Agent View Mode: info header + full-height overlay */}
