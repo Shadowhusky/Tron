@@ -137,12 +137,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // (src/components/DataTable.tsx, routes/$id/index.tsx, app/[slug]/page.tsx).
     // Relative paths resolved against session CWD at click time.
     //
-    // Segment chars: \w . $ @ + ~ - [ ] ( )  — covers Remix ($id), Next.js
+    // Segment chars: \w . $ @ + ~ - [ ] ( ) '  — covers Remix ($id), Next.js
     // ([id]), SvelteKit (+page), route groups ((auth)), scoped pkgs (@foo),
-    // macOS iCloud paths (com~apple~CloudDocs).
+    // macOS iCloud paths (com~apple~CloudDocs), possessives ("Husky's SSD").
     // Spaces allowed within interior segments (between two /) but not in the
     // final segment, to avoid capturing trailing sentence text.
-    const S = "[\\w.$@+~\\-\\[\\]()]"; // path segment char (no space)
+    const S = "[\\w.$@+~\\-\\[\\]()\']"; // path segment char (no space)
     const interiorSeg = "/" + S + "+(?:\\s+" + S + "+)*(?=/)"; // spaces ok, lookahead for next /
     const finalSeg = "/" + S + "+"; // no spaces in last segment
     const absUnixRe  = new RegExp("(?:" + interiorSeg + ")+" + finalSeg + "(?:\\.\\w+)?", "g");

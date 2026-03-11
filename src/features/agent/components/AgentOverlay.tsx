@@ -323,9 +323,10 @@ function linkifyPaths(text: string): string {
   // Only join when the line ends with "/" or "\" (clear path continuation).
   const joined = text.replace(/([/\\])[ \t]*\n[ \t]*/g, "$1");
 
-  // Segment chars: \w . $ @ + ~ - [ ] { }
+  // Segment chars: \w . $ @ + ~ - [ ] { } '
   // Deliberately excludes ( ) to avoid matching wrapper syntax like Update(path)
-  const S = "[\\w.$@+~\\-\\[\\]{}]";
+  // Includes ' for possessives/names like "Husky's SSD"
+  const S = "[\\w.$@+~\\-\\[\\]{}\']";
   const interiorSeg = "/" + S + "+(?:\\s+" + S + "+)*(?=/)";
   const finalSeg = "/" + S + "+";
   const absUnixRe = new RegExp(
@@ -405,9 +406,10 @@ function linkifyPaths(text: string): string {
     const before = result.slice(Math.max(0, start - 2), start);
     if (before.endsWith("](") || before.endsWith("](file://")) continue;
     const isWin = /^[A-Z]:\\/i.test(matched);
+    const encodePath = (p: string) => encodeURI(p).replace(/'/g, "%27");
     const uri = isWin
-      ? `file:///${encodeURI(matched.replace(/\\/g, "/"))}`
-      : `file://${encodeURI(matched)}`;
+      ? `file:///${encodePath(matched.replace(/\\/g, "/"))}`
+      : `file://${encodePath(matched)}`;
     result = result.slice(0, start) + `[${matched}](${uri})` + result.slice(end);
   }
   return result;
