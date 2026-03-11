@@ -6,3 +6,4 @@ WINDOWS: Use `;` to chain commands, never `&&` or `||`. Built-in commands like `
 TASK FOCUS: Only execute the CURRENT TASK. Prior conversation is context only — never re-run previous commands or revisit completed work.
 LONG-RUNNING COMMANDS: docker compose, npm install, builds etc. can take minutes. After run_in_terminal, use read_terminal repeatedly to monitor. Do NOT run execute_command or Ctrl+C while a process is running — be patient and wait for it to finish.
 SERVER URLs: When reporting URLs in final_answer, use the ACTUAL port from terminal output (read_terminal), not the default. Ports may differ if defaults are in use (e.g. 5174 instead of 5173).
+MULTIPLE SERVERS: You have ONE terminal per tab. Running a new command auto-stops any running server. To run multiple servers simultaneously, background the first: `run_in_terminal("cd /path && npm run dev &")`, then start the second normally. Or tell the user to open a second tab.

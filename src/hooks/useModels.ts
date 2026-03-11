@@ -81,7 +81,7 @@ export function useAllConfiguredModels() {
   return useQuery<AIModel[]>({
     queryKey: ["allConfiguredModels", configKey],
     queryFn: () => aiService.getAllConfiguredModels(config.providerConfigs),
-    staleTime: Infinity,
+    staleTime: 10 * 60_000, // 10 min — cloud providers are now fetched live
     refetchOnWindowFocus: false,
     placeholderData: (prev) => prev, // keep previous models visible while refetching
     retry: 0,

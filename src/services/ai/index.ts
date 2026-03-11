@@ -45,6 +45,12 @@ interface ProviderInfo {
   /** Placeholder model name for settings input */
   placeholder: string;
   label: string;
+  /** URL to fetch live model list (undefined = no live fetch) */
+  modelsUrl?: string | ((apiKey: string) => string);
+  /** Auth header style: "bearer" (default) or "anthropic" */
+  authStyle?: "bearer" | "anthropic";
+  /** Filter/sort raw model objects from API response. Returns model ID strings. */
+  filterModels?: (models: any[]) => string[];
 }
 
 const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
@@ -53,12 +59,26 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).openai || [],
     placeholder: "gpt-5.2",
     label: "OpenAI",
+    modelsUrl: "https://api.openai.com/v1/models",
+    filterModels: (models) =>
+      models
+        .filter((m) => (m.id.startsWith("gpt") || m.id.startsWith("o")) &&
+          !/(audio|realtime|tts|transcribe|embedding)/i.test(m.id))
+        .sort((a, b) => (b.created || 0) - (a.created || 0))
+        .map((m) => m.id),
   },
   anthropic: {
     chatUrl: "https://api.anthropic.com/v1/messages",
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).anthropic || [],
     placeholder: "claude-sonnet-4-6",
     label: "Anthropic",
+    modelsUrl: "https://api.anthropic.com/v1/models",
+    authStyle: "anthropic",
+    filterModels: (models) =>
+      models
+        .filter((m) => m.type === "model" && m.id?.includes("claude"))
+        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+        .map((m) => m.id),
   },
   gemini: {
     chatUrl:
@@ -66,18 +86,37 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).gemini || [],
     placeholder: "gemini-2.5-flash",
     label: "Gemini (Google)",
+    modelsUrl: (apiKey) => `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+    filterModels: (models) =>
+      models
+        .filter((m) => m.name?.includes("gemini"))
+        .sort((a, b) => (b.name || "").localeCompare(a.name || ""))
+        .map((m) => (m.name || "").replace("models/", "")),
   },
   deepseek: {
     chatUrl: "https://api.deepseek.com/chat/completions",
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).deepseek || [],
     placeholder: "deepseek-chat",
     label: "DeepSeek",
+    modelsUrl: "https://api.deepseek.com/models",
+    filterModels: (models) =>
+      models.sort((a, b) => (b.created || 0) - (a.created || 0)).map((m) => m.id),
   },
   kimi: {
     chatUrl: "https://api.moonshot.ai/v1/chat/completions",
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).kimi || [],
     placeholder: "kimi-k2.5",
     label: "Kimi (Moonshot)",
+    modelsUrl: "https://api.moonshot.ai/v1/models",
+    filterModels: (models) =>
+      models
+        .filter((m) => {
+          const id = (m.id || "").toLowerCase();
+          if (id.includes("vision") || /\d{4}-\d{2}-\d{2}/.test(id)) return false;
+          return id.includes("kimi") || id.includes("moonshot");
+        })
+        .sort((a, b) => (b.created || 0) - (a.created || 0))
+        .map((m) => m.id),
   },
   qwen: {
     chatUrl:
@@ -85,18 +124,40 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).qwen || [],
     placeholder: "qwen3.5-plus",
     label: "Qwen (Alibaba)",
+    modelsUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+    filterModels: (models) =>
+      models
+        .filter((m) => {
+          const id = (m.id || "").toLowerCase();
+          if (/(audio|realtime|asr|tts|omni|vl|vd|image|mt-|character|livetranslate|s2s|captioner)/i.test(id)) return false;
+          if (/\d{4}-\d{2}-\d{2}/.test(id) || /-\d{4}$/.test(id)) return false;
+          return id.includes("qwen");
+        })
+        .sort((a, b) => (b.created || 0) - (a.created || 0))
+        .map((m) => m.id),
   },
   glm: {
     chatUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).glm || [],
     placeholder: "glm-5",
     label: "GLM (Zhipu)",
+    modelsUrl: "https://open.bigmodel.cn/api/paas/v4/models",
+    filterModels: (models) =>
+      models
+        .filter((m) => {
+          const id = (m.id || "").toLowerCase();
+          if (/\d{4}-\d{2}-\d{2}/.test(id)) return false;
+          return id.includes("glm");
+        })
+        .sort((a, b) => (b.created || 0) - (a.created || 0))
+        .map((m) => m.id),
   },
   minimax: {
     chatUrl: "https://api.minimax.io/v1/text/chatcompletion_v2",
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).minimax || [],
     placeholder: "MiniMax-M2.5",
     label: "MiniMax",
+    // MiniMax has no /v1/models API — uses static defaults only
   },
   lmstudio: {
     chatUrl: "http://127.0.0.1:1234/v1/chat/completions",
@@ -162,13 +223,23 @@ function isOpenAICompatible(provider: string): boolean {
   );
 }
 
+/** Strip potential API keys/tokens from error messages before displaying to user. */
+function sanitizeError(msg: string): string {
+  // Strip patterns like <ak-xxx>, sk-xxx, key-xxx, Bearer xxx (partial tokens)
+  return msg
+    .replace(/<[a-z]{2,4}-[a-zA-Z0-9]{10,}>/g, "<***>")
+    .replace(/\b(sk|ak|key|pat|ghp|gho|glpat|xoxb|xoxp)-[a-zA-Z0-9]{10,}\b/g, "$1-***");
+}
+
 /**
  * Detect models that require OpenAI's Responses API (/v1/responses).
  * GPT-5+ codex models and standalone codex-* models are Responses-only.
  */
+/** Runtime cache: models that need the Responses API (learned from API errors). */
+const responsesModelCache = new Set<string>();
+
 function isResponsesModel(model: string): boolean {
-  const lower = model.toLowerCase();
-  return lower.includes("codex");
+  return responsesModelCache.has(model.toLowerCase());
 }
 
 /**
@@ -589,10 +660,45 @@ class AIService {
       return [];
     }
 
-    // Cloud providers — show defaults if API key is set
+    // Cloud providers — try live fetch, fall back to static defaults
     if (effectiveApiKey) {
       const info = CLOUD_PROVIDERS[provider];
       if (info) {
+        // Try live model list if provider has a modelsUrl
+        if (info.modelsUrl) {
+          try {
+            const url = typeof info.modelsUrl === "function"
+              ? info.modelsUrl(effectiveApiKey)
+              : info.modelsUrl;
+            const headers: Record<string, string> = {};
+            if (info.authStyle === "anthropic") {
+              headers["x-api-key"] = effectiveApiKey;
+              headers["anthropic-version"] = "2023-06-01";
+            } else {
+              // Gemini uses key in URL, skip auth header for it
+              if (typeof info.modelsUrl !== "function") {
+                headers.Authorization = `Bearer ${effectiveApiKey}`;
+              }
+            }
+            const response = await proxyFetch(url, { headers });
+            if (response.ok) {
+              const data = await response.json();
+              const rawModels = data.data || data.models || [];
+              const filtered = info.filterModels
+                ? info.filterModels(rawModels)
+                : rawModels.map((m: any) => m.id || m.name);
+              if (filtered.length > 0) {
+                return filtered.map((name: string) => ({
+                  name,
+                  provider: provider as AIProvider,
+                }));
+              }
+            }
+          } catch {
+            // Fall through to static defaults
+          }
+        }
+        // Fallback: static model list from models.json
         return info.defaultModels.map((name) => ({
           name,
           provider: provider as AIProvider,
@@ -900,6 +1006,11 @@ class AIService {
     });
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
+      // "not a chat model" → learn this model needs Responses API, retry
+      if (/not a chat model/i.test(errText) && !isResponsesModel(model)) {
+        responsesModelCache.add(model.toLowerCase());
+        return this.openAIChatSimple(provider, model, apiKey, messages, maxTokens, baseUrl);
+      }
       throw new Error(
         `${CLOUD_PROVIDERS[provider]?.label || provider} server error (${response.status}): ${errText.slice(0, 200)}`,
       );
@@ -963,10 +1074,7 @@ class AIService {
       }
     }
 
-    // Explicitly disable thinking when not requested (local models with thinking capability)
-    if (thinking === false && !useCompletions && !useResponses) {
-      body.chat_template_kwargs = { enable_thinking: false };
-    }
+    // Note: chat_template_kwargs removed — most providers reject unknown fields.
 
     const response = await proxyFetch(url, {
       method: "POST",
@@ -981,7 +1089,13 @@ class AIService {
     if (contentType.includes("application/json")) {
       const errJson = await response.json();
       if (errJson.error) {
-        throw new Error(`API Error: ${errJson.error.message || errJson.error}`);
+        const errMsg = errJson.error.message || String(errJson.error);
+        // "not a chat model" → learn this model needs Responses API, retry automatically
+        if (/not a chat model/i.test(errMsg) && !isResponsesModel(model)) {
+          responsesModelCache.add(model.toLowerCase());
+          return this.streamOpenAIChat(provider, model, apiKey, messages, onToken, signal, responseFormat, baseUrl, thinking);
+        }
+        throw new Error(`API Error: ${errMsg}`);
       }
       if (errJson.base_resp && errJson.base_resp.status_code !== 0) {
         throw new Error(
@@ -2236,8 +2350,9 @@ ${agentPrompt}
         // AbortError from timeout or model failure — NOT a user abort, treat as API error
         if (e.name === "AbortError" && !signal?.aborted) {
           const label = CLOUD_PROVIDERS[provider]?.label || provider;
-          onUpdate("error", `${label} error: ${e.message || "Request timed out"}`);
-          return { success: false, message: `${label}: ${e.message || "Request timed out"}` };
+          const safeMsg = sanitizeError(e.message || "Request timed out");
+          onUpdate("error", `${label} error: ${safeMsg}`);
+          return { success: false, message: `${label}: ${safeMsg}` };
         }
         const label = CLOUD_PROVIDERS[provider]?.label || provider;
         // "Failed to fetch" = CORS/network failure — unrecoverable, fail immediately
@@ -2249,15 +2364,16 @@ ${agentPrompt}
         }
         // API/model errors (invalid format, model refusal, etc.) — silent retry up to 3 times
         parseFailures++;
+        const safeErrMsg = sanitizeError(e.message || "Unknown error");
         if (parseFailures >= 3) {
-          onUpdate("error", `${label} error: ${e.message} `);
-          return { success: false, message: `${label}: ${e.message}` };
+          onUpdate("error", `${label} error: ${safeErrMsg} `);
+          return { success: false, message: `${label}: ${safeErrMsg}` };
         }
         // Push error context so model can adjust on retry
         history.push({ role: "assistant", content: "(API error)" });
         history.push({
           role: "user",
-          content: `Error from API: ${e.message}\nPlease retry. Respond with ONLY a JSON object — no markdown, no explanation.`,
+          content: `Error from API: ${safeErrMsg}\nPlease retry. Respond with ONLY a JSON object — no markdown, no explanation.`,
         });
         continue;
       }
@@ -2848,43 +2964,19 @@ ${agentPrompt}
           continue;
         }
 
-        // Check for "Lazy Completion": User asked for action, but agent did almost nothing.
-        const actionKeywords = [
-          "start ",
-          "create ",
-          "install ",
-          "configure ",
-          "make ",
-          "build ",
-          "setup ",
-          "find ",
-          "locate ",
-          "check ",
-          "search ",
-          "verify ",
-          "test ",
-          "show ",
-          "list ",
-          "get ",
-          "run ",
-          "open ",
-          "set up ",
-          "update ",
-          "fix ",
-          "debug ",
-          "deploy ",
-          "delete ",
-          "remove ",
-        ];
-        const isQuestionPattern = /^(how\s+to|how\s+do\s+i|what\s+is|explain|can\s+you\s+explain|tell\s+me)\b/i.test(userTask);
-        const hasActionRequest =
-          !isShortAck &&
-          !isQuestionPattern &&
-          actionKeywords.some((kw) => userTask.toLowerCase().includes(kw));
+        // Check for "Lazy Completion": Agent used read-only tools but took no write actions.
+        // Instead of keyword-matching the user's request, check the signal:
+        // tools were invoked (agent tried to work) but zero commands executed / files written.
+        const isQuestionPattern = /^(how\s+to|how\s+do\s+i|what\s+is|explain|can\s+you\s+explain|tell\s+me|what|why|where|when|who)\b/i.test(userTask);
+        const userEndsWithQuestion = userTask.trim().endsWith("?");
+        const isLikelyQuestion = isQuestionPattern || userEndsWithQuestion;
 
-        // If we executed no commands, wrote no files, and didn't use web tools, almost certainly incomplete.
+        // history.length > initialHistoryLen means the agent used tools (read_file, list_dir, etc.)
+        const agentUsedTools = history.length > 4; // system + user + at least 2 tool exchanges
         if (
-          hasActionRequest &&
+          !isShortAck &&
+          !isLikelyQuestion &&
+          agentUsedTools &&
           executedCommands.size === 0 &&
           !wroteFiles &&
           !usedWebTools &&
