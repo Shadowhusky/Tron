@@ -599,20 +599,19 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       try {
         // Save scroll state BEFORE fit() — fit() recalculates rows and can
         // reset the viewport scroll position, causing a visible jump.
-        const viewport = el.querySelector(".xterm-viewport");
-        const wasAtBottom = !viewport || (viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 5);
-        const savedScrollTop = viewport?.scrollTop ?? 0;
+        // Use xterm's buffer API (stable across versions) instead of DOM scraping.
+        const buf = xtermRef.current.buffer.active;
+        const wasAtBottom = buf.viewportY >= buf.baseY;
+        const savedViewportY = buf.viewportY;
 
         fitAddonRef.current.fit();
 
         // Restore scroll position to prevent visible jump during resize.
-        // If user was at the bottom, pin there; otherwise restore exact position.
-        if (viewport) {
-          if (wasAtBottom) {
-            viewport.scrollTop = viewport.scrollHeight;
-          } else {
-            viewport.scrollTop = savedScrollTop;
-          }
+        // If user was at the bottom, pin there; otherwise restore exact line.
+        if (wasAtBottom) {
+          xtermRef.current.scrollToBottom();
+        } else {
+          xtermRef.current.scrollToLine(savedViewportY);
         }
         const { cols, rows } = xtermRef.current;
 
