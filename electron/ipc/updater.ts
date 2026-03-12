@@ -187,6 +187,7 @@ async function applyMacUpdate(
 
 export function registerUpdaterHandlers(
   getMainWindow: () => BrowserWindow | null,
+  setForceQuit?: () => void,
 ) {
   // IPC handlers — lazy-load electron-updater on first call
   ipcMain.handle("updater.checkForUpdates", async () => {
@@ -200,7 +201,17 @@ export function registerUpdaterHandlers(
   });
 
   ipcMain.handle("updater.quitAndInstall", async () => {
+    // Mark forceQuit FIRST so the close interceptor doesn't block app.quit()
+    setForceQuit?.();
+
     const au = await getAutoUpdater(getMainWindow);
+
+    // Safety net: if nothing exits the app within 8s, force-kill.
+    // Covers edge cases where quitAndInstall silently fails.
+    const safetyTimer = setTimeout(() => {
+      console.error("[Updater] Safety timeout — forcing app.exit(0)");
+      app.exit(0);
+    }, 8000);
 
     // On macOS, electron-updater's default quitAndInstall can race — the app
     // relaunches before the zip extraction/replacement finishes, so the old
@@ -209,6 +220,7 @@ export function registerUpdaterHandlers(
     if (process.platform === "darwin") {
       try {
         await applyMacUpdate(getMainWindow);
+        clearTimeout(safetyTimer);
         app.relaunch();
         app.exit(0);
         return;
@@ -218,6 +230,7 @@ export function registerUpdaterHandlers(
       }
     }
 
+    clearTimeout(safetyTimer);
     au.quitAndInstall(false, true);
   });
 

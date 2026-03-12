@@ -224,7 +224,7 @@ registerAIHandlers();
 registerConfigHandlers();
 registerWebServerHandlers();
 registerWebHandlers();
-registerUpdaterHandlers(() => mainWindow);
+registerUpdaterHandlers(() => mainWindow, () => { forceQuit = true; });
 
 // --- Window close response from renderer ---
 ipcMain.on("window.closeConfirmed", () => {
