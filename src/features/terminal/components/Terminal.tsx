@@ -243,6 +243,36 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         } catch { /* use as-is */ }
       }
 
+      // Validate path exists before opening a tab — prevents opening
+      // blank editor tabs for paths that are just terminal output text.
+      try {
+        const parentDir = resolved.replace(/[/\\][^/\\]+$/, "") || "/";
+        const fileName = resolved.split(/[/\\]/).pop() || "";
+        const dirResult = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: parentDir });
+        if (dirResult?.success && dirResult.contents) {
+          const found = dirResult.contents.some((entry: { name: string }) => entry.name === fileName);
+          if (!found) {
+            // Also check if resolved itself is a directory
+            const selfDir = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: resolved });
+            if (!selfDir?.success) {
+              window.dispatchEvent(new CustomEvent("tron:toast", {
+                detail: { message: `File not found: ${filePath}` },
+              }));
+              return;
+            }
+            // It's a directory — open in file manager
+            window.electron?.ipcRenderer?.invoke("shell.openPath", resolved)?.catch(() => {});
+            return;
+          }
+        } else if (dirResult && !dirResult.success) {
+          // Parent dir doesn't exist
+          window.dispatchEvent(new CustomEvent("tron:toast", {
+            detail: { message: `File not found: ${filePath}` },
+          }));
+          return;
+        }
+      } catch { /* validation failed — proceed anyway */ }
+
       const ext = resolved.split(".").pop()?.toLowerCase() || "";
       const baseName = resolved.split(/[/\\]/).pop() || "";
 

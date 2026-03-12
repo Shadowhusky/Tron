@@ -277,6 +277,19 @@ const AppContent = () => {
     return () => window.removeEventListener("tron:manual-update-check", reset);
   }, []);
 
+  // Generic toast event listener (e.g. from terminal link validation)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.message) {
+        setSshToast(detail.message);
+        setTimeout(() => setSshToast(""), 4000);
+      }
+    };
+    window.addEventListener("tron:toast", handler);
+    return () => window.removeEventListener("tron:toast", handler);
+  }, []);
+
   // Listen for link clicks — show popover at click position
   // Defer by one frame so the originating click finishes before Radix Popover
   // installs its pointer-down-outside listener (otherwise it closes immediately).

@@ -609,6 +609,18 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   }, []);
 
+  /** Insert a new tab right after the currently active tab. */
+  const insertTabAfterActive = (newTab: Tab) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === activeTabIdRef.current);
+      if (idx === -1) return [...prev, newTab]; // fallback: append
+      const next = [...prev];
+      next.splice(idx + 1, 0, newTab);
+      return next;
+    });
+    setActiveTabId(newTab.id);
+  };
+
   const createTab = async () => {
     // In SSH-only mode, create a connect tab instead of a local PTY
     if (isSshOnly()) {
@@ -744,8 +756,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       root: { type: "leaf", sessionId, contentType: "editor", editorPath: filePath, sourceSessionId },
       activeSessionId: sessionId,
     };
-    setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(newTabId);
+    insertTabAfterActive(newTab);
   };
 
   const openBrowserTab = (url: string, title?: string) => {
@@ -758,8 +769,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       root: { type: "leaf", sessionId, contentType: "browser", url },
       activeSessionId: sessionId,
     };
-    setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(newTabId);
+    insertTabAfterActive(newTab);
   };
 
   const createRemoteTab = async (url: string) => {
