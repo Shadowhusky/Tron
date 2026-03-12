@@ -120,8 +120,11 @@ function persistSessionHistory(sessionId: string) {
   const history = sessionHistory.get(sessionId);
   if (history === undefined) return;
   try {
-    fs.writeFileSync(path.join(historyDir, `${sessionId}.txt`), history, "utf-8");
-  } catch { /* best effort */ }
+    const filePath = path.join(historyDir, `${sessionId}.txt`);
+    fs.writeFileSync(filePath, history, "utf-8");
+  } catch (err) {
+    console.error(`[Terminal] Failed to persist history for ${sessionId}:`, err);
+  }
 }
 
 function loadPersistedHistory(sessionId: string): string {
@@ -153,7 +156,7 @@ function flushDirtyHistory() {
 }
 
 /** Persist all session history to disk (called on shutdown). */
-function persistAllHistory() {
+export function persistAllHistory() {
   if (historyFlushTimer) { clearTimeout(historyFlushTimer); historyFlushTimer = null; }
   for (const [sid] of sessionHistory) {
     persistSessionHistory(sid);

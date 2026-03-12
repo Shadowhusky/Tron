@@ -6,7 +6,7 @@ import {
   ipcMain,
 } from "electron";
 import path from "path";
-import { registerTerminalHandlers, cleanupAllSessions, getSessions, getSessionHistory } from "./ipc/terminal";
+import { registerTerminalHandlers, cleanupAllSessions, persistAllHistory, getSessions, getSessionHistory } from "./ipc/terminal";
 import { registerSystemHandlers } from "./ipc/system";
 import { registerAIHandlers } from "./ipc/ai";
 import { registerConfigHandlers } from "./ipc/config";
@@ -42,6 +42,7 @@ if (process.env.TRON_TEST_PROFILE) {
 // --- Global State ---
 let mainWindow: BrowserWindow | null = null;
 let forceQuit = false;
+let quitPending = false; // true when Cmd+Q / dock quit is waiting for user confirmation
 let closeAttempts = 0;
 let closeTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -279,8 +280,16 @@ registerUpdaterHandlers(() => mainWindow, () => { forceQuit = true; });
 ipcMain.on("window.closeConfirmed", () => {
   if (closeTimeout) { clearTimeout(closeTimeout); closeTimeout = null; }
   closeAttempts = 0;
+  // Flush all terminal history to disk immediately before closing.
+  // This ensures the latest PTY output is persisted even if the window
+  // close + cleanup sequence has timing issues.
+  persistAllHistory();
   forceQuit = true;
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  if (quitPending) {
+    // Cmd+Q / dock quit — quit the entire app (not just close the window)
+    quitPending = false;
+    app.quit();
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.close();
   }
 });
@@ -288,6 +297,7 @@ ipcMain.on("window.closeConfirmed", () => {
 ipcMain.on("window.closeCancelled", () => {
   if (closeTimeout) { clearTimeout(closeTimeout); closeTimeout = null; }
   closeAttempts = 0;
+  quitPending = false;
 });
 
 // Update Windows title bar overlay colors when theme changes
@@ -337,9 +347,30 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  forceQuit = true;
-  cleanupAllSSHSessions();
-  cleanupAllSessions();
-  stopWebServer();
+app.on("before-quit", (e) => {
+  if (forceQuit) {
+    // Already confirmed or force-closing — proceed with cleanup
+    cleanupAllSSHSessions();
+    cleanupAllSessions();
+    stopWebServer();
+    return;
+  }
+
+  // Intercept Cmd+Q / dock quit to show the close confirm modal,
+  // same as clicking the window close button.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    e.preventDefault();
+    quitPending = true;
+    // Trigger the same close interception flow as the window close button.
+    // The renderer will show the confirm modal and respond with
+    // window.closeConfirmed or window.closeCancelled.
+    mainWindow.webContents.send("window.confirmClose");
+    // Safety timeout — if renderer doesn't respond within 5s, force quit
+    if (closeTimeout) clearTimeout(closeTimeout);
+    closeTimeout = setTimeout(() => {
+      forceQuit = true;
+      quitPending = false;
+      app.quit();
+    }, 5000);
+  }
 });

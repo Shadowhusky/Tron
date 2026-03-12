@@ -99,11 +99,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   const suppressOutgoingRef = useRef(false);
 
   /**
-   * Strip alternate-buffer sections from PTY history before replay.
-   * TUI programs (vim, Claude Code, htop) use the alternate screen buffer via
-   * ESC[?1049h (enter) / ESC[?1049l (leave). The cursor-positioning sequences
-   * inside are relative to real-time state and produce garbled output when replayed.
-   * We keep only normal-buffer content so the replay shows clean shell output.
+   * Strip alternate-buffer sections and cursor-positioning artifacts from PTY
+   * history before replay. TUI programs use the alternate screen buffer via
+   * ESC[?1049h (enter) / ESC[?1049l (leave). Content inside is all cursor-
+   * positioned and produces garbled output when replayed. We also strip cursor
+   * save/restore, absolute positioning, and screen clear sequences that TUI
+   * programs emit in the normal buffer during setup/teardown.
    */
   const stripAltBuffer = useCallback((history: string): string => {
     const enterRe = /\x1b\[\?(?:1049|1047|47)h/;
@@ -128,11 +129,17 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           remaining = remaining.slice(m.index + m[0].length);
           inAlt = false;
         } else {
-          // Still in alt buffer (TUI still running) — discard rest
           break;
         }
       }
     }
+    // Strip cursor save/restore (ESC7/ESC8, ESC[s/ESC[u) and absolute cursor
+    // positioning (ESC[H, ESC[<row>;<col>H/f) that TUI programs emit during
+    // setup/teardown in the normal buffer.
+    // Also strip screen clear (ESC[2J), erase to end of screen (ESC[J/ESC[0J),
+    // and scroll region setup (ESC[<t>;<b>r) — all relics of TUI initialization.
+    // eslint-disable-next-line no-control-regex
+    result = result.replace(/\x1b[78]|\x1b\[[su]|\x1b\[\d*;\d*[Hf]|\x1b\[\d*[HJr]|\x1b\[\?(?:25|12)[hl]|\x1b\[\?2004[hl]/g, "");
     return result;
   }, []);
 
@@ -553,6 +560,21 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if (e.type === "keydown" && e.key === "Escape") {
         window.dispatchEvent(new CustomEvent("tron:terminalSearchClose", { detail: { sessionId } }));
       }
+      // Alt+Left/Right → send ESC b / ESC f for word navigation.
+      // xterm.js with macOptionIsMeta sends raw CSI modifier sequences that
+      // many shells don't bind by default, producing ";3D"/";3C" garbage.
+      // ESC b/f are universally recognized in emacs line-editing mode.
+      // Write directly to PTY (bypass xterm's input processing) to avoid
+      // any interaction with macOptionIsMeta or other key transformations.
+      if (e.type === "keydown" && e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          const seq = e.key === "ArrowLeft" ? "\x1bb" : "\x1bf";
+          if (window.electron) {
+            window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data: seq });
+          }
+          return false;
+        }
+      }
       // Let xterm handle Cmd/Ctrl+V natively — its internal paste handler
       // reads clipboardData synchronously (more reliable than async Clipboard
       // API) and wraps text in bracketed paste sequences for TUI compatibility.
@@ -670,10 +692,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         let guardedScrollTop = xtermViewport.scrollTop;
         // Update guarded position when user intentionally scrolls (touch handler)
         const updateGuard = () => { guardedScrollTop = xtermViewport!.scrollTop; };
+        let mobileWasInAlt = false;
         const checkScroll = () => {
+          const inAlt = term.buffer.active.type === "alternate";
+          if (inAlt) { mobileWasInAlt = true; return; } // Skip in TUI — no scrollback
+          if (mobileWasInAlt) { mobileWasInAlt = false; guardedScrollTop = xtermViewport!.scrollTop; return; }
           if (xtermViewport && guardedScrollTop > 50 &&
               xtermViewport.scrollTop === 0) {
-            // Jumped to top — revert
             xtermViewport.scrollTop = guardedScrollTop;
           } else if (xtermViewport) {
             guardedScrollTop = xtermViewport.scrollTop;
@@ -689,13 +714,31 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     }
 
     // DESKTOP GUARD: persistent scroll guard that catches sudden scroll-to-top
-    // jumps from ANY cause — user interaction, xterm internals (alternate buffer
-    // switches, TUI redraws), or focus events. Tracks last known good position
+    // jumps from user interaction or focus events. Tracks last known good position
     // and reverts jumps >50px to scrollTop=0.
+    // IMPORTANT: Skip when in alternate buffer — alt buffer has no scrollback,
+    // so scrollTop is always 0. Without this check, switching to alt buffer
+    // (TUI launch) triggers false "jump to top" detection that fights with xterm.
     let desktopGuardPos = 0;
     let desktopGuardRaf = 0;
+    let wasInAltBuffer = false;
     const desktopScrollGuard = !isTouch && xtermViewport ? () => {
       const vp = xtermViewport!;
+      const inAlt = term.buffer.active.type === "alternate";
+      if (inAlt) {
+        // In alternate buffer (TUI) — no scrollback, skip guard.
+        // DON'T reset desktopGuardPos — preserve the normal-buffer position
+        // so we can restore it when transitioning back.
+        wasInAltBuffer = true;
+        return;
+      }
+      if (wasInAltBuffer) {
+        // Just exited alt buffer — update guard to current position
+        // (the normal buffer might have a different scroll position now)
+        wasInAltBuffer = false;
+        desktopGuardPos = vp.scrollTop;
+        return;
+      }
       if (desktopGuardPos > 50 && vp.scrollTop === 0) {
         // Sudden jump to top — revert on next frame to avoid fighting xterm
         cancelAnimationFrame(desktopGuardRaf);
@@ -763,12 +806,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       lastContainerH = ch;
 
       try {
+        const inAltBuffer = xtermRef.current.buffer.active.type === "alternate";
+
         // Save scroll state BEFORE fit() — fit() recalculates rows and can
         // reset the viewport scroll position, causing a visible jump.
-        // Use xterm's buffer API (stable across versions) instead of DOM scraping.
+        // In alternate buffer, scrollback doesn't exist so skip save/restore.
         const buf = xtermRef.current.buffer.active;
-        const wasAtBottom = buf.viewportY >= buf.baseY;
+        const wasAtBottom = inAltBuffer || buf.viewportY >= buf.baseY;
         const savedViewportY = buf.viewportY;
+        const savedScrollTop = xtermViewport?.scrollTop ?? 0;
 
         // Suppress desktop scroll guard during fit() — fit() may briefly set
         // scrollTop to 0 before we restore it, which would trigger the guard.
@@ -776,14 +822,21 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         fitAddonRef.current.fit();
 
         // Restore scroll position to prevent visible jump during resize.
-        // If user was at the bottom, pin there; otherwise restore exact line.
-        if (wasAtBottom) {
+        if (inAltBuffer) {
+          // In alternate buffer (TUI), force viewport to 0 — no scrollback exists.
+          // This prevents stale normal-buffer scroll positions from causing jumps.
+          if (xtermViewport) xtermViewport.scrollTop = 0;
+        } else if (wasAtBottom) {
           xtermRef.current.scrollToBottom();
         } else {
           xtermRef.current.scrollToLine(savedViewportY);
+          // Double-check: if scrollToLine didn't work, restore DOM scrollTop
+          if (xtermViewport && Math.abs(xtermViewport.scrollTop - savedScrollTop) > 50) {
+            xtermViewport.scrollTop = savedScrollTop;
+          }
         }
         // Re-arm guard with restored position
-        if (xtermViewport) desktopGuardPos = xtermViewport.scrollTop;
+        if (xtermViewport) desktopGuardPos = inAltBuffer ? 0 : xtermViewport.scrollTop;
         const { cols, rows } = xtermRef.current;
 
         if (
@@ -877,49 +930,76 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           // getHistory. In web mode, the fresh PTY outputs a shell prompt before
           // getHistory responds, making it non-empty and masking the saved content.
           let effectiveHistory = pendingHistory || ((history && history.length > 0) ? history : undefined);
-          const isReconnect = knownReconnect || !!effectiveHistory;
-
           // On mobile, truncate history to reduce write time and layout thrashing.
           // Scrollback is limited to 1000 lines anyway, so excess data is discarded.
           if (effectiveHistory && isTouch && effectiveHistory.length > 20000) {
             effectiveHistory = effectiveHistory.slice(-20000);
           }
 
-          if (isReconnect) {
-            // Suppress outgoing onData → PTY during bounce to prevent DSR
-            // response corruption from stale escape sequences.
+          // Suppress outgoing onData → PTY during history replay.
+          // Raw history contains terminal queries (DA1/DA2/DSR) that xterm responds
+          // to — without suppression, responses like ESC[>1;2c get sent to the PTY
+          // and the shell echoes them as garbage text ("/1;2c_").
+          if (effectiveHistory || knownReconnect) {
             suppressOutgoingRef.current = true;
           }
 
-          // Try to restore from SerializeAddon snapshot first — it captures the
-          // rendered visual framebuffer (no raw escape sequences) so it restores
-          // cleanly even after TUI sessions and at different terminal sizes.
+          // Try SerializeAddon snapshot for visual restore.
+          // Snapshots capture the rendered framebuffer (no raw escape sequences)
+          // so they restore cleanly even after TUI sessions.
           let usedSnapshot = false;
-          if (isReconnect) {
-            try {
-              const raw = localStorage.getItem(SNAPSHOT_KEY);
-              if (raw) {
-                const snap = JSON.parse(raw) as { data: string; cols: number; rows: number };
-                if (snap.data && snap.cols && snap.rows) {
-                  // Restore at the original dimensions to avoid reflow artifacts,
-                  // then resize to current dimensions after.
-                  term.resize(snap.cols, snap.rows);
-                  term.write(snap.data);
-                  usedSnapshot = true;
-                }
+          let snapshotData: { data: string; cols: number; rows: number; inAltBuffer?: boolean } | null = null;
+          try {
+            const raw = localStorage.getItem(SNAPSHOT_KEY);
+            if (raw) {
+              const snap = JSON.parse(raw) as { data: string; cols: number; rows: number; inAltBuffer?: boolean };
+              if (snap.data && snap.cols && snap.rows && !snap.inAltBuffer) {
+                snapshotData = snap;
               }
-            } catch { /* fall through to raw history */ }
+            }
+          } catch { /* ignore */ }
+
+          // Use snapshot for true reconnects (page reload with live PTY).
+          if (knownReconnect && snapshotData) {
+            term.resize(snapshotData.cols, snapshotData.rows);
+            term.write(snapshotData.data);
+            usedSnapshot = true;
           }
 
           // Fallback: write raw history with alternate-buffer sections stripped.
           if (!usedSnapshot && effectiveHistory) {
             const cleanHistory = stripAltBuffer(effectiveHistory);
-            if (cleanHistory) term.write(cleanHistory);
+            const hadTui = cleanHistory.length < effectiveHistory.length;
+
+            if (hadTui) {
+              // TUI content was stripped. Try the snapshot as a better restore
+              // source (saved on beforeunload/unmount, captures visual state).
+              // This handles app restart after running a TUI.
+              if (snapshotData) {
+                term.resize(snapshotData.cols, snapshotData.rows);
+                term.write(snapshotData.data);
+                usedSnapshot = true;
+              } else {
+                // No snapshot available — strip ALL escape sequences and show
+                // clean text tail so user sees recent shell commands/output.
+                // eslint-disable-next-line no-control-regex
+                const plainText = cleanHistory.replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+                  .replace(/[^\n]*\r(?!\n)/g, ""); // Handle \r overwrites
+                const lines = plainText.split("\n").filter(l => l.trim());
+                const tail = lines.slice(-100).join("\r\n");
+                if (tail.trim()) term.write(tail + "\r\n");
+              }
+            } else {
+              // No TUI — safe to replay with just DA/DSR query stripping
+              // eslint-disable-next-line no-control-regex
+              const safeHistory = cleanHistory.replace(/\x1b\[[\?>]?[\d;]*[cn]/g, "");
+              if (safeHistory) term.write(safeHistory);
+            }
           }
 
           // If we're still in alternate buffer (TUI still running),
           // clear the screen so the SIGWINCH bounce triggers a clean redraw.
-          if (isReconnect && term.buffer.active.type === "alternate") {
+          if (knownReconnect && term.buffer.active.type === "alternate") {
             term.write("\x1b[2J\x1b[H");
           }
 
@@ -941,7 +1021,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             );
           }
 
-          if (isReconnect) {
+          if (knownReconnect) {
             // Fit locally to get correct dimensions
             try { fitAddon.fit(); } catch { /* ignore */ }
 
@@ -974,9 +1054,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
               performResize();
             }, 300);
           } else {
-            // Fresh session — sync dimensions normally.
-            // On mobile a single resize is enough; desktop does a follow-up
-            // at 250ms to catch late layout settling (font load, etc.).
+            // Fresh session or split remount — sync dimensions normally.
+            // Re-enable outgoing writes (suppressed during history replay).
+            suppressOutgoingRef.current = false;
             performResize();
             if (!isTouch) setTimeout(performResize, 250);
           }
@@ -1105,14 +1185,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // PTY escape sequences (which garble cursor-positioned TUI output).
     const saveSnapshot = () => {
       try {
-        // Don't snapshot alternate buffer — TUI will redraw via SIGWINCH bounce
-        if (term.buffer.active.type === "alternate") return;
         const serialized = serializeAddon.serialize();
         if (serialized) {
           localStorage.setItem(`tron:termSnapshot:${sessionId}`, JSON.stringify({
             data: serialized,
             cols: term.cols,
             rows: term.rows,
+            inAltBuffer: term.buffer.active.type === "alternate",
           }));
         }
       } catch { /* non-critical */ }
@@ -1144,13 +1223,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     return () => {
       mounted = false;
-      // Save final snapshot before unmount
-      saveSnapshot();
+      // Save final snapshot before unmount — must run BEFORE term.dispose()
+      try { saveSnapshot(); } catch { /* term may already be disposed */ }
       clearInterval(snapshotTimer);
       window.removeEventListener("beforeunload", saveSnapshot);
+      // Flush any pending batched output before disposal
+      if (batchRaf !== null) { cancelAnimationFrame(batchRaf); batchRaf = null; }
+      if (batchBuffer) { try { term.write(batchBuffer); } catch {} batchBuffer = ""; }
+      if (inSyncMode) { try { term.write(syncBuffer); } catch {} syncBuffer = ""; inSyncMode = false; }
       clearTimeout(resizeTimer);
       clearTimeout(syncTimer);
-      if (batchRaf !== null) cancelAnimationFrame(batchRaf);
       window.removeEventListener("tron:splitDragStart", onSplitDragStart);
       window.removeEventListener("tron:splitDragEnd", onSplitDragEnd);
       unregisterScreenBufferReader(sessionId);

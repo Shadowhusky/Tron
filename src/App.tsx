@@ -261,6 +261,15 @@ const AppContent = () => {
     return cleanup;
   }, []);
 
+  // Cmd+Q / dock quit → main process sends forceClose before the close event.
+  // Set closingRef so beforeunload doesn't block.
+  useEffect(() => {
+    if (!window.electron?.ipcRenderer?.on) return;
+    return window.electron.ipcRenderer.on("window.forceClose", () => {
+      closingRef.current = true;
+    });
+  }, []);
+
   // Reset dismissed flag when user manually checks for updates (from Settings)
   useEffect(() => {
     const reset = () => { updateDismissedRef.current = false; };

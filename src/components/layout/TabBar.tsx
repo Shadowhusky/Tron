@@ -902,6 +902,58 @@ const TabBar: React.FC<TabBarProps> = ({
               Close Tab
             </button>
 
+            {/* Close Tabs to Left */}
+            {(() => {
+              const idx = tabs.findIndex((t) => t.id === contextMenu?.tabId);
+              return idx > 0 ? (
+                <button
+                  onClick={async () => {
+                    setContextMenu(null);
+                    const leftTabs = tabs.slice(0, idx);
+                    if (await confirm(`Close ${leftTabs.length} tab${leftTabs.length > 1 ? "s" : ""} to the left?`)) {
+                      for (const t of leftTabs) onClose(t.id);
+                    }
+                  }}
+                  className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                    resolvedTheme,
+                    {
+                      dark: "hover:bg-white/10",
+                      modern: "hover:bg-white/20",
+                      light: "hover:bg-red-50",
+                    },
+                  )}`}
+                >
+                  Close Tabs to the Left
+                </button>
+              ) : null;
+            })()}
+
+            {/* Close Tabs to Right */}
+            {(() => {
+              const idx = tabs.findIndex((t) => t.id === contextMenu?.tabId);
+              return idx >= 0 && idx < tabs.length - 1 ? (
+                <button
+                  onClick={async () => {
+                    setContextMenu(null);
+                    const rightTabs = tabs.slice(idx + 1);
+                    if (await confirm(`Close ${rightTabs.length} tab${rightTabs.length > 1 ? "s" : ""} to the right?`)) {
+                      for (const t of rightTabs) onClose(t.id);
+                    }
+                  }}
+                  className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                    resolvedTheme,
+                    {
+                      dark: "hover:bg-white/10",
+                      modern: "hover:bg-white/20",
+                      light: "hover:bg-red-50",
+                    },
+                  )}`}
+                >
+                  Close Tabs to the Right
+                </button>
+              ) : null;
+            })()}
+
             {/* Close All Tabs */}
             {tabs.length > 1 && (
               <button

@@ -76,6 +76,7 @@ const ALLOWED_RECEIVE_CHANNELS = [
   "menu.createTab",
   "menu.closeTab",
   "window.confirmClose",
+  "window.forceClose",
   "ssh.statusChange",
   "updater.status",
   "updater.downloadProgress",
