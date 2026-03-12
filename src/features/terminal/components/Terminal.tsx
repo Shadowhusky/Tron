@@ -3,6 +3,7 @@ import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
@@ -127,9 +128,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     });
 
     const searchAddon = new SearchAddon();
+    const unicodeAddon = new Unicode11Addon();
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.loadAddon(searchAddon);
+    term.loadAddon(unicodeAddon);
+    term.unicode.activeVersion = "11";
     searchAddonRef.current = searchAddon;
 
     // File path link provider — makes file paths clickable in terminal output.
