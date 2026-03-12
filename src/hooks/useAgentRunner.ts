@@ -9,7 +9,7 @@ import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 import { isDangerousCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
-import { readScreenBuffer } from "../services/terminalBuffer";
+import { readScreenBuffer, isAlternateBuffer } from "../services/terminalBuffer";
 import { getRemoteConnection } from "../services/remote-bridge";
 
 /**
@@ -869,7 +869,7 @@ ${prompt}
         thinkingEnabled && modelSupportsThinking,
         currentContinuation || undefined,
         images,
-        { isSSH: !!session?.sshProfileId, sessionId, rawUserTask: prompt },
+        { isSSH: !!session?.sshProfileId, sessionId, rawUserTask: prompt, isAlternateBuffer: () => isAlternateBuffer(sessionId) },
         async (description: string) => {
           if (alwaysAllowRef.current) return;
           setPendingCommand(description);

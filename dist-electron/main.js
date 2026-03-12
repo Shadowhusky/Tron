@@ -69,6 +69,8 @@ if (process.env.TRON_TEST_PROFILE) {
 // --- Global State ---
 let mainWindow = null;
 let forceQuit = false;
+let closeAttempts = 0;
+let closeTimeout = null;
 // --- Menu Helper ---
 const createMenu = (win) => {
     const isMac = process.platform === "darwin";
@@ -204,8 +206,22 @@ const createWindow = () => {
     // Intercept close to show confirmation in renderer
     mainWindow.on("close", (e) => {
         if (!forceQuit && mainWindow && !mainWindow.isDestroyed()) {
+            closeAttempts++;
+            // 3rd close attempt → force close (renderer is likely frozen/unresponsive)
+            if (closeAttempts >= 3) {
+                forceQuit = true;
+                return; // let the close proceed
+            }
             e.preventDefault();
             mainWindow.webContents.send("window.confirmClose");
+            // Safety timeout — if renderer doesn't respond within 5s, force close
+            if (closeTimeout)
+                clearTimeout(closeTimeout);
+            closeTimeout = setTimeout(() => {
+                forceQuit = true;
+                if (mainWindow && !mainWindow.isDestroyed())
+                    mainWindow.close();
+            }, 5000);
         }
     });
     mainWindow.on("closed", () => {
@@ -223,7 +239,7 @@ const createWindow = () => {
         mainWindow.loadFile(path_1.default.join(__dirname, "../dist-react/index.html"));
     }
 };
-// --- Clipboard image reader (for SmartInput paste) ---
+// --- Clipboard readers ---
 electron_1.ipcMain.handle("clipboard.readImage", async () => {
     const { clipboard } = await Promise.resolve().then(() => __importStar(require("electron")));
     const image = clipboard.readImage();
@@ -231,6 +247,47 @@ electron_1.ipcMain.handle("clipboard.readImage", async () => {
         return null;
     const png = image.toPNG();
     return png.toString("base64");
+});
+// Read file paths from system clipboard (e.g. files copied in Finder/Explorer)
+electron_1.ipcMain.handle("clipboard.readFilePaths", async () => {
+    const { clipboard } = await Promise.resolve().then(() => __importStar(require("electron")));
+    if (process.platform === "darwin") {
+        // macOS: NSFilenamesPboardType is exposed as a property list (XML plist)
+        // containing an array of file path strings.
+        try {
+            const raw = clipboard.read("NSFilenamesPboardType");
+            if (raw) {
+                // Parse plist XML — extract <string> values
+                const paths = Array.from(raw.matchAll(/<string>([^<]+)<\/string>/g), m => m[1]);
+                if (paths.length > 0)
+                    return paths;
+            }
+        }
+        catch { /* not available */ }
+        // Fallback: public.file-url
+        try {
+            const fileUrl = clipboard.read("public.file-url");
+            if (fileUrl) {
+                const decoded = decodeURIComponent(fileUrl.replace(/^file:\/\//, ""));
+                if (decoded)
+                    return [decoded];
+            }
+        }
+        catch { /* not available */ }
+    }
+    else if (process.platform === "win32") {
+        // Windows: CF_HDROP exposed via FileNameW
+        try {
+            const buf = clipboard.readBuffer("FileNameW");
+            if (buf && buf.length > 0) {
+                const decoded = buf.toString("ucs2").replace(/\0+$/, "");
+                if (decoded)
+                    return [decoded];
+            }
+        }
+        catch { /* not available */ }
+    }
+    return null;
 });
 // --- Register all IPC handlers ---
 (0, terminal_1.registerTerminalHandlers)(() => mainWindow);
@@ -240,16 +297,25 @@ electron_1.ipcMain.handle("clipboard.readImage", async () => {
 (0, config_1.registerConfigHandlers)();
 (0, web_server_1.registerWebServerHandlers)();
 (0, web_1.registerWebHandlers)();
-(0, updater_1.registerUpdaterHandlers)(() => mainWindow);
+(0, updater_1.registerUpdaterHandlers)(() => mainWindow, () => { forceQuit = true; });
 // --- Window close response from renderer ---
 electron_1.ipcMain.on("window.closeConfirmed", () => {
+    if (closeTimeout) {
+        clearTimeout(closeTimeout);
+        closeTimeout = null;
+    }
+    closeAttempts = 0;
     forceQuit = true;
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.close();
     }
 });
 electron_1.ipcMain.on("window.closeCancelled", () => {
-    // No-op — renderer dismissed the modal
+    if (closeTimeout) {
+        clearTimeout(closeTimeout);
+        closeTimeout = null;
+    }
+    closeAttempts = 0;
 });
 // Update Windows title bar overlay colors when theme changes
 electron_1.ipcMain.on("window.themeChanged", (_, resolvedTheme) => {

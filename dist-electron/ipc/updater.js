@@ -127,7 +127,12 @@ function wireEvents(autoUpdater, getMainWindow) {
  * where the app relaunches before the zip extraction finishes.
  */
 async function applyMacUpdate(getMainWindow) {
+    const sendStep = (step) => {
+        updateStatus = "installing";
+        sendToRenderer(getMainWindow, "updater.status", { status: "installing", updateInfo, installStep: step });
+    };
     // Locate the pending update zip
+    sendStep("Locating update...");
     const cacheDir = (0, node_path_1.join)(electron_1.app.getPath("userData"), "..", "Caches", "tron-updater", "pending");
     if (!(0, node_fs_1.existsSync)(cacheDir)) {
         throw new Error(`Cache dir not found: ${cacheDir}`);
@@ -144,10 +149,8 @@ async function applyMacUpdate(getMainWindow) {
     if (!appBundlePath.endsWith(".app")) {
         throw new Error(`Unexpected app path: ${appBundlePath}`);
     }
-    // Notify renderer that we're extracting (can take a few seconds for ~140MB zip)
-    updateStatus = "installing";
-    sendToRenderer(getMainWindow, "updater.status", { status: updateStatus, updateInfo });
     // Extract to a temp directory using ditto (preserves macOS attrs + code signing)
+    sendStep("Extracting update...");
     const extractDir = (0, node_path_1.join)((0, node_os_1.tmpdir)(), `tron-update-${Date.now()}`);
     await execFileAsync("ditto", ["-xk", zipPath, extractDir]);
     // Find the .app inside the extracted dir (should be Tron.app)
@@ -158,16 +161,19 @@ async function applyMacUpdate(getMainWindow) {
     }
     const newAppPath = (0, node_path_1.join)(extractDir, extracted[0]);
     // Replace: remove old bundle, move new one in place
+    sendStep("Applying update...");
     (0, node_fs_1.rmSync)(appBundlePath, { recursive: true, force: true });
     await execFileAsync("mv", [newAppPath, appBundlePath]);
     // Clean up temp dir (ignore errors)
+    sendStep("Cleaning up...");
     try {
         (0, node_fs_1.rmSync)(extractDir, { recursive: true, force: true });
     }
     catch { /* best-effort */ }
+    sendStep("Restarting...");
     console.log("[Updater] macOS update applied successfully");
 }
-function registerUpdaterHandlers(getMainWindow) {
+function registerUpdaterHandlers(getMainWindow, setForceQuit) {
     // IPC handlers — lazy-load electron-updater on first call
     electron_1.ipcMain.handle("updater.checkForUpdates", async () => {
         const au = await getAutoUpdater(getMainWindow);
@@ -178,7 +184,15 @@ function registerUpdaterHandlers(getMainWindow) {
         await au.downloadUpdate();
     });
     electron_1.ipcMain.handle("updater.quitAndInstall", async () => {
+        // Mark forceQuit FIRST so the close interceptor doesn't block app.quit()
+        setForceQuit?.();
         const au = await getAutoUpdater(getMainWindow);
+        // Safety net: if nothing exits the app within 60s, force-kill.
+        // Extraction of ~140MB zip can take 10-30s on slow disks.
+        const safetyTimer = setTimeout(() => {
+            console.error("[Updater] Safety timeout — forcing app.exit(0)");
+            electron_1.app.exit(0);
+        }, 60000);
         // On macOS, electron-updater's default quitAndInstall can race — the app
         // relaunches before the zip extraction/replacement finishes, so the old
         // binary runs again. Fix: extract the update ourselves BEFORE quitting,
@@ -186,6 +200,7 @@ function registerUpdaterHandlers(getMainWindow) {
         if (process.platform === "darwin") {
             try {
                 await applyMacUpdate(getMainWindow);
+                clearTimeout(safetyTimer);
                 electron_1.app.relaunch();
                 electron_1.app.exit(0);
                 return;
@@ -195,6 +210,7 @@ function registerUpdaterHandlers(getMainWindow) {
                 console.error("[Updater] Manual apply failed, falling back:", err);
             }
         }
+        clearTimeout(safetyTimer);
         au.quitAndInstall(false, true);
     });
     electron_1.ipcMain.handle("updater.getStatus", () => ({
@@ -206,14 +222,15 @@ function registerUpdaterHandlers(getMainWindow) {
     electron_1.ipcMain.handle("updater.getVersion", () => electron_1.app.getVersion());
 }
 /** Check for updates after app is idle, then periodically. Only runs when packaged. */
-function autoCheckForUpdates(autoDownload, getMainWindow) {
+function autoCheckForUpdates(_autoDownload, getMainWindow) {
     if (!electron_1.app.isPackaged)
         return;
     const CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
     const doCheck = async () => {
         try {
             const au = await getAutoUpdater(getMainWindow);
-            au.autoDownload = autoDownload;
+            // Never auto-download — only notify. User must click "Update Now".
+            au.autoDownload = false;
             // Skip if already downloaded — no need to re-check
             if (updateStatus === "downloaded" || updateStatus === "downloading")
                 return;

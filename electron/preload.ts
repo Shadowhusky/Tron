@@ -56,6 +56,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "updater.getStatus",
   "updater.getVersion",
   "clipboard.readImage",
+  "clipboard.readFilePaths",
   "web.search",
   "web.fetch",
 ] as const;
@@ -255,6 +256,8 @@ const electronAPI = {
       ipcRenderer.invoke("updater.getVersion") as Promise<string>,
     readClipboardImage: () =>
       ipcRenderer.invoke("clipboard.readImage") as Promise<string | null>,
+    readClipboardFilePaths: () =>
+      ipcRenderer.invoke("clipboard.readFilePaths") as Promise<string[] | null>,
   },
 };
 

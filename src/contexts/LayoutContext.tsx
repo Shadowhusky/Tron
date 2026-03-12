@@ -189,7 +189,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           cwd: savedCwds[id],
           aiConfig: config,
           interactions: (parsed.sessionInteractions || {})[id] || [],
-          dirty: (parsed.sessionDirtyFlags || {})[id] ?? false,
+          dirty: false, // Reset on app restart — user hasn't interacted yet this session
           sshProfileId: (parsed.sessionSSHProfileIds || {})[id],
           remoteUrl: (parsed.sessionRemoteUrls || {})[id],
         });
@@ -420,8 +420,6 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
               const aiConfig = (parsed.sessionConfigs || {})[oldId];
               const interactions = (parsed.sessionInteractions || {})[oldId];
               const summaryConstant = (parsed.sessionSummaries || {})[oldId];
-              const wasDirty =
-                (parsed.sessionDirtyFlags || {})[oldId] ?? false;
               const sshProfileId = (parsed.sessionSSHProfileIds || {})[oldId];
               const remoteUrl = (parsed.sessionRemoteUrls || {})[oldId];
               const titleLocked = (parsed.sessionTitleLocked || {})[oldId] ?? false;
@@ -488,7 +486,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 interactions: interactions || [],
                 contextSummary: summaryConstant?.summary,
                 contextSummarySourceLength: summaryConstant?.sourceLength,
-                dirty: wasDirty,
+                dirty: false, // Reset on reconnect — user hasn't interacted yet
                 sshProfileId,
                 remoteUrl,
                 // Mark as reconnected only if we reattached to a live PTY

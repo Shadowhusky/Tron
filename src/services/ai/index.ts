@@ -1894,7 +1894,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     thinkingEnabled: boolean = true,
     continuation?: AgentContinuation,
     images?: AttachedImage[],
-    options?: { isSSH?: boolean; sessionId?: string; rawUserTask?: string },
+    options?: { isSSH?: boolean; sessionId?: string; rawUserTask?: string; isAlternateBuffer?: () => boolean },
     checkFilePermission?: (description: string) => Promise<void>,
   ): Promise<AgentResult> {
     const cfg = sessionConfig || this.config;
@@ -2014,10 +2014,18 @@ ${agentPrompt}
       terminalBusy = false;
     }
 
-    // Detect terminal state by reading recent output
+    // Detect terminal state by reading recent output.
+    // If terminal is in alternate buffer, a TUI app (Claude Code, vim, etc.)
+    // is definitely running — classify as "busy" even if output looks idle-ish.
     const detectTerminalState = async (): Promise<TerminalState> => {
       const output = await readTerminal(20);
-      return classifyTerminalOutput(output);
+      const state = classifyTerminalOutput(output);
+      if (state === "idle" && options?.isAlternateBuffer?.()) {
+        // Alternate buffer active but output looks idle — TUI is running
+        // (e.g. Claude Code waiting for input, vim in normal mode)
+        return "busy";
+      }
+      return state;
     };
 
     /**
@@ -3506,7 +3514,12 @@ ${agentPrompt}
             }
 
             termState = classifyTerminalOutput(output || "");
-            tuiProgram = termState !== "idle" ? detectTuiProgram(output || "") : null;
+            // If alternate buffer is active, a TUI is definitely running
+            const inAltBuffer = options?.isAlternateBuffer?.() ?? false;
+            if (inAltBuffer && termState === "idle") termState = "busy";
+            tuiProgram = (termState !== "idle" || inAltBuffer) ? detectTuiProgram(output || "") : null;
+            // If alternate buffer but heuristics didn't match, treat as generic TUI
+            if (inAltBuffer && !tuiProgram) tuiProgram = "tui-app";
 
             // If terminal is busy (process running) and we came from run_in_terminal,
             // poll internally instead of returning to the LLM

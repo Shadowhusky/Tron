@@ -137,7 +137,13 @@ function wireEvents(
 async function applyMacUpdate(
   getMainWindow: () => BrowserWindow | null,
 ): Promise<void> {
+  const sendStep = (step: string) => {
+    updateStatus = "installing";
+    sendToRenderer(getMainWindow, "updater.status", { status: "installing", updateInfo, installStep: step });
+  };
+
   // Locate the pending update zip
+  sendStep("Locating update...");
   const cacheDir = join(app.getPath("userData"), "..", "Caches", "tron-updater", "pending");
   if (!existsSync(cacheDir)) {
     throw new Error(`Cache dir not found: ${cacheDir}`);
@@ -157,11 +163,8 @@ async function applyMacUpdate(
     throw new Error(`Unexpected app path: ${appBundlePath}`);
   }
 
-  // Notify renderer that we're extracting (can take a few seconds for ~140MB zip)
-  updateStatus = "installing";
-  sendToRenderer(getMainWindow, "updater.status", { status: updateStatus, updateInfo });
-
   // Extract to a temp directory using ditto (preserves macOS attrs + code signing)
+  sendStep("Extracting update...");
   const extractDir = join(tmpdir(), `tron-update-${Date.now()}`);
   await execFileAsync("ditto", ["-xk", zipPath, extractDir]);
 
@@ -174,14 +177,17 @@ async function applyMacUpdate(
   const newAppPath = join(extractDir, extracted[0]);
 
   // Replace: remove old bundle, move new one in place
+  sendStep("Applying update...");
   rmSync(appBundlePath, { recursive: true, force: true });
   await execFileAsync("mv", [newAppPath, appBundlePath]);
 
   // Clean up temp dir (ignore errors)
+  sendStep("Cleaning up...");
   try {
     rmSync(extractDir, { recursive: true, force: true });
   } catch { /* best-effort */ }
 
+  sendStep("Restarting...");
   console.log("[Updater] macOS update applied successfully");
 }
 
@@ -206,12 +212,12 @@ export function registerUpdaterHandlers(
 
     const au = await getAutoUpdater(getMainWindow);
 
-    // Safety net: if nothing exits the app within 8s, force-kill.
-    // Covers edge cases where quitAndInstall silently fails.
+    // Safety net: if nothing exits the app within 60s, force-kill.
+    // Extraction of ~140MB zip can take 10-30s on slow disks.
     const safetyTimer = setTimeout(() => {
       console.error("[Updater] Safety timeout — forcing app.exit(0)");
       app.exit(0);
-    }, 8000);
+    }, 60_000);
 
     // On macOS, electron-updater's default quitAndInstall can race — the app
     // relaunches before the zip extraction/replacement finishes, so the old
@@ -246,7 +252,7 @@ export function registerUpdaterHandlers(
 
 /** Check for updates after app is idle, then periodically. Only runs when packaged. */
 export function autoCheckForUpdates(
-  autoDownload: boolean,
+  _autoDownload: boolean,
   getMainWindow: () => BrowserWindow | null,
 ) {
   if (!app.isPackaged) return;
@@ -256,7 +262,8 @@ export function autoCheckForUpdates(
   const doCheck = async () => {
     try {
       const au = await getAutoUpdater(getMainWindow);
-      au.autoDownload = autoDownload;
+      // Never auto-download — only notify. User must click "Update Now".
+      au.autoDownload = false;
       // Skip if already downloaded — no need to re-check
       if (updateStatus === "downloaded" || updateStatus === "downloading") return;
       await au.checkForUpdates();

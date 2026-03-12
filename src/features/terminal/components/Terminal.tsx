@@ -4,11 +4,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
-import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader } from "../../../services/terminalBuffer";
-import { isElectronApp, isTouchDevice, normalizePath } from "../../../utils/platform";
+import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader } from "../../../services/terminalBuffer";
+import { isElectronApp, isMacOS, isTouchDevice, normalizePath } from "../../../utils/platform";
 import { isRemoteSession } from "../../../services/remote-bridge";
 import "@xterm/xterm/css/xterm.css";
 
@@ -97,6 +98,44 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   // response corruption (xterm responds to stale cursor-position requests)
   const suppressOutgoingRef = useRef(false);
 
+  /**
+   * Strip alternate-buffer sections from PTY history before replay.
+   * TUI programs (vim, Claude Code, htop) use the alternate screen buffer via
+   * ESC[?1049h (enter) / ESC[?1049l (leave). The cursor-positioning sequences
+   * inside are relative to real-time state and produce garbled output when replayed.
+   * We keep only normal-buffer content so the replay shows clean shell output.
+   */
+  const stripAltBuffer = useCallback((history: string): string => {
+    const enterRe = /\x1b\[\?(?:1049|1047|47)h/;
+    const leaveRe = /\x1b\[\?(?:1049|1047|47)l/;
+    let result = "";
+    let remaining = history;
+    let inAlt = false;
+    while (remaining.length > 0) {
+      if (!inAlt) {
+        const m = enterRe.exec(remaining);
+        if (m) {
+          result += remaining.slice(0, m.index);
+          remaining = remaining.slice(m.index + m[0].length);
+          inAlt = true;
+        } else {
+          result += remaining;
+          break;
+        }
+      } else {
+        const m = leaveRe.exec(remaining);
+        if (m) {
+          remaining = remaining.slice(m.index + m[0].length);
+          inAlt = false;
+        } else {
+          // Still in alt buffer (TUI still running) — discard rest
+          break;
+        }
+      }
+    }
+    return result;
+  }, []);
+
   // ---- Main effect: create terminal (once per sessionId) ----
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -114,6 +153,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       fontSize: 14,
       theme: termTheme,
       allowProposedApi: true,
+      // macOS Option key → Meta so Alt+Arrow sends proper escape sequences
+      ...(isMacOS() ? { macOptionIsMeta: true } : {}),
       // Reduce scrollback on mobile to save memory and speed up fit()/scroll
       ...(isTouch ? { scrollback: 1000 } : {}),
     });
@@ -129,10 +170,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     const searchAddon = new SearchAddon();
     const unicodeAddon = new Unicode11Addon();
+    const serializeAddon = new SerializeAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(unicodeAddon);
+    term.loadAddon(serializeAddon);
     term.unicode.activeVersion = "11";
     searchAddonRef.current = searchAddon;
 
@@ -333,6 +376,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // Register selection reader so context menu can read selected text
     registerSelectionReader(sessionId, () => term.getSelection());
 
+    // Register alternate buffer reader for TUI detection
+    registerAlternateBufferReader(sessionId, () => term.buffer.active.type === "alternate");
+
     // Register viewport text reader — returns only the currently visible lines
     registerViewportTextReader(sessionId, () => {
       const buf = term.buffer.active;
@@ -346,6 +392,95 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return lines.join("\n");
     });
 
+    // --- Mode 2026: Synchronized Output buffering ---
+    // TUI apps (Claude Code, Bubbletea, etc.) wrap screen updates in
+    // ESC[?2026h ... ESC[?2026l sequences. We buffer all writes during
+    // sync mode and flush atomically to prevent partial-frame flicker.
+    let syncBuffer = "";
+    let inSyncMode = false;
+    const SYNC_BEGIN = "\x1b[?2026h";
+    const SYNC_END = "\x1b[?2026l";
+    const SYNC_TIMEOUT = 200; // ms — force flush if end marker never arrives
+    let syncTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // --- RAF batching for alternate-buffer (TUI) output ---
+    // TUI programs like Claude Code produce thousands of small writes per
+    // second (full-screen redraws). Writing each chunk individually causes
+    // xterm to render intermediate partial frames → visible flicker and
+    // scroll jumps. We batch writes and flush once per animation frame
+    // (~60fps) when in alternate buffer, giving xterm one complete frame
+    // to render atomically.
+    let batchBuffer = "";
+    let batchRaf: number | null = null;
+
+    const flushBatch = () => {
+      batchRaf = null;
+      if (batchBuffer) {
+        term.write(batchBuffer);
+        batchBuffer = "";
+      }
+    };
+
+    /** Write to xterm, batching at RAF rate when in alternate buffer (TUI). */
+    const batchWrite = (data: string) => {
+      if (term.buffer.active.type === "alternate") {
+        batchBuffer += data;
+        if (batchRaf === null) {
+          batchRaf = requestAnimationFrame(flushBatch);
+        }
+      } else {
+        // Normal buffer — write immediately for responsive shell experience
+        term.write(data);
+      }
+    };
+
+    const syncWrite = (data: string) => {
+      // Check for sync markers in the data
+      if (!inSyncMode) {
+        const beginIdx = data.indexOf(SYNC_BEGIN);
+        if (beginIdx === -1) {
+          batchWrite(data); // No sync markers — write (batched if TUI)
+          return;
+        }
+        // Write everything before the sync marker
+        if (beginIdx > 0) batchWrite(data.slice(0, beginIdx));
+        inSyncMode = true;
+        syncBuffer = data.slice(beginIdx + SYNC_BEGIN.length);
+        // Safety timeout: force flush if end marker never arrives
+        syncTimer = setTimeout(() => {
+          if (inSyncMode) {
+            inSyncMode = false;
+            batchWrite(syncBuffer);
+            syncBuffer = "";
+          }
+        }, SYNC_TIMEOUT);
+        // Check if end marker is also in this chunk
+        const endIdx = syncBuffer.indexOf(SYNC_END);
+        if (endIdx !== -1) {
+          clearTimeout(syncTimer);
+          inSyncMode = false;
+          const buffered = syncBuffer.slice(0, endIdx);
+          const rest = syncBuffer.slice(endIdx + SYNC_END.length);
+          syncBuffer = "";
+          batchWrite(buffered);
+          if (rest) syncWrite(rest); // Recurse for remaining data
+        }
+        return;
+      }
+      // Already in sync mode — accumulate
+      syncBuffer += data;
+      const endIdx = syncBuffer.indexOf(SYNC_END);
+      if (endIdx !== -1) {
+        clearTimeout(syncTimer);
+        inSyncMode = false;
+        const buffered = syncBuffer.slice(0, endIdx);
+        const rest = syncBuffer.slice(endIdx + SYNC_END.length);
+        syncBuffer = "";
+        batchWrite(buffered);
+        if (rest) syncWrite(rest);
+      }
+    };
+
     // Local-only fit (adjusts xterm cols/rows to container — no IPC to backend).
     // We must NOT send resize IPC before history is restored, because resizing
     // the PTY causes the shell to re-render its prompt, which appends a duplicate
@@ -355,8 +490,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // Skip initial focus on mobile — prevents keyboard from opening on mount
     if (!isTouch) term.focus();
 
+    // Guard against double image paste (capture listener + xterm internal handler)
+    let lastImagePasteTime = 0;
+
     // Save a file blob to temp via IPC and write the path to the terminal PTY.
     const saveFileAndType = async (blob: Blob, filename?: string) => {
+      const now = Date.now();
+      if (now - lastImagePasteTime < 1000) return; // dedupe within 1s
+      lastImagePasteTime = now;
       const buf = await blob.arrayBuffer();
       const bytes = new Uint8Array(buf);
       let binary = "";
@@ -419,35 +560,60 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return true;
     });
 
-    // Paste event listener — intercepts images/files from clipboard.
+    // Paste event listener — intercepts images and file paths from clipboard.
     // Text paste is handled natively by xterm (bracketed paste aware).
     // This fires on both Cmd+V and right-click paste.
-    const onPaste = async (e: ClipboardEvent) => {
+    //
+    // IMPORTANT: e.preventDefault() must happen synchronously (before any await)
+    // or xterm's handler will process the event first. We decide synchronously
+    // whether to intercept, then do async work.
+    const onPaste = (e: ClipboardEvent) => {
       const cd = e.clipboardData;
       if (!cd) return;
-      // Check for image/file items in clipboardData
-      for (const item of Array.from(cd.items)) {
-        if (item.kind === "file" && item.type.startsWith("image/")) {
-          e.preventDefault();
-          e.stopPropagation();
-          const file = item.getAsFile();
-          if (file) await saveFileAndType(file);
-          return;
-        }
+      const items = Array.from(cd.items);
+      // If clipboard has plain text, let xterm handle it natively
+      const hasText = items.some((i) => i.kind === "string" && i.type === "text/plain");
+      if (hasText) return;
+      // Pure image paste — intercept synchronously, process async
+      const imageItem = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
+      if (imageItem) {
+        e.preventDefault();
+        e.stopPropagation();
+        const file = imageItem.getAsFile();
+        if (file) saveFileAndType(file);
+        return;
       }
-      // Fallback: server-side clipboard read (web mode — clipboardData may be empty)
-      try {
-        if (window.electron?.ipcRenderer?.readClipboardImage) {
-          const base64 = await window.electron.ipcRenderer.readClipboardImage();
-          if (base64) {
-            const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-            const blob = new Blob([bytes], { type: "image/png" });
-            await saveFileAndType(blob, `paste-${Date.now()}.png`);
+      // No text and no image in clipboardData — likely file paths copied from
+      // Finder/Explorer. preventDefault synchronously to block xterm from reading
+      // a stale clipboard image, then check file paths async.
+      e.preventDefault();
+      e.stopPropagation();
+      (async () => {
+        // Check for file paths from system clipboard
+        try {
+          const paths = await window.electron?.ipcRenderer?.readClipboardFilePaths?.();
+          if (paths && paths.length > 0) {
+            const quoted = paths.map((p: string) => /\s/.test(p) ? `"${p}"` : p).join(" ");
+            window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, {
+              id: sessionId,
+              data: quoted,
+            });
             return;
           }
-        }
-      } catch { /* IPC not available */ }
-      // Text paste — let xterm handle it (default behavior)
+        } catch { /* IPC not available */ }
+        // Fallback: clipboard image read for web mode
+        // (clipboardData may be empty when browser restricts access)
+        try {
+          if (window.electron?.ipcRenderer?.readClipboardImage) {
+            const base64 = await window.electron.ipcRenderer.readClipboardImage();
+            if (base64) {
+              const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+              const blob = new Blob([bytes], { type: "image/png" });
+              await saveFileAndType(blob, `paste-${Date.now()}.png`);
+            }
+          }
+        } catch { /* IPC not available */ }
+      })();
     };
     // Use capture phase so we intercept images BEFORE xterm's internal paste
     // handler (which may stopPropagation, preventing bubbling to this container).
@@ -671,7 +837,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     if (window.electron) {
       // Echo listener (for agent writes) — safe to register immediately
       const handleEcho = (_: any, data: string) => {
-        term.write(data);
+        syncWrite(data);
       };
       removeEchoListener = window.electron.ipcRenderer.on(
         terminalEchoChannel(sessionId),
@@ -695,12 +861,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
               if (earlyDataBuf) {
                 earlyDataBuf.push(data);
               } else {
-                term.write(data);
+                syncWrite(data);
               }
             }
           },
         );
       }
+
+      const SNAPSHOT_KEY = `tron:termSnapshot:${sessionId}`;
 
       const finishSetup = (history?: string, knownReconnect = false) => {
           if (!mounted) return;
@@ -723,9 +891,36 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             suppressOutgoingRef.current = true;
           }
 
-          // Write history to xterm first (restores previous output on reload)
-          if (effectiveHistory) {
-            term.write(effectiveHistory);
+          // Try to restore from SerializeAddon snapshot first — it captures the
+          // rendered visual framebuffer (no raw escape sequences) so it restores
+          // cleanly even after TUI sessions and at different terminal sizes.
+          let usedSnapshot = false;
+          if (isReconnect) {
+            try {
+              const raw = localStorage.getItem(SNAPSHOT_KEY);
+              if (raw) {
+                const snap = JSON.parse(raw) as { data: string; cols: number; rows: number };
+                if (snap.data && snap.cols && snap.rows) {
+                  // Restore at the original dimensions to avoid reflow artifacts,
+                  // then resize to current dimensions after.
+                  term.resize(snap.cols, snap.rows);
+                  term.write(snap.data);
+                  usedSnapshot = true;
+                }
+              }
+            } catch { /* fall through to raw history */ }
+          }
+
+          // Fallback: write raw history with alternate-buffer sections stripped.
+          if (!usedSnapshot && effectiveHistory) {
+            const cleanHistory = stripAltBuffer(effectiveHistory);
+            if (cleanHistory) term.write(cleanHistory);
+          }
+
+          // If we're still in alternate buffer (TUI still running),
+          // clear the screen so the SIGWINCH bounce triggers a clean redraw.
+          if (isReconnect && term.buffer.active.type === "alternate") {
+            term.write("\x1b[2J\x1b[H");
           }
 
           // Web mode: flush early data that arrived during getHistory round-trip
@@ -740,7 +935,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
               IPC.TERMINAL_INCOMING_DATA,
               ({ id, data }: { id: string; data: string }) => {
                 if (id === sessionId) {
-                  term.write(data);
+                  syncWrite(data);
                 }
               },
             );
@@ -905,6 +1100,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     const resizeObserver = new ResizeObserver(debouncedResize);
     resizeObserver.observe(el);
 
+    // Periodically snapshot the terminal state via SerializeAddon so
+    // reconnect can restore a clean visual state instead of replaying raw
+    // PTY escape sequences (which garble cursor-positioned TUI output).
+    const saveSnapshot = () => {
+      try {
+        // Don't snapshot alternate buffer — TUI will redraw via SIGWINCH bounce
+        if (term.buffer.active.type === "alternate") return;
+        const serialized = serializeAddon.serialize();
+        if (serialized) {
+          localStorage.setItem(`tron:termSnapshot:${sessionId}`, JSON.stringify({
+            data: serialized,
+            cols: term.cols,
+            rows: term.rows,
+          }));
+        }
+      } catch { /* non-critical */ }
+    };
+    const snapshotTimer = setInterval(saveSnapshot, 10000);
+    window.addEventListener("beforeunload", saveSnapshot);
+
     // Send Input
     let activityFired = false;
     const disposableOnData = term.onData((data) => {
@@ -929,12 +1144,19 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     return () => {
       mounted = false;
+      // Save final snapshot before unmount
+      saveSnapshot();
+      clearInterval(snapshotTimer);
+      window.removeEventListener("beforeunload", saveSnapshot);
       clearTimeout(resizeTimer);
+      clearTimeout(syncTimer);
+      if (batchRaf !== null) cancelAnimationFrame(batchRaf);
       window.removeEventListener("tron:splitDragStart", onSplitDragStart);
       window.removeEventListener("tron:splitDragEnd", onSplitDragEnd);
       unregisterScreenBufferReader(sessionId);
       unregisterSelectionReader(sessionId);
       unregisterViewportTextReader(sessionId);
+      unregisterAlternateBufferReader(sessionId);
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;

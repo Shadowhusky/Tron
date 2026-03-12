@@ -125,6 +125,7 @@ const AppContent = () => {
   const [updateReady, setUpdateReady] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [installStep, setInstallStep] = useState("");
   const [updateDownloading, setUpdateDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
   const [updateVersion, setUpdateVersion] = useState("");
@@ -138,6 +139,7 @@ const AppContent = () => {
     };
   }
   const updateDismissedRef = useRef(false);
+  const closingRef = useRef(false);
 
   // Generic confirm modal — replaces window.confirm for styled modals
   const [confirmModal, setConfirmModal] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
@@ -146,18 +148,20 @@ const AppContent = () => {
   }, []);
   useEffect(() => { setConfirmHandler(confirmHandler); }, [setConfirmHandler, confirmHandler]);
 
-  // Warn before page refresh (Cmd+R) if there are active terminal sessions
+  // Warn before page refresh (Cmd+R) if there are dirty terminal sessions.
+  // Only blocks accidental refresh — not app quit (Cmd+Q / dock quit set closingRef).
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
-      // Check if any real terminal sessions exist (not settings, browser, editor, ssh-connect)
-      const hasActiveSessions = Array.from(sessionsRef.current.keys()).some(
-        (id) => !id.startsWith("settings") && !id.startsWith("browser-") && !id.startsWith("editor-") && !id.startsWith("ssh-connect") && !id.startsWith("pixel-agents"),
+      // Skip if user already confirmed close via the modal or auto-close path
+      if (closingRef.current) return;
+      // Only block if there are sessions the user has actually interacted with
+      const hasDirtySessions = Array.from(sessionsRef.current.entries()).some(
+        ([id, session]) => !id.startsWith("settings") && !id.startsWith("browser-") && !id.startsWith("editor-") && !id.startsWith("ssh-connect") && !id.startsWith("pixel-agents") && session.dirty,
       );
-      if (hasActiveSessions) {
+      if (hasDirtySessions) {
         e.preventDefault();
-        // Legacy browsers need returnValue set
         e.returnValue = "You have active terminal sessions. Are you sure you want to reload?";
       }
     };
@@ -234,13 +238,24 @@ const AppContent = () => {
     return () => window.removeEventListener("tron:open-remote-modal", handler);
   }, []);
 
-  // Listen for window close confirmation from Electron main process
+  // Listen for window close confirmation from Electron main process.
+  // Only show the close modal if there are active terminal sessions worth saving.
+  // If the user just opened the app and hasn't done anything, close immediately.
   useEffect(() => {
     if (!window.electron?.ipcRenderer?.on) return;
     const cleanup = window.electron.ipcRenderer.on(
       IPC.WINDOW_CONFIRM_CLOSE,
       () => {
-        setShowCloseConfirm(true);
+        const hasDirtySessions = Array.from(sessionsRef.current.entries()).some(
+          ([id, session]) => !id.startsWith("settings") && !id.startsWith("browser-") && !id.startsWith("editor-") && !id.startsWith("ssh-connect") && !id.startsWith("pixel-agents") && session.dirty,
+        );
+        if (hasDirtySessions) {
+          setShowCloseConfirm(true);
+        } else {
+          // No sessions worth saving — close immediately
+          closingRef.current = true;
+          window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CONFIRMED, {});
+        }
       },
     );
     return cleanup;
@@ -296,6 +311,7 @@ const AppContent = () => {
           setUpdateInstalling(true);
           setUpdateDownloading(false);
           setUpdateAvailable(false);
+          if (data.installStep) setInstallStep(data.installStep);
         } else if (data.status === "downloading") {
           setUpdateDownloading(true);
           setUpdateAvailable(false);
@@ -330,6 +346,9 @@ const AppContent = () => {
       // Clear localStorage + flush to disk before closing window
       await discardPersistedLayout();
     }
+    // Disable beforeunload guard so the close actually goes through.
+    // For "save", sessions are still in state and beforeunload would block.
+    closingRef.current = true;
     window.electron?.ipcRenderer?.send(IPC.WINDOW_CLOSE_CONFIRMED, {});
   };
 
@@ -560,14 +579,29 @@ const AppContent = () => {
         resolvedTheme={resolvedTheme}
         onClose={updateInstalling ? () => {} : () => { updateDismissedRef.current = true; setUpdateReady(false); }}
         title={updateInstalling ? "Installing Update" : "Update Ready"}
-        description={updateInstalling
-          ? "Extracting and applying update... The app will restart automatically."
-          : `A new version (v${updateVersion}) has been downloaded and is ready to install.`}
+        description={updateInstalling ? undefined : `A new version (v${updateVersion}) has been downloaded and is ready to install.`}
         buttons={updateInstalling ? [] : [
           { label: "Later", type: "ghost", onClick: () => { updateDismissedRef.current = true; setUpdateReady(false); } },
           { label: "Relaunch Now", type: "primary", onClick: () => window.electron?.ipcRenderer?.quitAndInstall?.() },
         ]}
-      />
+      >
+        {updateInstalling && (
+          <div className="px-4 pb-4">
+            <p className={`text-sm mb-3 ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+              {installStep || "Preparing..."}
+            </p>
+            <div className={`w-full h-1.5 rounded-full overflow-hidden ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}>
+              <div
+                className="h-full rounded-full bg-purple-500 animate-[indeterminate_1.5s_ease-in-out_infinite]"
+                style={{ width: "40%" }}
+              />
+            </div>
+            <p className={`text-[11px] mt-2 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}>
+              The app will restart automatically when done.
+            </p>
+          </div>
+        )}
+      </Modal>
 
       {/* Downloading update modal with progress bar */}
       <Modal

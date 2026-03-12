@@ -31,6 +31,9 @@ const INPUT_PROMPT_PATTERNS = [
   /press enter to continue/i,
   /waiting for input/i,
   /type .+ to continue/i,
+  /do you want to proceed\??/i,
+  /would you like to proceed\??/i,
+  /allow this action\??/i,
 ];
 
 /**
@@ -47,6 +50,7 @@ const TUI_MENU_PATTERNS = [
   /◆\s+\S/,             // Active prompt marker only (◆ = awaiting input, ◇ = completed — skip ◇)
   /[■□]\s+\S/,          // Checkbox markers
   /[❯►]\s+\S/,          // Selection cursor indicators (not > which is too common)
+  /[❯►]\s*\d+\.\s/,     // Numbered option with selection cursor (Claude Code: ❯ 1. Yes)
 ];
 
 /**
@@ -231,7 +235,11 @@ export function classifyTerminalOutput(output: string): TerminalState {
   const lastLines = lines.slice(-3).join("\n");
   const lastLine = lines.filter(l => l.trim()).slice(-1)[0]?.trim() || "";
   // Shell prompt at end → process finished, terminal idle
-  if (/[$%#>]\s*$/.test(lastLines) || /^\S+@\S+.*[%$#>]\s*$/m.test(lastLines)) return "idle";
+  // Use [$%#] (not >) for generic prompt detection — bare ">" is too greedy
+  // (matches TUI output, command fragments, etc.)
+  if (/[$%#]\s*$/.test(lastLines) || /^\S+@\S+.*[%$#]\s*$/m.test(lastLines)) return "idle";
+  // Prompt ending with "> " only after a path-like prefix (bash custom prompts)
+  if (/^[~\/][\w\/.-]*>\s*$/m.test(lastLines)) return "idle";
   // Windows PowerShell prompt: PS C:\Users\foo>  or  PS>
   if (/^PS\s+[A-Z]:\\[^>]*>\s*$/m.test(lastLines)) return "idle";
   // Windows cmd.exe prompt: C:\Users\foo>

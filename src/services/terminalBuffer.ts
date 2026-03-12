@@ -55,6 +55,29 @@ export function readViewportText(sessionId: string): string {
   return reader();
 }
 
+// --- Alternate buffer state (for TUI detection) ---
+
+export type AlternateBufferReader = () => boolean;
+
+const alternateBufferReaders = new Map<string, AlternateBufferReader>();
+
+export function registerAlternateBufferReader(
+  sessionId: string,
+  reader: AlternateBufferReader,
+) {
+  alternateBufferReaders.set(sessionId, reader);
+}
+
+export function unregisterAlternateBufferReader(sessionId: string) {
+  alternateBufferReaders.delete(sessionId);
+}
+
+/** Returns true if the terminal is in alternate screen buffer (TUI app running) */
+export function isAlternateBuffer(sessionId: string): boolean {
+  const reader = alternateBufferReaders.get(sessionId);
+  return reader ? reader() : false;
+}
+
 // --- Selection reader (for context menu Copy / Ask Agent / Add to Input) ---
 
 export type SelectionReader = () => string;

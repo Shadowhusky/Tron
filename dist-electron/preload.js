@@ -56,6 +56,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "updater.getStatus",
     "updater.getVersion",
     "clipboard.readImage",
+    "clipboard.readFilePaths",
     "web.search",
     "web.fetch",
 ];
@@ -170,6 +171,7 @@ const electronAPI = {
         getUpdateStatus: () => electron_1.ipcRenderer.invoke("updater.getStatus"),
         getAppVersion: () => electron_1.ipcRenderer.invoke("updater.getVersion"),
         readClipboardImage: () => electron_1.ipcRenderer.invoke("clipboard.readImage"),
+        readClipboardFilePaths: () => electron_1.ipcRenderer.invoke("clipboard.readFilePaths"),
     },
 };
 // Expose via contextBridge to "_electronBridge" (frozen/read-only).

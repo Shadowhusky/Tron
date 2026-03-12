@@ -42,6 +42,8 @@ if (process.env.TRON_TEST_PROFILE) {
 // --- Global State ---
 let mainWindow: BrowserWindow | null = null;
 let forceQuit = false;
+let closeAttempts = 0;
+let closeTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // --- Menu Helper ---
 const createMenu = (win: BrowserWindow) => {
@@ -186,8 +188,20 @@ const createWindow = () => {
   // Intercept close to show confirmation in renderer
   mainWindow.on("close", (e) => {
     if (!forceQuit && mainWindow && !mainWindow.isDestroyed()) {
+      closeAttempts++;
+      // 3rd close attempt → force close (renderer is likely frozen/unresponsive)
+      if (closeAttempts >= 3) {
+        forceQuit = true;
+        return; // let the close proceed
+      }
       e.preventDefault();
       mainWindow.webContents.send("window.confirmClose");
+      // Safety timeout — if renderer doesn't respond within 5s, force close
+      if (closeTimeout) clearTimeout(closeTimeout);
+      closeTimeout = setTimeout(() => {
+        forceQuit = true;
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+      }, 5000);
     }
   });
 
@@ -207,13 +221,48 @@ const createWindow = () => {
   }
 };
 
-// --- Clipboard image reader (for SmartInput paste) ---
+// --- Clipboard readers ---
 ipcMain.handle("clipboard.readImage", async () => {
   const { clipboard } = await import("electron");
   const image = clipboard.readImage();
   if (image.isEmpty()) return null;
   const png = image.toPNG();
   return png.toString("base64");
+});
+
+// Read file paths from system clipboard (e.g. files copied in Finder/Explorer)
+ipcMain.handle("clipboard.readFilePaths", async () => {
+  const { clipboard } = await import("electron");
+  if (process.platform === "darwin") {
+    // macOS: NSFilenamesPboardType is exposed as a property list (XML plist)
+    // containing an array of file path strings.
+    try {
+      const raw = clipboard.read("NSFilenamesPboardType");
+      if (raw) {
+        // Parse plist XML — extract <string> values
+        const paths = Array.from(raw.matchAll(/<string>([^<]+)<\/string>/g), m => m[1]);
+        if (paths.length > 0) return paths;
+      }
+    } catch { /* not available */ }
+    // Fallback: public.file-url
+    try {
+      const fileUrl = clipboard.read("public.file-url");
+      if (fileUrl) {
+        const decoded = decodeURIComponent(fileUrl.replace(/^file:\/\//, ""));
+        if (decoded) return [decoded];
+      }
+    } catch { /* not available */ }
+  } else if (process.platform === "win32") {
+    // Windows: CF_HDROP exposed via FileNameW
+    try {
+      const buf = clipboard.readBuffer("FileNameW");
+      if (buf && buf.length > 0) {
+        const decoded = buf.toString("ucs2").replace(/\0+$/, "");
+        if (decoded) return [decoded];
+      }
+    } catch { /* not available */ }
+  }
+  return null;
 });
 
 // --- Register all IPC handlers ---
@@ -228,6 +277,8 @@ registerUpdaterHandlers(() => mainWindow, () => { forceQuit = true; });
 
 // --- Window close response from renderer ---
 ipcMain.on("window.closeConfirmed", () => {
+  if (closeTimeout) { clearTimeout(closeTimeout); closeTimeout = null; }
+  closeAttempts = 0;
   forceQuit = true;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.close();
@@ -235,7 +286,8 @@ ipcMain.on("window.closeConfirmed", () => {
 });
 
 ipcMain.on("window.closeCancelled", () => {
-  // No-op — renderer dismissed the modal
+  if (closeTimeout) { clearTimeout(closeTimeout); closeTimeout = null; }
+  closeAttempts = 0;
 });
 
 // Update Windows title bar overlay colors when theme changes

@@ -86,6 +86,7 @@ interface Window {
       getAppVersion: () => Promise<string>;
       // Clipboard
       readClipboardImage: () => Promise<string | null>;
+      readClipboardFilePaths: () => Promise<string[] | null>;
       clipboardReadText: () => Promise<string>;
       clipboardWriteText: (text: string) => Promise<boolean>;
     };

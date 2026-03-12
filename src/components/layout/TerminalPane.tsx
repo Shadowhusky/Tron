@@ -630,7 +630,29 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data: text });
             }
           };
-          // Try clipboard image first (saves to temp, types path into terminal)
+          // 1. Try file paths first (files copied in Finder/Explorer)
+          if (isElectronApp()) {
+            try {
+              const paths = await window.electron?.ipcRenderer?.readClipboardFilePaths?.();
+              if (paths && paths.length > 0) {
+                const quoted = paths.map((p: string) => /\s/.test(p) ? `"${p}"` : p).join(" ");
+                sendToTerminal(quoted);
+                return;
+              }
+            } catch { /* IPC unavailable */ }
+          }
+          // 2. Try text (navigator first, then server-side IPC)
+          try {
+            if (navigator.clipboard?.readText) {
+              const text = await navigator.clipboard.readText();
+              if (text) { sendToTerminal(text); return; }
+            }
+          } catch { /* permission denied or not supported */ }
+          try {
+            const text = await window.electron?.ipcRenderer?.clipboardReadText?.();
+            if (text) { sendToTerminal(text); return; }
+          } catch { /* IPC not available */ }
+          // 3. Try clipboard image last (only if no file paths or text)
           if (isElectronApp()) {
             try {
               const base64 = await window.electron?.ipcRenderer?.readClipboardImage?.();
@@ -643,18 +665,6 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               }
             } catch { /* no image or IPC unavailable */ }
           }
-          // Try navigator.clipboard.readText() (works in user gesture context)
-          try {
-            if (navigator.clipboard?.readText) {
-              const text = await navigator.clipboard.readText();
-              if (text) { sendToTerminal(text); return; }
-            }
-          } catch { /* permission denied or not supported */ }
-          // Fallback: server-side clipboard (reads server clipboard, useful for local/desktop web)
-          try {
-            const text = await window.electron?.ipcRenderer?.clipboardReadText?.();
-            if (text) { sendToTerminal(text); return; }
-          } catch { /* IPC not available */ }
           // Last resort for mobile: create a temporary textarea for native paste
           const ta = document.createElement("textarea");
           ta.style.cssText = "position:fixed;left:0;top:40%;width:80%;height:44px;z-index:99999;font-size:16px;padding:8px;border:2px solid #666;border-radius:8px;background:#222;color:#fff;margin:0 10%";
