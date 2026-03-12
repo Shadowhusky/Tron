@@ -796,7 +796,16 @@ ${prompt}
             });
             setIsThinking(false);
           } else if (step === "thinking_done") {
-            // No thinking content produced — just clear thinking state
+            // No thinking content produced — remove placeholder thinking entry and clear state
+            setAgentThread((prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].step === "thinking") {
+                const updated = [...prev];
+                updated.splice(lastIdx, 1);
+                return updated;
+              }
+              return prev;
+            });
             setIsThinking(false);
           } else if (step === "clear_streaming") {
             // Remove leftover streaming entries (e.g. from guard-rejected responses)
@@ -805,8 +814,15 @@ ${prompt}
               return hasStreaming ? prev.filter(s => s.step !== "streaming") : prev;
             });
           } else if (step === "thinking") {
-            // Always show thinking indicator — even for non-thinking models
+            // Show thinking indicator and add thinking entry to thread immediately
+            // so the thinking container appears before streaming_thinking flushes
             setIsThinking(true);
+            setAgentThread((prev) => {
+              // Avoid duplicate — streaming_thinking may have already added one
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].step === "thinking") return prev;
+              return [...prev, { step: "thinking", output }];
+            });
           } else {
             // Plan: replace streaming entry with structured plan step
             if (step === "plan") {
