@@ -262,7 +262,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
             : valOrUpdater;
         if (inputRef.current && inputRef.current.value !== newVal) {
           inputRef.current.value = newVal;
-          if (newVal) resizeTextarea(inputRef.current);
+          resizeTextarea(inputRef.current);
         }
         return newVal;
       });
