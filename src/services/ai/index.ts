@@ -2020,6 +2020,31 @@ ${agentPrompt}
       return classifyTerminalOutput(output);
     };
 
+    /**
+     * Escalating strategy to stop a running process and return to idle shell.
+     * Tries multiple approaches: Ctrl+C, double Ctrl+C, Enter+Ctrl+C, "q"+Enter, Ctrl+D.
+     * Returns true if terminal reached idle state.
+     */
+    const smartStopProcess = async (): Promise<boolean> => {
+      const strategies: { keys: string; label: string; delay: number }[] = [
+        { keys: "\x03", label: "Ctrl+C", delay: 500 },
+        { keys: "\x03", label: "Ctrl+C (retry)", delay: 500 },
+        { keys: "\r\x03", label: "Enter + Ctrl+C", delay: 500 },
+        { keys: "q\r", label: "q + Enter", delay: 500 },
+        { keys: "\x04", label: "Ctrl+D (EOF)", delay: 500 },
+      ];
+      for (const strategy of strategies) {
+        await writeToTerminal(strategy.keys, true);
+        // Wait and check up to 3 times per strategy
+        for (let check = 0; check < 3; check++) {
+          await new Promise((r) => setTimeout(r, strategy.delay));
+          const state = classifyTerminalOutput(await readTerminal(10) || "");
+          if (state === "idle") return true;
+        }
+      }
+      return false;
+    };
+
     let parseFailures = 0;
     // Loop detection: track recent actions to break repetitive patterns
     const recentActions: string[] = [];
@@ -3096,44 +3121,23 @@ ${agentPrompt}
             const pfOutput = await readTerminal(30);
             const pfState = classifyTerminalOutput(pfOutput || "");
 
-            // Server/daemon running — stop it first
-            if (pfState === "server") {
-              onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
-              await writeToTerminal("\x03", true);
-              let waitAttempts = 0;
-              while (waitAttempts < 15) {
-                await new Promise((r) => setTimeout(r, 500));
-                const checkState = classifyTerminalOutput(await readTerminal(10) || "");
-                if (checkState === "idle") break;
-                waitAttempts++;
-              }
-              const afterState = classifyTerminalOutput(await readTerminal(10) || "");
-              if (afterState !== "idle") {
-                onUpdate("failed", `Server still running after Ctrl+C — command not executed`, action);
-                history.push({
-                  role: "user",
-                  content: `(Command NOT executed — a server/dev process is running in the terminal and could not be stopped with Ctrl+C. You must stop it first: use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,
-                });
-                continue;
-              }
-              onUpdate("executed", `Stopped server`, action);
-            } else if (pfState === "busy") {
-              // Try Ctrl+C to recover — can't write to a busy terminal cleanly
-              onUpdate("executing", `Stopping running process to run: ${(action.command || "").slice(0, 60)}…`, action);
-              await writeToTerminal("\x03", true);
-              let bWait = 0;
-              while (bWait < 15) {
-                await new Promise((r) => setTimeout(r, 500));
-                const cs = classifyTerminalOutput(await readTerminal(10) || "");
-                if (cs === "idle") break;
-                bWait++;
-              }
-              const abState = classifyTerminalOutput(await readTerminal(10) || "");
-              if (abState !== "idle") {
+            // Server/daemon or busy process — stop it first
+            if (pfState === "server" || pfState === "busy") {
+              onUpdate("executing", `Stopping ${pfState === "server" ? "server" : "process"} to run: ${(action.command || "").slice(0, 60)}…`, action);
+              const stopped = await smartStopProcess();
+              if (!stopped) {
+                if (pfState === "server") {
+                  onUpdate("failed", `Server still running — command not executed`, action);
+                  history.push({
+                    role: "user",
+                    content: `(Command NOT executed — a process is running in the terminal and could not be stopped. You must stop it manually: try send_text("\\x03"), send_text("q\\r"), or send_text("\\x04"), then read_terminal to confirm idle, then retry.)`,
+                  });
+                  continue;
+                }
                 terminalBusy = true;
-                onUpdate("executed", `Stopping running process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
+                onUpdate("executed", `Stopping process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
               } else {
-                onUpdate("executed", `Stopped running process`, action);
+                onUpdate("executed", `Stopped ${pfState === "server" ? "server" : "process"}`, action);
               }
             }
 
@@ -3256,16 +3260,8 @@ ${agentPrompt}
             } else if (state === "server") {
               // Dev server running — auto-stop it so the command can execute
               onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
-              await writeToTerminal("\x03", true);
-              let sWait = 0;
-              while (sWait < 15) {
-                await new Promise((r) => setTimeout(r, 500));
-                const cs = classifyTerminalOutput(await readTerminal(10) || "");
-                if (cs === "idle") break;
-                sWait++;
-              }
-              const afterState = classifyTerminalOutput(await readTerminal(10) || "");
-              if (afterState === "idle") {
+              const stopped = await smartStopProcess();
+              if (stopped) {
                 terminalBusy = false;
                 consecutiveBusy = 0;
                 onUpdate("executed", `Stopped server`, action);
@@ -3276,10 +3272,10 @@ ${agentPrompt}
                 });
                 // Fall through to execute the command
               } else {
-                onUpdate("failed", `Server could not be stopped with Ctrl+C`, action);
+                onUpdate("failed", `Server could not be stopped`, action);
                 history.push({
                   role: "user",
-                  content: `(Command NOT executed — server could not be stopped with Ctrl+C. Use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,
+                  content: `(Command NOT executed — process could not be stopped. You must stop it manually: try send_text("\\x03"), send_text("q\\r"), or send_text("\\x04"), then read_terminal to confirm idle, then retry.)`,
                 });
                 consecutiveGuardBlocks++;
                 continue;
@@ -4052,56 +4048,24 @@ ${agentPrompt}
           const pfOutput = await readTerminal(30);
           const pfState = classifyTerminalOutput(pfOutput || "");
 
-          // Server/daemon running — stop it first so the command runs in a shell, not the server's stdin
+          // Server/daemon or busy process — stop it first so the command runs in a shell
           if (pfState === "server" || pfState === "busy") {
-            if (pfState === "server") {
-              onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
-              await writeToTerminal("\x03", true); // Ctrl+C to stop server
-              // Wait for terminal to return to idle
-              let waitAttempts = 0;
-              while (waitAttempts < 15) {
-                await new Promise((r) => setTimeout(r, 500));
-                const checkState = classifyTerminalOutput(await readTerminal(10) || "");
-                if (checkState === "idle") break;
-                waitAttempts++;
-              }
-              const afterState = classifyTerminalOutput(await readTerminal(10) || "");
-              if (afterState !== "idle") {
-                // Server didn't stop — tell agent to handle manually
-                onUpdate("failed", `Server still running after Ctrl+C — command not executed`, action);
-                history.push({
-                  role: "user",
-                  content: `(Command NOT executed — a server/dev process is running in the terminal and could not be stopped with Ctrl+C. You must stop it first: use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry the command.)`,
-                });
-                continue;
-              }
-              // Server stopped — fall through to execute the command
-              onUpdate("executed", `Stopped server`, action);
+            onUpdate("executing", `Stopping ${pfState === "server" ? "server" : "process"} to run: ${(action.command || "").slice(0, 60)}…`, action);
+            const stopped = await smartStopProcess();
+            if (stopped) {
+              onUpdate("executed", `Stopped ${pfState === "server" ? "server" : "process"}`, action);
               stoppedServerForExec = true;
               terminalBusy = false;
+            } else if (pfState === "server") {
+              onUpdate("failed", `Server still running — command not executed`, action);
+              history.push({
+                role: "user",
+                content: `(Command NOT executed — a process is running in the terminal and could not be stopped. You must stop it manually: try send_text("\\x03"), send_text("q\\r"), or send_text("\\x04"), then read_terminal to confirm idle, then retry the command.)`,
+              });
+              continue;
             } else {
-              // busy (not server) — process running, try Ctrl+C to recover
-              // Sentinel-based exec can't work with a busy terminal either
-              onUpdate("executing", `Stopping running process to run: ${(action.command || "").slice(0, 60)}…`, action);
-              await writeToTerminal("\x03", true);
-              let waitAttempts = 0;
-              while (waitAttempts < 15) {
-                await new Promise((r) => setTimeout(r, 500));
-                const checkState = classifyTerminalOutput(await readTerminal(10) || "");
-                if (checkState === "idle") break;
-                waitAttempts++;
-              }
-              const afterBusyState = classifyTerminalOutput(await readTerminal(10) || "");
-              if (afterBusyState === "idle") {
-                // Process stopped — fall through to execute the command
-                onUpdate("executed", `Stopped running process`, action);
-                stoppedServerForExec = true;
-                terminalBusy = false;
-              } else {
-                // Still busy — set flag and let handler deal with it
-                onUpdate("executed", `Stopping running process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
-                terminalBusy = true;
-              }
+              onUpdate("executed", `Stopping process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
+              terminalBusy = true;
             }
           }
 
@@ -4221,26 +4185,17 @@ ${agentPrompt}
           } else if (state === "server") {
             // Dev server is running — auto-stop it so the command can execute
             onUpdate("executing", `Stopping server to run: ${(action.command || "").slice(0, 60)}…`, action);
-            await writeToTerminal("\x03", true);
-            let waitAttempts = 0;
-            while (waitAttempts < 15) {
-              await new Promise((r) => setTimeout(r, 500));
-              const checkState = classifyTerminalOutput(await readTerminal(10) || "");
-              if (checkState === "idle") break;
-              waitAttempts++;
-            }
-            const afterState = classifyTerminalOutput(await readTerminal(10) || "");
-            if (afterState === "idle") {
+            const stopped = await smartStopProcess();
+            if (stopped) {
               terminalBusy = false;
               stoppedServerForExec = true;
               onUpdate("executed", `Stopped server`, action);
               // Fall through to execute the command
             } else {
-              // Server didn't stop — block and tell agent
-              onUpdate("failed", `Server could not be stopped with Ctrl+C`, action);
+              onUpdate("failed", `Server could not be stopped`, action);
               history.push({
                 role: "user",
-                content: `(Command NOT executed — server could not be stopped with Ctrl+C. Use send_text("\\x03") or send_text("q\\r") to quit, then read_terminal to confirm idle, then retry.)`,
+                content: `(Command NOT executed — process could not be stopped. You must stop it manually: try send_text("\\x03"), send_text("q\\r"), or send_text("\\x04"), then read_terminal to confirm idle, then retry.)`,
               });
               consecutiveGuardBlocks++;
               continue;
