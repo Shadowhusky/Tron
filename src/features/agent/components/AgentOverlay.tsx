@@ -893,7 +893,10 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
   const isDragging = useRef(false);
   const dragStartY = useRef(0);
   const dragStartHeight = useRef(0);
+  const liveHeightRef = useRef<number | undefined>(undefined);
   const [liveHeight, setLiveHeight] = useState<number | undefined>(undefined);
+  const onResizeHeightRef = useRef(onResizeHeight);
+  onResizeHeightRef.current = onResizeHeight;
 
   const handleDragStart = useCallback(
     (e: React.PointerEvent) => {
@@ -912,15 +915,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     [fullHeight, isExpanded, overlayHeight],
   );
 
+  // Stable listeners — no dependency on liveHeight to avoid re-registering mid-drag
   useEffect(() => {
     const handlePointerMove = (e: PointerEvent) => {
       if (!isDragging.current) return;
-      // Dragging UP increases height
+      // Dragging UP increases height — allow up to 95% of window
       const delta = dragStartY.current - e.clientY;
-      const newHeight = Math.max(
-        100,
-        Math.min(window.innerHeight * 0.85, dragStartHeight.current + delta),
-      );
+      const maxH = window.innerHeight * 0.95;
+      const newHeight = Math.max(100, Math.min(maxH, dragStartHeight.current + delta));
+      liveHeightRef.current = newHeight;
       setLiveHeight(newHeight);
     };
     const handlePointerUp = () => {
@@ -928,9 +931,13 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       isDragging.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      if (liveHeight !== undefined && onResizeHeight) {
-        onResizeHeight(liveHeight);
+      const h = liveHeightRef.current;
+      if (h !== undefined && onResizeHeightRef.current) {
+        // Snap to full height if dragged past 90% of window
+        const snapThreshold = window.innerHeight * 0.9;
+        onResizeHeightRef.current(h >= snapThreshold ? window.innerHeight : h);
       }
+      liveHeightRef.current = undefined;
       setLiveHeight(undefined);
     };
     window.addEventListener("pointermove", handlePointerMove);
@@ -939,7 +946,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [liveHeight, onResizeHeight]);
+  }, []); // stable — no deps
 
   // Track panel width for responsive controls
   useEffect(() => {
@@ -1441,7 +1448,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
             !fullHeight &&
             isExpanded &&
             (liveHeight !== undefined || overlayHeight)
-              ? { height: liveHeight ?? overlayHeight, maxHeight: "60%" }
+              ? { height: liveHeight ?? overlayHeight, maxHeight: "100%" }
               : undefined
           }
           className={`w-full ${fullHeight ? "flex-1 min-h-0" : ""} ${
