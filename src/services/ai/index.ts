@@ -1938,7 +1938,7 @@ TOOLS:
 2. {"tool":"run_in_terminal","command":"..."} — Run interactive/long-running commands (npm create, dev servers). Monitor with read_terminal after.
 3. {"tool":"read_terminal","lines":50} — Read last N lines of terminal output.
 4. {"tool":"send_text","text":"...","description":"..."} — Send keystrokes. Include description. Keys: \\r=Enter, \\x1B[B=Down, \\x1B[A=Up, \\x03=Ctrl+C.
-5. {"tool":"ask_question","question":"..."} — Ask user for clarification.
+5. {"tool":"ask_question","question":"..."} — Ask user ONLY for credentials, preferences, or ambiguous choices. NEVER ask about system state, hardware, files, paths — check yourself first.
 6. {"tool":"final_answer","content":"..."} — Task complete. 1-3 lines.
 7. {"tool":"write_file","path":"/absolute/path","content":"..."} — Create a NEW file or fully replace a small file. Use edit_file for modifying existing files.
 8. {"tool":"read_file","path":"/absolute/path"} — Read a file directly. Use instead of cat.
@@ -1949,7 +1949,7 @@ TOOLS:
 13. {"tool":"web_fetch","url":"..."} — Fetch and read a web page. Returns plain text. Use after web_search to read documentation pages, Stack Overflow answers, etc. NEVER use this to call external APIs (Yahoo Finance, stock APIs, weather APIs, etc.) — only fetch human-readable web pages.
 
 RULES:
-1. Execute directly — never explain. Be autonomous: check system state yourself (ps, curl, lsof, ls) instead of asking the user.
+1. Execute directly — never explain. Be FULLY autonomous: check system state (ps, curl, lsof, ls), hardware info (system_profiler, diskutil), file locations (find, ls) yourself. NEVER ask the user for information you can discover via commands.
 2. On failure, analyze the error, fix root cause proactively (missing files, permissions, paths, deps), then retry. Don't give up or retry blindly.
 3. If user denies permission, STOP.
 4. FILE OPS: Use read_file, list_dir, search_dir, edit_file, write_file (new files only). Never use cat/heredoc/grep/ls/printf through the terminal.
@@ -3027,15 +3027,31 @@ ${agentPrompt}
             /\bwhat version\b/,
             /\bdo you have\b/,
             /\bis .+ (running|started|available|active|open|up)\b/,
+            /\bwhat.+(model|brand|type|size|spec|hardware|device|disk|drive|ssd|cpu|gpu|ram|memory)\b/,
+            /\bwhich.+(model|brand|type|device|disk|drive|ssd|folder|directory|file|path)\b/,
+            /\bwhat.+(folder|directory|file|path|location)\b/,
+            /\bwhere.+(is|are|located|stored|saved)\b/,
           ];
           if (statePatterns.some((p) => p.test(q))) {
             history.push({
               role: "user",
-              content: `Do NOT ask the user about system state. You can check it yourself with commands. Use execute_command to verify: processes ("ps aux | grep <name>"), ports ("lsof -i :<port>"), installed tools ("which <cmd>"), HTTP services ("curl -sS http://localhost:<port>/"). Try common defaults first and adapt based on results.`,
+              content: `Do NOT ask the user about system state or hardware info. You can check it yourself with commands. Use execute_command: hardware ("system_profiler SPStorageDataType", "diskutil list"), processes ("ps aux | grep <name>"), ports ("lsof -i :<port>"), installed tools ("which <cmd>"), files ("ls", "find"). Try checking first and adapt based on results.`,
             });
             continue;
           }
         }
+
+        // Detect ask_question that looks like a completed answer (not actually a question)
+        const questionText = action.question || action.content || "";
+        const hasSubstantialContent = questionText.length > 200;
+        const hasConclusion = /\b(verdict|conclusion|summary|result|analysis|in summary|overall)\b/i.test(questionText);
+        const hasTable = questionText.includes("|") && questionText.split("|").length > 6;
+        if (hasSubstantialContent && (hasConclusion || hasTable)) {
+          // This is a done response disguised as a question — emit as final_answer
+          onUpdate("done", questionText, { tool: "final_answer", content: questionText });
+          return { success: true, message: questionText };
+        }
+
         return {
           success: true,
           message: action.question || action.content || "Question?",
