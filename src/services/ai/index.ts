@@ -3007,49 +3007,44 @@ ${agentPrompt}
       }
 
       if (action.tool === "ask_question") {
+        const questionText = action.question || action.content || "";
+        const q = questionText.toLowerCase();
+
         // Allow questions about credentials, secrets, preferences — things the agent can't check
-        const q = (action.question || "").toLowerCase();
         const isCredentialQuestion =
-          /\b(password|username|account|credential|api.?key|token|login|auth|secret|license|email|ssh)\b/.test(
-            q,
-          );
+          /\b(password|username|account|credential|api.?key|token|login|auth|secret|license|email|ssh)\b/.test(q);
         const isPreferenceQuestion =
           /\b(prefer|want|choose|which|style|color|name|title)\b/.test(q);
 
-        // Reject questions about system state that the agent can check itself
-        if (!isCredentialQuestion && !isPreferenceQuestion) {
-          const statePatterns = [
-            /\b(is|are)\b.+\brunning\b/,
-            /\b(is|are)\b.+\binstalled\b/,
-            /\b(is|are)\b.+\blistening\b/,
-            /\bwhat port\b/,
-            /\bwhich port\b/,
-            /\bwhat version\b/,
-            /\bdo you have\b/,
-            /\bis .+ (running|started|available|active|open|up)\b/,
-            /\bwhat.+(model|brand|type|size|spec|hardware|device|disk|drive|ssd|cpu|gpu|ram|memory)\b/,
-            /\bwhich.+(model|brand|type|device|disk|drive|ssd|folder|directory|file|path)\b/,
-            /\bwhat.+(folder|directory|file|path|location)\b/,
-            /\bwhere.+(is|are|located|stored|saved)\b/,
-          ];
-          if (statePatterns.some((p) => p.test(q))) {
-            history.push({
-              role: "user",
-              content: `Do NOT ask the user about system state or hardware info. You can check it yourself with commands. Use execute_command: hardware ("system_profiler SPStorageDataType", "diskutil list"), processes ("ps aux | grep <name>"), ports ("lsof -i :<port>"), installed tools ("which <cmd>"), files ("ls", "find"). Try checking first and adapt based on results.`,
-            });
-            continue;
-          }
+        // General autonomy guard: if agent hasn't tried any commands yet and the
+        // question isn't about credentials/preferences, reject it. The agent should
+        // explore the system first (commands, file reads) before asking the user.
+        if (!isCredentialQuestion && !isPreferenceQuestion && executedCommands.size === 0 && !wroteFiles && !usedWebTools) {
+          history.push({
+            role: "user",
+            content: `REJECTED: Do NOT ask the user — you haven't tried anything yet. Be autonomous: use execute_command to check system state (system_profiler, diskutil, ps, lsof, ls, find, which, curl). Discover the answer yourself first. Only ask_question if you truly cannot determine the answer after trying.`,
+          });
+          continue;
         }
 
-        // Detect ask_question that looks like a completed answer (not actually a question)
-        const questionText = action.question || action.content || "";
-        const hasSubstantialContent = questionText.length > 200;
-        const hasConclusion = /\b(verdict|conclusion|summary|result|analysis|in summary|overall)\b/i.test(questionText);
-        const hasTable = questionText.includes("|") && questionText.split("|").length > 6;
-        if (hasSubstantialContent && (hasConclusion || hasTable)) {
-          // This is a done response disguised as a question — emit as final_answer
+        // Detect ask_question that is actually a completed answer (no question mark,
+        // substantial content = the agent is reporting results, not asking)
+        const endsWithQuestion = questionText.trim().endsWith("?");
+        const hasQuestionMark = questionText.includes("?");
+        const isLongAnswer = questionText.length > 150;
+        if (isLongAnswer && !endsWithQuestion) {
+          // Long response without trailing "?" — this is a done response, not a question
           onUpdate("done", questionText, { tool: "final_answer", content: questionText });
           return { success: true, message: questionText };
+        }
+        // Also catch: has a "?" buried in middle but the bulk is analysis/results
+        if (questionText.length > 300 && hasQuestionMark) {
+          // Count question marks vs total content — if <1 per 200 chars, it's mostly answer
+          const qCount = (questionText.match(/\?/g) || []).length;
+          if (qCount <= 1 && questionText.length > 400) {
+            onUpdate("done", questionText, { tool: "final_answer", content: questionText });
+            return { success: true, message: questionText };
+          }
         }
 
         return {
