@@ -2035,6 +2035,7 @@ ${agentPrompt}
     let lastReadTerminalOutput = ""; // Track consecutive identical read_terminal results
     let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
     let readTerminalCount = 0; // Total consecutive read_terminal calls (for UI merging + backoff)
+    let multiToolWarnings = 0; // Consecutive responses where model outputs multiple tool calls
 
     // ── Repeated error / stagnation detection ──────────────────────────────
     // Tracks error "signatures" (TypeError, SyntaxError, module not found, etc.)
@@ -2687,6 +2688,31 @@ ${agentPrompt}
         };
       }
       parseFailures = 0; // Reset on successful parse
+
+      // ── Multi-tool-call detection ──────────────────────────────────────
+      // Some models (especially smaller/local ones) generate multiple tool
+      // calls in a single response instead of waiting for each result.
+      // The parser picks the first one, but the model keeps repeating this
+      // pattern and never makes progress. Detect and inject correction.
+      const toolCallMatches = (responseText || "").match(/\{"tool"\s*:/g);
+      if (toolCallMatches && toolCallMatches.length > 1) {
+        multiToolWarnings++;
+        if (multiToolWarnings >= 3) {
+          // Model is stuck in multi-tool pattern — force final_answer
+          consecutiveGuardBlocks++;
+          history.push({ role: "assistant", content: JSON.stringify(action) });
+          history.push({
+            role: "user",
+            content: "CRITICAL: You keep outputting multiple tool calls in one response. This is NOT supported. You can only use ONE tool per response, then WAIT for the result. Summarize your progress and finish with final_answer.",
+          });
+          multiToolWarnings = 0;
+          continue;
+        }
+        // Inject one-at-a-time reminder with the tool result
+        // (appended to the tool result message below, not here)
+      } else {
+        multiToolWarnings = 0; // Reset when model responds with single tool call
+      }
 
       history.push({ role: "assistant", content: JSON.stringify(action) });
 
@@ -4362,6 +4388,16 @@ ${agentPrompt}
             }
           }
         }
+      }
+
+      // --- Multi-tool-call correction ---
+      // When model generated multiple tool calls in one response, remind it
+      // to use one tool at a time so it actually processes each result.
+      if (multiToolWarnings > 0) {
+        history.push({
+          role: "user",
+          content: "IMPORTANT: You generated multiple tool calls in your last response. Only the FIRST one was executed (above). Output exactly ONE JSON tool call per response, then WAIT for the result before calling the next tool.",
+        });
       }
 
       // --- Progress tracking & reflection ---
