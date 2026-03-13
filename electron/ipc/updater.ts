@@ -144,7 +144,8 @@ async function applyMacUpdate(
 
   // Locate the pending update zip
   sendStep("Locating update...");
-  const cacheDir = join(app.getPath("userData"), "..", "Caches", "tron-updater", "pending");
+  // electron-updater downloads to ~/Library/Caches/<app-name>-updater/pending/
+  const cacheDir = join(app.getPath("home"), "Library", "Caches", "tron-updater", "pending");
   if (!existsSync(cacheDir)) {
     throw new Error(`Cache dir not found: ${cacheDir}`);
   }
@@ -233,6 +234,11 @@ export function registerUpdaterHandlers(
       } catch (err) {
         // Fall through to default quitAndInstall if manual apply fails
         console.error("[Updater] Manual apply failed, falling back:", err);
+        sendToRenderer(getMainWindow, "updater.status", {
+          status: "installing",
+          updateInfo,
+          installStep: "Falling back to default installer...",
+        });
       }
     }
 
