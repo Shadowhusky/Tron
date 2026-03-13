@@ -462,8 +462,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
     };
 
+    // Track last data write timestamp — used to defer fit() during active output
+    let lastDataTs = 0;
+
     /** Write to xterm, batching at RAF rate when in alternate buffer (TUI). */
     const batchWrite = (data: string) => {
+      lastDataTs = Date.now();
       if (term.buffer.active.type === "alternate") {
         batchBuffer += data;
         if (batchRaf === null) {
@@ -804,10 +808,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         return;
       }
       if (desktopGuardPos > 50 && vp.scrollTop === 0) {
-        // Sudden jump to top — revert on next frame to avoid fighting xterm
+        // Sudden jump to top — restore SYNCHRONOUSLY to prevent any visible
+        // flicker. Previous RAF-deferred approach was too slow during active
+        // output (xterm renders continuously, defeating single-frame restore).
+        vp.scrollTop = desktopGuardPos;
+        // Also schedule RAF as backup in case sync restore was overridden
         cancelAnimationFrame(desktopGuardRaf);
         const restoreTo = desktopGuardPos;
-        desktopGuardRaf = requestAnimationFrame(() => { vp.scrollTop = restoreTo; });
+        desktopGuardRaf = requestAnimationFrame(() => {
+          if (vp.scrollTop === 0 && restoreTo > 50) vp.scrollTop = restoreTo;
+        });
       } else {
         desktopGuardPos = vp.scrollTop;
       }
@@ -856,6 +866,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if (!fitAddonRef.current || !xtermRef.current) return;
       if (!reconnectSettled) return; // defer until bounce completes
       if (viewportResizing) return; // skip fit() during keyboard open/close (mobile)
+
+      // Defer fit() during active output — fit() recalculates viewport dimensions
+      // which can reset scrollTop to 0, causing a visible scroll-to-top flicker.
+      // Re-queue the resize after a short delay to try again when output settles.
+      const timeSinceData = Date.now() - lastDataTs;
+      if (lastDataTs > 0 && timeSinceData < 150) {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(performResize, 200);
+        return;
+      }
 
       // Skip if container dimensions haven't changed (prevents resize loops)
       const cw = el.clientWidth;
