@@ -229,7 +229,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return cleaned;
     };
 
-    const activateFilePath = async (filePath: string) => {
+    const activateFilePath = async (filePath: string, event?: MouseEvent) => {
       let resolved = filePath;
 
       // Resolve relative paths against session CWD
@@ -243,53 +243,57 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         } catch { /* use as-is */ }
       }
 
-      // Validate path exists before opening a tab — prevents opening
-      // blank editor tabs for paths that are just terminal output text.
+      // Validate path exists before showing popover
+      let isDirectory = false;
+      let isFile = false;
       try {
         const parentDir = resolved.replace(/[/\\][^/\\]+$/, "") || "/";
         const fileName = resolved.split(/[/\\]/).pop() || "";
         const dirResult = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: parentDir });
         if (dirResult?.success && dirResult.contents) {
           const found = dirResult.contents.some((entry: { name: string }) => entry.name === fileName);
-          if (!found) {
-            // Also check if resolved itself is a directory
+          if (found) {
+            // Check if it's a directory by trying to list it
             const selfDir = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: resolved });
-            if (!selfDir?.success) {
+            isDirectory = selfDir?.success ?? false;
+            isFile = !isDirectory;
+          } else {
+            // Not found as file — check if it's a directory itself
+            const selfDir = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: resolved });
+            if (selfDir?.success) {
+              isDirectory = true;
+            } else {
               window.dispatchEvent(new CustomEvent("tron:toast", {
                 detail: { message: `File not found: ${filePath}` },
               }));
               return;
             }
-            // It's a directory — open in file manager
-            window.electron?.ipcRenderer?.invoke("shell.openPath", resolved)?.catch(() => {});
-            return;
           }
         } else if (dirResult && !dirResult.success) {
-          // Parent dir doesn't exist
           window.dispatchEvent(new CustomEvent("tron:toast", {
             detail: { message: `File not found: ${filePath}` },
           }));
           return;
         }
-      } catch { /* validation failed — proceed anyway */ }
+      } catch { /* validation failed — proceed anyway, treat as file */ isFile = true; }
 
       const ext = resolved.split(".").pop()?.toLowerCase() || "";
       const baseName = resolved.split(/[/\\]/).pop() || "";
+      const canEdit = editorExts.has(ext) || editorFiles.has(baseName);
 
-      if (editorExts.has(ext) || editorFiles.has(baseName)) {
-        // Pass sourceSessionId so CodeEditorPane can route file reads
-        // through the remote bridge when this is a remote terminal session.
-        window.dispatchEvent(new CustomEvent("tron:openEditorTab", {
-          detail: { filePath: resolved, sourceSessionId: sessionId },
-        }));
-      } else {
-        // Non-editor file or directory — open directly in system file manager
-        if (window.electron?.ipcRenderer) {
-          window.electron.ipcRenderer.invoke("shell.showItemInFolder", resolved)?.catch(() => {
-            window.electron?.ipcRenderer?.invoke("shell.openPath", resolved)?.catch(() => {});
-          });
-        }
-      }
+      // Dispatch event to show file popover at click position
+      window.dispatchEvent(new CustomEvent("tron:fileClicked", {
+        detail: {
+          filePath: resolved,
+          displayPath: filePath,
+          x: event?.clientX ?? 0,
+          y: event?.clientY ?? 0,
+          isDirectory,
+          isFile,
+          canEdit,
+          sourceSessionId: sessionId,
+        },
+      }));
     };
 
     term.registerLinkProvider({
@@ -359,7 +363,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             links.push({
               range: { start: { x: matchStart + 1, y: lineNumber }, end: { x: matchEnd, y: lineNumber } },
               text: matched,
-              activate() { activateFilePath(matched); },
+              activate(event) { activateFilePath(matched, event); },
             });
           } else {
             const startY = startRow + 1 + Math.floor(matchStart / cols);
@@ -369,7 +373,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             links.push({
               range: { start: { x: startX, y: startY }, end: { x: endX, y: endY } },
               text: matched,
-              activate() { activateFilePath(matched); },
+              activate(event) { activateFilePath(matched, event); },
             });
           }
         }
@@ -556,6 +560,36 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
     };
 
+    // Save multiple files — processes all without dedupe between them,
+    // writes space-separated paths to PTY.
+    const saveFilesAndType = async (files: (Blob | File)[]) => {
+      const now = Date.now();
+      if (now - lastImagePasteTime < 1000) return; // dedupe vs previous paste event
+      lastImagePasteTime = now;
+      const paths: string[] = [];
+      for (const blob of files) {
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        const base64 = btoa(binary);
+        const ext = (blob instanceof File && blob.name)
+          ? (blob.name.split(".").pop() || "bin")
+          : (blob.type.split("/")[1]?.replace("jpeg", "jpg") || "bin");
+        const filePath = await window.electron?.ipcRenderer?.invoke(
+          "file.saveTempImage",
+          { base64, ext },
+        );
+        if (filePath) paths.push(filePath);
+      }
+      if (paths.length > 0 && window.electron) {
+        window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, {
+          id: sessionId,
+          data: paths.join(" "),
+        });
+      }
+    };
+
     // Custom key handling — intercept configurable hotkeys before xterm
     term.attachCustomKeyEventHandler((e) => {
       // Parse the clearTerminal hotkey to check dynamically
@@ -627,12 +661,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       const hasText = items.some((i) => i.kind === "string" && i.type === "text/plain");
       if (hasText) return;
       // Pure image paste — intercept synchronously, process async
-      const imageItem = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
-      if (imageItem) {
+      const imageItems = items.filter((i) => i.kind === "file" && i.type.startsWith("image/"));
+      if (imageItems.length > 0) {
         e.preventDefault();
         e.stopPropagation();
-        const file = imageItem.getAsFile();
-        if (file) saveFileAndType(file);
+        const files = imageItems.map((i) => i.getAsFile()).filter(Boolean) as File[];
+        saveFilesAndType(files);
         return;
       }
       // No text and no image in clipboardData — likely file paths copied from
@@ -1196,10 +1230,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if (!files || files.length === 0) return;
       e.preventDefault();
       e.stopPropagation();
-      // Save each dropped file
-      for (const file of Array.from(files)) {
-        saveFileAndType(file, file.name);
-      }
+      // Save all dropped files and write paths to PTY
+      saveFilesAndType(Array.from(files));
     };
     el.addEventListener("dragover", onDragOver);
     el.addEventListener("drop", onDrop);

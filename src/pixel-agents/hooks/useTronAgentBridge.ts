@@ -124,6 +124,29 @@ const THINKING_RE = /[·✢✳✶✻✽]\s+[A-Z][a-z]+[….]/;
 /** Claude Code permission prompt — "Allow ToolName(...)" or "Allow mcp__..." */
 const PERMISSION_RE = /Allow\s+(?:Bash|Read|Edit|MultiEdit|Write|Glob|Grep|Fetch|Search|WebFetch|WebSearch|Agent|Explore|Task|Skill|NotebookEdit|mcp__)\b/;
 
+/** Known AI agent names / banners that indicate an agent session.
+ *  Matching any of these marks the session as "has agent" so subsequent
+ *  terminal activity is tracked as working status. */
+const AGENT_NAME_RE = /\bclaude\s*code\b|\bclaude\b|\bcopilot\b|\bcursor\b|\baider\b|\bcody\b|\bcodex\b|\bgithub\s*copilot\b|\bcontinue\b|\btabby\b|\bdevin\b|\bwindsurf\b/i;
+
+/** Generic interactive prompts that indicate the terminal needs user input.
+ *  Covers npm init, Claude Code, cargo, pip, docker, git, etc. */
+const GENERIC_PERMISSION_PATTERNS = [
+  /do you want to proceed\??/i,
+  /would you like to proceed\??/i,
+  /do you want to continue\??/i,
+  /are you sure\??/i,
+  /\(y\/n\)\s*\??/i,
+  /\[y\/n\]\s*\??/i,
+  /\[yes\/no\]\s*\??/i,
+  /continue\?\s*\(y\/n\)/i,
+  /allow this action\??/i,
+  /press enter to continue/i,
+  /[❯►]\s*\d+\.\s+(?:Yes|No|Cancel|Skip|Continue|Abort)/i,
+  /[●○]\s+(?:Yes|No|Cancel|Skip|Continue|Abort)/i,
+  /◆\s+\S/,
+];
+
 const sessionLookback = new Map<string, string>();
 const LOOKBACK_MAX = 150;
 
@@ -138,7 +161,9 @@ function detectToolFromChunk(sessionId: string, rawData: string): DetectResult {
   const text = prev + stripped;
 
   // Check for permission prompt first (highest priority)
-  const hasPermission = PERMISSION_RE.test(text);
+  // Includes both Claude Code specific "Allow ..." and generic interactive prompts
+  const hasPermission = PERMISSION_RE.test(text) ||
+    GENERIC_PERMISSION_PATTERNS.some(p => p.test(text));
 
   // Check for tool patterns in the combined lookback + current chunk
   for (const [re, tool] of TOOL_CALL_RE) {
@@ -167,6 +192,11 @@ function detectToolFromChunk(sessionId: string, rawData: string): DetectResult {
   if (hasPermission) {
     sessionLookback.delete(sessionId);
     return { tool: null, permission: true };
+  }
+  // Agent name/banner detected — no specific tool, but marks the session as agent
+  if (AGENT_NAME_RE.test(stripped)) {
+    sessionLookback.delete(sessionId);
+    return { tool: "agent_detected", permission: false };
   }
 
   // No match — keep the lookback for the next chunk (tool name may be split)
@@ -238,7 +268,7 @@ function findTabTitle(tabs: Tab[], sessionId: string): string | null {
 
 const TOOL_STICKY_MS = 2000;
 /** How long after last terminal data before we consider an external agent idle */
-const EXTERNAL_IDLE_MS = 3000;
+const EXTERNAL_IDLE_MS = 5000;
 
 export function useAgentStatuses(): AgentStatus[] {
   const store = useContext(AgentContext);
@@ -289,14 +319,28 @@ export function useAgentStatuses(): AgentStatus[] {
         // Track permission state from external agents (Claude Code "Allow ..." prompts)
         terminalPermission.current.set(id, permission);
 
+        // While an agent is actively running (terminalLastData exists from a recent
+        // tool/thinking/name match), ANY terminal data keeps it alive as "working".
+        // Once the agent goes idle and terminalLastData is cleaned up by the
+        // reconcile loop, regular terminal data from non-agent commands won't
+        // re-trigger the working status — only new agent patterns will.
+        if (!tool && !permission && terminalLastData.current.has(id)) {
+          const printable = stripAnsi(data).replace(/[\x00-\x1F\x7F]/g, "").trim();
+          if (printable.length > 0) {
+            terminalLastData.current.set(id, now);
+          }
+        }
+
         if (tool || permission) {
-          // Only tool/permission matches count as activity — this ensures the
-          // EXTERNAL_IDLE_MS timeout actually works. Non-tool data (shell prompts,
-          // cursor blinks) must NOT refresh the timestamp, otherwise idle detection
-          // never triggers after the agent finishes.
+          // Tool/permission matches — primary activity signal, also marks agent presence
+          everHadAgent.current.add(id);
           terminalLastData.current.set(id, now);
 
-          if (tool === "thinking") {
+          // "agent_detected" is just an identifier (agent name/banner seen),
+          // not a real tool — only used to mark everHadAgent + timestamp
+          if (tool === "agent_detected") {
+            // no-op for tool display
+          } else if (tool === "thinking") {
             const lastTs = terminalToolTimestamp.current.get(id) ?? 0;
             if (now - lastTs > TOOL_STICKY_MS) {
               terminalDetectedTool.current.set(id, tool);

@@ -356,6 +356,7 @@ function StorageSection({ cardClass, t, resolvedTheme }: {
           { label: clearing ? "Clearing..." : "Clear All", type: "danger", onClick: handleClearAll },
         ]}
       />
+
     </div>
   );
 }
@@ -799,6 +800,7 @@ const SettingsPane = () => {
   >("idle");
   const [testError, setTestError] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
+  const [applyAllModel, setApplyAllModel] = useState<string | null>(null);
   const providerCacheRef = useRef<ProviderCache>({ ...appConfig.providerConfigs });
 
   // Hotkey recording state
@@ -1226,8 +1228,14 @@ const SettingsPane = () => {
                                         </div>
                                       </button>
                                       <button
+                                        onClick={(e) => { e.stopPropagation(); setApplyAllModel(m.name); }}
+                                        className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
+                                      >
+                                        Apply to all
+                                      </button>
+                                      <button
                                         onClick={(e) => toggleFavorite(e, m.name)}
-                                        className={`shrink-0 p-1 opacity-50 hover:opacity-100 transition-opacity ml-2 ${isFav ? "text-yellow-400 opacity-100" : "text-gray-400 group-hover:opacity-100 opacity-0"}`}
+                                        className={`shrink-0 p-1 opacity-50 hover:opacity-100 transition-opacity ${isFav ? "text-yellow-400 opacity-100" : "text-gray-400 group-hover:opacity-100 opacity-0"}`}
                                       >
                                         <Star className={`w-3.5 h-3.5 ${isFav ? "fill-current" : ""}`} />
                                       </button>
@@ -1352,8 +1360,14 @@ const SettingsPane = () => {
                                                   {name}
                                                 </button>
                                                 <button
+                                                  onClick={(e) => { e.stopPropagation(); setApplyAllModel(name); }}
+                                                  className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity ml-2 mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
+                                                >
+                                                  Apply to all
+                                                </button>
+                                                <button
                                                   onClick={(e) => toggleFavorite(e, name)}
-                                                  className={`shrink-0 p-1 opacity-50 hover:opacity-100 transition-opacity ml-2 ${isFav ? "text-yellow-400 opacity-100" : "text-gray-400 group-hover:opacity-100 opacity-0"}`}
+                                                  className={`shrink-0 p-1 opacity-50 hover:opacity-100 transition-opacity ${isFav ? "text-yellow-400 opacity-100" : "text-gray-400 group-hover:opacity-100 opacity-0"}`}
                                                 >
                                                   <Star className={`w-3.5 h-3.5 ${isFav ? "fill-current" : ""}`} />
                                                 </button>
@@ -1870,6 +1884,35 @@ const SettingsPane = () => {
           </motion.div>
         </AnimatePresence>
       </div>
+      <Modal
+        show={!!applyAllModel}
+        resolvedTheme={resolvedTheme as ResolvedTheme}
+        onClose={() => setApplyAllModel(null)}
+        title="Apply Model to All Sessions?"
+        description={`This will replace the model in all terminal sessions with ${config.provider} / ${applyAllModel}.`}
+        maxWidth="max-w-sm"
+        buttons={[
+          { label: "Cancel", type: "ghost", onClick: () => setApplyAllModel(null) },
+          {
+            label: "Apply to All",
+            type: "primary",
+            onClick: () => {
+              if (!applyAllModel) return;
+              const baseUrl = providerUsesBaseUrl(config.provider) ? config.baseUrl : undefined;
+              sessions.forEach((_, sid) => {
+                if (sid === "settings" || sid.startsWith("ssh-connect") || sid.startsWith("browser-") || sid.startsWith("editor-") || sid.startsWith("pixel-agents")) return;
+                updateSessionConfig(sid, {
+                  provider: config.provider,
+                  model: applyAllModel,
+                  apiKey: config.apiKey,
+                  baseUrl,
+                });
+              });
+              setApplyAllModel(null);
+            },
+          },
+        ]}
+      />
     </div >
   );
 };

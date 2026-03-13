@@ -25,7 +25,7 @@ import Modal from "./components/ui/Modal";
 import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
 import { isTouchDevice } from "./utils/platform";
-import { ExternalLink, PanelRight } from "lucide-react";
+import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye } from "lucide-react";
 import AgentStatusBar from "./pixel-agents/components/AgentStatusBar";
 
 /**
@@ -136,6 +136,15 @@ const AppContent = () => {
   if (linkPopover) {
     linkAnchorRef.current = {
       getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: linkPopover.x, y: linkPopover.y }),
+    };
+  }
+  const [filePopover, setFilePopover] = useState<{ filePath: string; displayPath: string; x: number; y: number; isDirectory: boolean; isFile: boolean; canEdit: boolean; sourceSessionId: string } | null>(null);
+  const fileAnchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
+    getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
+  });
+  if (filePopover) {
+    fileAnchorRef.current = {
+      getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: filePopover.x, y: filePopover.y }),
     };
   }
   const updateDismissedRef = useRef(false);
@@ -311,6 +320,17 @@ const AppContent = () => {
     };
     window.addEventListener("tron:linkClicked", handler);
     return () => window.removeEventListener("tron:linkClicked", handler);
+  }, []);
+
+  // Listen for file path clicks — show file popover at click position
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail?.filePath) return;
+      requestAnimationFrame(() => setFilePopover(detail));
+    };
+    window.addEventListener("tron:fileClicked", handler);
+    return () => window.removeEventListener("tron:fileClicked", handler);
   }, []);
 
   // Open code editor tab from file path clicks (agent overlay, etc.)
@@ -727,6 +747,93 @@ const AppContent = () => {
             >
               <PanelRight className="h-3.5 w-3.5" />
               Open in Tab
+            </button>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+
+      {/* File path click popover — context-menu style at click position */}
+      <Popover.Root
+        open={!!filePopover}
+        onOpenChange={(open) => { if (!open) setFilePopover(null); }}
+      >
+        <Popover.Anchor virtualRef={fileAnchorRef as any} />
+        <Popover.Portal>
+          <Popover.Content
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+            className={`z-[200] min-w-[180px] max-w-[320px] overflow-hidden rounded-lg py-1 shadow-xl ${
+              resolvedTheme === "light"
+                ? "border border-gray-200 bg-white text-gray-800 shadow-xl"
+                : resolvedTheme === "modern"
+                  ? "border border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+                  : "border border-white/10 bg-[#1e1e1e] text-gray-200"
+            }`}
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
+            {/* Path preview */}
+            <div className={`px-3 py-1.5 text-[11px] truncate ${
+              resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"
+            }`}>
+              {filePopover?.displayPath}
+            </div>
+            <div className={`my-0.5 h-px ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`} />
+            {/* Open in Editor — only for editable files */}
+            {filePopover?.canEdit && filePopover?.isFile && (
+              <button
+                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                  resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
+                }`}
+                onClick={() => {
+                  if (filePopover) {
+                    window.dispatchEvent(new CustomEvent("tron:openEditorTab", {
+                      detail: { filePath: filePopover.filePath, sourceSessionId: filePopover.sourceSessionId },
+                    }));
+                  }
+                  setFilePopover(null);
+                }}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Open in Editor
+              </button>
+            )}
+            {/* Open Folder / Reveal in Finder */}
+            <button
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
+              }`}
+              onClick={() => {
+                if (filePopover) {
+                  if (filePopover.isDirectory) {
+                    window.electron?.ipcRenderer?.invoke("shell.openPath", filePopover.filePath)?.catch(() => {});
+                  } else {
+                    window.electron?.ipcRenderer?.invoke("shell.showItemInFolder", filePopover.filePath)?.catch(() => {
+                      window.electron?.ipcRenderer?.invoke("shell.openPath", filePopover.filePath)?.catch(() => {});
+                    });
+                  }
+                }
+                setFilePopover(null);
+              }}
+            >
+              {filePopover?.isDirectory ? <FolderOpen className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              {filePopover?.isDirectory ? "Open Folder" : "Reveal in Finder"}
+            </button>
+            {/* Copy path */}
+            <button
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
+              }`}
+              onClick={() => {
+                if (filePopover) {
+                  navigator.clipboard.writeText(filePopover.filePath).catch(() => {});
+                }
+                setFilePopover(null);
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" />
+              Copy Path
             </button>
           </Popover.Content>
         </Popover.Portal>
