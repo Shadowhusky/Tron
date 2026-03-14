@@ -43,10 +43,15 @@ export const test = base.extend<AppFixture>({
     // Isolate test data from the user's real application data
     const profilePath = path.join(__dirname, `../.test-profile-${Date.now()}`);
 
+    // Remove ELECTRON_RUN_AS_NODE from env — it may be set by the user's shell
+    // (e.g. from a prior Tron web server fork) and prevents Electron from loading
+    // its main process modules (app, ipcMain, etc.).
+    const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env;
+
     const app = await _electron.launch({
       args: process.env.SHOW_UI === "true" ? [path.resolve(__dirname, "../../dist-electron/main.js")] : [path.resolve(__dirname, "../../dist-electron/main.js"), "--hidden", "--headless"],
       env: {
-        ...process.env,
+        ...cleanEnv,
         NODE_ENV: "test",
         TRON_TEST_PROFILE: profilePath,
       },
