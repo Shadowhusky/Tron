@@ -661,10 +661,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       const cd = e.clipboardData;
       if (!cd) return;
       const items = Array.from(cd.items);
-      // If clipboard has plain text, let xterm handle it natively
-      const hasText = items.some((i) => i.kind === "string" && i.type === "text/plain");
-      if (hasText) return;
-      // Pure image paste — intercept synchronously, process async
+      // Image paste — check BEFORE text. Even if clipboard has both text and
+      // images (common on Windows), prefer saving images to temp files.
       const imageItems = items.filter((i) => i.kind === "file" && i.type.startsWith("image/"));
       if (imageItems.length > 0) {
         e.preventDefault();
@@ -673,9 +671,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         saveFilesAndType(files);
         return;
       }
-      // No text and no image in clipboardData — likely file paths copied from
-      // Finder/Explorer. preventDefault synchronously to block xterm from reading
-      // a stale clipboard image, then check file paths async.
+      // If clipboard has plain text (and no images), let xterm handle natively
+      const hasText = items.some((i) => i.kind === "string" && i.type === "text/plain");
+      if (hasText) return;
+      // No text and no image in clipboardData — could be file paths (Finder/Explorer)
+      // or text that the browser didn't expose via clipboardData (Windows edge case).
+      // preventDefault synchronously, then check via async APIs.
       e.preventDefault();
       e.stopPropagation();
       (async () => {
@@ -691,8 +692,35 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             return;
           }
         } catch { /* IPC not available */ }
-        // Fallback: clipboard image read for web mode
-        // (clipboardData may be empty when browser restricts access)
+        // Check for text via async clipboard API — clipboardData may be empty
+        // on Windows in some scenarios even when text is on the clipboard.
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text) {
+            window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, {
+              id: sessionId,
+              data: text,
+            });
+            return;
+          }
+        } catch { /* not available or permission denied */ }
+        // Try browser Clipboard API for images (works in secure contexts)
+        try {
+          if (navigator.clipboard?.read) {
+            const clipItems = await navigator.clipboard.read();
+            for (const item of clipItems) {
+              const imgType = item.types.find((t: string) => t.startsWith("image/"));
+              if (imgType) {
+                const blob = await item.getType(imgType);
+                const ext = imgType.split("/")[1]?.replace("jpeg", "jpg") || "png";
+                await saveFileAndType(blob, `paste-${Date.now()}.${ext}`);
+                return;
+              }
+            }
+          }
+        } catch { /* not available or permission denied */ }
+        // Last resort: server-side clipboard image read (reads server's clipboard,
+        // only useful when client and server are the same machine)
         try {
           if (window.electron?.ipcRenderer?.readClipboardImage) {
             const base64 = await window.electron.ipcRenderer.readClipboardImage();
