@@ -897,11 +897,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
       // Defer fit() during active output — fit() recalculates viewport dimensions
       // which can reset scrollTop to 0, causing a visible scroll-to-top flicker.
-      // Re-queue the resize after a short delay to try again when output settles.
+      // TUI agents (Claude Code etc.) cause overlay resizing which fires ResizeObserver
+      // on the terminal container. Must defer aggressively to avoid scroll jumps.
+      // When user is scrolled up AND data is flowing, skip resize entirely —
+      // the user is reading history and won't notice slightly wrong column count.
       const timeSinceData = Date.now() - lastDataTs;
-      if (lastDataTs > 0 && timeSinceData < 150) {
+      if (lastDataTs > 0 && timeSinceData < 500) {
+        if (lastScrolledUp) return; // user reading history — don't disturb
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(performResize, 200);
+        resizeTimer = setTimeout(performResize, 300);
         return;
       }
 
@@ -949,6 +953,20 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         }
         // Re-arm guard with restored position
         if (xtermViewport) desktopGuardPos = inAltBuffer ? 0 : xtermViewport.scrollTop;
+
+        // Safety: schedule another scroll restoration on next frame. xterm's internal
+        // rendering may asynchronously reset scrollTop after fit() returns.
+        if (!inAltBuffer && !wasAtBottom && xtermViewport) {
+          const safeScrollTop = xtermViewport.scrollTop;
+          const safeViewportY = savedViewportY;
+          requestAnimationFrame(() => {
+            if (!xtermRef.current || !xtermViewport) return;
+            if (xtermViewport.scrollTop === 0 && safeScrollTop > 50) {
+              xtermRef.current.scrollToLine(safeViewportY);
+              desktopGuardPos = xtermViewport.scrollTop;
+            }
+          });
+        }
         const { cols, rows } = xtermRef.current;
 
         if (
