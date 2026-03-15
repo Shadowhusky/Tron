@@ -213,36 +213,15 @@ export function registerUpdaterHandlers(
 
     const au = await getAutoUpdater(getMainWindow);
 
-    // Safety net: if nothing exits the app within 60s, force-kill.
-    // Extraction of ~140MB zip can take 10-30s on slow disks.
-    const safetyTimer = setTimeout(() => {
+    // Safety net: if nothing exits the app within 30s, force-kill.
+    setTimeout(() => {
       console.error("[Updater] Safety timeout — forcing app.exit(0)");
       app.exit(0);
-    }, 60_000);
+    }, 30_000);
 
-    // On macOS, electron-updater's default quitAndInstall can race — the app
-    // relaunches before the zip extraction/replacement finishes, so the old
-    // binary runs again. Fix: extract the update ourselves BEFORE quitting,
-    // then relaunch. This guarantees the new binary is in place on restart.
-    if (process.platform === "darwin") {
-      try {
-        await applyMacUpdate(getMainWindow);
-        clearTimeout(safetyTimer);
-        app.relaunch();
-        app.exit(0);
-        return;
-      } catch (err) {
-        // Fall through to default quitAndInstall if manual apply fails
-        console.error("[Updater] Manual apply failed, falling back:", err);
-        sendToRenderer(getMainWindow, "updater.status", {
-          status: "installing",
-          updateInfo,
-          installStep: "Falling back to default installer...",
-        });
-      }
-    }
-
-    clearTimeout(safetyTimer);
+    // Use electron-updater's built-in quitAndInstall.
+    // isSilent=false (show installer), isForceRunAfter=true (relaunch after install).
+    // electron-updater handles extraction and replacement natively.
     au.quitAndInstall(false, true);
   });
 
