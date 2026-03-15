@@ -135,7 +135,10 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
     }
   };
 
-  const handleSelect = () => {
+  const handleSelect = (e?: React.MouseEvent | React.KeyboardEvent) => {
+    // Stop propagation so Enter/click doesn't reach the terminal
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
     if (mode === "file" && selectedFile) {
       onSelect(selectedFile);
     } else {

@@ -630,62 +630,99 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               window.electron.ipcRenderer.send(IPC.TERMINAL_WRITE, { id: sessionId, data: text });
             }
           };
-          // 1. Try file paths first (files copied in Finder/Explorer)
-          if (isElectronApp()) {
-            try {
-              const paths = await window.electron?.ipcRenderer?.readClipboardFilePaths?.();
-              if (paths && paths.length > 0) {
-                const quoted = paths.map((p: string) => /\s/.test(p) ? `"${p}"` : p).join(" ");
-                sendToTerminal(quoted);
-                return;
+          const saveImageAndType = async (blob: Blob, filename: string) => {
+            const buf = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let binary = ""; for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            const ext = filename.split(".").pop() || "png";
+            const filePath = await window.electron?.ipcRenderer?.invoke("file.saveTempImage", { base64: btoa(binary), ext });
+            if (filePath) sendToTerminal(filePath);
+          };
+
+          // 1. Try browser Clipboard API FIRST — must be called immediately
+          //    on user gesture (before any await) or the permission is lost.
+          //    Supports both text and images.
+          try {
+            if (navigator.clipboard?.read) {
+              const items = await navigator.clipboard.read();
+              for (const item of items) {
+                // Check for image types
+                const imgType = item.types.find((t: string) => t.startsWith("image/"));
+                if (imgType) {
+                  const blob = await item.getType(imgType);
+                  const ext = imgType.split("/")[1]?.replace("jpeg", "jpg") || "png";
+                  await saveImageAndType(blob, `paste.${ext}`);
+                  return;
+                }
+                // Check for text
+                if (item.types.includes("text/plain")) {
+                  const blob = await item.getType("text/plain");
+                  const text = await blob.text();
+                  if (text) { sendToTerminal(text); return; }
+                }
               }
-            } catch { /* IPC unavailable */ }
-          }
-          // 2. Try text (navigator first, then server-side IPC)
+            }
+          } catch { /* permission denied or not supported */ }
+
+          // 2. Fallback: try navigator.clipboard.readText() (simpler API, wider support)
           try {
             if (navigator.clipboard?.readText) {
               const text = await navigator.clipboard.readText();
               if (text) { sendToTerminal(text); return; }
             }
-          } catch { /* permission denied or not supported */ }
+          } catch { /* not available */ }
+
+          // 3. Electron-specific: file paths, then image
+          if (isElectronApp()) {
+            try {
+              const paths = await window.electron?.ipcRenderer?.readClipboardFilePaths?.();
+              if (paths && paths.length > 0) {
+                sendToTerminal(paths.map((p: string) => /\s/.test(p) ? `"${p}"` : p).join(" "));
+                return;
+              }
+            } catch {}
+          }
+
+          // 4. Server-side clipboard IPC (reads server's clipboard)
           try {
             const text = await window.electron?.ipcRenderer?.clipboardReadText?.();
             if (text) { sendToTerminal(text); return; }
-          } catch { /* IPC not available */ }
-          // 3. Try clipboard image last (only if no file paths or text)
-          if (isElectronApp()) {
-            try {
-              const base64 = await window.electron?.ipcRenderer?.readClipboardImage?.();
-              if (base64) {
-                const filePath = await window.electron?.ipcRenderer?.invoke(
-                  "file.saveTempImage",
-                  { base64, ext: "png" },
-                );
-                if (filePath) { sendToTerminal(filePath); return; }
-              }
-            } catch { /* no image or IPC unavailable */ }
-          }
-          // Last resort for mobile: create a temporary textarea for native paste
+          } catch {}
+
+          // 5. Server-side clipboard image
+          try {
+            const base64 = await window.electron?.ipcRenderer?.readClipboardImage?.();
+            if (base64) {
+              const filePath = await window.electron?.ipcRenderer?.invoke("file.saveTempImage", { base64, ext: "png" });
+              if (filePath) { sendToTerminal(filePath); return; }
+            }
+          } catch {}
+
+          // 6. Last resort (mobile): focused textarea for native paste gesture
           const ta = document.createElement("textarea");
-          ta.style.cssText = "position:fixed;left:0;top:40%;width:80%;height:44px;z-index:99999;font-size:16px;padding:8px;border:2px solid #666;border-radius:8px;background:#222;color:#fff;margin:0 10%";
-          ta.placeholder = "Tap here and paste, then press Enter";
+          ta.style.cssText = "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:220px;height:40px;z-index:99999;font-size:16px;padding:8px 12px;border:1px solid #555;border-radius:8px;background:#1a1a1a;color:#ccc;outline:none;text-align:center;-webkit-user-select:text;user-select:text";
+          ta.placeholder = "Tap here & paste";
           document.body.appendChild(ta);
           ta.focus();
-          const cleanup = () => { ta.remove(); };
-          ta.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              sendToTerminal(ta.value);
+          const cleanup = () => { if (ta.parentNode) ta.remove(); };
+          ta.addEventListener("paste", (ev) => {
+            // Handle pasted images
+            const files = ev.clipboardData?.files;
+            if (files && files.length > 0) {
+              for (const f of Array.from(files)) {
+                if (f.type.startsWith("image/")) {
+                  saveImageAndType(f, f.name || `paste.${f.type.split("/")[1] || "png"}`);
+                }
+              }
               cleanup();
+              return;
             }
+            setTimeout(() => { if (ta.value) sendToTerminal(ta.value); cleanup(); }, 50);
           });
-          // Auto-send on paste event
-          ta.addEventListener("paste", () => {
-            setTimeout(() => {
-              if (ta.value) { sendToTerminal(ta.value); cleanup(); }
-            }, 50);
+          ta.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") { ev.preventDefault(); if (ta.value) sendToTerminal(ta.value); cleanup(); }
+            if (ev.key === "Escape") cleanup();
           });
-          // Remove after 10s if unused
           setTimeout(cleanup, 10000);
         },
       },

@@ -8,7 +8,7 @@ import { useConfig } from "../../contexts/ConfigContext";
 import { Folder, X, Loader2, Trash2, Search, Settings } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
-import { abbreviateHome, isWindows, isElectronApp, isTouchDevice } from "../../utils/platform";
+import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi } from "../../utils/contextCleaner";
 import { classifyTerminalOutput, detectTuiProgram } from "../../utils/terminalState";
@@ -468,27 +468,17 @@ const ContextBar: React.FC<ContextBarProps> = ({
   );
 
   /** Send `cd <dir>` to the terminal and refresh CWD. */
-  const cdToDirectory = async (selected: string) => {
+  const cdToDirectory = (selected: string) => {
     if (!sessionId) return;
-    // Check if terminal has a running process — if so, Ctrl+C first
-    try {
-      const history = await window.electron?.ipcRenderer?.getHistory?.(sessionId);
-      const lastLines = (history || "").split("\n").slice(-5).join("\n");
-      const state = classifyTerminalOutput(lastLines);
-      if (state !== "idle") {
-        window.electron?.ipcRenderer?.send?.("terminal.write", { id: sessionId, data: "\x03" });
-        await new Promise((r) => setTimeout(r, 500));
-      }
-    } catch { /* proceed with cd anyway */ }
-
-    const clearChar = isWindows() ? "\x1b" : "\x15";
-    window.electron?.ipcRenderer?.send?.("terminal.write", { id: sessionId, data: clearChar });
-    if (isWindows()) await new Promise((r) => setTimeout(r, 50));
-    window.electron?.ipcRenderer?.send?.("terminal.write", {
-      id: sessionId,
-      data: `cd ${JSON.stringify(selected)}\r`,
-    });
-    setTimeout(() => refreshCwd(sessionId), 500);
+    // Delay the write by 200ms so any Enter keyup event from the folder picker
+    // modal drains before the cd command reaches the PTY.
+    setTimeout(() => {
+      window.electron?.ipcRenderer?.send?.("terminal.write", {
+        id: sessionId,
+        data: `\x15cd ${JSON.stringify(selected)}\r`,
+      });
+      setTimeout(() => refreshCwd(sessionId), 300);
+    }, 200);
   };
 
   return (

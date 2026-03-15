@@ -160,6 +160,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       fontSize: 14,
       theme: termTheme,
       allowProposedApi: true,
+      smoothScrollDuration: 0,
       // macOS Option key → Meta so Alt+Arrow sends proper escape sequences
       ...(isMacOS() ? { macOptionIsMeta: true } : {}),
       // Reduce scrollback on mobile to save memory and speed up fit()/scroll
@@ -454,20 +455,19 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     let batchBuffer = "";
     let batchRaf: number | null = null;
 
+    // No special write wrapper needed — RAF scroll guard handles everything.
+    const safeWrite = (data: string) => { term.write(data); };
+
     const flushBatch = () => {
       batchRaf = null;
       if (batchBuffer) {
-        term.write(batchBuffer);
+        safeWrite(batchBuffer);
         batchBuffer = "";
       }
     };
 
-    // Track last data write timestamp — used to defer fit() during active output
-    let lastDataTs = 0;
-
     /** Write to xterm, batching at RAF rate when in alternate buffer (TUI). */
     const batchWrite = (data: string) => {
-      lastDataTs = Date.now();
       if (term.buffer.active.type === "alternate") {
         batchBuffer += data;
         if (batchRaf === null) {
@@ -475,7 +475,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         }
       } else {
         // Normal buffer — write immediately for responsive shell experience
-        term.write(data);
+        safeWrite(data);
       }
     };
 
@@ -643,10 +643,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           return false;
         }
       }
-      // Let xterm handle Cmd/Ctrl+V natively — its internal paste handler
-      // reads clipboardData synchronously (more reliable than async Clipboard
-      // API) and wraps text in bracketed paste sequences for TUI compatibility.
-      // Image handling is done via the separate 'paste' event listener below.
+      // Block Ctrl+V / Cmd+V from being sent to PTY as raw \x16 (^V).
+      // Return false lets browser fire native paste event for our handler.
+      if (e.type === "keydown" && (e.key === "v" || e.key === "V") && (e.metaKey || e.ctrlKey) && !e.altKey) {
+        return false;
+      }
       return true;
     });
 
@@ -661,8 +662,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       const cd = e.clipboardData;
       if (!cd) return;
       const items = Array.from(cd.items);
-      // Image paste — check BEFORE text. Even if clipboard has both text and
-      // images (common on Windows), prefer saving images to temp files.
+      // Check images FIRST — clipboard often has both text + image
       const imageItems = items.filter((i) => i.kind === "file" && i.type.startsWith("image/"));
       if (imageItems.length > 0) {
         e.preventDefault();
@@ -671,12 +671,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         saveFilesAndType(files);
         return;
       }
-      // If clipboard has plain text (and no images), let xterm handle natively
+      // No images — if has text, let xterm handle natively
       const hasText = items.some((i) => i.kind === "string" && i.type === "text/plain");
       if (hasText) return;
-      // No text and no image in clipboardData — could be file paths (Finder/Explorer)
-      // or text that the browser didn't expose via clipboardData (Windows edge case).
-      // preventDefault synchronously, then check via async APIs.
+      // No text and no image in clipboardData — likely file paths copied from
+      // Finder/Explorer. preventDefault synchronously to block xterm from reading
+      // a stale clipboard image, then check file paths async.
       e.preventDefault();
       e.stopPropagation();
       (async () => {
@@ -692,35 +692,23 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             return;
           }
         } catch { /* IPC not available */ }
-        // Check for text via async clipboard API — clipboardData may be empty
-        // on Windows in some scenarios even when text is on the clipboard.
+        // Try server-side clipboard text IPC (web mode)
+        try {
+          const text = await window.electron?.ipcRenderer?.clipboardReadText?.();
+          if (text) {
+            window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, { id: sessionId, data: text });
+            return;
+          }
+        } catch {}
+        // Try browser Clipboard API
         try {
           const text = await navigator.clipboard.readText();
           if (text) {
-            window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, {
-              id: sessionId,
-              data: text,
-            });
+            window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, { id: sessionId, data: text });
             return;
           }
-        } catch { /* not available or permission denied */ }
-        // Try browser Clipboard API for images (works in secure contexts)
-        try {
-          if (navigator.clipboard?.read) {
-            const clipItems = await navigator.clipboard.read();
-            for (const item of clipItems) {
-              const imgType = item.types.find((t: string) => t.startsWith("image/"));
-              if (imgType) {
-                const blob = await item.getType(imgType);
-                const ext = imgType.split("/")[1]?.replace("jpeg", "jpg") || "png";
-                await saveFileAndType(blob, `paste-${Date.now()}.${ext}`);
-                return;
-              }
-            }
-          }
-        } catch { /* not available or permission denied */ }
-        // Last resort: server-side clipboard image read (reads server's clipboard,
-        // only useful when client and server are the same machine)
+        } catch {}
+        // Fallback: clipboard image read
         try {
           if (window.electron?.ipcRenderer?.readClipboardImage) {
             const base64 = await window.electron.ipcRenderer.readClipboardImage();
@@ -730,7 +718,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
               await saveFileAndType(blob, `paste-${Date.now()}.png`);
             }
           }
-        } catch { /* IPC not available */ }
+        } catch {}
       })();
     };
     // Use capture phase so we intercept images BEFORE xterm's internal paste
@@ -741,7 +729,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // terminal, xterm focuses its helper textarea. The browser auto-scrolls
     // .xterm-viewport to bring the textarea into view, jumping to the top of
     // the scrollback buffer.
-    const xtermViewport = el.querySelector(".xterm-viewport") as HTMLElement | null;
     const xtermTextarea = el.querySelector(".xterm-helper-textarea") as HTMLElement | null;
 
     // MOBILE SCROLL-TO-TOP FIX: block textarea focus entirely.
@@ -757,10 +744,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     } : null;
     if (preventPageScroll) window.addEventListener("scroll", preventPageScroll);
     // MOBILE SCROLL-TO-TOP FIX:
-    // On mobile, tapping the terminal can cause scroll-to-top via multiple paths
-    // (native focus, xterm internals, React re-renders from focusTarget state).
-    // Fix: completely block xterm textarea focus + continuously guard scroll position.
-    let mobileScrollObserver: MutationObserver | null = null;
+    // MOBILE TEXTAREA FIX: Block textarea focus to prevent keyboard popup
+    // and scroll-to-top issues from focus-induced layout shifts.
     if (isTouch && xtermTextarea) {
       // Make textarea completely unfocusable from taps
       xtermTextarea.style.setProperty("pointer-events", "none", "important");
@@ -782,98 +767,89 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         origTextareaFocus(opts);
       };
 
-      // Continuous scroll guard: use MutationObserver + scroll listener to catch
-      // ANY scroll-to-top regardless of cause (focus, re-render, layout shift)
-      if (xtermViewport) {
-        let guardedScrollTop = xtermViewport.scrollTop;
-        // Update guarded position when user intentionally scrolls (touch handler)
-        const updateGuard = () => { guardedScrollTop = xtermViewport!.scrollTop; };
-        let mobileWasInAlt = false;
-        const checkScroll = () => {
-          const inAlt = term.buffer.active.type === "alternate";
-          if (inAlt) { mobileWasInAlt = true; return; } // Skip in TUI — no scrollback
-          if (mobileWasInAlt) { mobileWasInAlt = false; guardedScrollTop = xtermViewport!.scrollTop; return; }
-          if (xtermViewport && guardedScrollTop > 50 &&
-              xtermViewport.scrollTop === 0) {
-            xtermViewport.scrollTop = guardedScrollTop;
-          } else if (xtermViewport) {
-            guardedScrollTop = xtermViewport.scrollTop;
-          }
-        };
-        xtermViewport.addEventListener("scroll", checkScroll);
-        // Also observe DOM changes that might cause layout shifts
-        mobileScrollObserver = new MutationObserver(checkScroll);
-        mobileScrollObserver.observe(el, { childList: true, subtree: true, attributes: true });
-        // Update guard when user scrolls via our touch handler
-        term.onScroll(updateGuard);
-      }
     }
 
-    // DESKTOP GUARD: persistent scroll guard that catches sudden scroll-to-top
-    // jumps from user interaction or focus events. Tracks last known good position
-    // and reverts jumps >50px to scrollTop=0.
-    // IMPORTANT: Skip when in alternate buffer — alt buffer has no scrollback,
-    // so scrollTop is always 0. Without this check, switching to alt buffer
-    // (TUI launch) triggers false "jump to top" detection that fights with xterm.
-    let desktopGuardPos = 0;
-    let desktopGuardRaf = 0;
-    let wasInAltBuffer = false;
-    const desktopScrollGuard = !isTouch && xtermViewport ? () => {
-      const vp = xtermViewport!;
-      const inAlt = term.buffer.active.type === "alternate";
-      if (inAlt) {
-        // In alternate buffer (TUI) — no scrollback, skip guard.
-        // DON'T reset desktopGuardPos — preserve the normal-buffer position
-        // so we can restore it when transitioning back.
-        wasInAltBuffer = true;
-        return;
-      }
-      if (wasInAltBuffer) {
-        // Just exited alt buffer — update guard to current position
-        // (the normal buffer might have a different scroll position now)
-        wasInAltBuffer = false;
-        desktopGuardPos = vp.scrollTop;
-        return;
-      }
-      if (desktopGuardPos > 50 && vp.scrollTop === 0) {
-        // Sudden jump to top — restore SYNCHRONOUSLY to prevent any visible
-        // flicker. Previous RAF-deferred approach was too slow during active
-        // output (xterm renders continuously, defeating single-frame restore).
-        vp.scrollTop = desktopGuardPos;
-        // Also schedule RAF as backup in case sync restore was overridden
-        cancelAnimationFrame(desktopGuardRaf);
-        const restoreTo = desktopGuardPos;
-        desktopGuardRaf = requestAnimationFrame(() => {
-          if (vp.scrollTop === 0 && restoreTo > 50) vp.scrollTop = restoreTo;
-        });
-      } else {
-        desktopGuardPos = vp.scrollTop;
-      }
-    } : null;
-    if (desktopScrollGuard) {
-      xtermViewport!.addEventListener("scroll", desktopScrollGuard);
-    }
-
-    // Track whether user is scrolled up from bottom (for scroll-to-bottom button).
-    // Use xterm's onScroll API instead of DOM scroll events — term.scrollLines()
-    // (used by our touch handler) may not fire native scroll events on .xterm-viewport.
+    // SCROLL GUARD: Event-driven approach that works WITH xterm v6's internal
+    // scroll system instead of fighting it from outside.
+    //
+    // xterm v6 uses SmoothScrollableElement/Scrollable (VS Code infrastructure)
+    // for all scrolling. The .xterm-viewport element is NOT a scroll container.
+    // BufferService.isUserScrolling controls whether new output auto-scrolls to
+    // bottom. When true, BufferService.scroll() preserves the user's position
+    // (adjusting for buffer trimming). When false, it snaps to bottom.
+    //
+    // The problem: isUserScrolling is cleared by BufferService.scrollLines()
+    // when a positive disp reaches ybase. External scroll corrections (like a
+    // RAF loop calling scrollToLine) re-enter the scroll system, can overshoot
+    // or undershoot, and fight with Viewport._sync/queueSync.
+    //
+    // Fix: Don't try to correct ydisp externally. Instead, rely on xterm's
+    // built-in isUserScrolling mechanism. The only thing we need to do is:
+    // 1. Track scrolled-up state for the UI (scroll-to-bottom button)
+    // 2. Follow natural buffer trim drift (ydisp decrements by 1 per trim)
+    // 3. Handle the edge case where ydisp hits 0 during heavy trimming
+    //
+    // For buffer trimming: when the buffer is full and the user is scrolled up,
+    // BufferService.scroll() does ydisp = max(ydisp-1, 0). This is correct —
+    // old content above the viewport is removed. We track this for the UI.
     let lastScrolledUp = false;
-    const checkScrolledUp = () => {
+    let scrollLockY = -1; // locked viewportY, -1 = not locked
+    let userScrollTs = 0; // timestamp of last user scroll gesture
+    // Detect user scroll gestures (wheel, touch, programmatic scroll-to-bottom)
+    const onUserScroll = () => { userScrollTs = Date.now(); };
+    el.addEventListener("wheel", onUserScroll, { passive: true });
+    el.addEventListener("touchstart", onUserScroll, { passive: true });
+
+    // Event-driven scroll tracking — no RAF loop needed for position guarding.
+    // xterm's onScroll fires for every ydisp change (user scroll AND output scroll).
+    const disposableOnScroll = term.onScroll(() => {
       const buf = term.buffer.active;
+      if (buf.type === "alternate") {
+        scrollLockY = -1;
+        return;
+      }
+
       const isUp = buf.viewportY < buf.baseY;
+      const isUserAction = Date.now() - userScrollTs < 300;
+
+      if (isUserAction) {
+        // User is actively scrolling — track their position
+        scrollLockY = isUp ? buf.viewportY : -1;
+      } else if (scrollLockY >= 0) {
+        // Not a user action — this is output-driven scroll change.
+        // xterm's BufferService.scroll() already handles this correctly
+        // via isUserScrolling: it decrements ydisp by 1 for each trim.
+        // We just follow the natural drift.
+        const drift = scrollLockY - buf.viewportY;
+        if (drift >= 0 && drift <= 2) {
+          // Natural trim drift (1 or 2 lines between events) — follow it.
+          // Also handles drift=0 (no change) gracefully.
+          scrollLockY = buf.viewportY;
+        } else if (buf.viewportY > scrollLockY) {
+          // viewportY jumped FORWARD (toward bottom) without user action.
+          // This means isUserScrolling was cleared unexpectedly.
+          // Re-assert the locked position.
+          term.scrollToLine(scrollLockY);
+        } else {
+          // Large backward jump (drift > 2) — multiple trims between events.
+          // Follow it since the content was trimmed.
+          scrollLockY = buf.viewportY;
+        }
+      }
+
+      // Update scrolled-up state for UI (scroll-to-bottom button)
       if (isUp !== lastScrolledUp) {
         lastScrolledUp = isUp;
         onScrolledUpChangeRef.current?.(isUp);
       }
-    };
-    const disposableOnScroll = term.onScroll(checkScrolledUp);
-    // Also check on lineFeed — when new content arrives while scrolled up,
-    // baseY increases but viewportY stays, keeping isUp = true.
-    const disposableOnLineFeed = term.onLineFeed(checkScrolledUp);
+    });
+    const disposableOnLineFeed = term.onLineFeed(() => {});
 
     // Listen for scrollToBottom requests from parent (via window event)
     const handleScrollToBottom = (e: Event) => {
       if ((e as CustomEvent).detail?.sessionId === sessionId) {
+        scrollLockY = -1;
+        userScrollTs = Date.now(); // treat as user action
         term.scrollToBottom();
       }
     };
@@ -892,27 +868,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     let lastContainerH = 0;
     const performResize = () => {
       if (!fitAddonRef.current || !xtermRef.current) return;
-      if (!reconnectSettled) return; // defer until bounce completes
-      if (viewportResizing) return; // skip fit() during keyboard open/close (mobile)
-
-      // Defer fit() during active output — fit() recalculates viewport dimensions
-      // which can reset scrollTop to 0, causing a visible scroll-to-top flicker.
-      // TUI agents (Claude Code etc.) cause overlay resizing which fires ResizeObserver
-      // on the terminal container. Must defer aggressively to avoid scroll jumps.
-      // When user is scrolled up AND data is flowing, skip resize entirely —
-      // the user is reading history and won't notice slightly wrong column count.
-      const timeSinceData = Date.now() - lastDataTs;
-      if (lastDataTs > 0 && timeSinceData < 500) {
-        if (lastScrolledUp) return; // user reading history — don't disturb
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(performResize, 300);
-        return;
-      }
+      if (!reconnectSettled) return;
+      if (viewportResizing) return;
 
       // Skip if container dimensions haven't changed (prevents resize loops)
       const cw = el.clientWidth;
       const ch = el.clientHeight;
       if (cw === lastContainerW && ch === lastContainerH && lastContainerW > 0) return;
+
       // Minimum height guard: if container is too small (< 80px ≈ 4 rows),
       // skip resize entirely. Prevents absurd 1-2 row terminals that cause
       // massive reflow and flicker. The PTY keeps its previous dimensions.
@@ -930,42 +893,21 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         const buf = xtermRef.current.buffer.active;
         const wasAtBottom = inAltBuffer || buf.viewportY >= buf.baseY;
         const savedViewportY = buf.viewportY;
-        const savedScrollTop = xtermViewport?.scrollTop ?? 0;
 
-        // Suppress desktop scroll guard during fit() — fit() may briefly set
-        // scrollTop to 0 before we restore it, which would trigger the guard.
-        desktopGuardPos = 0;
         fitAddonRef.current.fit();
 
-        // Restore scroll position to prevent visible jump during resize.
-        if (inAltBuffer) {
-          // In alternate buffer (TUI), force viewport to 0 — no scrollback exists.
-          // This prevents stale normal-buffer scroll positions from causing jumps.
-          if (xtermViewport) xtermViewport.scrollTop = 0;
-        } else if (wasAtBottom) {
-          xtermRef.current.scrollToBottom();
-        } else {
-          xtermRef.current.scrollToLine(savedViewportY);
-          // Double-check: if scrollToLine didn't work, restore DOM scrollTop
-          if (xtermViewport && Math.abs(xtermViewport.scrollTop - savedScrollTop) > 50) {
-            xtermViewport.scrollTop = savedScrollTop;
+        // Restore scroll position after fit() reflow.
+        // fit() is synchronous (unlike term.write), so restore immediately.
+        if (!inAltBuffer) {
+          // Mark as user action so the onScroll handler doesn't fight
+          userScrollTs = Date.now();
+          if (wasAtBottom) {
+            scrollLockY = -1;
+            xtermRef.current.scrollToBottom();
+          } else {
+            xtermRef.current.scrollToLine(savedViewportY);
+            scrollLockY = xtermRef.current.buffer.active.viewportY;
           }
-        }
-        // Re-arm guard with restored position
-        if (xtermViewport) desktopGuardPos = inAltBuffer ? 0 : xtermViewport.scrollTop;
-
-        // Safety: schedule another scroll restoration on next frame. xterm's internal
-        // rendering may asynchronously reset scrollTop after fit() returns.
-        if (!inAltBuffer && !wasAtBottom && xtermViewport) {
-          const safeScrollTop = xtermViewport.scrollTop;
-          const safeViewportY = savedViewportY;
-          requestAnimationFrame(() => {
-            if (!xtermRef.current || !xtermViewport) return;
-            if (xtermViewport.scrollTop === 0 && safeScrollTop > 50) {
-              xtermRef.current.scrollToLine(safeViewportY);
-              desktopGuardPos = xtermViewport.scrollTop;
-            }
-          });
         }
         const { cols, rows } = xtermRef.current;
 
@@ -1251,9 +1193,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         // Resize in next frame so opacity:0 paints first
         requestAnimationFrame(() => {
           performResize();
-          // Pin scroll to bottom so cursor stays visible
-          const viewport = el.querySelector(".xterm-viewport");
-          if (viewport) viewport.scrollTop = viewport.scrollHeight;
+          // Pin scroll to bottom so cursor stays visible after keyboard close.
+          // Use xterm API (not .xterm-viewport which is not a scroll container in v6).
+          if (xtermRef.current) {
+            scrollLockY = -1;
+            userScrollTs = Date.now();
+            xtermRef.current.scrollToBottom();
+          }
           // Reveal after one more frame (resize has painted)
           requestAnimationFrame(() => { el.style.opacity = "1"; });
         });
@@ -1377,17 +1323,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       vv?.removeEventListener("resize", onViewportResize);
       clearTimeout(viewportResizeTimer);
       if (preventPageScroll) window.removeEventListener("scroll", preventPageScroll);
-      if (desktopScrollGuard) {
-        xtermViewport?.removeEventListener("scroll", desktopScrollGuard);
-        cancelAnimationFrame(desktopGuardRaf);
-      }
       // Restore original textarea focus + clean up mobile listeners
       if (xtermTextarea && origTextareaFocus) {
         xtermTextarea.focus = origTextareaFocus;
       }
-      if (mobileScrollObserver) mobileScrollObserver.disconnect();
       disposableOnScroll.dispose();
       disposableOnLineFeed.dispose();
+      el.removeEventListener("wheel", onUserScroll);
+      el.removeEventListener("touchstart", onUserScroll);
       window.removeEventListener("tron:scrollTermToBottom", handleScrollToBottom);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);

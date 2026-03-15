@@ -908,8 +908,11 @@ ${prompt}
         (finalAnswer.success ? "Task Completed" : "Task Failed");
 
       setAgentThread((prev) => {
-        // Remove leftover streaming entries
-        const cleaned = prev.filter(s => s.step !== "streaming" && s.step !== "streaming_response");
+        // Remove leftover streaming entries and convert unfinished "thinking"
+        // steps to "thought" so the fade animation triggers in AgentOverlay.
+        const cleaned = prev
+          .filter(s => s.step !== "streaming" && s.step !== "streaming_response")
+          .map(s => s.step === "thinking" ? { ...s, step: "thought" as const } : s);
         return [...cleaned, { step: finalStep, output: finalOutput, payload: finalAnswer.payload }];
       });
 
@@ -944,7 +947,9 @@ ${prompt}
         // Abort is handled by stopAgent() which already adds a "stopped" step.
         console.error(error);
         setAgentThread((prev) => [
-          ...prev.filter(s => s.step !== "streaming" && s.step !== "streaming_response"),
+          ...prev
+            .filter(s => s.step !== "streaming" && s.step !== "streaming_response")
+            .map(s => s.step === "thinking" ? { ...s, step: "thought" as const } : s),
           { step: "error", output: `Error: ${error.message}` },
         ]);
         setIsAgentRunning(false);

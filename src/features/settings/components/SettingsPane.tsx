@@ -800,6 +800,7 @@ const SettingsPane = () => {
   >("idle");
   const [testError, setTestError] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
+  const [modelToast, setModelToast] = useState("");
   const [applyAllModel, setApplyAllModel] = useState<string | null>(null);
   const providerCacheRef = useRef<ProviderCache>({ ...appConfig.providerConfigs });
 
@@ -1094,6 +1095,17 @@ const SettingsPane = () => {
             transition={{ duration: 0.15 }}
             className="w-full max-w-xl flex flex-col gap-4 sm:gap-6 pb-16"
           >
+            {/* Model selection toast */}
+            {modelToast && (
+              <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg text-xs font-medium shadow-lg transition-opacity ${
+                resolvedTheme === "light"
+                  ? "bg-white/95 text-gray-700 border border-gray-200"
+                  : "bg-gray-800/95 text-gray-200 border border-gray-600"
+              }`}>
+                {modelToast}
+              </div>
+            )}
+
             {/* AI Configuration */}
             {activeSection === "ai" && (
               <div
@@ -1205,7 +1217,7 @@ const SettingsPane = () => {
                                     >
                                       <button
                                         data-testid={`model-item-${m.name}`}
-                                        onClick={() => setConfig({ ...config, model: m.name })}
+                                        onClick={() => { setConfig({ ...config, model: m.name }); setModelToast(`${m.name} set as default`); setTimeout(() => setModelToast(""), 2000); }}
                                         className="flex-1 flex items-center gap-2 truncate text-left"
                                       >
                                         <span className="truncate">{m.name}</span>
@@ -1229,7 +1241,7 @@ const SettingsPane = () => {
                                       </button>
                                       <button
                                         onClick={(e) => { e.stopPropagation(); setApplyAllModel(m.name); }}
-                                        className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
+                                        className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
                                       >
                                         Apply to all
                                       </button>
@@ -1354,14 +1366,14 @@ const SettingsPane = () => {
                                                   }`}
                                               >
                                                 <button
-                                                  onClick={() => setConfig({ ...config, model: name })}
+                                                  onClick={() => { setConfig({ ...config, model: name }); setModelToast(`${name} set as default`); setTimeout(() => setModelToast(""), 2000); }}
                                                   className="flex-1 text-left truncate"
                                                 >
                                                   {name}
                                                 </button>
                                                 <button
                                                   onClick={(e) => { e.stopPropagation(); setApplyAllModel(name); }}
-                                                  className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity ml-2 mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
+                                                  className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ml-2 mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
                                                 >
                                                   Apply to all
                                                 </button>
@@ -1899,6 +1911,7 @@ const SettingsPane = () => {
             onClick: () => {
               if (!applyAllModel) return;
               const baseUrl = providerUsesBaseUrl(config.provider) ? config.baseUrl : undefined;
+              // Apply to all existing sessions
               sessions.forEach((_, sid) => {
                 if (sid === "settings" || sid.startsWith("ssh-connect") || sid.startsWith("browser-") || sid.startsWith("editor-") || sid.startsWith("pixel-agents")) return;
                 updateSessionConfig(sid, {
@@ -1908,6 +1921,16 @@ const SettingsPane = () => {
                   baseUrl,
                 });
               });
+              // Also save as global default for new sessions
+              const newConfig = { ...config, model: applyAllModel };
+              if (!providerUsesBaseUrl(config.provider)) newConfig.baseUrl = undefined;
+              setConfig(newConfig);
+              aiService.saveConfig(newConfig);
+              updateAppConfig({ ai: newConfig });
+              // Update provider cache
+              const cache = providerCacheRef.current;
+              cache[config.provider] = { model: applyAllModel, apiKey: config.apiKey, baseUrl: config.baseUrl };
+              updateAppConfig({ providerConfigs: { ...cache } });
               setApplyAllModel(null);
             },
           },

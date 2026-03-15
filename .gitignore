@@ -33,3 +33,6 @@ playwright-report/
 *.sln
 *.sw?
 .claude/worktrees/
+release/
+Certificates.p12
+video_production/

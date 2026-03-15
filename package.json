@@ -2,10 +2,11 @@
   "name": "tron",
   "description": "Self-hosted AI-powered terminal. Run shells, use local or cloud LLMs (Ollama, OpenAI, Claude), and get agent-assisted commands from your desktop.",
   "private": true,
-  "version": "1.2.25",
+  "version": "1.2.26",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
+    "postinstall": "npx patch-package",
     "dev": "concurrently \"npm run dev:react\" \"wait-on tcp:5173 && npm run build:server && npm run dev:electron\"",
     "dev:react": "vite",
     "dev:electron": "tsc -p electron/tsconfig.json && electron .",
