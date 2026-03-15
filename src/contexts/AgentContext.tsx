@@ -283,7 +283,7 @@ class AgentStore {
 
 const AgentContext = createContext<AgentStore | null>(null);
 
-type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number };
+type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number; isOverlayVisible?: boolean };
 
 function parsePersistedData(parsed: Record<string, PersistedSession>): Map<string, AgentState> {
   const map = new Map<string, AgentState>();
@@ -314,7 +314,8 @@ function parsePersistedData(parsed: Record<string, PersistedSession>): Map<strin
       map.set(id, {
         ...defaultState,
         agentThread: cleanedThread,
-        isOverlayVisible: cleanedThread.length > 0,
+        // Use persisted visibility if available; only fall back to "has thread" for old data
+        isOverlayVisible: typeof data.isOverlayVisible === "boolean" ? data.isOverlayVisible : cleanedThread.length > 0,
         overlayHeight: data.overlayHeight,
         draftInput: data.draftInput,
         thinkingEnabled: data.thinkingEnabled ?? defaultState.thinkingEnabled,
@@ -382,6 +383,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
           ...(hasDraft ? { draftInput: state.draftInput } : {}),
           thinkingEnabled: state.thinkingEnabled,
           ...(typeof state.scrollPosition === "number" ? { scrollPosition: state.scrollPosition } : {}),
+          isOverlayVisible: state.isOverlayVisible,
         };
       }
     }

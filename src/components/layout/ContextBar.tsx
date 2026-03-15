@@ -112,6 +112,9 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const contextTextRef = useRef("");
   const isAgentRunningRef = useRef(false);
   const pendingSummarizeRef = useRef<string | null>(null); // stashed context for deferred auto-summarize
+  // Track initial thread length to prevent auto-summarize on app load before user sends a prompt
+  const initialThreadLenRef = useRef(agentThread.length);
+  const hasUserPromptedRef = useRef(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showCtxTooltip, setShowCtxTooltip] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -288,11 +291,17 @@ const ContextBar: React.FC<ContextBarProps> = ({
         // Calculate usage percent from raw context (for auto-summarize trigger)
         const rawPercent = (fullContext.length / maxContext) * 100;
 
+        // Track whether user has sent a new prompt since app load
+        if (!hasUserPromptedRef.current && agentThread.length > initialThreadLenRef.current) {
+          hasUserPromptedRef.current = true;
+        }
+
         // Auto-summarize at 90% (use refs to avoid stale closure reads)
         // Skip when a TUI is running — TUI output is already capped above, and
         // summarizing while a TUI constantly refreshes causes compaction loops.
+        // Only auto-summarize after user has sent at least one prompt in this session.
         // For fresh context: check raw percent. For already-summarized: check effective context.
-        const shouldAutoSummarize = !tuiProgram && !isSummarizingRef.current && (
+        const shouldAutoSummarize = hasUserPromptedRef.current && !tuiProgram && !isSummarizingRef.current && (
           (!isSummarizedRef.current && rawPercent > 90) ||
           (isSummarizedRef.current && session?.contextSummary && (() => {
             const newOutput = terminalText.trim();

@@ -129,6 +129,7 @@ const AppContent = () => {
   const [updateDownloading, setUpdateDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
   const [updateVersion, setUpdateVersion] = useState("");
+  const [updateNotes, setUpdateNotes] = useState("");
   const [linkPopover, setLinkPopover] = useState<{ url: string; x: number; y: number } | null>(null);
   const linkAnchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
     getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
@@ -364,12 +365,14 @@ const AppContent = () => {
         } else if (data.updateInfo?.version && !updateDismissedRef.current) {
           if (data.status === "downloaded") {
             setUpdateVersion(data.updateInfo.version);
+            setUpdateNotes(data.updateInfo.releaseNotes || "");
             setUpdateAvailable(false);
             setUpdateDownloading(false);
             setDownloadProgress(null);
             setUpdateReady(true);
           } else if (data.status === "available") {
             setUpdateVersion(data.updateInfo.version);
+            setUpdateNotes(data.updateInfo.releaseNotes || "");
             setUpdateAvailable(true);
           }
         }
@@ -627,7 +630,7 @@ const AppContent = () => {
           { label: "Relaunch Now", type: "primary", onClick: () => window.electron?.ipcRenderer?.quitAndInstall?.() },
         ]}
       >
-        {updateInstalling && (
+        {updateInstalling ? (
           <div className="px-4 pb-4">
             <p className={`text-sm mb-3 ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
               {installStep || "Preparing..."}
@@ -642,7 +645,11 @@ const AppContent = () => {
               The app will restart automatically when done.
             </p>
           </div>
-        )}
+        ) : updateNotes ? (
+          <div className={`px-4 pb-3 text-[11px] leading-relaxed max-h-40 overflow-y-auto ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+            <div dangerouslySetInnerHTML={{ __html: updateNotes }} />
+          </div>
+        ) : null}
       </Modal>
 
       {/* Downloading update modal with progress bar */}
@@ -688,7 +695,13 @@ const AppContent = () => {
             window.electron?.ipcRenderer?.downloadUpdate?.();
           }},
         ]}
-      />
+      >
+        {updateNotes && (
+          <div className={`px-4 pb-3 text-[11px] leading-relaxed max-h-40 overflow-y-auto ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+            <div dangerouslySetInnerHTML={{ __html: updateNotes }} />
+          </div>
+        )}
+      </Modal>
 
       {/* Link click popover — context-menu style at click position */}
       <Popover.Root

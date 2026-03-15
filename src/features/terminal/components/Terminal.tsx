@@ -161,10 +161,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       theme: termTheme,
       allowProposedApi: true,
       smoothScrollDuration: 0,
+      // Large scrollback prevents "scroll to top" during fast output: when the
+      // user scrolls up and the buffer is full, each new line trims one from
+      // the top and decrements ydisp. With only 1000 lines, ydisp reaches 0
+      // in seconds of fast output, snapping the viewport to the top.
+      scrollback: isTouch ? 5000 : 10000,
       // macOS Option key → Meta so Alt+Arrow sends proper escape sequences
       ...(isMacOS() ? { macOptionIsMeta: true } : {}),
-      // Reduce scrollback on mobile to save memory and speed up fit()/scroll
-      ...(isTouch ? { scrollback: 1000 } : {}),
     });
 
     const fitAddon = new FitAddon();
@@ -455,8 +458,49 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     let batchBuffer = "";
     let batchRaf: number | null = null;
 
-    // No special write wrapper needed — RAF scroll guard handles everything.
-    const safeWrite = (data: string) => { term.write(data); };
+    // SCROLL LOCK: when user is scrolled up, buffer ALL terminal data instead
+    // of writing it to xterm. This prevents alt buffer switches, scroll resets,
+    // and all other disruptions. When user scrolls to bottom, flush the buffer.
+    let pausedData = "";
+    let hasPausedData = false;
+    const notifyPaused = (hasData: boolean) => {
+      if (hasData !== hasPausedData) {
+        hasPausedData = hasData;
+        window.dispatchEvent(new CustomEvent("tron:pausedUpdate", {
+          detail: { sessionId, hasUpdate: hasData },
+        }));
+      }
+    };
+    // Detect meaningful new output vs TUI animation. TUI animations use
+    // cursor movement (ESC[H, ESC[A/B/C/D) + overwrites without newlines.
+    // Real output contains \n with printable text. Check a 200-byte sample
+    // for \n preceded or followed by printable chars (not just escape codes).
+    // eslint-disable-next-line no-control-regex
+    const ANSI_RE_PAUSE = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?(?:\x07|\x1b\\)|\x1b[^\[].?|\x0F|\x0E/g;
+    const hasRealNewlines = (data: string): boolean => {
+      const stripped = data.replace(ANSI_RE_PAUSE, "").replace(/\r/g, "");
+      // Count \n that have at least 5 printable chars nearby
+      const parts = stripped.split("\n");
+      let meaningfulLines = 0;
+      for (const p of parts) {
+        if (p.trim().length > 5) meaningfulLines++;
+      }
+      return meaningfulLines >= 2;
+    };
+    const safeWrite = (data: string) => {
+      if (lastScrolledUp) {
+        pausedData += data;
+        if (!hasPausedData && hasRealNewlines(pausedData)) notifyPaused(true);
+      } else {
+        if (pausedData) {
+          term.write(pausedData + data);
+          pausedData = "";
+          notifyPaused(false);
+        } else {
+          term.write(data);
+        }
+      }
+    };
 
     const flushBatch = () => {
       batchRaf = null;
@@ -793,64 +837,50 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // BufferService.scroll() does ydisp = max(ydisp-1, 0). This is correct —
     // old content above the viewport is removed. We track this for the UI.
     let lastScrolledUp = false;
-    let scrollLockY = -1; // locked viewportY, -1 = not locked
-    let userScrollTs = 0; // timestamp of last user scroll gesture
-    // Detect user scroll gestures (wheel, touch, programmatic scroll-to-bottom)
-    const onUserScroll = () => { userScrollTs = Date.now(); };
-    el.addEventListener("wheel", onUserScroll, { passive: true });
-    el.addEventListener("touchstart", onUserScroll, { passive: true });
 
-    // Event-driven scroll tracking — no RAF loop needed for position guarding.
-    // xterm's onScroll fires for every ydisp change (user scroll AND output scroll).
+    // FROZEN OVERLAY: when user scrolls up, capture xterm screen content as
+    // SCROLL LOCK: simple approach — pause all term.write() while scrolled up.
+    // No overlay, no DOM hacking, no xterm patching. safeWrite() buffers data
+    // and flushes when user scrolls to bottom. Terminal display stays frozen.
+
     const disposableOnScroll = term.onScroll(() => {
       const buf = term.buffer.active;
-      if (buf.type === "alternate") {
-        scrollLockY = -1;
-        return;
-      }
-
+      if (buf.type === "alternate") return;
       const isUp = buf.viewportY < buf.baseY;
-      const isUserAction = Date.now() - userScrollTs < 300;
-
-      if (isUserAction) {
-        // User is actively scrolling — track their position
-        scrollLockY = isUp ? buf.viewportY : -1;
-      } else if (scrollLockY >= 0) {
-        // Not a user action — this is output-driven scroll change.
-        // xterm's BufferService.scroll() already handles this correctly
-        // via isUserScrolling: it decrements ydisp by 1 for each trim.
-        // We just follow the natural drift.
-        const drift = scrollLockY - buf.viewportY;
-        if (drift >= 0 && drift <= 2) {
-          // Natural trim drift (1 or 2 lines between events) — follow it.
-          // Also handles drift=0 (no change) gracefully.
-          scrollLockY = buf.viewportY;
-        } else if (buf.viewportY > scrollLockY) {
-          // viewportY jumped FORWARD (toward bottom) without user action.
-          // This means isUserScrolling was cleared unexpectedly.
-          // Re-assert the locked position.
-          term.scrollToLine(scrollLockY);
-        } else {
-          // Large backward jump (drift > 2) — multiple trims between events.
-          // Follow it since the content was trimmed.
-          scrollLockY = buf.viewportY;
+      if (isUp !== lastScrolledUp) {
+        lastScrolledUp = isUp;
+        onScrolledUpChangeRef.current?.(isUp);
+        // When scrolling back to bottom, flush paused data
+        if (!isUp && pausedData) {
+          const data = pausedData;
+          pausedData = ""; notifyPaused(false);
+          
+          
+          term.write(data, () => { term.scrollToBottom(); });
         }
       }
-
-      // Update scrolled-up state for UI (scroll-to-bottom button)
+    });
+    const disposableOnLineFeed = term.onLineFeed(() => {
+      const buf = term.buffer.active;
+      if (buf.type === "alternate") return;
+      const isUp = buf.viewportY < buf.baseY;
       if (isUp !== lastScrolledUp) {
         lastScrolledUp = isUp;
         onScrolledUpChangeRef.current?.(isUp);
       }
     });
-    const disposableOnLineFeed = term.onLineFeed(() => {});
 
     // Listen for scrollToBottom requests from parent (via window event)
     const handleScrollToBottom = (e: Event) => {
       if ((e as CustomEvent).detail?.sessionId === sessionId) {
-        scrollLockY = -1;
-        userScrollTs = Date.now(); // treat as user action
+        // Unlock so new data flows to xterm again
+        lastScrolledUp = false;
+        pausedData = ""; notifyPaused(false);
+        
+        
+        // Scroll xterm to bottom now, and again after new data arrives
         term.scrollToBottom();
+        setTimeout(() => term.scrollToBottom(), 200);
       }
     };
     window.addEventListener("tron:scrollTermToBottom", handleScrollToBottom);
@@ -899,14 +929,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         // Restore scroll position after fit() reflow.
         // fit() is synchronous (unlike term.write), so restore immediately.
         if (!inAltBuffer) {
-          // Mark as user action so the onScroll handler doesn't fight
-          userScrollTs = Date.now();
           if (wasAtBottom) {
-            scrollLockY = -1;
+            lastScrolledUp = false;
             xtermRef.current.scrollToBottom();
           } else {
             xtermRef.current.scrollToLine(savedViewportY);
-            scrollLockY = xtermRef.current.buffer.active.viewportY;
+            lastScrolledUp = true;
           }
         }
         const { cols, rows } = xtermRef.current;
@@ -1196,8 +1224,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           // Pin scroll to bottom so cursor stays visible after keyboard close.
           // Use xterm API (not .xterm-viewport which is not a scroll container in v6).
           if (xtermRef.current) {
-            scrollLockY = -1;
-            userScrollTs = Date.now();
+            lastScrolledUp = false;
             xtermRef.current.scrollToBottom();
           }
           // Reveal after one more frame (resize has painted)
@@ -1329,8 +1356,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
       disposableOnScroll.dispose();
       disposableOnLineFeed.dispose();
-      el.removeEventListener("wheel", onUserScroll);
-      el.removeEventListener("touchstart", onUserScroll);
+      // Flush any remaining paused data
+      if (pausedData) { term.write(pausedData); pausedData = ""; }
       window.removeEventListener("tron:scrollTermToBottom", handleScrollToBottom);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);

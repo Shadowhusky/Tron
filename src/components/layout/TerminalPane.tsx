@@ -146,7 +146,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     modelToastTimer.current = setTimeout(() => setModelToast(false), 6000);
   }, []);
 
-  // Terminal scroll-to-bottom state
+  // Terminal scroll-to-bottom state + paused lines count
   const [termScrolledUp, setTermScrolledUp] = useState(false);
   const stableOnScrolledUpChange = useCallback((up: boolean) => setTermScrolledUp(up), []);
   const scrollTermToBottom = useCallback(() => {
