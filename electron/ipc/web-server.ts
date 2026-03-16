@@ -276,4 +276,18 @@ export function registerWebServerHandlers() {
     const available = await isPortAvailable(port);
     return { available };
   });
+
+  ipcMain.handle("webServer.killPort", async (_event, port: number) => {
+    try {
+      const { execSync } = require("child_process");
+      if (process.platform === "win32") {
+        execSync(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :${port} ^| findstr LISTENING') do taskkill /PID %a /F`, { timeout: 5000, stdio: "ignore" });
+      } else {
+        execSync(`lsof -ti:${port} | xargs kill -9`, { timeout: 5000, stdio: "ignore" });
+      }
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
+  });
 }

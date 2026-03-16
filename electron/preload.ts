@@ -50,6 +50,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   "webServer.stop",
   "webServer.status",
   "webServer.checkPort",
+  "webServer.killPort",
   "updater.checkForUpdates",
   "updater.downloadUpdate",
   "updater.quitAndInstall",
@@ -239,6 +240,8 @@ const electronAPI = {
       ipcRenderer.invoke("webServer.status") as Promise<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>,
     checkPort: (port: number) =>
       ipcRenderer.invoke("webServer.checkPort", port) as Promise<{ available: boolean }>,
+    killPort: (port: number) =>
+      ipcRenderer.invoke("webServer.killPort", port) as Promise<{ success: boolean }>,
     // Updater
     checkForUpdates: () =>
       ipcRenderer.invoke("updater.checkForUpdates") as Promise<void>,

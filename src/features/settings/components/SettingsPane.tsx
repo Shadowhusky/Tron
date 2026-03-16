@@ -375,6 +375,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
   const [portWarning, setPortWarning] = useState("");
   const [restarting, setRestarting] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const [showKillConfirm, setShowKillConfirm] = useState(false);
   const portCheckTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const ipc = window.electron?.ipcRenderer;
@@ -429,8 +430,24 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
     const port = Number(portInput) || wsConfig.port;
     await ipc?.stopWebServer?.();
     updateConfig({ webServer: { ...wsConfig, port, enabled: true } });
+    const result = await ipc?.startWebServer?.(port);
+    await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+    setRestarting(false);
+    // If start failed and port is in use, offer to kill the process
+    if (result && !result.success && result.error?.includes("EADDRINUSE")) {
+      setShowKillConfirm(true);
+    }
+  };
+
+  const handleKillAndRestart = async () => {
+    setShowKillConfirm(false);
+    setRestarting(true);
+    const port = Number(portInput) || wsConfig.port;
+    await ipc?.invoke?.("webServer.killPort", port);
+    // Wait a moment for the port to free up
+    await new Promise(r => setTimeout(r, 500));
     await ipc?.startWebServer?.(port);
-    ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+    await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
     setRestarting(false);
   };
 
@@ -584,6 +601,19 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
           </p>
         </div>
       )}
+
+      <Modal
+        show={showKillConfirm}
+        resolvedTheme={resolvedTheme as ResolvedTheme}
+        onClose={() => setShowKillConfirm(false)}
+        title="Port In Use"
+        description={`Port ${portInput} is already in use by another process. Kill that process and start the server?`}
+        maxWidth="max-w-sm"
+        buttons={[
+          { label: "Cancel", type: "ghost", onClick: () => setShowKillConfirm(false) },
+          { label: "Kill & Restart", type: "danger", onClick: handleKillAndRestart },
+        ]}
+      />
     </div>
   );
 }
