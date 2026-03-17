@@ -69,9 +69,9 @@ interface Window {
       getPersistedHistoryStats: () => Promise<{ fileCount: number; totalBytes: number }>;
       clearAllPersistedHistory: () => Promise<{ deletedCount: number }>;
       // Web Server
-      startWebServer: (port: number) => Promise<{ success: boolean; port?: number; error?: string }>;
+      startWebServer: (port: number, expose?: boolean) => Promise<{ success: boolean; port?: number; error?: string }>;
       stopWebServer: () => Promise<{ success: boolean }>;
-      getWebServerStatus: () => Promise<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>;
+      getWebServerStatus: () => Promise<{ running: boolean; port: number | null; expose: boolean; localIPs: string[]; error: string | null }>;
       checkPort: (port: number) => Promise<{ available: boolean }>;
       // Updater
       checkForUpdates: () => Promise<void>;

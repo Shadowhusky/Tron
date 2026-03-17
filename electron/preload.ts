@@ -232,12 +232,12 @@ const electronAPI = {
     clearAllPersistedHistory: () =>
       ipcRenderer.invoke("terminal.history.clearAll") as Promise<{ deletedCount: number }>,
     // Web Server
-    startWebServer: (port: number) =>
-      ipcRenderer.invoke("webServer.start", port) as Promise<{ success: boolean; port?: number; error?: string }>,
+    startWebServer: (port: number, expose?: boolean) =>
+      ipcRenderer.invoke("webServer.start", port, expose) as Promise<{ success: boolean; port?: number; error?: string }>,
     stopWebServer: () =>
       ipcRenderer.invoke("webServer.stop") as Promise<{ success: boolean }>,
     getWebServerStatus: () =>
-      ipcRenderer.invoke("webServer.status") as Promise<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>,
+      ipcRenderer.invoke("webServer.status") as Promise<{ running: boolean; port: number | null; expose: boolean; localIPs: string[]; error: string | null }>,
     checkPort: (port: number) =>
       ipcRenderer.invoke("webServer.checkPort", port) as Promise<{ available: boolean }>,
     killPort: (port: number) =>

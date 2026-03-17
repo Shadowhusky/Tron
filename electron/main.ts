@@ -320,7 +320,7 @@ app.whenReady().then(async () => {
   // Auto-start integrated web server (auto-restarts on crash with backoff)
   const wsConfig = readWebServerConfig();
   if (wsConfig.enabled) {
-    const result = await startWebServerManaged(wsConfig.port);
+    const result = await startWebServerManaged(wsConfig.port, wsConfig.expose);
     if (!result.success) {
       console.error(`[Tron] Web server initial start failed (will retry): ${result.error}`);
     }

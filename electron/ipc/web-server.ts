@@ -18,11 +18,12 @@ let intentionalStop = false;
 let restartAttempts = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let lastStartPort = 3888;
+let lastStartExpose = true;
 
 const CONFIG_FILE = "tron.config.json";
 
 /** Read webServer config from the persisted tron.config.json. */
-export function readWebServerConfig(): { enabled: boolean; port: number } {
+export function readWebServerConfig(): { enabled: boolean; port: number; expose: boolean } {
   try {
     const configPath = path.join(app.getPath("userData"), CONFIG_FILE);
     if (fs.existsSync(configPath)) {
@@ -30,10 +31,11 @@ export function readWebServerConfig(): { enabled: boolean; port: number } {
       return {
         enabled: raw?.webServer?.enabled !== false,
         port: raw?.webServer?.port || 3888,
+        expose: raw?.webServer?.expose !== false,
       };
     }
   } catch { /* use defaults */ }
-  return { enabled: true, port: 3888 };
+  return { enabled: true, port: 3888, expose: true };
 }
 
 /** Resolve path to the server entry point (dev vs production). */
@@ -48,14 +50,14 @@ function getServerPath(): string {
 }
 
 /** Check if a port is available. */
-function isPortAvailable(port: number): Promise<boolean> {
+function isPortAvailable(port: number, host = "127.0.0.1"): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.once("error", () => resolve(false));
     server.once("listening", () => {
       server.close(() => resolve(true));
     });
-    server.listen(port, "0.0.0.0");
+    server.listen(port, host);
   });
 }
 
@@ -71,7 +73,7 @@ function scheduleRestart() {
   console.log(`[Tron] Scheduling web server restart in ${backoff}ms (attempt ${restartAttempts}/${MAX_RESTART_ATTEMPTS})...`);
   restartTimer = setTimeout(async () => {
     restartTimer = null;
-    const result = await startWebServer(lastStartPort);
+    const result = await startWebServer(lastStartPort, lastStartExpose);
     if (!result.success) {
       console.error(`[Tron] Web server restart failed: ${result.error}`);
       scheduleRestart();
@@ -80,12 +82,13 @@ function scheduleRestart() {
 }
 
 /** Start the web server as a forked child process. */
-export async function startWebServer(port: number): Promise<{ success: boolean; port?: number; error?: string }> {
+export async function startWebServer(port: number, expose = true): Promise<{ success: boolean; port?: number; error?: string }> {
   if (serverProcess) {
     return { success: false, error: "Server is already running" };
   }
 
   lastStartPort = port;
+  lastStartExpose = expose;
   lastError = null;
 
   const serverPath = getServerPath();
@@ -94,7 +97,8 @@ export async function startWebServer(port: number): Promise<{ success: boolean; 
     return { success: false, error: lastError };
   }
 
-  const available = await isPortAvailable(port);
+  const host = expose ? "0.0.0.0" : "127.0.0.1";
+  const available = await isPortAvailable(port, host);
   if (!available) {
     lastError = `Port ${port} is already in use`;
     return { success: false, error: lastError };
@@ -108,6 +112,7 @@ export async function startWebServer(port: number): Promise<{ success: boolean; 
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
         TRON_PORT: String(port),
+        TRON_HOST: host,
         TRON_DEV: isDev ? "true" : "false",
       },
       stdio: ["pipe", "pipe", "pipe", "ipc"],
@@ -236,20 +241,22 @@ function getLocalIPs(): string[] {
  * Start the web server with automatic restart on crash.
  * Use this instead of `startWebServer` for the initial app startup.
  */
-export async function startWebServerManaged(port: number) {
+export async function startWebServerManaged(port: number, expose = true) {
   intentionalStop = false;
   restartAttempts = 0;
   lastStartPort = port;
-  const result = await startWebServer(port);
+  lastStartExpose = expose;
+  const result = await startWebServer(port, expose);
   if (!result.success) scheduleRestart();
   return result;
 }
 
 /** Get current server status. */
-export function getWebServerStatus(): { running: boolean; port: number | null; localIPs: string[]; error: string | null; restarting: boolean; restartAttempts: number } {
+export function getWebServerStatus(): { running: boolean; port: number | null; expose: boolean; localIPs: string[]; error: string | null; restarting: boolean; restartAttempts: number } {
   return {
     running: serverProcess !== null && !serverProcess.killed,
     port: currentPort,
+    expose: lastStartExpose,
     localIPs: getLocalIPs(),
     error: lastError,
     restarting: restartTimer !== null,
@@ -259,8 +266,8 @@ export function getWebServerStatus(): { running: boolean; port: number | null; l
 
 /** Register all web server IPC handlers. */
 export function registerWebServerHandlers() {
-  ipcMain.handle("webServer.start", async (_event, port: number) => {
-    return startWebServer(port || 3888);
+  ipcMain.handle("webServer.start", async (_event, port: number, expose?: boolean) => {
+    return startWebServer(port || 3888, expose ?? true);
   });
 
   ipcMain.handle("webServer.stop", async () => {

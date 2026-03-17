@@ -368,9 +368,9 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
   resolvedTheme: string;
 }) {
   const { config: tronConfig, updateConfig } = useConfig();
-  const wsConfig = tronConfig.webServer ?? { enabled: true, port: 3888 };
+  const wsConfig = tronConfig.webServer ?? { enabled: true, port: 3888, expose: true };
 
-  const [status, setStatus] = useState<{ running: boolean; port: number | null; localIPs: string[]; error: string | null }>({ running: false, port: null, localIPs: [], error: null });
+  const [status, setStatus] = useState<{ running: boolean; port: number | null; expose: boolean; localIPs: string[]; error: string | null }>({ running: false, port: null, expose: true, localIPs: [], error: null });
   const [portInput, setPortInput] = useState(String(wsConfig.port));
   const [portWarning, setPortWarning] = useState("");
   const [restarting, setRestarting] = useState(false);
@@ -411,11 +411,24 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
     const next = !wsConfig.enabled;
     updateConfig({ webServer: { ...wsConfig, enabled: next } });
     if (next) {
-      await ipc?.startWebServer?.(wsConfig.port);
+      await ipc?.startWebServer?.(wsConfig.port, wsConfig.expose);
     } else {
       await ipc?.stopWebServer?.();
     }
     ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+  };
+
+  const handleExposeToggle = async () => {
+    const next = !wsConfig.expose;
+    updateConfig({ webServer: { ...wsConfig, expose: next } });
+    // Restart required to rebind
+    if (status.running) {
+      setRestarting(true);
+      await ipc?.stopWebServer?.();
+      await ipc?.startWebServer?.(wsConfig.port, next);
+      await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+      setRestarting(false);
+    }
   };
 
   const handlePortBlur = () => {
@@ -430,7 +443,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
     const port = Number(portInput) || wsConfig.port;
     await ipc?.stopWebServer?.();
     updateConfig({ webServer: { ...wsConfig, port, enabled: true } });
-    const result = await ipc?.startWebServer?.(port);
+    const result = await ipc?.startWebServer?.(port, wsConfig.expose);
     await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
     setRestarting(false);
     // If start failed and port is in use, offer to kill the process
@@ -446,7 +459,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
     await ipc?.invoke?.("webServer.killPort", port);
     // Wait a moment for the port to free up
     await new Promise(r => setTimeout(r, 500));
-    await ipc?.startWebServer?.(port);
+    await ipc?.startWebServer?.(port, wsConfig.expose);
     await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
     setRestarting(false);
   };
@@ -499,6 +512,35 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
         </div>
       </div>
 
+      {/* Expose to network toggle */}
+      <div className={cardClass}>
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-xs font-medium ${t.text}`}>Expose to Network</span>
+            <span className={`text-[10px] ${t.textFaint}`}>
+              {wsConfig.expose
+                ? "Accessible from other devices on your local network"
+                : "Only accessible from this computer (localhost)"}
+            </span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={wsConfig.expose}
+            onClick={handleExposeToggle}
+            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${wsConfig.expose
+              ? "bg-purple-500"
+              : resolvedTheme === "light"
+                ? "bg-gray-300"
+                : "bg-white/15"
+              }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${wsConfig.expose ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+            />
+          </button>
+        </div>
+      </div>
+
       {/* Status */}
       <div className={cardClass}>
         <div className="flex items-center justify-between">
@@ -525,16 +567,18 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
         )}
       </div>
 
-      {/* IP Address (read-only) + Port (editable) */}
+      {/* IP Address (read-only, only when exposed) + Port (editable) */}
       <div className={cardClass}>
         <div className="flex items-center gap-4">
-          <div className="flex-1">
-            <label className={`text-xs font-medium mb-1.5 block ${t.textMuted}`}>IP Address</label>
-            <div className={`px-2 py-1 text-xs rounded border ${t.border} ${resolvedTheme === "light" ? "bg-gray-50 text-gray-500" : "bg-white/3 text-gray-400"}`}>
-              {status.localIPs.length > 0 ? primaryIP : "—"}
+          {wsConfig.expose && (
+            <div className="flex-1">
+              <label className={`text-xs font-medium mb-1.5 block ${t.textMuted}`}>IP Address</label>
+              <div className={`px-2 py-1 text-xs rounded border ${t.border} ${resolvedTheme === "light" ? "bg-gray-50 text-gray-500" : "bg-white/3 text-gray-400"}`}>
+                {status.localIPs.length > 0 ? primaryIP : "—"}
+              </div>
             </div>
-          </div>
-          <div>
+          )}
+          <div className={wsConfig.expose ? "" : "flex-1"}>
             <label className={`text-xs font-medium mb-1.5 block ${t.textMuted}`}>Port</label>
             <div className="flex items-center gap-2">
               <input
@@ -552,7 +596,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
         {portWarning && (
           <span className="text-[10px] text-amber-400 mt-1.5 block">{portWarning}</span>
         )}
-        {status.localIPs.length > 1 && (
+        {wsConfig.expose && status.localIPs.length > 1 && (
           <p className={`text-[10px] ${t.textFaint} mt-1.5`}>
             Also available on: {status.localIPs.slice(1).join(", ")}
           </p>
@@ -573,7 +617,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
         <div className={cardClass}>
           <label className={`text-xs font-medium mb-2 block ${t.textMuted}`}>Access URLs</label>
           <div className="space-y-1.5">
-            {[`http://localhost:${displayPort}`, ...status.localIPs.map((ip) => `http://${ip}:${displayPort}`)].map((url) => (
+            {[`http://localhost:${displayPort}`, ...(wsConfig.expose ? status.localIPs.map((ip) => `http://${ip}:${displayPort}`) : [])].map((url) => (
               <div key={url} className="flex items-center gap-1.5">
                 <code className={`text-xs px-2 py-1 rounded ${resolvedTheme === "light" ? "bg-gray-100 text-gray-800" : "bg-white/5 text-gray-300"} flex-1 truncate`}>
                   {url}
@@ -596,8 +640,9 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
             ))}
           </div>
           <p className={`text-[10px] ${t.textFaint} mt-2 leading-relaxed`}>
-            Use the IP address to access from other devices on your local network.
-            For remote access, use Tailscale or a reverse proxy to securely expose this address.
+            {wsConfig.expose
+              ? "Use the IP address to access from other devices on your local network. For remote access, use Tailscale or a reverse proxy to securely expose this address."
+              : "Server is only accessible from this computer. Enable \"Expose to Network\" to access from other devices."}
           </p>
         </div>
       )}

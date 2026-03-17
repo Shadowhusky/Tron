@@ -72,6 +72,7 @@ export interface HotkeyMap {
 export interface WebServerConfig {
   enabled: boolean;  // default: true
   port: number;      // default: 3888
+  expose: boolean;   // default: true — bind 0.0.0.0 (network) vs 127.0.0.1 (localhost only)
 }
 
 export interface TronConfig {
