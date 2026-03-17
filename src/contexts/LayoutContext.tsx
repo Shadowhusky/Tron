@@ -75,6 +75,8 @@ interface LayoutContextType {
   setConfirmHandler: (handler: (message: string) => Promise<boolean>) => void;
   /** Trigger an immediate CWD refresh for a session (or the active session). */
   refreshCwd: (sessionId?: string) => Promise<void>;
+  /** Reconnect a disconnected SSH session using its stored profile. */
+  reconnectSSH: (sessionId: string) => Promise<void>;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -93,6 +95,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const [sessions, setSessions] = useState<Map<string, TerminalSession>>(
     new Map(),
   );
+
+  // Expose sessions for E2E tests
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__layoutSessions = sessions;
 
   // Ref tracking latest tabs for use in closures
   const tabsRef = useRef(tabs);
@@ -1565,6 +1571,62 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  /** Reconnect a disconnected SSH session using its stored profile. */
+  const reconnectSSH = useCallback(async (sessionId: string) => {
+    const session = sessionsRef.current.get(sessionId);
+    if (!session?.sshProfileId) return;
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) return;
+    try {
+      const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
+      const profiles: SSHConnectionConfig[] = await readFn() || [];
+      const profile = profiles.find((p) => p.id === session.sshProfileId);
+      if (!profile) throw new Error("SSH profile not found");
+      const connectFn = (ipc as any)?.connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
+      const result = await connectFn({
+        ...profile,
+        password: (profile as any).savedPassword,
+        passphrase: (profile as any).savedPassphrase,
+        cols: 80,
+        rows: 30,
+      });
+      const newId = result.sessionId;
+      const newTitle = profile.name || `${(profile as any).username}@${(profile as any).host}`;
+      // Replace the old session with the new one, preserving config
+      setSessions((prev) => {
+        const next = new Map(prev);
+        next.delete(sessionId);
+        next.set(newId, {
+          id: newId,
+          title: session.title || newTitle,
+          titleLocked: session.titleLocked,
+          cwd: session.cwd,
+          aiConfig: session.aiConfig || aiService.getConfig(),
+          sshProfileId: session.sshProfileId,
+        });
+        return next;
+      });
+      // Update the layout tree to use the new session ID
+      setTabs((prev) =>
+        prev.map((tab) => {
+          const replaceNode = (node: LayoutNode): LayoutNode => {
+            if (node.type === "leaf") {
+              return node.sessionId === sessionId ? { ...node, sessionId: newId } : node;
+            }
+            return { ...node, children: node.children.map(replaceNode) };
+          };
+          const newRoot = replaceNode(tab.root);
+          const newActiveId = tab.activeSessionId === sessionId ? newId : tab.activeSessionId;
+          return newRoot !== tab.root || newActiveId !== tab.activeSessionId
+            ? { ...tab, root: newRoot, activeSessionId: newActiveId }
+            : tab;
+        }),
+      );
+    } catch (err: any) {
+      console.warn(`Failed to reconnect SSH session ${sessionId}:`, err.message);
+    }
+  }, []);
+
   // Keyboard Shortcuts (customizable via hotkey system)
   // In web mode, Cmd+W/Cmd+D/Cmd+Shift+D conflict with browser shortcuts
   // (close tab, bookmark, etc.) so we only register them in Electron.
@@ -1656,6 +1718,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         serverDisconnected,
         setConfirmHandler,
         refreshCwd,
+        reconnectSSH,
       }}
     >
       {children}

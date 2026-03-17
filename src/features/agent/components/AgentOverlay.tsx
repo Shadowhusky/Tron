@@ -1062,7 +1062,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       // Only collapse steps BEFORE the previous run (older runs)
       for (let i = 0; i < prevRunStart; i++) {
         if (
-          (agentThread[i].step === "executed" || agentThread[i].step === "read_terminal") &&
+          (agentThread[i].step === "executed" || agentThread[i].step === "read_terminal" || agentThread[i].step === "done") &&
           !manuallyExpandedRef.current.has(i)
         ) {
           toCollapse.add(i);
@@ -1638,7 +1638,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       ? describeStreamingContent(step.output)
                       : null;
                     const isCollapsed =
-                      isExecuted && collapsedSteps.has(globalIdx);
+                      (isExecuted || isDone) && collapsedSteps.has(globalIdx);
 
                     // For executed/failed steps, split command from output
                     let execCommand = "";
@@ -1753,14 +1753,14 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                         }`}
                       >
                         <div
-                          className={`flex items-center gap-1.5 mb-0.5 ${isExecuted ? "cursor-pointer select-none" : ""}`}
+                          className={`flex items-center gap-1.5 mb-0.5 ${isExecuted || isDone ? "cursor-pointer select-none" : ""}`}
                           onClick={
-                            isExecuted
+                            isExecuted || isDone
                               ? () => toggleStepCollapse(globalIdx)
                               : undefined
                           }
                         >
-                          {isExecuted && (
+                          {(isExecuted || isDone) && (
                             <span
                               className={`text-[9px] opacity-50 transition-transform ${isCollapsed ? "" : "rotate-90"}`}
                             >

@@ -47,6 +47,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     splitUserAction,
     closePane,
     serverDisconnected,
+    reconnectSSH,
   } = useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
@@ -836,6 +837,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 status={sshStatus}
                 label={session?.title || "SSH"}
                 resolvedTheme={resolvedTheme}
+                onReconnect={() => reconnectSSH(sessionId)}
               />
             )}
             {!isSSH && session?.remoteUrl && (

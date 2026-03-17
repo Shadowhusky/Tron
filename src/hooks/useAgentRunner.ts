@@ -53,8 +53,11 @@ export function useAgentRunner(
 
   // Persisted agent state for resuming after ask_question
   const continuationRef = useRef<AgentContinuation | null>(null);
-  /** Check if the tab title is locked (agent-generated or user-renamed). */
-  const isTitleLocked = () => session?.titleLocked === true;
+  /** Check if the tab title is locked (agent-generated or user-renamed).
+   *  Uses ref to always read the latest session value (not stale closure). */
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const isTitleLocked = () => sessionRef.current?.titleLocked === true;
 
   // Streaming throttle — buffers token-level setAgentThread calls (max ~10/sec)
   const streamBufferRef = useRef<{
@@ -926,12 +929,14 @@ ${prompt}
       }
 
       // Generate smart tab title now that the model is free
-      if (shouldGenerateTitle) {
+      // Re-check isTitleLocked() here (not just shouldGenerateTitle from start)
+      // in case user manually renamed the tab during the agent run
+      if (shouldGenerateTitle && !isTitleLocked()) {
         const titleContext = finalAnswer.message
           ? `${prompt}\n[AGENT RESPONSE]: ${finalAnswer.message.slice(0, 200)}`
           : prompt;
-        aiService.generateTabTitle(titleContext, session?.aiConfig).then((t) => {
-          if (t) {
+        aiService.generateTabTitle(titleContext, sessionRef.current?.aiConfig).then((t) => {
+          if (t && !isTitleLocked()) {
             renameTab(sessionId, t);
             updateSession(sessionId, { titleLocked: true });
           }

@@ -458,11 +458,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     let batchBuffer = "";
     let batchRaf: number | null = null;
 
-    // SCROLL LOCK: when user is scrolled up, buffer ALL terminal data instead
-    // of writing it to xterm. This prevents alt buffer switches, scroll resets,
-    // and all other disruptions. When user scrolls to bottom, flush the buffer.
+    // SCROLL LOCK: when user is scrolled up OR container is resizing, buffer
+    // ALL terminal data instead of writing it to xterm. This prevents alt buffer
+    // switches, scroll resets, and all other disruptions. When user scrolls to
+    // bottom (or resize settles), flush the buffer.
     let pausedData = "";
     let hasPausedData = false;
+    let resizePaused = false; // true while container is actively resizing
+    let resizePauseTimer: ReturnType<typeof setTimeout> | undefined;
     const notifyPaused = (hasData: boolean) => {
       if (hasData !== hasPausedData) {
         hasPausedData = hasData;
@@ -487,18 +490,42 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
       return meaningfulLines >= 2;
     };
+    const isPaused = () => lastScrolledUp || resizePaused;
+    /** Flush paused buffer in chunks to avoid blocking xterm on large buffers.
+     *  Writes up to CHUNK_SIZE bytes per frame, scheduling continuation via RAF. */
+    const FLUSH_CHUNK_SIZE = 64 * 1024; // 64KB per frame
+    let flushingPaused = false;
+    const flushPausedData = () => {
+      if (!pausedData || isPaused()) { flushingPaused = false; return; }
+      flushingPaused = true;
+      if (pausedData.length <= FLUSH_CHUNK_SIZE) {
+        // Small enough — write all at once
+        const data = pausedData;
+        pausedData = ""; notifyPaused(false);
+        term.write(data, () => {
+          flushingPaused = false;
+          term.scrollToBottom();
+        });
+      } else {
+        // Large buffer — write in chunks to keep UI responsive
+        const chunk = pausedData.slice(0, FLUSH_CHUNK_SIZE);
+        pausedData = pausedData.slice(FLUSH_CHUNK_SIZE);
+        term.write(chunk, () => {
+          // Schedule next chunk on next frame
+          requestAnimationFrame(flushPausedData);
+        });
+      }
+    };
     const safeWrite = (data: string) => {
-      if (lastScrolledUp) {
+      if (isPaused()) {
         pausedData += data;
         if (!hasPausedData && hasRealNewlines(pausedData)) notifyPaused(true);
+      } else if (pausedData) {
+        // Append to buffer and start chunked flush
+        pausedData += data;
+        if (!flushingPaused) flushPausedData();
       } else {
-        if (pausedData) {
-          term.write(pausedData + data);
-          pausedData = "";
-          notifyPaused(false);
-        } else {
-          term.write(data);
-        }
+        term.write(data);
       }
     };
 
@@ -850,23 +877,28 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if (isUp !== lastScrolledUp) {
         lastScrolledUp = isUp;
         onScrolledUpChangeRef.current?.(isUp);
-        // When scrolling back to bottom, flush paused data
-        if (!isUp && pausedData) {
-          const data = pausedData;
-          pausedData = ""; notifyPaused(false);
-          
-          
-          term.write(data, () => { term.scrollToBottom(); });
+        // When scrolling back to bottom, start chunked flush of paused data
+        if (!isUp && pausedData && !flushingPaused) {
+          flushPausedData();
         }
       }
     });
+    // onLineFeed can fire mid-write when xterm processes a large chunk. During
+    // a write, viewportY may lag behind baseY transiently. Only mark as
+    // scrolled up from onLineFeed if user has actually scrolled (threshold >1
+    // row) to avoid false positives from transient mid-write state.
     const disposableOnLineFeed = term.onLineFeed(() => {
       const buf = term.buffer.active;
       if (buf.type === "alternate") return;
-      const isUp = buf.viewportY < buf.baseY;
-      if (isUp !== lastScrolledUp) {
-        lastScrolledUp = isUp;
-        onScrolledUpChangeRef.current?.(isUp);
+      const gap = buf.baseY - buf.viewportY;
+      // Only react to real user scrolling (gap > 1 row), not transient mid-write lag
+      if (gap > 1 && !lastScrolledUp) {
+        lastScrolledUp = true;
+        onScrolledUpChangeRef.current?.(true);
+      } else if (gap === 0 && lastScrolledUp) {
+        lastScrolledUp = false;
+        onScrolledUpChangeRef.current?.(false);
+        if (pausedData && !flushingPaused) flushPausedData();
       }
     });
 
@@ -875,12 +907,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if ((e as CustomEvent).detail?.sessionId === sessionId) {
         // Unlock so new data flows to xterm again
         lastScrolledUp = false;
-        pausedData = ""; notifyPaused(false);
-        
-        
-        // Scroll xterm to bottom now, and again after new data arrives
-        term.scrollToBottom();
-        setTimeout(() => term.scrollToBottom(), 200);
+        notifyPaused(false);
+        // Flush paused data via chunked write (or discard if empty)
+        if (pausedData && !flushingPaused) {
+          flushPausedData();
+        } else if (!pausedData) {
+          // Scroll xterm to bottom now, and again after new data arrives
+          term.scrollToBottom();
+          setTimeout(() => term.scrollToBottom(), 200);
+        }
       }
     };
     window.addEventListener("tron:scrollTermToBottom", handleScrollToBottom);
@@ -964,10 +999,21 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     let splitDragging = false;
     const debouncedResize = () => {
       if (splitDragging) return; // defer fit() during split drag
+      // Pause writes while container is resizing to prevent flicker.
+      // Writes resume after performResize completes + settle time.
+      resizePaused = true;
+      clearTimeout(resizePauseTimer);
       clearTimeout(resizeTimer);
       // Longer debounce on mobile — fit() is expensive and keyboard transitions
       // generate many resize events. 250ms prevents layout thrashing.
-      resizeTimer = setTimeout(performResize, isTouch ? 250 : 100);
+      resizeTimer = setTimeout(() => {
+        performResize();
+        // Keep paused briefly after resize to let xterm reflow settle
+        resizePauseTimer = setTimeout(() => {
+          resizePaused = false;
+          if (pausedData && !lastScrolledUp && !flushingPaused) flushPausedData();
+        }, 50);
+      }, isTouch ? 250 : 100);
     };
 
     // Defer fit() during SplitPane drag to eliminate ALL xterm redraws
@@ -1357,6 +1403,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       disposableOnScroll.dispose();
       disposableOnLineFeed.dispose();
       // Flush any remaining paused data
+      clearTimeout(resizePauseTimer);
+      resizePaused = false;
       if (pausedData) { term.write(pausedData); pausedData = ""; }
       window.removeEventListener("tron:scrollTermToBottom", handleScrollToBottom);
       el.removeEventListener("dragover", onDragOver);

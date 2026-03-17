@@ -132,7 +132,30 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
     setConnecting(true);
     setError(null);
     try {
-      await onConnect(buildConfig());
+      // Build config once so auto-save and connect use the same ID
+      const config = buildConfig();
+      // Auto-save profile before connecting so user doesn't have to click Save first
+      const profile: SSHProfile = {
+        id: config.id,
+        name: config.name,
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        authMethod: config.authMethod,
+        privateKeyPath: config.privateKeyPath,
+        saveCredentials: config.saveCredentials,
+        savedPassword: config.saveCredentials ? config.password : undefined,
+        savedPassphrase: config.saveCredentials ? config.passphrase : undefined,
+      };
+      const updated = [...profiles.filter((p) => p.id !== profile.id), profile];
+      try {
+        const ipc = window.electron?.ipcRenderer;
+        if (ipc?.writeSSHProfiles) await ipc.writeSSHProfiles(updated);
+        else await ipc?.invoke("ssh.profiles.write", updated);
+        setProfiles(updated);
+        setSelectedProfileId(profile.id);
+      } catch { /* ignore save errors */ }
+      await onConnect(config);
       // Success — modal will be closed by the parent
     } catch (e: any) {
       setError(e.message || "Connection failed");
