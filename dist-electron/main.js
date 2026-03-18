@@ -69,6 +69,7 @@ if (process.env.TRON_TEST_PROFILE) {
 // --- Global State ---
 let mainWindow = null;
 let forceQuit = false;
+let quitPending = false; // true when Cmd+Q / dock quit is waiting for user confirmation
 let closeAttempts = 0;
 let closeTimeout = null;
 // --- Menu Helper ---
@@ -305,8 +306,17 @@ electron_1.ipcMain.on("window.closeConfirmed", () => {
         closeTimeout = null;
     }
     closeAttempts = 0;
+    // Flush all terminal history to disk immediately before closing.
+    // This ensures the latest PTY output is persisted even if the window
+    // close + cleanup sequence has timing issues.
+    (0, terminal_1.persistAllHistory)();
     forceQuit = true;
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (quitPending) {
+        // Cmd+Q / dock quit — quit the entire app (not just close the window)
+        quitPending = false;
+        electron_1.app.quit();
+    }
+    else if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.close();
     }
 });
@@ -316,6 +326,7 @@ electron_1.ipcMain.on("window.closeCancelled", () => {
         closeTimeout = null;
     }
     closeAttempts = 0;
+    quitPending = false;
 });
 // Update Windows title bar overlay colors when theme changes
 electron_1.ipcMain.on("window.themeChanged", (_, resolvedTheme) => {
@@ -337,7 +348,7 @@ electron_1.app.whenReady().then(async () => {
     // Auto-start integrated web server (auto-restarts on crash with backoff)
     const wsConfig = (0, web_server_1.readWebServerConfig)();
     if (wsConfig.enabled) {
-        const result = await (0, web_server_1.startWebServerManaged)(wsConfig.port);
+        const result = await (0, web_server_1.startWebServerManaged)(wsConfig.port, wsConfig.expose);
         if (!result.success) {
             console.error(`[Tron] Web server initial start failed (will retry): ${result.error}`);
         }
@@ -364,10 +375,31 @@ electron_1.app.on("window-all-closed", () => {
     if (process.platform !== "darwin")
         electron_1.app.quit();
 });
-electron_1.app.on("before-quit", () => {
-    forceQuit = true;
-    (0, ssh_1.cleanupAllSSHSessions)();
-    (0, terminal_1.cleanupAllSessions)();
-    (0, web_server_1.stopWebServer)();
+electron_1.app.on("before-quit", (e) => {
+    if (forceQuit) {
+        // Already confirmed or force-closing — proceed with cleanup
+        (0, ssh_1.cleanupAllSSHSessions)();
+        (0, terminal_1.cleanupAllSessions)();
+        (0, web_server_1.stopWebServer)();
+        return;
+    }
+    // Intercept Cmd+Q / dock quit to show the close confirm modal,
+    // same as clicking the window close button.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        e.preventDefault();
+        quitPending = true;
+        // Trigger the same close interception flow as the window close button.
+        // The renderer will show the confirm modal and respond with
+        // window.closeConfirmed or window.closeCancelled.
+        mainWindow.webContents.send("window.confirmClose");
+        // Safety timeout — if renderer doesn't respond within 5s, force quit
+        if (closeTimeout)
+            clearTimeout(closeTimeout);
+        closeTimeout = setTimeout(() => {
+            forceQuit = true;
+            quitPending = false;
+            electron_1.app.quit();
+        }, 5000);
+    }
 });
 //# sourceMappingURL=main.js.map

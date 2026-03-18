@@ -29,6 +29,9 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
 
   return (
     <span
+      data-testid={`agent-dot-${agent.sessionId}`}
+      data-status={agent.permission ? "needs-approval" : agent.active ? "active" : "idle"}
+      data-tool={agent.tool ?? ""}
       className={`inline-flex items-center gap-1 font-mono text-[10px] leading-none transition-colors duration-300 cursor-pointer rounded px-1 -mx-1 ${
         themeClass(resolvedTheme, {
           dark: "hover:bg-white/5",

@@ -352,7 +352,7 @@ export function useAgentStatuses(): AgentStatus[] {
         }
       },
     );
-  }, [store]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps — refs only, no re-subscribe needed
 
   // Listen for Tron agent activity events — authoritative source for running state
   useEffect(() => {
@@ -407,6 +407,18 @@ export function useAgentStatuses(): AgentStatus[] {
         }
         result.push({ sessionId: id, label, ...act });
         continue;
+      }
+
+      // Safety net: if AgentStore says agent is not running for this session,
+      // but agentRunning ref still has it (e.g. tron:agent-activity event was missed),
+      // clean it up so the session doesn't incorrectly appear as an active external agent.
+      if (agentRunning.current.has(id) && !agentState?.isAgentRunning) {
+        agentRunning.current.delete(id);
+        terminalDetectedTool.current.delete(id);
+        terminalToolTimestamp.current.delete(id);
+        terminalPermission.current.delete(id);
+        terminalLastData.current.delete(id);
+        sessionLookback.delete(id);
       }
 
       // External agent (Claude Code CLI etc.) — detected via terminal data flow

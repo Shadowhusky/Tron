@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.persistAllHistory = persistAllHistory;
 exports.getPersistedHistoryStats = getPersistedHistoryStats;
 exports.clearAllPersistedHistory = clearAllPersistedHistory;
 exports.bufferIfExecActive = bufferIfExecActive;
@@ -164,9 +165,12 @@ function persistSessionHistory(sessionId) {
     if (history === undefined)
         return;
     try {
-        fs_1.default.writeFileSync(path_1.default.join(historyDir, `${sessionId}.txt`), history, "utf-8");
+        const filePath = path_1.default.join(historyDir, `${sessionId}.txt`);
+        fs_1.default.writeFileSync(filePath, history, "utf-8");
     }
-    catch { /* best effort */ }
+    catch (err) {
+        console.error(`[Terminal] Failed to persist history for ${sessionId}:`, err);
+    }
 }
 function loadPersistedHistory(sessionId) {
     try {

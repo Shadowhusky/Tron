@@ -196,6 +196,11 @@ class AgentStore {
           : [...cleaned, { step: "stopped", output: "Stopped" }];
       })(),
     });
+
+    // Notify external trackers (AgentStatusBar) that the agent stopped.
+    // Without this, useTronAgentBridge's agentRunning ref retains the sessionId
+    // and reconcile() incorrectly shows the session as an active external agent.
+    window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
   }
 
   stopAllAgents = () => {

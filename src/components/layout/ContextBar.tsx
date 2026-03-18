@@ -549,7 +549,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
       </div>
 
       {/* Right: Context Ring + Model */}
-      <div className="flex items-center gap-4 shrink-0">
+      <div className="flex items-center gap-4 shrink-0 min-w-0 max-w-[50%]">
         <>
         <div
           ref={ctxRingRef}
@@ -633,13 +633,13 @@ const ContextBar: React.FC<ContextBarProps> = ({
         </>
 
         {/* Model Switcher */}
-        <div ref={modelBtnRef}>
+        <div ref={modelBtnRef} className="min-w-0 overflow-hidden">
           <div
             data-testid="model-selector"
-            className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-purple-400 text-[10px]"
+            className="flex items-center gap-1 min-w-0 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-purple-400 text-[10px]"
             onClick={() => setShowModelMenu(!showModelMenu)}
           >
-            <span className={`font-semibold ${!activeModel ? "opacity-50 italic" : ""}`}>{activeModel || "No model"}</span>
+            <span className={`font-semibold truncate ${!activeModel ? "opacity-50 italic" : ""}`}>{activeModel || "No model"}</span>
           </div>
 
           {/* Model Menu — portal to escape overflow-hidden */}

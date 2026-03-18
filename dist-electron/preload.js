@@ -50,6 +50,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "webServer.stop",
     "webServer.status",
     "webServer.checkPort",
+    "webServer.killPort",
     "updater.checkForUpdates",
     "updater.downloadUpdate",
     "updater.quitAndInstall",
@@ -74,6 +75,7 @@ const ALLOWED_RECEIVE_CHANNELS = [
     "menu.createTab",
     "menu.closeTab",
     "window.confirmClose",
+    "window.forceClose",
     "ssh.statusChange",
     "updater.status",
     "updater.downloadProgress",
@@ -160,10 +162,11 @@ const electronAPI = {
         getPersistedHistoryStats: () => electron_1.ipcRenderer.invoke("terminal.history.getStats"),
         clearAllPersistedHistory: () => electron_1.ipcRenderer.invoke("terminal.history.clearAll"),
         // Web Server
-        startWebServer: (port) => electron_1.ipcRenderer.invoke("webServer.start", port),
+        startWebServer: (port, expose) => electron_1.ipcRenderer.invoke("webServer.start", port, expose),
         stopWebServer: () => electron_1.ipcRenderer.invoke("webServer.stop"),
         getWebServerStatus: () => electron_1.ipcRenderer.invoke("webServer.status"),
         checkPort: (port) => electron_1.ipcRenderer.invoke("webServer.checkPort", port),
+        killPort: (port) => electron_1.ipcRenderer.invoke("webServer.killPort", port),
         // Updater
         checkForUpdates: () => electron_1.ipcRenderer.invoke("updater.checkForUpdates"),
         downloadUpdate: () => electron_1.ipcRenderer.invoke("updater.downloadUpdate"),

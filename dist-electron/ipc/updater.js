@@ -133,7 +133,8 @@ async function applyMacUpdate(getMainWindow) {
     };
     // Locate the pending update zip
     sendStep("Locating update...");
-    const cacheDir = (0, node_path_1.join)(electron_1.app.getPath("userData"), "..", "Caches", "tron-updater", "pending");
+    // electron-updater downloads to ~/Library/Caches/<app-name>-updater/pending/
+    const cacheDir = (0, node_path_1.join)(electron_1.app.getPath("home"), "Library", "Caches", "tron-updater", "pending");
     if (!(0, node_fs_1.existsSync)(cacheDir)) {
         throw new Error(`Cache dir not found: ${cacheDir}`);
     }
@@ -187,30 +188,14 @@ function registerUpdaterHandlers(getMainWindow, setForceQuit) {
         // Mark forceQuit FIRST so the close interceptor doesn't block app.quit()
         setForceQuit?.();
         const au = await getAutoUpdater(getMainWindow);
-        // Safety net: if nothing exits the app within 60s, force-kill.
-        // Extraction of ~140MB zip can take 10-30s on slow disks.
-        const safetyTimer = setTimeout(() => {
+        // Safety net: if nothing exits the app within 30s, force-kill.
+        setTimeout(() => {
             console.error("[Updater] Safety timeout — forcing app.exit(0)");
             electron_1.app.exit(0);
-        }, 60000);
-        // On macOS, electron-updater's default quitAndInstall can race — the app
-        // relaunches before the zip extraction/replacement finishes, so the old
-        // binary runs again. Fix: extract the update ourselves BEFORE quitting,
-        // then relaunch. This guarantees the new binary is in place on restart.
-        if (process.platform === "darwin") {
-            try {
-                await applyMacUpdate(getMainWindow);
-                clearTimeout(safetyTimer);
-                electron_1.app.relaunch();
-                electron_1.app.exit(0);
-                return;
-            }
-            catch (err) {
-                // Fall through to default quitAndInstall if manual apply fails
-                console.error("[Updater] Manual apply failed, falling back:", err);
-            }
-        }
-        clearTimeout(safetyTimer);
+        }, 30000);
+        // Use electron-updater's built-in quitAndInstall.
+        // isSilent=false (show installer), isForceRunAfter=true (relaunch after install).
+        // electron-updater handles extraction and replacement natively.
         au.quitAndInstall(false, true);
     });
     electron_1.ipcMain.handle("updater.getStatus", () => ({

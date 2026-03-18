@@ -17,6 +17,7 @@ import * as ssh from "./handlers/ssh.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.TRON_PORT) || 3888;
+const HOST = process.env.TRON_HOST || "0.0.0.0";
 const DEV_VITE_PORT = Number(process.env.PORT) || 5173;
 const isDev = process.argv.includes("--dev") || process.env.TRON_DEV === "true";
 const serverMode = process.env.TRON_MODE ||
@@ -767,8 +768,8 @@ function handleSend(channel, data) {
             break;
     }
 }
-server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Tron Web] Server running on http://0.0.0.0:${PORT}`);
+server.listen(PORT, HOST, () => {
+    console.log(`[Tron Web] Server running on http://${HOST}:${PORT}`);
     if (isDev) {
         console.log(`[Tron Web] Proxying to Vite at http://localhost:${DEV_VITE_PORT}`);
     }
