@@ -314,8 +314,6 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           if (!prev || !prev.isWrapped) break;
           startRow--;
         }
-        // Only process from the first row of each logical line to avoid duplicates
-        if (startRow !== lineNumber - 1) { callback(undefined); return; }
 
         const rowTexts: string[] = [];
         let row = startRow;
@@ -374,6 +372,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             const startX = (matchStart % cols) + 1;
             const endY = startRow + 1 + Math.floor((matchEnd - 1) / cols);
             const endX = ((matchEnd - 1) % cols) + 1;
+            // Only include links that touch the queried lineNumber
+            if (lineNumber < startY || lineNumber > endY) continue;
             links.push({
               range: { start: { x: startX, y: startY }, end: { x: endX, y: endY } },
               text: matched,
