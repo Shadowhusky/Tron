@@ -374,6 +374,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
   const [portInput, setPortInput] = useState(String(wsConfig.port));
   const [portWarning, setPortWarning] = useState("");
   const [restarting, setRestarting] = useState(false);
+  const [restartStep, setRestartStep] = useState("");
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const portCheckTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -424,9 +425,20 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
     // Restart required to rebind
     if (status.running) {
       setRestarting(true);
+      setRestartStep("Stopping server...");
       await ipc?.stopWebServer?.();
-      await ipc?.startWebServer?.(wsConfig.port, next);
+      setRestartStep("Waiting for port to free up...");
+      await new Promise(r => setTimeout(r, 300));
+      setRestartStep("Starting server...");
+      let result = await ipc?.startWebServer?.(wsConfig.port, next);
+      if (result && !result.success && result.error?.includes("already in use")) {
+        setRestartStep("Port still in use, retrying...");
+        await ipc?.invoke?.("webServer.killPort", wsConfig.port);
+        await new Promise(r => setTimeout(r, 500));
+        result = await ipc?.startWebServer?.(wsConfig.port, next);
+      }
       await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+      setRestartStep("");
       setRestarting(false);
     }
   };
@@ -440,16 +452,24 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
 
   const handleRestart = async () => {
     setRestarting(true);
+    setRestartStep("Stopping server...");
     const port = Number(portInput) || wsConfig.port;
     await ipc?.stopWebServer?.();
     updateConfig({ webServer: { ...wsConfig, port, enabled: true } });
-    const result = await ipc?.startWebServer?.(port, wsConfig.expose);
-    await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
-    setRestarting(false);
-    // If start failed and port is in use, offer to kill the process
-    if (result && !result.success && result.error?.includes("EADDRINUSE")) {
-      setShowKillConfirm(true);
+    setRestartStep("Waiting for port to free up...");
+    await new Promise(r => setTimeout(r, 300));
+    setRestartStep("Starting server...");
+    let result = await ipc?.startWebServer?.(port, wsConfig.expose);
+    // If port still in use (old process lingering or external), kill and retry
+    if (result && !result.success && result.error?.includes("already in use")) {
+      setRestartStep("Port still in use, retrying...");
+      await ipc?.invoke?.("webServer.killPort", port);
+      await new Promise(r => setTimeout(r, 500));
+      result = await ipc?.startWebServer?.(port, wsConfig.expose);
     }
+    await ipc?.getWebServerStatus?.().then(setStatus).catch(() => {});
+    setRestartStep("");
+    setRestarting(false);
   };
 
   const handleKillAndRestart = async () => {
@@ -562,7 +582,10 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
             </button>
           )}
         </div>
-        {!status.running && status.error && (
+        {restarting && restartStep && (
+          <p className={`text-[10px] ${t.textFaint} mt-1.5 animate-pulse`}>{restartStep}</p>
+        )}
+        {!restarting && !status.running && status.error && (
           <p className="text-[10px] text-red-400 mt-1.5">{status.error}</p>
         )}
       </div>
