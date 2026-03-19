@@ -620,8 +620,10 @@ export function smartQuotePaths(input: string): string {
   const trimmed = normalized.trim();
   if (!trimmed) return trimmed;
 
-  // Skip if the command already uses quotes, backslash escapes, or shell operators
-  if (/['"`\\|&;$(){}]/.test(trimmed)) return trimmed;
+  // Skip if the command already uses quotes, backslash escapes, or shell operators.
+  // Note: single quotes (') are NOT in this check — apostrophes in filenames like "Husky's SSD"
+  // are handled by wrapping in double quotes, which treats ' as a literal character.
+  if (/["`\\|&;$(){}]/.test(trimmed)) return trimmed;
 
   const parts = trimmed.split(/\s+/);
   // Nothing to fix if single token or no multi-word path possible

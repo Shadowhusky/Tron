@@ -1266,8 +1266,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
       // Mark session as active (enables AI placeholder after first command)
       hasActivityRef.current = true;
 
-      // Intercept slash commands (e.g. /log) before mode routing
-      if (finalVal.startsWith("/") && onSlashCommand) {
+      // Intercept slash commands (e.g. /log, /clear) before mode routing.
+      // Only match known commands exactly — not file paths like /usr/bin/node or /Volumes/...
+      const slashCmd = finalVal.split(/\s+/)[0];
+      if ((slashCmd === "/log" || slashCmd === "/clear") && onSlashCommand) {
         onSlashCommand(finalVal);
         setValue("");
         setGhostText("");
