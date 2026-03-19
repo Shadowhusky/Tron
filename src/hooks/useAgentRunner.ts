@@ -25,6 +25,8 @@ export function useAgentRunner(
     // @ts-ignore
     addInteraction,
     renameTab,
+    isTabTitleLocked,
+    lockTabTitle,
   } = useLayout();
   const { addToHistory } = useHistory();
   const { aiBehavior } = useConfig();
@@ -53,11 +55,8 @@ export function useAgentRunner(
 
   // Persisted agent state for resuming after ask_question
   const continuationRef = useRef<AgentContinuation | null>(null);
-  /** Check if the tab title is locked (agent-generated or user-renamed).
-   *  Uses ref to always read the latest session value (not stale closure). */
   const sessionRef = useRef(session);
   sessionRef.current = session;
-  const isTitleLocked = () => sessionRef.current?.titleLocked === true;
 
   // Streaming throttle — buffers token-level setAgentThread calls (max ~10/sec)
   const streamBufferRef = useRef<{
@@ -224,7 +223,7 @@ export function useAgentRunner(
       return;
     }
 
-    if (!isTitleLocked() && sessionId && session?.title === "Terminal") {
+    if (!isTabTitleLocked(sessionId) && sessionId && session?.title === "Terminal") {
       const cmdStr = cmd.trim();
       const title = cmdStr.length > 20 ? cmdStr.substring(0, 20) + "..." : cmdStr;
       renameTab(sessionId, title);
@@ -244,7 +243,7 @@ export function useAgentRunner(
       return;
     }
 
-    if (!isTitleLocked() && sessionId && session?.title === "Terminal") {
+    if (!isTabTitleLocked(sessionId) && sessionId && session?.title === "Terminal") {
       const cmdStr = cmd.trim();
       const title = cmdStr.length > 20 ? cmdStr.substring(0, 20) + "..." : cmdStr;
       renameTab(sessionId, title);
@@ -375,7 +374,7 @@ export function useAgentRunner(
     setAgentThread((prev) => [...prev, { step: "separator", output: separatorOutput }]);
 
     // Tab title will be generated after agent finishes (local models can't handle concurrent requests)
-    const shouldGenerateTitle = !isTitleLocked() && sessionId && prompt.trim() && aiBehavior.aiTabTitles;
+    const shouldGenerateTitle = !isTabTitleLocked(sessionId) && sessionId && prompt.trim() && aiBehavior.aiTabTitles;
 
     // --- Image analysis shortcut: bypass agent loop entirely ---
     if (images && images.length > 0) {
@@ -929,16 +928,16 @@ ${prompt}
       }
 
       // Generate smart tab title now that the model is free
-      // Re-check isTitleLocked() here (not just shouldGenerateTitle from start)
+      // Re-check isTabTitleLocked() here (not just shouldGenerateTitle from start)
       // in case user manually renamed the tab during the agent run
-      if (shouldGenerateTitle && !isTitleLocked()) {
+      if (shouldGenerateTitle && !isTabTitleLocked(sessionId)) {
         const titleContext = finalAnswer.message
           ? `${prompt}\n[AGENT RESPONSE]: ${finalAnswer.message.slice(0, 200)}`
           : prompt;
         aiService.generateTabTitle(titleContext, sessionRef.current?.aiConfig).then((t) => {
-          if (t && !isTitleLocked()) {
+          if (t && !isTabTitleLocked(sessionId)) {
             renameTab(sessionId, t);
-            updateSession(sessionId, { titleLocked: true });
+            lockTabTitle(sessionId);
           }
         });
       }

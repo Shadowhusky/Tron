@@ -57,6 +57,10 @@ interface LayoutContextType {
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
   renameTab: (sessionId: string, title: string) => void;
+  /** Check whether the tab containing sessionId has its title locked (user-renamed or auto-named). */
+  isTabTitleLocked: (sessionId: string) => boolean;
+  /** Lock the tab title for the tab containing sessionId (prevents future auto-renames). */
+  lockTabTitle: (sessionId: string) => void;
   updateTabColor: (tabId: string, color?: string) => void;
   duplicateTab: (tabId: string) => Promise<void>;
   createSSHTab: (config: SSHConnectionConfig) => Promise<void>;
@@ -1245,6 +1249,30 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  /** Find the tab whose layout tree contains the given sessionId. */
+  const findTabBySession = (sessionId: string): Tab | undefined => {
+    const contains = (node: LayoutNode, sid: string): boolean => {
+      if (node.type === "leaf") return node.sessionId === sid;
+      return node.children.some((c) => contains(c, sid));
+    };
+    return tabsRef.current.find((t) => contains(t.root, sessionId));
+  };
+
+  /** Check whether the tab containing sessionId has its title locked. */
+  const isTabTitleLocked = (sessionId: string): boolean => {
+    const tab = findTabBySession(sessionId);
+    return tab?.titleLocked === true;
+  };
+
+  /** Lock the tab title for the tab containing sessionId. */
+  const lockTabTitle = (sessionId: string): void => {
+    const tab = findTabBySession(sessionId);
+    if (!tab || tab.titleLocked) return;
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tab.id ? { ...t, titleLocked: true } : t)),
+    );
+  };
+
   /** Update the color flag for a tab */
   const updateTabColor = (tabId: string, color?: string) => {
     setTabs((prev) =>
@@ -1705,6 +1733,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         reorderTabs,
         focusSession,
         renameTab,
+        isTabTitleLocked,
+        lockTabTitle,
         updateTabColor,
         duplicateTab,
         createSSHTab,

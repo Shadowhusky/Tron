@@ -43,6 +43,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     createSSHTab,
     openSettingsTab,
     renameTab,
+    isTabTitleLocked,
     refreshCwd,
     splitUserAction,
     closePane,
@@ -175,9 +176,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   useEffect(() => {
     firstCommandFired.current = false;
   }, [sessionId]);
+  const isTabTitleLockedRef = useRef(isTabTitleLocked);
+  isTabTitleLockedRef.current = isTabTitleLocked;
   const stableOnFirstCommand = useCallback(() => {
     if (firstCommandFired.current) return;
     firstCommandFired.current = true;
+    // Skip if tab title is already locked (user-renamed or auto-named by another panel)
+    if (isTabTitleLockedRef.current(sessionId)) return;
     // Only rename if tab title is still the default
     const currentTab = tabsRef.current.find(
       (t) => t.activeSessionId === sessionId,
@@ -210,6 +215,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       if (autoNameAttempted.current.has(sessionId)) return;
       autoNameAttempted.current.add(sessionId);
       try {
+        // Skip if tab title is already locked (user-renamed or auto-named by another panel)
+        if (isTabTitleLockedRef.current(sessionId)) return;
         // Check tab title is still default
         const currentTab = tabsRef.current.find(
           (t) => t.activeSessionId === sessionId,
@@ -225,7 +232,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           session?.aiConfig,
         );
         if (!name) return;
-        // Re-check tab still has default title
+        // Re-check tab still has default title and not locked
+        if (isTabTitleLockedRef.current(sessionId)) return;
         const recheckTab = tabsRef.current.find(
           (t) => t.activeSessionId === sessionId,
         );

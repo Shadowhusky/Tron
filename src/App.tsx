@@ -102,7 +102,7 @@ const AppContent = () => {
     discardPersistedLayout,
     isHydrated,
     renameTab,
-    updateSession,
+    lockTabTitle,
     updateTabColor,
     duplicateTab,
     createSSHTab,
@@ -498,7 +498,7 @@ const AppContent = () => {
         onOpenSettings={openSettingsTab}
         isTabDirty={isTabDirty}
         onConfirmClose={confirmHandler}
-        onRenameTab={(sid, title) => { renameTab(sid, title); updateSession(sid, { titleLocked: true }); }}
+        onRenameTab={(sid, title) => { renameTab(sid, title); lockTabTitle(sid); }}
         onUpdateTabColor={updateTabColor}
         onDuplicateTab={handleDuplicateTab}
         onSaveTab={handleSaveTab}

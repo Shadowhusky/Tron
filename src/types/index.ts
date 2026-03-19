@@ -157,6 +157,7 @@ export interface Tab {
   id: string;
   title: string;
   color?: string; // Optional color tag for the tab
+  titleLocked?: boolean; // true once user or agent has set a meaningful title — blocks all auto-renames
   root: LayoutNode;
   activeSessionId: string | null; // Which session is active in this tab
 }
