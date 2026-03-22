@@ -1,0 +1,64 @@
+name: Release Windows (Signed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to attach the signed exe to (e.g., v1.2.30)"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package Windows installer (unsigned)
+        run: npx electron-builder --win --config.npmRebuild=false
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned
+          path: release/*.exe
+
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-unsigned
+          path: unsigned
+
+      - name: Submit signing request to SignPath
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: tron
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: windows-exe
+          github-artifact-id: ${{ needs.build.outputs.artifact-id || '' }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Upload signed exe to GitHub Release
+        run: gh release upload "${{ github.event.inputs.version }}" signed/*.exe --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

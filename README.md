@@ -214,13 +214,97 @@ Tron's agent is designed for **everyday terminal tasks** — running commands, e
 
 All shortcuts are customizable in Settings.
 
-## macOS Gatekeeper Notice
+## Installation FAQ
 
-When opening the app for the first time on macOS, you may see a warning that the app is from an unidentified developer. To open it:
+<details>
+<summary><strong>Windows — "Smart App Control blocked this app" (no "Run anyway" button)</strong></summary>
+
+Windows 11's Smart App Control may block unsigned apps entirely, with no option to bypass.
+
+**Option A — Unblock the file:**
+
+1. Right-click the downloaded `.exe` → **Properties**
+2. At the bottom, check **"Unblock"** → click **Apply**
+3. Double-click the `.exe` to run it
+
+**Option B — Disable Smart App Control** (if Option A doesn't work):
+
+1. Open **Settings** → **Privacy & Security** → **Windows Security**
+2. Click **App & browser control** → **Smart App Control settings**
+3. Set it to **Off**
+
+> ⚠️ This is a one-way toggle — once turned off, it can't be re-enabled without resetting Windows. This is safe for most users; Windows Defender still protects your system independently.
+
+</details>
+
+<details>
+<summary><strong>Windows — "Windows protected your PC" (SmartScreen)</strong></summary>
+
+1. Click **"More info"**
+2. Click **"Run anyway"**
+
+This only appears on the first install. Windows remembers your choice for future launches.
+
+</details>
+
+<details>
+<summary><strong>macOS — "app is from an unidentified developer"</strong></summary>
 
 **Right-click** the app → **Open** → click **Open** in the dialog.
 
-You only need to do this once — macOS remembers your choice. To build a fully signed app that skips this warning, see the [code signing guide](https://www.electron.build/code-signing).
+You only need to do this once — macOS remembers your choice.
+
+</details>
+
+<details>
+<summary><strong>macOS — "app is damaged and can't be opened"</strong></summary>
+
+This happens when macOS quarantine flags the downloaded file. Remove the flag:
+
+```bash
+xattr -cr /Applications/Tron.app
+```
+
+Then open the app normally.
+
+</details>
+
+<details>
+<summary><strong>Linux — "Permission denied" when running the AppImage</strong></summary>
+
+Make the file executable first:
+
+```bash
+chmod +x Tron-*.AppImage
+./Tron-*.AppImage
+```
+
+</details>
+
+<details>
+<summary><strong>Linux — "FUSE not found" / AppImage won't start</strong></summary>
+
+AppImage requires FUSE to mount. Install it:
+
+```bash
+# Ubuntu/Debian
+sudo apt install libfuse2
+
+# Fedora
+sudo dnf install fuse
+
+# Arch
+sudo pacman -S fuse2
+```
+
+Alternatively, extract and run without FUSE:
+
+```bash
+./Tron-*.AppImage --appimage-extract
+./squashfs-root/AppRun
+```
+
+</details>
 
 ## Development
 
