@@ -471,10 +471,28 @@ const ContextBar: React.FC<ContextBarProps> = ({
   };
 
   const displayCwd = abbreviateHome(cwd);
+  // Short path: show just the last folder name for tight spaces
+  const shortCwd = (() => {
+    const parts = displayCwd.replace(/\/$/, "").split("/");
+    return parts[parts.length - 1] || displayCwd;
+  })();
   const contextPercent = Math.min(
     100,
     Math.round((contextLength / maxContext) * 100),
   );
+
+  // Track container width for responsive layout
+  const barRef = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setCompact(entry.contentRect.width < 380);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   /** Send `cd <dir>` to the terminal and refresh CWD. */
   const cdToDirectory = (selected: string) => {
@@ -492,6 +510,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
 
   return (
     <div
+      ref={barRef}
       data-tutorial="context-bar"
       data-testid="context-bar"
       className={`w-full h-8 border-t flex items-center justify-between px-3 transition-all duration-200 select-none shrink-0 overflow-hidden whitespace-nowrap ${themeClass(
@@ -522,8 +541,8 @@ const ContextBar: React.FC<ContextBarProps> = ({
           }}
         >
           <Folder className="w-3 h-3 opacity-60 group-hover/path:opacity-100 transition-opacity" />
-          <span className="truncate opacity-80 group-hover/path:opacity-100 group-hover/path:underline transition-opacity text-[10px]">
-            {displayCwd}
+          <span className="truncate opacity-80 group-hover/path:opacity-100 group-hover/path:underline transition-opacity text-[10px]" style={{ minWidth: `${Math.min(shortCwd.length, 12)}ch` }}>
+            {compact ? shortCwd : displayCwd}
           </span>
         </div>
 
@@ -549,7 +568,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
       </div>
 
       {/* Right: Context Ring + Model */}
-      <div className="flex items-center gap-4 shrink-0 min-w-0 max-w-[50%]">
+      <div className={`flex items-center ${compact ? "gap-2" : "gap-4"} min-w-0 max-w-[50%]`}>
         <>
         <div
           ref={ctxRingRef}
@@ -560,7 +579,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
           onMouseLeave={() => setShowCtxTooltip(false)}
         >
           <ContextRing percent={contextPercent} size={12} />
-          <span className="text-[10px]">{contextPercent}%</span>
+          {!compact && <span className="text-[10px]">{contextPercent}%</span>}
         </div>
         {/* Context tooltip — portal to escape overflow-hidden */}
         {showCtxTooltip &&
@@ -629,11 +648,11 @@ const ContextBar: React.FC<ContextBarProps> = ({
             )}
         </AnimatePresence>
 
-        <div className="h-3 w-px bg-current opacity-20" />
+        {!compact && <div className="h-3 w-px bg-current opacity-20" />}
         </>
 
         {/* Model Switcher */}
-        <div ref={modelBtnRef} className="min-w-0 overflow-hidden">
+        <div ref={modelBtnRef} className={`min-w-0 overflow-hidden ${compact ? "max-w-[60px]" : ""}`}>
           <div
             data-testid="model-selector"
             className="flex items-center gap-1 min-w-0 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-purple-400 text-[10px]"
