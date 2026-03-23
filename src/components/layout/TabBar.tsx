@@ -59,6 +59,9 @@ const TabBar: React.FC<TabBarProps> = ({
   const [localTabs, setLocalTabs] = useState(tabs);
   const isDraggingRef = useRef(false);
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
+  // Refs to track which tab is being dragged and whether it moved far enough to count as a real drag
+  const draggingTabIdRef = useRef<string | null>(null);
+  const realDragRef = useRef(false);
 
   // Long-press for mobile context menu
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -178,16 +181,24 @@ const TabBar: React.FC<TabBarProps> = ({
 
   const commitReorder = () => {
     isDraggingRef.current = false;
+    const draggedId = draggingTabIdRef.current;
+    const wasRealDrag = realDragRef.current;
+    draggingTabIdRef.current = null;
+    realDragRef.current = false;
     setDraggingTabId(null);
+
+    if (!draggedId || !wasRealDrag) {
+      // Click or accidental tiny movement — reset visual order to match parent state
+      setLocalTabs(tabs);
+      return;
+    }
+
     const oldIds = tabs.map((t) => t.id);
     const newIds = localTabs.map((t) => t.id);
-    for (let i = 0; i < oldIds.length; i++) {
-      if (oldIds[i] !== newIds[i]) {
-        const movedId = newIds[i];
-        const fromIndex = oldIds.indexOf(movedId);
-        onReorder(fromIndex, i);
-        break;
-      }
+    const fromIndex = oldIds.indexOf(draggedId);
+    const toIndex = newIds.indexOf(draggedId);
+    if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
+      onReorder(fromIndex, toIndex);
     }
   };
 
@@ -251,8 +262,16 @@ const TabBar: React.FC<TabBarProps> = ({
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0, width: 0, overflow: "hidden" }}
                 transition={{ duration: 0.12, ease: "easeOut" }}
-                onDragStart={() => setDraggingTabId(tab.id)}
+                onDragStart={() => {
+                  setDraggingTabId(tab.id);
+                  draggingTabIdRef.current = tab.id;
+                  realDragRef.current = false;
+                }}
+                onDrag={(_, info) => {
+                  if (Math.abs(info.offset.x) > 4) realDragRef.current = true;
+                }}
                 onDragEnd={commitReorder}
+                dragMomentum={false}
                 whileDrag={{
                   zIndex: 50,
                   cursor: "grabbing",
