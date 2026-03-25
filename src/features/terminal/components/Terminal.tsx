@@ -249,6 +249,35 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return cleaned;
     };
 
+    /**
+     * Strip non-path wrapper text from the front of a match.
+     * Handles: "Update(src/..." → "src/...", "(src/..." → "src/...",
+     *          "[text](src/..." → "src/..."
+     * Preserves balanced route groups: "(auth)/page.tsx" stays intact.
+     */
+    const cleanLeading = (p: string): string => {
+      const firstSlash = p.indexOf("/");
+      if (firstSlash <= 0) return p;
+      const prefix = p.slice(0, firstSlash);
+      // Walk backward through prefix to find the last unbalanced ( or [
+      const depth = { paren: 0, bracket: 0 };
+      let cutAt = -1;
+      for (let i = prefix.length - 1; i >= 0; i--) {
+        const ch = prefix[i];
+        if (ch === ")") depth.paren++;
+        else if (ch === "(") {
+          if (depth.paren > 0) depth.paren--;
+          else { cutAt = i; break; }
+        } else if (ch === "]") depth.bracket++;
+        else if (ch === "[") {
+          if (depth.bracket > 0) depth.bracket--;
+          else { cutAt = i; break; }
+        }
+      }
+      if (cutAt >= 0) return p.slice(cutAt + 1);
+      return p;
+    };
+
     const activateFilePath = async (filePath: string, event?: MouseEvent) => {
       let resolved = filePath;
 
@@ -351,12 +380,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             let matched = m[0];
             if (/^https?:\/\//i.test(matched)) continue;
             matched = cleanTrailing(matched);
+            const lenBeforeLead = matched.length;
+            matched = cleanLeading(matched);
+            const leadStripped = lenBeforeLead - matched.length;
             if (matched.length < 3) continue;
             if (regex === relRe) {
               const ext = matched.split(".").pop()?.toLowerCase() || "";
               if (!editorExts.has(ext)) continue;
             }
-            rawMatches.push({ start: m.index, end: m.index + matched.length, text: matched });
+            const start = m.index + leadStripped;
+            rawMatches.push({ start, end: start + matched.length, text: matched });
           }
         }
 
