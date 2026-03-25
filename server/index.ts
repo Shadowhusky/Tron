@@ -475,7 +475,10 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
 
     const { type, id, channel, data } = msg;
 
-    if (type === "invoke") {
+    if (type === "ping") {
+      // Heartbeat response — remote-bridge.ts sends these to detect zombie connections
+      ws.send(JSON.stringify({ type: "pong" }));
+    } else if (type === "invoke") {
       try {
         const result = await handleInvoke(channel, data, clientId, pushEvent);
         ws.send(JSON.stringify({ type: "invoke-response", id, result }));

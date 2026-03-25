@@ -4,6 +4,9 @@
  * When a remote terminal session is created, all IPC calls for that session
  * are routed through the remote server's WebSocket instead of the local one.
  * The Terminal component works unchanged — routing is transparent.
+ *
+ * Includes heartbeat (ping/pong) for zombie detection and auto-reconnect
+ * with exponential backoff when the connection drops.
  */
 
 type Listener = (...args: any[]) => void;
@@ -14,99 +17,253 @@ interface PendingInvoke {
   timer: ReturnType<typeof setTimeout>;
 }
 
+export type RemoteConnectionState = "connected" | "reconnecting" | "disconnected";
+
 class RemoteConnection {
   private ws: WebSocket | null = null;
   private connected = false;
+  private wasEverConnected = false;
+  private intentionalClose = false;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   private pendingInvokes = new Map<string, PendingInvoke>();
   private eventListeners = new Map<string, Set<Listener>>();
   private messageQueue: string[] = [];
+  private _stateListeners = new Set<(state: RemoteConnectionState) => void>();
   readonly url: string;
+
+  private static MAX_RECONNECT = 8;
+  private static HEARTBEAT_MS = 30_000;
+  private static HEARTBEAT_TIMEOUT_MS = 10_000;
 
   constructor(url: string) {
     this.url = url;
   }
 
+  // ---- WebSocket URL ----
+
+  private buildWsUrl(): string {
+    const wsProto = this.url.startsWith("https") ? "wss:" : "ws:";
+    const host = new URL(this.url).host;
+    const token = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
+    return `${wsProto}//${host}/ws?token=${token}`;
+  }
+
+  // ---- Connect ----
+
   connect(): Promise<void> {
+    this.intentionalClose = false;
     return new Promise((resolve, reject) => {
-      const wsProto = this.url.startsWith("https") ? "wss:" : "ws:";
-      let host: string;
-      try {
-        host = new URL(this.url).host;
-      } catch {
-        reject(new Error(`Invalid URL: ${this.url}`));
+      this.createWs(resolve, reject);
+    });
+  }
+
+  /**
+   * Creates a new WebSocket and wires up all event handlers.
+   * Used for both initial connection and reconnection.
+   *
+   * @param onReady  Called once when the server sends the "mode" message (initial connect resolves here).
+   * @param onFail   Called if the WS fails before connecting (initial connect rejects here).
+   */
+  private createWs(onReady?: () => void, onFail?: (err: Error) => void): void {
+    let wsUrl: string;
+    try {
+      wsUrl = this.buildWsUrl();
+    } catch {
+      onFail?.(new Error(`Invalid URL: ${this.url}`));
+      return;
+    }
+
+    this.ws = new WebSocket(wsUrl);
+
+    // Connection timeout (only for initial connect — reconnect has its own backoff)
+    const connectTimeout = onFail
+      ? setTimeout(() => {
+          onFail(new Error(`Connection timeout: ${this.url}`));
+          this.ws?.close();
+        }, 10_000)
+      : null;
+
+    this.ws.onopen = () => {
+      if (connectTimeout) clearTimeout(connectTimeout);
+      this.connected = true;
+      this.wasEverConnected = true;
+      this.reconnectAttempts = 0;
+      this.startHeartbeat();
+      // Flush queued messages
+      while (this.messageQueue.length > 0) {
+        this.ws!.send(this.messageQueue.shift()!);
+      }
+      // Don't resolve yet — wait for the mode message from server
+    };
+
+    let modeReceived = false;
+    this.ws.onmessage = (event) => {
+      let msg: any;
+      try { msg = JSON.parse(event.data); } catch { return; }
+
+      if (msg.type === "mode") {
+        if (!modeReceived) {
+          modeReceived = true;
+          if (onReady) {
+            onReady();
+          } else {
+            // Reconnection — notify listeners
+            console.log("[Remote] Reconnected to", this.url);
+            this.notifyState("connected");
+          }
+        }
         return;
       }
 
-      // Generate a unique client token for this remote connection
-      const token = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
-      const wsUrl = `${wsProto}//${host}/ws?token=${token}`;
-
-      this.ws = new WebSocket(wsUrl);
-
-      const timeout = setTimeout(() => {
-        reject(new Error(`Connection timeout: ${this.url}`));
-        this.ws?.close();
-      }, 10000);
-
-      this.ws.onopen = () => {
-        clearTimeout(timeout);
-        this.connected = true;
-        // Flush queued messages
-        while (this.messageQueue.length > 0) {
-          this.ws!.send(this.messageQueue.shift()!);
+      if (msg.type === "pong") {
+        // Heartbeat response — connection is alive
+        if (this.heartbeatTimeout) {
+          clearTimeout(this.heartbeatTimeout);
+          this.heartbeatTimeout = null;
         }
-        // Don't resolve yet — wait for the mode message from server
-      };
+        return;
+      }
 
-      this.ws.onmessage = (event) => {
-        let msg: any;
-        try { msg = JSON.parse(event.data); } catch { return; }
-
-        if (msg.type === "mode") {
-          // Server confirmed connection — resolve the connect promise
-          resolve();
-          return;
-        }
-
-        if (msg.type === "invoke-response") {
-          const pending = this.pendingInvokes.get(msg.id);
-          if (pending) {
-            this.pendingInvokes.delete(msg.id);
-            clearTimeout(pending.timer);
-            if (msg.error) {
-              pending.reject(new Error(msg.error));
-            } else {
-              pending.resolve(msg.result);
-            }
-          }
-        } else if (msg.type === "event") {
-          const listeners = this.eventListeners.get(msg.channel);
-          if (listeners) {
-            for (const fn of listeners) {
-              fn(msg.data);
-            }
-          }
-        }
-      };
-
-      this.ws.onclose = () => {
-        this.connected = false;
-        // Reject all pending invokes
-        for (const [id, pending] of this.pendingInvokes) {
+      if (msg.type === "invoke-response") {
+        const pending = this.pendingInvokes.get(msg.id);
+        if (pending) {
+          this.pendingInvokes.delete(msg.id);
           clearTimeout(pending.timer);
-          pending.reject(new Error(`Remote connection closed: ${this.url}`));
-          this.pendingInvokes.delete(id);
+          if (msg.error) {
+            pending.reject(new Error(msg.error));
+          } else {
+            pending.resolve(msg.result);
+          }
         }
-      };
+      } else if (msg.type === "event") {
+        const listeners = this.eventListeners.get(msg.channel);
+        if (listeners) {
+          for (const fn of listeners) {
+            fn(msg.data);
+          }
+        }
+      }
+    };
 
-      this.ws.onerror = () => {
-        clearTimeout(timeout);
-        if (!this.connected) {
-          reject(new Error(`Failed to connect to remote server: ${this.url}`));
-        }
-      };
-    });
+    this.ws.onclose = () => {
+      if (connectTimeout) clearTimeout(connectTimeout);
+      this.connected = false;
+      this.stopHeartbeat();
+      // Reject all pending invokes so callers don't hang
+      for (const [id, pending] of this.pendingInvokes) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error(`Remote connection closed: ${this.url}`));
+        this.pendingInvokes.delete(id);
+      }
+      // Clear stale queued messages (their corresponding invokes are rejected)
+      this.messageQueue.length = 0;
+
+      if (!this.intentionalClose && this.wasEverConnected) {
+        this.scheduleReconnect();
+      }
+    };
+
+    this.ws.onerror = () => {
+      if (connectTimeout) clearTimeout(connectTimeout);
+      if (!this.connected && onFail) {
+        onFail(new Error(`Failed to connect to remote server: ${this.url}`));
+      }
+    };
   }
+
+  // ---- Heartbeat ----
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatInterval = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      try { this.ws.send(JSON.stringify({ type: "ping" })); } catch { return; }
+      this.heartbeatTimeout = setTimeout(() => {
+        // No pong received — connection is zombie
+        console.warn("[Remote] Heartbeat timeout for", this.url);
+        this.forceReconnect();
+      }, RemoteConnection.HEARTBEAT_TIMEOUT_MS);
+    }, RemoteConnection.HEARTBEAT_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) { clearInterval(this.heartbeatInterval); this.heartbeatInterval = null; }
+    if (this.heartbeatTimeout) { clearTimeout(this.heartbeatTimeout); this.heartbeatTimeout = null; }
+  }
+
+  // ---- Reconnect ----
+
+  /**
+   * Force-close the current WS and trigger reconnection.
+   * Used by heartbeat timeout and visibility-change health check.
+   */
+  forceReconnect(): void {
+    if (this.intentionalClose) return;
+    this.stopHeartbeat();
+    if (this.ws) {
+      // Null handlers to prevent double onclose handling
+      this.ws.onclose = null;
+      this.ws.onmessage = null;
+      try { this.ws.close(); } catch { /* already dead */ }
+    }
+    this.connected = false;
+    // Reject all pending invokes
+    for (const [id, pending] of this.pendingInvokes) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(`Remote connection lost: ${this.url}`));
+      this.pendingInvokes.delete(id);
+    }
+    this.messageQueue.length = 0;
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    if (this.intentionalClose || this.reconnectTimer) return;
+    this.reconnectAttempts++;
+
+    if (this.reconnectAttempts > RemoteConnection.MAX_RECONNECT) {
+      console.warn("[Remote] Max reconnect attempts reached for", this.url);
+      this.notifyState("disconnected");
+      return;
+    }
+
+    this.notifyState("reconnecting");
+    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 16_000);
+    console.log(`[Remote] Reconnecting to ${this.url} in ${delay}ms (attempt ${this.reconnectAttempts}/${RemoteConnection.MAX_RECONNECT})`);
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.intentionalClose) return;
+      this.createWs(); // best-effort — no onReady/onFail callbacks
+    }, delay);
+  }
+
+  /**
+   * Send an immediate ping to check connection health.
+   * If no pong within timeout, forces reconnect.
+   */
+  checkHealth(): void {
+    if (this.intentionalClose || !this.connected) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.forceReconnect();
+      return;
+    }
+    // Cancel any existing heartbeat timeout and send immediate ping
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
+    }
+    try { this.ws.send(JSON.stringify({ type: "ping" })); } catch { return; }
+    this.heartbeatTimeout = setTimeout(() => {
+      console.warn("[Remote] Health check failed for", this.url);
+      this.forceReconnect();
+    }, RemoteConnection.HEARTBEAT_TIMEOUT_MS);
+  }
+
+  // ---- IPC ----
 
   invoke(channel: string, data?: any): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -114,7 +271,7 @@ class RemoteConnection {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(id);
         reject(new Error(`Remote IPC invoke timeout: ${channel}`));
-      }, 120000);
+      }, 120_000);
 
       this.pendingInvokes.set(id, { resolve, reject, timer });
       this.sendRaw(JSON.stringify({ type: "invoke", id, channel, data }));
@@ -136,6 +293,9 @@ class RemoteConnection {
   }
 
   disconnect(): void {
+    this.intentionalClose = true;
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.stopHeartbeat();
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();
@@ -147,11 +307,26 @@ class RemoteConnection {
       pending.reject(new Error("Remote connection disconnected"));
     }
     this.pendingInvokes.clear();
+    this.messageQueue.length = 0;
+    this.notifyState("disconnected");
   }
 
   isConnected(): boolean {
     return this.connected;
   }
+
+  // ---- State observability ----
+
+  onStateChange(cb: (state: RemoteConnectionState) => void): () => void {
+    this._stateListeners.add(cb);
+    return () => { this._stateListeners.delete(cb); };
+  }
+
+  private notifyState(state: RemoteConnectionState): void {
+    for (const cb of this._stateListeners) cb(state);
+  }
+
+  // ---- Internal ----
 
   private sendRaw(data: string): void {
     if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -227,6 +402,45 @@ export function disconnectRemote(connectionId: string): void {
   }
 }
 
+/** Subscribe to state changes on the connection that owns a session. */
+export function onRemoteStateChange(
+  sessionId: string,
+  cb: (state: RemoteConnectionState) => void,
+): (() => void) | null {
+  const conn = getRemoteConnection(sessionId);
+  if (!conn) return null;
+  return conn.onStateChange(cb);
+}
+
+// --- Visibility Change Handler ---
+// When the tab is hidden for >2s (mobile sleep, tab switch), the remote WS
+// may have silently died. On resume, send an immediate health-check ping
+// to all remote connections so zombie sockets are detected quickly instead
+// of waiting up to 30s for the next scheduled heartbeat.
+
+let _visibilityHandlerInstalled = false;
+
+function installVisibilityHandler(): void {
+  if (_visibilityHandlerInstalled || typeof document === "undefined") return;
+  _visibilityHandlerInstalled = true;
+
+  let hiddenSince = 0;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      hiddenSince = Date.now();
+      return;
+    }
+    const elapsed = hiddenSince ? Date.now() - hiddenSince : 0;
+    hiddenSince = 0;
+    if (elapsed < 2000) return; // short tab switch — skip
+
+    console.log(`[Remote] Tab visible after ${Math.round(elapsed / 1000)}s, checking remote connections...`);
+    for (const conn of connections.values()) {
+      conn.checkHealth();
+    }
+  });
+}
+
 // --- IPC Channel Routing ---
 
 /** Channels where the sessionId is passed as the direct data argument (string). */
@@ -290,6 +504,9 @@ export function extractSessionId(channel: string, data: any): string | null {
  */
 export function installRemoteRouting(): void {
   if (!window.electron?.ipcRenderer) return;
+
+  // Also install the visibility handler for remote health checks
+  installVisibilityHandler();
 
   const ipc = window.electron.ipcRenderer;
 

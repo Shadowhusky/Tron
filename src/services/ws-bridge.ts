@@ -225,21 +225,36 @@ export function initWebSocketBridge() {
   connect();
 
   // bfcache restoration — mobile browsers freeze/unfreeze pages, leaving a dead WS
+  /** Reject all pending invokes so callers don't hang waiting for a dead WS. */
+  function rejectPendingInvokes(reason: string) {
+    for (const [id, pending] of pendingInvokes) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+      pendingInvokes.delete(id);
+    }
+  }
+
+  /** Tear down the current WS (null handlers, close) and reject orphaned invokes. */
+  function forceReconnect(logMsg: string) {
+    console.log(logMsg);
+    connected = false;
+    connectionFailed = false;
+    reconnectAttempts = 0;
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try { ws.close(); } catch { /* already dead */ }
+    }
+    // Reject pending invokes — their responses would go to the dead WS
+    rejectPendingInvokes("WebSocket reconnecting");
+    connect();
+  }
+
   window.addEventListener("pageshow", (event) => {
     if (event.persisted) {
-      console.log("[WS Bridge] Page restored from bfcache, reconnecting...");
-      connected = false;
-      connectionFailed = false;
-      reconnectAttempts = 0;
-      // Null out stale WS handlers to prevent its onclose from scheduling a duplicate reconnect
-      if (ws) {
-        ws.onopen = null;
-        ws.onmessage = null;
-        ws.onclose = null;
-        ws.onerror = null;
-        try { ws.close(); } catch { /* already dead */ }
-      }
-      connect();
+      forceReconnect("[WS Bridge] Page restored from bfcache, reconnecting...");
     }
   });
 
@@ -260,19 +275,7 @@ export function initWebSocketBridge() {
     // Short tab switches (< 2s) with WS still open — likely fine, skip
     if (elapsed < 2000 && ws?.readyState === WebSocket.OPEN) return;
 
-    // Force reconnect — WS may appear open but is dead after mobile freeze
-    console.log(`[WS Bridge] Tab visible after ${Math.round(elapsed / 1000)}s, forcing reconnect...`);
-    connected = false;
-    connectionFailed = false;
-    reconnectAttempts = 0;
-    if (ws) {
-      ws.onopen = null;
-      ws.onmessage = null;
-      ws.onclose = null;
-      ws.onerror = null;
-      try { ws.close(); } catch { /* already dead */ }
-    }
-    connect();
+    forceReconnect(`[WS Bridge] Tab visible after ${Math.round(elapsed / 1000)}s, forcing reconnect...`);
   });
 
   (window as any).electron = {
