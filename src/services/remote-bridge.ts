@@ -34,7 +34,8 @@ class RemoteConnection {
   private _stateListeners = new Set<(state: RemoteConnectionState) => void>();
   readonly url: string;
 
-  private static MAX_RECONNECT = 8;
+  private static AGGRESSIVE_ATTEMPTS = 8;
+  private static PATIENT_INTERVAL_MS = 30_000;
   private static HEARTBEAT_MS = 30_000;
   private static HEARTBEAT_TIMEOUT_MS = 10_000;
 
@@ -224,15 +225,14 @@ class RemoteConnection {
     if (this.intentionalClose || this.reconnectTimer) return;
     this.reconnectAttempts++;
 
-    if (this.reconnectAttempts > RemoteConnection.MAX_RECONNECT) {
-      console.warn("[Remote] Max reconnect attempts reached for", this.url);
-      this.notifyState("disconnected");
-      return;
-    }
-
     this.notifyState("reconnecting");
-    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 16_000);
-    console.log(`[Remote] Reconnecting to ${this.url} in ${delay}ms (attempt ${this.reconnectAttempts}/${RemoteConnection.MAX_RECONNECT})`);
+    // Phase 1: aggressive exponential backoff (1s→16s, ~8 attempts)
+    // Phase 2: patient retries every 30s indefinitely
+    const aggressive = this.reconnectAttempts <= RemoteConnection.AGGRESSIVE_ATTEMPTS;
+    const delay = aggressive
+      ? Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 16_000)
+      : RemoteConnection.PATIENT_INTERVAL_MS;
+    console.log(`[Remote] Reconnecting to ${this.url} in ${delay / 1000}s (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -246,7 +246,15 @@ class RemoteConnection {
    * If no pong within timeout, forces reconnect.
    */
   checkHealth(): void {
-    if (this.intentionalClose || !this.connected) return;
+    if (this.intentionalClose) return;
+    // Reset to aggressive mode so visibility-change retries are fast
+    this.reconnectAttempts = 0;
+    if (!this.connected) {
+      // Not connected — cancel any patient-phase timer and retry aggressively
+      if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+      this.scheduleReconnect();
+      return;
+    }
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.forceReconnect();
       return;
@@ -266,6 +274,10 @@ class RemoteConnection {
   // ---- IPC ----
 
   invoke(channel: string, data?: any): Promise<any> {
+    // Fast-fail when disconnected and not actively reconnecting
+    if (!this.connected && !this.reconnectTimer) {
+      return Promise.reject(new Error(`Remote server unreachable: ${this.url}`));
+    }
     return new Promise((resolve, reject) => {
       const id = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
       const timer = setTimeout(() => {

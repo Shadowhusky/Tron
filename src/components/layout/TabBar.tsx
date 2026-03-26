@@ -263,12 +263,14 @@ const TabBar: React.FC<TabBarProps> = ({
                 exit={{ opacity: 0, width: 0, overflow: "hidden" }}
                 transition={{ duration: 0.12, ease: "easeOut" }}
                 onDragStart={() => {
-                  setDraggingTabId(tab.id);
                   draggingTabIdRef.current = tab.id;
                   realDragRef.current = false;
                 }}
                 onDrag={(_, info) => {
-                  if (Math.abs(info.offset.x) > 4) realDragRef.current = true;
+                  if (!realDragRef.current && Math.abs(info.offset.x) > 8) {
+                    realDragRef.current = true;
+                    setDraggingTabId(tab.id);
+                  }
                 }}
                 onDragEnd={commitReorder}
                 dragMomentum={false}
