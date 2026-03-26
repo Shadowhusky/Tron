@@ -28,11 +28,14 @@ class RemoteConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+  private lastMessageTime = 0;
   private pendingInvokes = new Map<string, PendingInvoke>();
   private eventListeners = new Map<string, Set<Listener>>();
   private messageQueue: string[] = [];
   private _stateListeners = new Set<(state: RemoteConnectionState) => void>();
   readonly url: string;
+  /** Persistent token reused across reconnections so the server maps the new WS to the same client. */
+  private readonly clientToken: string;
 
   private static AGGRESSIVE_ATTEMPTS = 8;
   private static PATIENT_INTERVAL_MS = 30_000;
@@ -41,6 +44,7 @@ class RemoteConnection {
 
   constructor(url: string) {
     this.url = url;
+    this.clientToken = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
 
   // ---- WebSocket URL ----
@@ -48,8 +52,7 @@ class RemoteConnection {
   private buildWsUrl(): string {
     const wsProto = this.url.startsWith("https") ? "wss:" : "ws:";
     const host = new URL(this.url).host;
-    const token = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
-    return `${wsProto}//${host}/ws?token=${token}`;
+    return `${wsProto}//${host}/ws?token=${this.clientToken}`;
   }
 
   // ---- Connect ----
@@ -104,6 +107,9 @@ class RemoteConnection {
     this.ws.onmessage = (event) => {
       let msg: any;
       try { msg = JSON.parse(event.data); } catch { return; }
+
+      // Track last message time for backward-compatible heartbeat
+      this.lastMessageTime = Date.now();
 
       if (msg.type === "mode") {
         if (!modeReceived) {
@@ -181,9 +187,15 @@ class RemoteConnection {
     this.stopHeartbeat();
     this.heartbeatInterval = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      const pingTime = Date.now();
       try { this.ws.send(JSON.stringify({ type: "ping" })); } catch { return; }
       this.heartbeatTimeout = setTimeout(() => {
-        // No pong received — connection is zombie
+        this.heartbeatTimeout = null;
+        // Backward-compatible: if ANY message was received since the ping
+        // (invoke-response, event, pong), the connection is alive — even if
+        // the server doesn't support pong (older version).
+        if (this.lastMessageTime >= pingTime) return;
+        // No messages at all since ping — connection is dead
         console.warn("[Remote] Heartbeat timeout for", this.url);
         this.forceReconnect();
       }, RemoteConnection.HEARTBEAT_TIMEOUT_MS);
