@@ -922,6 +922,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     const disposableOnScroll = term.onScroll(() => {
       const buf = term.buffer.active;
       if (buf.type === "alternate") return;
+      // During flush, scroll events are from our own writes — ignore to prevent
+      // transient viewportY < baseY from re-pausing the flush (deadlock).
+      if (flushingPaused) return;
       const isUp = buf.viewportY < buf.baseY;
       if (isUp !== lastScrolledUp) {
         lastScrolledUp = isUp;
@@ -932,24 +935,35 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         }
       }
     });
-    // onLineFeed can fire mid-write when xterm processes a large chunk. During
-    // a write, viewportY may lag behind baseY transiently. Only mark as
-    // scrolled up from onLineFeed if user has actually scrolled (threshold >1
-    // row) to avoid false positives from transient mid-write state.
+    // onLineFeed fires during term.write() for every newline in a chunk.
+    // viewportY can transiently lag behind baseY mid-write, so we must NOT
+    // set lastScrolledUp = true here — that creates a deadlock where writes
+    // are paused but no further events fire to unpause. User scroll-up is
+    // detected solely by onScroll. onLineFeed only handles recovery (detecting
+    // when viewport has caught up to bottom to unpause).
     const disposableOnLineFeed = term.onLineFeed(() => {
       const buf = term.buffer.active;
       if (buf.type === "alternate") return;
-      const gap = buf.baseY - buf.viewportY;
-      // Only react to real user scrolling (gap > 1 row), not transient mid-write lag
-      if (gap > 1 && !lastScrolledUp) {
-        lastScrolledUp = true;
-        onScrolledUpChangeRef.current?.(true);
-      } else if (gap === 0 && lastScrolledUp) {
+      if (buf.baseY - buf.viewportY === 0 && lastScrolledUp) {
         lastScrolledUp = false;
         onScrolledUpChangeRef.current?.(false);
         if (pausedData && !flushingPaused) flushPausedData();
       }
     });
+
+    // Safety net: periodically check for stale scroll-lock. If lastScrolledUp
+    // is true but the viewport is actually at bottom, reset and flush. Catches
+    // any edge case where onScroll/onLineFeed missed the recovery.
+    const stalePauseTimer = setInterval(() => {
+      if (!lastScrolledUp || flushingPaused) return;
+      const buf = term.buffer.active;
+      if (buf.type === "alternate") return;
+      if (buf.viewportY >= buf.baseY - 1) {
+        lastScrolledUp = false;
+        onScrolledUpChangeRef.current?.(false);
+        if (pausedData) flushPausedData();
+      }
+    }, 2000);
 
     // Listen for scrollToBottom requests from parent (via window event)
     const handleScrollToBottom = (e: Event) => {
@@ -1429,6 +1443,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       if (inSyncMode) { try { term.write(syncBuffer); } catch {} syncBuffer = ""; inSyncMode = false; }
       clearTimeout(resizeTimer);
       clearTimeout(syncTimer);
+      clearInterval(stalePauseTimer);
       window.removeEventListener("tron:splitDragStart", onSplitDragStart);
       window.removeEventListener("tron:splitDragEnd", onSplitDragEnd);
       unregisterScreenBufferReader(sessionId);
