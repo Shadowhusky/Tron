@@ -2056,6 +2056,7 @@ ${agentPrompt}
     let parseFailures = 0;
     // Loop detection: track recent actions to break repetitive patterns
     const recentActions: string[] = [];
+    const recentCoarseKeys: string[] = []; // Coarse prefix-based tracking for semantic-loop detection
     let loopBreaks = 0; // Escalating loop counter
     let recentlyBlockedAction: string | null = null; // Last action blocked by loop detection — cleared after any different action succeeds
     // Progress tracking
@@ -2801,11 +2802,27 @@ ${agentPrompt}
         recentActions[recentActions.length - 4] ===
         recentActions[recentActions.length - 6];
 
-      if (isConsecutiveLoop || isAlternatingLoop) {
+      // Semantic loop: catches "A-B-C-D-A-B-C-D" patterns where commands vary
+      // slightly (different python one-liners, JSON paths, grep patterns) but
+      // are all the same kind of diagnostic probe. Exact-match detection misses
+      // these because each command is textually unique. Uses coarse prefix:
+      // tool + first 50 chars of command/path/query + write-file path.
+      const coarseKey = action.tool === "write_file" || action.tool === "edit_file"
+        ? `${action.tool}:${action.path || ""}`
+        : `${action.tool}:${(action.command || action.query || action.path || action.url || "").slice(0, 50)}`;
+      recentCoarseKeys.push(coarseKey);
+      if (recentCoarseKeys.length > 12) recentCoarseKeys.shift();
+      // Threshold tuned per tool — read_terminal/send_text legitimately repeat.
+      const coarseThreshold = action.tool === "read_terminal" || action.tool === "send_text" ? 8 : 5;
+      const coarseCount = recentCoarseKeys.filter((k) => k === coarseKey).length;
+      const isSemanticLoop = coarseCount >= coarseThreshold;
+
+      if (isConsecutiveLoop || isAlternatingLoop || isSemanticLoop) {
         loopBreaks++;
         // Temporarily block this action — cleared when agent tries something different
         if (actionKey) recentlyBlockedAction = actionKey;
         recentActions.length = 0;
+        recentCoarseKeys.length = 0;
 
         // Escalating response
         if (loopBreaks >= 3) {
@@ -2819,12 +2836,15 @@ ${agentPrompt}
         }
 
         // Silent retry — don't show guard rejection to user
+        const loopKind = isSemanticLoop
+          ? `You keep running similar "${action.tool}" calls that differ only in minor details (different python snippets, grep patterns, JSON paths) — that counts as looping. The diagnostic you're running has already given you the information you need.`
+          : `You repeated "${action.tool}" with the same parameters 3+ times.`;
         history.push({
           role: "user",
           content:
             loopBreaks === 1
-              ? `LOOP DETECTED: You repeated "${action.tool}" with the same parameters 3+ times. This action is now BLOCKED. Try a completely different approach — different tool, different command, or different parameters.`
-              : `LOOP DETECTED AGAIN (${loopBreaks}/3). You are still stuck. If you cannot find an alternative approach, use final_answer NOW to explain what went wrong. One more loop will terminate the agent.`,
+              ? `LOOP DETECTED: ${loopKind} This action is now BLOCKED. Step back and try a COMPLETELY different approach — a different tool, a different file, or abandon this sub-problem. If the prerequisite you're trying to fix is blocking the real task, use final_answer to report the blocker to the user and ask how to proceed.`
+              : `LOOP DETECTED AGAIN (${loopBreaks}/3). You are still stuck repeating the same kind of action. Use final_answer NOW to explain what you tried, what failed, and ask the user how to proceed. One more loop will terminate the agent.`,
         });
         continue;
       }
