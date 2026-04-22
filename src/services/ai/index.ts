@@ -851,6 +851,114 @@ class AIService {
     return history;
   }
 
+  /**
+   * Ask the LLM whether the agent is stuck in a loop or making real progress.
+   * Used to arbitrate heuristic loop-detection suspicions — keeps cheap pattern
+   * matching as a first filter, but defers the final "block and redirect"
+   * decision to the model so complex tasks that legitimately need many similar
+   * probes aren't halted prematurely.
+   *
+   * Returns { stuck, suggestion? }:
+   *  - stuck=true  → heuristic confirmed, block the action and inject suggestion
+   *  - stuck=false → allow the action; heuristic was a false positive
+   *  On any failure (network, parse) we return stuck=true as a safe fallback so
+   *  the agent still gets redirected instead of looping forever.
+   */
+  async arbitrateAgentLoop(
+    task: string,
+    recentActions: Array<{ tool: string; args: string; outcome?: string }>,
+    suspectAction: { tool: string; args: string },
+    sessionConfig?: AIConfig,
+    signal?: AbortSignal,
+  ): Promise<{ stuck: boolean; suggestion: string }> {
+    const cfg = sessionConfig || this.config;
+    const { provider, model, apiKey } = cfg;
+    const baseUrl = providerUsesBaseUrl(provider) ? cfg.baseUrl : undefined;
+    if (!provider || !model) {
+      return { stuck: true, suggestion: "Try a completely different approach or use final_answer." };
+    }
+
+    const lines = recentActions
+      .map((a, i) => `${i + 1}. ${a.tool}(${a.args.slice(0, 120)})${a.outcome ? ` → ${a.outcome.slice(0, 80)}` : ""}`)
+      .join("\n");
+    const prompt = `You are evaluating whether an AI agent is stuck in an unproductive loop or genuinely making progress on a complex task.
+
+TASK: ${task.slice(0, 300)}
+
+RECENT ACTIONS (oldest→newest):
+${lines}
+
+NEXT ACTION THE AGENT WANTS TO TAKE:
+${suspectAction.tool}(${suspectAction.args.slice(0, 200)})
+
+Decide: is the agent stuck in a loop (running minor variations of the same probe without learning anything new / not converging toward the task), or legitimately making progress?
+
+Reply with ONLY a single JSON object on one line, no markdown, no explanation:
+{"stuck": true|false, "suggestion": "<if stuck: one sentence telling the agent what concrete different approach to try next, or to use final_answer to report the blocker; if not stuck: empty string>"}`;
+
+    const messages = [{ role: "user", content: prompt }];
+    const maxTokens = 200;
+
+    const parseReply = (txt: string): { stuck: boolean; suggestion: string } => {
+      const m = txt.match(/\{[\s\S]*?\}/);
+      if (!m) return { stuck: true, suggestion: "Try a different approach or use final_answer." };
+      try {
+        const obj = JSON.parse(m[0]);
+        return {
+          stuck: obj.stuck === true,
+          suggestion: typeof obj.suggestion === "string" ? obj.suggestion : "",
+        };
+      } catch {
+        return { stuck: true, suggestion: "Try a different approach or use final_answer." };
+      }
+    };
+
+    try {
+      if (signal?.aborted) return { stuck: true, suggestion: "Aborted." };
+
+      if (provider === "ollama") {
+        const response = await proxyFetch(
+          `${baseUrl || "http://localhost:11434"}/api/generate`,
+          {
+            method: "POST",
+            headers: this.jsonHeaders(apiKey),
+            body: JSON.stringify({ model, prompt, stream: false, format: "json" }),
+            signal,
+          },
+        );
+        if (!response.ok) throw new Error(`Ollama: ${response.status}`);
+        const data = await response.json();
+        return parseReply(data.response || "");
+      }
+
+      if (isAnthropicProtocol(provider) && (apiKey || provider === "anthropic-compat")) {
+        const response = await proxyFetch(getAnthropicChatUrl(provider, baseUrl), {
+          method: "POST",
+          headers: this.anthropicHeaders(apiKey),
+          body: JSON.stringify({ model, max_tokens: maxTokens, messages }),
+          signal,
+        });
+        const data = await response.json();
+        return parseReply(data.content?.[0]?.text || "");
+      }
+
+      if (isOpenAICompatible(provider) && (apiKey || providerUsesBaseUrl(provider))) {
+        const result = await this.openAIChatSimple(
+          provider,
+          model,
+          apiKey || "",
+          messages,
+          maxTokens,
+          providerUsesBaseUrl(provider) ? baseUrl : undefined,
+        );
+        return parseReply(result);
+      }
+    } catch (e) {
+      console.warn("Loop arbiter failed, assuming stuck", e);
+    }
+    return { stuck: true, suggestion: "Try a completely different approach or use final_answer to report the blocker." };
+  }
+
   /** Stream an Ollama /api/chat response. Returns content and thinking text. */
   private async streamOllamaChat(
     baseUrl: string,
@@ -1906,7 +2014,10 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     // Only send baseUrl for providers that use it — prevents Ollama localhost leak.
     const baseUrl = providerUsesBaseUrl(provider) ? cfg.baseUrl : undefined;
 
-    const maxSteps = sessionConfig?.maxAgentSteps || 100;
+    // High safety ceiling — termination is driven by LLM-arbitrated loop
+    // detection, not a hard step count (complex tasks legitimately need many
+    // steps). Step limit only catches runaway cases arbiter also misses.
+    const maxSteps = sessionConfig?.maxAgentSteps || 300;
 
     // Initialize state — resume from continuation or start fresh
     let history: any[];
@@ -2057,8 +2168,12 @@ ${agentPrompt}
     // Loop detection: track recent actions to break repetitive patterns
     const recentActions: string[] = [];
     const recentCoarseKeys: string[] = []; // Coarse prefix-based tracking for semantic-loop detection
-    let loopBreaks = 0; // Escalating loop counter
+    // Full action history for LLM arbiter (tool, args, last outcome)
+    const recentActionDetails: Array<{ tool: string; args: string; outcome?: string }> = [];
+    let loopBreaks = 0; // Confirmed loops (by LLM arbiter). 3 → terminate.
     let recentlyBlockedAction: string | null = null; // Last action blocked by loop detection — cleared after any different action succeeds
+    let lastArbiterStep = -1; // Step index of last arbiter call — rate-limit to avoid back-to-back LLM calls
+    let lastArbiterSuggestion: string | null = null; // Suggestion from most recent confirmed loop — reshown until agent changes approach
     // Progress tracking
     let lastProgressStep = 0;
     let commandsSucceeded = 0;
@@ -2750,7 +2865,9 @@ ${agentPrompt}
 
       history.push({ role: "assistant", content: JSON.stringify(action) });
 
-      // Loop detection: track recent actions and break repetitive patterns
+      // Loop detection: heuristics flag suspicion; an LLM arbiter confirms
+      // whether the agent is actually stuck. Arbiter-confirmed loops redirect
+      // with concrete suggestions; 3 confirmations terminate the agent.
       const actionKey = JSON.stringify({
         tool: action.tool,
         path: action.path,
@@ -2760,38 +2877,39 @@ ${agentPrompt}
         url: action.url,
       });
 
-      // Block the most recently looped action — cleared once a different action runs
+      // Block the most recently *arbiter-confirmed* looped action — cleared
+      // once the agent actually tries something different
       if (actionKey && recentlyBlockedAction === actionKey) {
         history.push({
           role: "user",
-          content: `BLOCKED: "${action.tool}" with these parameters was just blocked due to looping. You MUST use a different tool or different parameters. If you cannot proceed, use final_answer.`,
+          content: `BLOCKED: you tried the SAME action again after a loop warning. You MUST use a different tool or different parameters${lastArbiterSuggestion ? `. Specifically: ${lastArbiterSuggestion}` : ""}. If you cannot proceed, use final_answer.`,
         });
         continue;
       }
       // Agent moved on to a different action — clear the block
       if (actionKey && recentlyBlockedAction && actionKey !== recentlyBlockedAction) {
         recentlyBlockedAction = null;
+        lastArbiterSuggestion = null;
       }
 
       if (actionKey) recentActions.push(actionKey);
       if (recentActions.length > 8) recentActions.shift();
 
-      // Consecutive loop: same action N times in a row.
-      // send_text: 5 (menu navigation), read_terminal: 5 (monitoring), others: 2
-      const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 2;
-      let isConsecutiveLoop = false;
+      // Consecutive suspicion: same exact action N times in a row.
+      const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 3;
+      let isConsecutiveSuspicion = false;
       if (actionKey != null && recentActions.length >= maxConsecutive) {
-        isConsecutiveLoop = true;
+        isConsecutiveSuspicion = true;
         for (let i = 1; i <= maxConsecutive; i++) {
           if (recentActions[recentActions.length - i] !== actionKey) {
-            isConsecutiveLoop = false;
+            isConsecutiveSuspicion = false;
             break;
           }
         }
       }
 
-      // Alternating loop: A→B→A→B→A→B pattern
-      const isAlternatingLoop =
+      // Alternating suspicion: A→B→A→B→A→B pattern
+      const isAlternatingSuspicion =
         recentActions.length >= 6 &&
         recentActions[recentActions.length - 1] ===
         recentActions[recentActions.length - 3] &&
@@ -2802,51 +2920,81 @@ ${agentPrompt}
         recentActions[recentActions.length - 4] ===
         recentActions[recentActions.length - 6];
 
-      // Semantic loop: catches "A-B-C-D-A-B-C-D" patterns where commands vary
-      // slightly (different python one-liners, JSON paths, grep patterns) but
-      // are all the same kind of diagnostic probe. Exact-match detection misses
-      // these because each command is textually unique. Uses coarse prefix:
-      // tool + first 50 chars of command/path/query + write-file path.
+      // Semantic suspicion: coarse-prefix match catches minor-variation probes
+      // (different python one-liners, grep patterns, JSON paths) all doing the
+      // same diagnostic work.
+      const coarseArgs = action.command || action.query || action.path || action.url || "";
       const coarseKey = action.tool === "write_file" || action.tool === "edit_file"
         ? `${action.tool}:${action.path || ""}`
-        : `${action.tool}:${(action.command || action.query || action.path || action.url || "").slice(0, 50)}`;
+        : `${action.tool}:${coarseArgs.slice(0, 50)}`;
       recentCoarseKeys.push(coarseKey);
       if (recentCoarseKeys.length > 12) recentCoarseKeys.shift();
-      // Threshold tuned per tool — read_terminal/send_text legitimately repeat.
       const coarseThreshold = action.tool === "read_terminal" || action.tool === "send_text" ? 8 : 5;
       const coarseCount = recentCoarseKeys.filter((k) => k === coarseKey).length;
-      const isSemanticLoop = coarseCount >= coarseThreshold;
+      const isSemanticSuspicion = coarseCount >= coarseThreshold;
 
-      if (isConsecutiveLoop || isAlternatingLoop || isSemanticLoop) {
-        loopBreaks++;
-        // Temporarily block this action — cleared when agent tries something different
-        if (actionKey) recentlyBlockedAction = actionKey;
-        recentActions.length = 0;
-        recentCoarseKeys.length = 0;
+      // Record action detail for arbiter context (cap at last 15)
+      recentActionDetails.push({ tool: action.tool, args: coarseArgs || action.text || "" });
+      if (recentActionDetails.length > 15) recentActionDetails.shift();
 
-        // Escalating response
-        if (loopBreaks >= 3) {
-          // After 3 loop breaks, force termination
-          return {
-            success: false,
-            message:
-              "Agent terminated: stuck in repeated loops despite multiple interventions.",
-            type: "failure",
-          };
+      const suspicionTriggered =
+        isConsecutiveSuspicion || isAlternatingSuspicion || isSemanticSuspicion;
+
+      if (suspicionTriggered) {
+        // Rate-limit arbiter: don't call again within 3 steps of a previous call
+        // (arbiter itself costs an LLM roundtrip; false positives don't block)
+        if (lastArbiterStep >= 0 && i - lastArbiterStep < 3) {
+          // Treat as benign — heuristic already asked recently, give it space
+        } else {
+          lastArbiterStep = i;
+          onUpdate("thinking", "Checking for agent loop...");
+          const taskForArbiter = options?.rawUserTask || prompt || "";
+          const arbiter = await this.arbitrateAgentLoop(
+            taskForArbiter,
+            recentActionDetails.slice(-15),
+            { tool: action.tool, args: coarseArgs || action.text || "" },
+            cfg,
+            signal,
+          );
+
+          if (arbiter.stuck) {
+            loopBreaks++;
+            if (actionKey) recentlyBlockedAction = actionKey;
+            lastArbiterSuggestion = arbiter.suggestion || null;
+            recentActions.length = 0;
+            recentCoarseKeys.length = 0;
+
+            if (loopBreaks >= 3) {
+              return {
+                success: false,
+                message:
+                  "Agent terminated: stuck in repeated loops confirmed by three independent checks.",
+                type: "failure",
+              };
+            }
+
+            const suggestion = arbiter.suggestion
+              ? ` Suggestion: ${arbiter.suggestion}`
+              : "";
+            history.push({
+              role: "user",
+              content:
+                loopBreaks === 1
+                  ? `LOOP DETECTED (confirmed by independent check): you are repeating similar "${action.tool}" calls without converging on the task. This action is BLOCKED.${suggestion} If this prerequisite is blocking the real task, use final_answer to report the blocker.`
+                  : `LOOP DETECTED AGAIN (${loopBreaks}/3, confirmed). You are still stuck.${suggestion} Use final_answer NOW to explain what you tried, what failed, and ask the user how to proceed. One more loop will terminate the agent.`,
+            });
+            continue;
+          }
+          // Arbiter said: not a loop. Let the action through. But soften the
+          // heuristic state so we don't re-fire on the very next step.
+          if (isConsecutiveSuspicion || isAlternatingSuspicion) {
+            recentActions.length = 0;
+          }
+          if (isSemanticSuspicion) {
+            // Drop a few entries so we need genuinely-new repetitions to re-flag
+            recentCoarseKeys.splice(0, Math.max(0, recentCoarseKeys.length - 3));
+          }
         }
-
-        // Silent retry — don't show guard rejection to user
-        const loopKind = isSemanticLoop
-          ? `You keep running similar "${action.tool}" calls that differ only in minor details (different python snippets, grep patterns, JSON paths) — that counts as looping. The diagnostic you're running has already given you the information you need.`
-          : `You repeated "${action.tool}" with the same parameters 3+ times.`;
-        history.push({
-          role: "user",
-          content:
-            loopBreaks === 1
-              ? `LOOP DETECTED: ${loopKind} This action is now BLOCKED. Step back and try a COMPLETELY different approach — a different tool, a different file, or abandon this sub-problem. If the prerequisite you're trying to fix is blocking the real task, use final_answer to report the blocker to the user and ask how to proceed.`
-              : `LOOP DETECTED AGAIN (${loopBreaks}/3). You are still stuck repeating the same kind of action. Use final_answer NOW to explain what you tried, what failed, and ask the user how to proceed. One more loop will terminate the agent.`,
-        });
-        continue;
       }
 
       // 3. Execute Tool

@@ -1,6 +1,7 @@
 import {
   useState,
   useEffect,
+  useLayoutEffect,
   useRef,
   useCallback,
   useTransition,
@@ -274,6 +275,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
   useEffect(() => {
     onDraftChange?.(reactValue || undefined);
   }, [reactValue, onDraftChange]);
+
+  // Resync textarea height whenever reactValue changes. Backs up the rAF inside
+  // setValue/onChange — guarantees the textarea collapses back to 1 line after
+  // send (`setValue("")`) regardless of React batching or strict-mode re-runs.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    if (el.value !== reactValue) el.value = reactValue;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [reactValue]);
 
   // Mode State
   const [isAuto, setIsAuto] = useState(true);
