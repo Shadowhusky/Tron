@@ -498,7 +498,7 @@ const AppContent = () => {
         onOpenSettings={openSettingsTab}
         isTabDirty={isTabDirty}
         onConfirmClose={confirmHandler}
-        onRenameTab={(sid, title) => { renameTab(sid, title); lockTabTitle(sid); }}
+        onRenameTab={(sid, title) => { renameTab(sid, title, { force: true }); lockTabTitle(sid); }}
         onUpdateTabColor={updateTabColor}
         onDuplicateTab={handleDuplicateTab}
         onSaveTab={handleSaveTab}

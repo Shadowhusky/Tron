@@ -44,6 +44,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     openSettingsTab,
     renameTab,
     isTabTitleLocked,
+    lockTabTitle,
     refreshCwd,
     splitUserAction,
     closePane,
@@ -178,6 +179,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   }, [sessionId]);
   const isTabTitleLockedRef = useRef(isTabTitleLocked);
   isTabTitleLockedRef.current = isTabTitleLocked;
+  const lockTabTitleRef = useRef(lockTabTitle);
+  lockTabTitleRef.current = lockTabTitle;
   const stableOnFirstCommand = useCallback(() => {
     if (firstCommandFired.current) return;
     firstCommandFired.current = true;
@@ -238,7 +241,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           (t) => t.activeSessionId === sessionId,
         );
         if (recheckTab && recheckTab.title === "Terminal") {
+          // AI-generated tab name: lock it so no later auto-rename overrides.
           renameTabRef.current(sessionId, name);
+          lockTabTitleRef.current(sessionId);
         }
       } catch {
         // Non-critical, silently ignore

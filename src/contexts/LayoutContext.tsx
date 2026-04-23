@@ -56,7 +56,7 @@ interface LayoutContextType {
   clearPendingSettingsSection: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
-  renameTab: (sessionId: string, title: string) => void;
+  renameTab: (sessionId: string, title: string, opts?: { force?: boolean }) => void;
   /** Check whether the tab containing sessionId has its title locked (user-renamed or auto-named). */
   isTabTitleLocked: (sessionId: string) => boolean;
   /** Lock the tab title for the tab containing sessionId (prevents future auto-renames). */
@@ -208,7 +208,20 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     };
     savedTabs.forEach((tab) => collectSessions(tab.root));
-    return { tabs: savedTabs, sessions: offlineSessions };
+    // Back-compat: infer tab.titleLocked from session-level lock if missing
+    const tabsWithLock = savedTabs.map((tab) => {
+      if (tab.titleLocked) return tab;
+      let locked = false;
+      const walk = (n: LayoutNode) => {
+        if (locked) return;
+        if (n.type === "leaf") {
+          if ((parsed.sessionTitleLocked || {})[n.sessionId]) locked = true;
+        } else n.children.forEach(walk);
+      };
+      walk(tab.root);
+      return locked ? { ...tab, titleLocked: true } : tab;
+    });
+    return { tabs: tabsWithLock, sessions: offlineSessions };
   };
 
   // Flag to disable auto-save when user chose "Exit Without Saving"
@@ -525,8 +538,21 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             savedTabs.map(async (tab): Promise<Tab | null> => {
               const newRoot = await regenerateNode(tab.root);
               if (!newRoot) return null;
+              // Back-compat: if saved state predates tab.titleLocked, infer
+              // the lock from any session-level titleLocked under this tab.
+              let titleLocked = tab.titleLocked === true;
+              if (!titleLocked) {
+                const walk = (n: LayoutNode) => {
+                  if (titleLocked) return;
+                  if (n.type === "leaf") {
+                    if ((parsed.sessionTitleLocked || {})[n.sessionId]) titleLocked = true;
+                  } else n.children.forEach(walk);
+                };
+                walk(tab.root);
+              }
               return {
                 ...tab,
+                titleLocked,
                 root: newRoot,
                 activeSessionId: findFirstSession(newRoot),
               } as Tab;
@@ -1233,19 +1259,32 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   /** Update tab title for the tab containing a given session */
-  const renameTab = (sessionId: string, title: string) => {
+  const renameTab = (sessionId: string, title: string, opts: { force?: boolean } = {}) => {
+    // Defense-in-depth: if the tab title has been locked (user manually
+    // renamed OR agent has generated an AI title for it), silently refuse
+    // any non-forced rename. This catches auto-rename paths that forgot to
+    // pre-check isTabTitleLocked — so a locked title stays locked across
+    // splits, reconnects, and app restarts.
+    if (!opts.force) {
+      const locked = findTabBySession(sessionId)?.titleLocked === true;
+      if (locked) return;
+    }
     setTabs((prev) =>
-      prev.map((t) => (t.activeSessionId === sessionId ? { ...t, title } : t)),
+      prev.map((t) =>
+        t.activeSessionId === sessionId
+          ? { ...t, title, ...(opts.force ? { titleLocked: true } : {}) }
+          : t,
+      ),
     );
-    // Keep session title in sync so it survives refresh
+    // Keep session title (and lock flag) in sync so it survives refresh
     setSessions((prev) => {
       const s = prev.get(sessionId);
-      if (s && s.title !== title) {
-        const next = new Map(prev);
-        next.set(sessionId, { ...s, title });
-        return next;
-      }
-      return prev;
+      if (!s) return prev;
+      const nextLocked = opts.force ? true : s.titleLocked;
+      if (s.title === title && s.titleLocked === nextLocked) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, { ...s, title, titleLocked: nextLocked });
+      return next;
     });
   };
 
@@ -1267,10 +1306,35 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   /** Lock the tab title for the tab containing sessionId. */
   const lockTabTitle = (sessionId: string): void => {
     const tab = findTabBySession(sessionId);
-    if (!tab || tab.titleLocked) return;
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tab.id ? { ...t, titleLocked: true } : t)),
-    );
+    if (!tab) return;
+    if (!tab.titleLocked) {
+      setTabs((prev) =>
+        prev.map((t) => (t.id === tab.id ? { ...t, titleLocked: true } : t)),
+      );
+    }
+    // Also mark every session in this tab as locked so the flag survives
+    // session-id churn (SSH replace, reconnect with new PTY, split panes).
+    const sessionIds: string[] = [];
+    const collect = (node: LayoutNode) => {
+      if (node.type === "leaf") {
+        if (node.sessionId) sessionIds.push(node.sessionId);
+      } else {
+        node.children.forEach(collect);
+      }
+    };
+    collect(tab.root);
+    setSessions((prev) => {
+      let mutated = false;
+      const next = new Map(prev);
+      for (const sid of sessionIds) {
+        const s = next.get(sid);
+        if (s && !s.titleLocked) {
+          next.set(sid, { ...s, titleLocked: true });
+          mutated = true;
+        }
+      }
+      return mutated ? next : prev;
+    });
   };
 
   /** Update the color flag for a tab */
@@ -1363,6 +1427,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       id: newTabId,
       title: `${tabToDuplicate.title} (Copy)`,
       color: tabToDuplicate.color,
+      titleLocked: tabToDuplicate.titleLocked,
       root: newRoot,
       activeSessionId,
     };
