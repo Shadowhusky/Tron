@@ -61,6 +61,17 @@ const HOTKEY_LABELS: Record<string, string> = {
   cycleMode: "Cycle Mode",
   forceAgent: "Force Agent (in input)",
   forceCommand: "Force Command (in input)",
+  switchTab1: "Switch to Tab 1",
+  switchTab2: "Switch to Tab 2",
+  switchTab3: "Switch to Tab 3",
+  switchTab4: "Switch to Tab 4",
+  switchTab5: "Switch to Tab 5",
+  switchTab6: "Switch to Tab 6",
+  switchTab7: "Switch to Tab 7",
+  switchTab8: "Switch to Tab 8",
+  switchTab9: "Switch to Tab 9",
+  switchTabLast: "Switch to Last Tab",
+  tabSearch: "Tab Search Palette",
 };
 
 const NAV_SECTIONS_BASE = [

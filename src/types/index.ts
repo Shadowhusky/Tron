@@ -66,6 +66,17 @@ export interface HotkeyMap {
   closeTab: string;
   splitHorizontal: string;
   splitVertical: string;
+  switchTab1: string;
+  switchTab2: string;
+  switchTab3: string;
+  switchTab4: string;
+  switchTab5: string;
+  switchTab6: string;
+  switchTab7: string;
+  switchTab8: string;
+  switchTab9: string;
+  switchTabLast: string;
+  tabSearch: string;
   [key: string]: string;
 }
 

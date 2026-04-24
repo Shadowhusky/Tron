@@ -27,6 +27,17 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   cycleMode: "ctrl+shift+m",
   forceAgent: "meta+enter",
   forceCommand: "meta+shift+enter",
+  switchTab1: "meta+1",
+  switchTab2: "meta+2",
+  switchTab3: "meta+3",
+  switchTab4: "meta+4",
+  switchTab5: "meta+5",
+  switchTab6: "meta+6",
+  switchTab7: "meta+7",
+  switchTab8: "meta+8",
+  switchTab9: "meta+9",
+  switchTabLast: "meta+0",
+  tabSearch: "meta+shift+p",
 };
 
 const DEFAULT_CONFIG: TronConfig = {

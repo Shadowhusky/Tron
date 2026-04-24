@@ -15,6 +15,7 @@ import { IPC } from "../constants/ipc";
 import { isSshOnly } from "../services/mode";
 import { onServerReconnect } from "../services/ws-bridge";
 import { matchesHotkey } from "../hooks/useHotkey";
+import { selectTabByIndex } from "../utils/tabSwitcher";
 import { useConfig } from "./ConfigContext";
 import { isElectronApp } from "../utils/platform";
 import { connectRemote, createRemotePTY, getRemoteConnectionId, unregisterRemoteSession } from "../services/remote-bridge";
@@ -1726,6 +1727,17 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const { hotkeys } = useConfig();
   const isElectron = isElectronApp();
   useEffect(() => {
+    // Tab-switch hotkeys (Cmd/Ctrl+1..9, 0) must yield to text inputs — when
+    // SmartInput is focused the same combos bind to mode switches.
+    const isTextInputFocused = (): boolean => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (matchesHotkey(e, hotkeys.newTab || "meta+t")) {
         e.preventDefault();
@@ -1742,6 +1754,40 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       if (isElectron && matchesHotkey(e, hotkeys.splitVertical || "meta+shift+d")) {
         e.preventDefault();
         splitUserAction("vertical");
+      }
+
+      // Tab-index switch (Cmd+1..9, Cmd+0 → last). Skip when a text input
+      // is focused so SmartInput's mode hotkeys keep working.
+      if (!isTextInputFocused()) {
+        const indexBindings: Array<[string, number]> = [
+          [hotkeys.switchTab1, 1],
+          [hotkeys.switchTab2, 2],
+          [hotkeys.switchTab3, 3],
+          [hotkeys.switchTab4, 4],
+          [hotkeys.switchTab5, 5],
+          [hotkeys.switchTab6, 6],
+          [hotkeys.switchTab7, 7],
+          [hotkeys.switchTab8, 8],
+          [hotkeys.switchTab9, 9],
+          [hotkeys.switchTabLast, 0],
+        ];
+        for (const [combo, digit] of indexBindings) {
+          if (combo && matchesHotkey(e, combo)) {
+            const target = selectTabByIndex(tabsRef.current, digit);
+            if (target) {
+              e.preventDefault();
+              setActiveTabId(target.id);
+            }
+            return;
+          }
+        }
+      }
+
+      // Tab search palette (Cmd+Shift+P by default) — dispatched globally
+      // so any mounted listener (App.tsx) can open the palette overlay.
+      if (hotkeys.tabSearch && matchesHotkey(e, hotkeys.tabSearch)) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("tron:openTabSearch"));
       }
     };
 

@@ -18,6 +18,7 @@ import { useHotkey } from "./hooks/useHotkey";
 import { useInvalidateModels } from "./hooks/useModels";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
+import TabSearchPalette from "./components/layout/TabSearchPalette";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import SavedTabsModal from "./components/layout/SavedTabsModal";
 import RemoteConnectionModal from "./components/layout/RemoteConnectionModal";
@@ -520,6 +521,7 @@ const AppContent = () => {
           onSelectTab={selectTab}
           onDismiss={dismissNotification}
         />
+        <TabSearchPalette />
         {tabs.map((tab) => (
           <div
             key={tab.id}
