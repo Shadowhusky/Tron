@@ -165,6 +165,99 @@ export function filterTabs(
   return scored.map((s) => s.tab);
 }
 
+// ---------------------------------------------------------------------------
+// Snippet extraction — concise preview of where a query matched
+// ---------------------------------------------------------------------------
+
+export interface ContextSnippet {
+  /** Whitespace-collapsed text BEFORE the match (may include leading "…"). */
+  prefix: string;
+  /** The matched substring, original casing preserved. */
+  match: string;
+  /** Whitespace-collapsed text AFTER the match (may include trailing "…"). */
+  suffix: string;
+  /** True if the prefix was truncated and starts with "…". */
+  prefixTruncated: boolean;
+  /** True if the suffix was truncated and ends with "…". */
+  suffixTruncated: boolean;
+}
+
+/**
+ * Locate a query inside `text` and return a short, human-readable preview
+ * centred on the match. Collapses runs of whitespace and newlines so the
+ * snippet renders as a single line.
+ *
+ * @param text  source text (e.g. tab context)
+ * @param query the substring to highlight; case-insensitive locate, but
+ *              the original casing of the matched span is preserved
+ * @param opts.window  total character budget for the prefix + match + suffix
+ *                     (excluding ellipses). Default 80.
+ *
+ * Returns `null` if `text` or `query` is empty, or if the query isn't found.
+ */
+export function extractContextSnippet(
+  text: string,
+  query: string,
+  opts: { window?: number } = {},
+): ContextSnippet | null {
+  if (!text || !query) return null;
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  const idx = lower.indexOf(q);
+  if (idx < 0) return null;
+
+  const window = opts.window ?? 80;
+  const matchEnd = idx + query.length;
+  // Keep room for the match itself plus ~equal padding on either side.
+  const pad = Math.max(0, Math.floor((window - query.length) / 2));
+
+  let prefixStart = Math.max(0, idx - pad);
+  let suffixEnd = Math.min(text.length, matchEnd + pad);
+
+  const prefixTruncated = prefixStart > 0;
+  const suffixTruncated = suffixEnd < text.length;
+
+  // Try to start the prefix at a word boundary so we don't slice mid-word.
+  if (prefixTruncated) {
+    const slice = text.slice(prefixStart, idx);
+    const ws = slice.search(/\S/); // first non-whitespace
+    if (ws > 0) prefixStart += ws;
+    // If we landed mid-word, walk forward to the next whitespace
+    const beforeChar = text[prefixStart - 1];
+    if (beforeChar && /\S/.test(beforeChar)) {
+      const fwd = text.slice(prefixStart, idx).search(/\s/);
+      if (fwd >= 0 && fwd < pad / 2) prefixStart += fwd + 1;
+    }
+  }
+  if (suffixTruncated) {
+    const slice = text.slice(matchEnd, suffixEnd);
+    const back = slice.search(/\s\S*$/);
+    if (back > 0) suffixEnd = matchEnd + back;
+  }
+
+  const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
+
+  const rawPrefix = text.slice(prefixStart, idx);
+  const rawSuffix = text.slice(matchEnd, suffixEnd);
+  const matchText = text.slice(idx, matchEnd);
+
+  let prefix = collapse(rawPrefix);
+  let suffix = collapse(rawSuffix);
+  // Preserve a single space between prefix/match and match/suffix when the
+  // raw text had any whitespace there (so the rendered snippet isn't glued).
+  if (rawPrefix.length > 0 && /\s$/.test(rawPrefix) && prefix.length > 0) {
+    prefix = prefix + " ";
+  }
+  if (rawSuffix.length > 0 && /^\s/.test(rawSuffix) && suffix.length > 0) {
+    suffix = " " + suffix;
+  }
+
+  if (prefixTruncated && prefix.length > 0) prefix = "…" + prefix;
+  if (suffixTruncated && suffix.length > 0) suffix = suffix + "…";
+
+  return { prefix, match: matchText, suffix, prefixTruncated, suffixTruncated };
+}
+
 /**
  * Like {@link filterTabs} but also returns the match source per tab, so
  * callers can render a small "context" badge on context-only matches.

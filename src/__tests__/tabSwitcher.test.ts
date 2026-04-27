@@ -3,6 +3,7 @@ import {
   selectTabByIndex,
   filterTabs,
   getTabContext,
+  extractContextSnippet,
 } from "../utils/tabSwitcher";
 import type { Tab, TerminalSession } from "../types";
 
@@ -363,5 +364,62 @@ describe("filterTabs (context-aware)", () => {
 
   it("falls back to title-only behaviour when no context map is provided", () => {
     expect(filterTabs(tabs, "Two").map((t) => t.id)).toEqual(["2"]);
+  });
+});
+
+
+// =============================================================================
+// extractContextSnippet — concise preview around a match
+// =============================================================================
+
+describe("extractContextSnippet", () => {
+  it("returns null when query is not present", () => {
+    expect(extractContextSnippet("hello world", "xyz")).toBeNull();
+  });
+
+  it("returns null for empty inputs", () => {
+    expect(extractContextSnippet("", "q")).toBeNull();
+    expect(extractContextSnippet("abc", "")).toBeNull();
+  });
+
+  it("is case-insensitive when locating the match", () => {
+    const out = extractContextSnippet("Stripe API key rotation completed", "stripe");
+    expect(out).not.toBeNull();
+    expect(out!.match.toLowerCase()).toBe("stripe");
+  });
+
+  it("preserves the original casing of the match in the result", () => {
+    const out = extractContextSnippet("Pull request #4321 merged", "PULL");
+    expect(out!.match).toBe("Pull");
+  });
+
+  it("centres the match in a window of roughly the requested width", () => {
+    const text =
+      "some preface context that does not matter and then the keyword needle in the middle and lots more trailing text we do not need";
+    const out = extractContextSnippet(text, "needle", { window: 60 });
+    expect(out!.match).toBe("needle");
+    const total = out!.prefix.length + out!.match.length + out!.suffix.length;
+    expect(total).toBeLessThanOrEqual(60 + 4); // window + ellipses
+    expect(out!.prefixTruncated).toBe(true);
+    expect(out!.suffixTruncated).toBe(true);
+  });
+
+  it("does not add a leading ellipsis when the match is near the start", () => {
+    const out = extractContextSnippet("needle at the very beginning of the line", "needle", { window: 60 });
+    expect(out!.prefixTruncated).toBe(false);
+    expect(out!.prefix.startsWith("…")).toBe(false);
+  });
+
+  it("does not add a trailing ellipsis when the match is near the end", () => {
+    const out = extractContextSnippet("jump straight to the needle", "needle", { window: 60 });
+    expect(out!.suffixTruncated).toBe(false);
+  });
+
+  it("collapses newlines and excess whitespace inside the snippet", () => {
+    const text = "line one\n\n\nthe   needle   here\n\nline three";
+    const out = extractContextSnippet(text, "needle");
+    const joined = out!.prefix + out!.match + out!.suffix;
+    expect(joined).not.toMatch(/\n/);
+    expect(joined).not.toMatch(/ {2,}/);
   });
 });

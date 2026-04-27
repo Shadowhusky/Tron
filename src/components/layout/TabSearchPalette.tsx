@@ -3,7 +3,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import { getTheme } from "../../utils/theme";
-import { filterTabsAnnotated, getTabContext } from "../../utils/tabSwitcher";
+import {
+  filterTabsAnnotated,
+  getTabContext,
+  extractContextSnippet,
+} from "../../utils/tabSwitcher";
 import { readScreenBuffer } from "../../services/terminalBuffer";
 
 /**
@@ -167,13 +171,21 @@ const TabSearchPalette: React.FC = () => {
                     const dot = tab.color
                       ? { backgroundColor: tab.color }
                       : undefined;
+                    const snippet =
+                      matchSource === "context" && query.trim()
+                        ? extractContextSnippet(
+                            contextMap.get(tab.id) || "",
+                            query.trim(),
+                            { window: 70 },
+                          )
+                        : null;
                     return (
                       <button
                         key={tab.id}
                         data-tab-idx={i}
                         onMouseEnter={() => setHighlight(i)}
                         onClick={() => confirm(tab.id)}
-                        className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
+                        className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
                           isActive
                             ? `${t.surfaceActive} ${t.text}`
                             : `${t.textMuted} ${t.surfaceHover}`
@@ -181,21 +193,43 @@ const TabSearchPalette: React.FC = () => {
                       >
                         {tab.color && (
                           <span
-                            className="w-2 h-2 rounded-full shrink-0"
+                            className="w-2 h-2 rounded-full shrink-0 mt-1.5"
                             style={dot}
                           />
                         )}
-                        <span className="truncate flex-1">{tab.title}</span>
-                        {matchSource === "context" && (
-                          <span
-                            className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${t.borderSubtle} border ${t.textFaint}`}
-                            title="Match from terminal/agent context"
-                          >
-                            ctx
+                        <span className="flex-1 min-w-0">
+                          <span className="flex items-center gap-2">
+                            <span className="truncate flex-1">
+                              {matchSource === "title"
+                                ? renderHighlighted(tab.title, query)
+                                : tab.title}
+                            </span>
+                            {matchSource === "context" && (
+                              <span
+                                className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${t.borderSubtle} border ${t.textFaint} shrink-0`}
+                                title="Match from terminal / agent context"
+                              >
+                                ctx
+                              </span>
+                            )}
+                            <span className={`text-[10px] ${t.textFaint} shrink-0`}>
+                              {i + 1}
+                            </span>
                           </span>
-                        )}
-                        <span className={`text-[10px] ${t.textFaint}`}>
-                          {i + 1}
+                          {snippet && (
+                            <span
+                              className={`block truncate font-mono text-[11px] mt-0.5 ${t.textFaint}`}
+                            >
+                              {snippet.prefix}
+                              <span
+                                className="font-semibold"
+                                style={{ color: "var(--brand-accent, #a855f7)" }}
+                              >
+                                {snippet.match}
+                              </span>
+                              {snippet.suffix}
+                            </span>
+                          )}
                         </span>
                       </button>
                     );
@@ -215,5 +249,27 @@ const TabSearchPalette: React.FC = () => {
     </AnimatePresence>
   );
 };
+
+/** Highlight occurrences of `query` inside `text`, case-insensitive. */
+function renderHighlighted(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  const ql = q.toLowerCase();
+  const idx = lower.indexOf(ql);
+  if (idx < 0) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <span
+        className="font-semibold"
+        style={{ color: "var(--brand-accent, #a855f7)" }}
+      >
+        {text.slice(idx, idx + q.length)}
+      </span>
+      {text.slice(idx + q.length)}
+    </>
+  );
+}
 
 export default TabSearchPalette;
