@@ -1742,18 +1742,22 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       if (matchesHotkey(e, hotkeys.newTab || "meta+t")) {
         e.preventDefault();
         createTab();
+        return;
       }
       if (isElectron && matchesHotkey(e, hotkeys.closeTab || "meta+w")) {
         e.preventDefault();
         closeActivePaneWithConfirm();
+        return;
       }
       if (isElectron && matchesHotkey(e, hotkeys.splitHorizontal || "meta+d")) {
         e.preventDefault();
         splitUserAction("horizontal");
+        return;
       }
       if (isElectron && matchesHotkey(e, hotkeys.splitVertical || "meta+shift+d")) {
         e.preventDefault();
         splitUserAction("vertical");
+        return;
       }
 
       // Tab-index switch (Cmd+1..9, Cmd+0 → last). Skip when a text input

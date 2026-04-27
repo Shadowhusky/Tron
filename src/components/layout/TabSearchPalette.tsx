@@ -30,6 +30,7 @@ const TabSearchPalette: React.FC = () => {
   const [highlight, setHighlight] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const focusRafRef = useRef<number | null>(null);
 
   // Per-tab context, built once each time the palette opens. Snapshotting
   // here (rather than on every keystroke) keeps filtering O(query.len * sum
@@ -39,6 +40,14 @@ const TabSearchPalette: React.FC = () => {
   const [contextMap, setContextMap] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
+    const focusInputSoon = () => {
+      if (focusRafRef.current !== null) cancelAnimationFrame(focusRafRef.current);
+      focusRafRef.current = requestAnimationFrame(() => {
+        focusRafRef.current = null;
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
+    };
     const onOpen = () => {
       setQuery("");
       setHighlight(0);
@@ -50,14 +59,19 @@ const TabSearchPalette: React.FC = () => {
       }
       setContextMap(next);
       setOpen(true);
+      // Always re-focus on the open event — handles re-firing while open
+      // (state setters above are no-ops when palette was already open).
+      focusInputSoon();
     };
     window.addEventListener("tron:openTabSearch", onOpen);
-    return () => window.removeEventListener("tron:openTabSearch", onOpen);
+    return () => {
+      window.removeEventListener("tron:openTabSearch", onOpen);
+      if (focusRafRef.current !== null) {
+        cancelAnimationFrame(focusRafRef.current);
+        focusRafRef.current = null;
+      }
+    };
   }, [tabs, sessions]);
-
-  useEffect(() => {
-    if (open) requestAnimationFrame(() => inputRef.current?.focus());
-  }, [open]);
 
   const filtered = useMemo(
     () => filterTabsAnnotated(tabs, query, { contextMap }),
@@ -79,6 +93,8 @@ const TabSearchPalette: React.FC = () => {
   const close = () => {
     setOpen(false);
     setQuery("");
+    // Drop the snapshot so we don't hold scrollback strings between sessions.
+    setContextMap(new Map());
   };
 
   const confirm = (tabId?: string) => {
@@ -183,7 +199,9 @@ const TabSearchPalette: React.FC = () => {
                       <button
                         key={tab.id}
                         data-tab-idx={i}
-                        onMouseEnter={() => setHighlight(i)}
+                        onMouseMove={() => {
+                          if (highlight !== i) setHighlight(i);
+                        }}
                         onClick={() => confirm(tab.id)}
                         className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
                           isActive
@@ -220,14 +238,14 @@ const TabSearchPalette: React.FC = () => {
                             <span
                               className={`block truncate font-mono text-[11px] mt-0.5 ${t.textFaint}`}
                             >
-                              {snippet.prefix}
+                              {renderHighlighted(snippet.prefix, query)}
                               <span
                                 className="font-semibold"
                                 style={{ color: "var(--brand-accent, #a855f7)" }}
                               >
                                 {snippet.match}
                               </span>
-                              {snippet.suffix}
+                              {renderHighlighted(snippet.suffix, query)}
                             </span>
                           )}
                         </span>
@@ -250,26 +268,34 @@ const TabSearchPalette: React.FC = () => {
   );
 };
 
-/** Highlight occurrences of `query` inside `text`, case-insensitive. */
+/** Highlight every occurrence of `query` inside `text`, case-insensitive. */
 function renderHighlighted(text: string, query: string): React.ReactNode {
   const q = query.trim();
   if (!q) return text;
   const lower = text.toLowerCase();
   const ql = q.toLowerCase();
-  const idx = lower.indexOf(ql);
-  if (idx < 0) return text;
-  return (
-    <>
-      {text.slice(0, idx)}
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  while (cursor < text.length) {
+    const idx = lower.indexOf(ql, cursor);
+    if (idx < 0) {
+      parts.push(text.slice(cursor));
+      break;
+    }
+    if (idx > cursor) parts.push(text.slice(cursor, idx));
+    parts.push(
       <span
+        key={`m${key++}`}
         className="font-semibold"
         style={{ color: "var(--brand-accent, #a855f7)" }}
       >
         {text.slice(idx, idx + q.length)}
-      </span>
-      {text.slice(idx + q.length)}
-    </>
-  );
+      </span>,
+    );
+    cursor = idx + q.length;
+  }
+  return <>{parts}</>;
 }
 
 export default TabSearchPalette;
