@@ -629,7 +629,14 @@ const AppContent = () => {
         description={updateInstalling ? undefined : `A new version (v${updateVersion}) has been downloaded and is ready to install.`}
         buttons={updateInstalling ? [] : [
           { label: "Later", type: "ghost", onClick: () => { updateDismissedRef.current = true; setUpdateReady(false); } },
-          { label: "Relaunch Now", type: "primary", onClick: () => window.electron?.ipcRenderer?.quitAndInstall?.() },
+          { label: "Relaunch Now", type: "primary", onClick: () => {
+            // Flip to the installing UI immediately — the IPC roundtrip can
+            // take a moment before the main process emits the "installing"
+            // status, and the user expects feedback the instant they click.
+            setUpdateInstalling(true);
+            setInstallStep("Preparing...");
+            window.electron?.ipcRenderer?.quitAndInstall?.();
+          } },
         ]}
       >
         {updateInstalling ? (

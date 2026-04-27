@@ -28,9 +28,13 @@ const TabSearchPalette: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
+  // Increments on every open event — drives a useEffect that focuses the
+  // input AFTER React mounts it. Calling focus directly inside the event
+  // handler races with mount; rAF inside the handler also raced with
+  // AnimatePresence's enter timing on some renders.
+  const [openTick, setOpenTick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const focusRafRef = useRef<number | null>(null);
 
   // Per-tab context, built once each time the palette opens. Snapshotting
   // here (rather than on every keystroke) keeps filtering O(query.len * sum
@@ -40,14 +44,6 @@ const TabSearchPalette: React.FC = () => {
   const [contextMap, setContextMap] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
-    const focusInputSoon = () => {
-      if (focusRafRef.current !== null) cancelAnimationFrame(focusRafRef.current);
-      focusRafRef.current = requestAnimationFrame(() => {
-        focusRafRef.current = null;
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      });
-    };
     const onOpen = () => {
       setQuery("");
       setHighlight(0);
@@ -59,19 +55,33 @@ const TabSearchPalette: React.FC = () => {
       }
       setContextMap(next);
       setOpen(true);
-      // Always re-focus on the open event — handles re-firing while open
-      // (state setters above are no-ops when palette was already open).
-      focusInputSoon();
+      setOpenTick((n) => n + 1);
     };
     window.addEventListener("tron:openTabSearch", onOpen);
-    return () => {
-      window.removeEventListener("tron:openTabSearch", onOpen);
-      if (focusRafRef.current !== null) {
-        cancelAnimationFrame(focusRafRef.current);
-        focusRafRef.current = null;
+    return () => window.removeEventListener("tron:openTabSearch", onOpen);
+  }, [tabs, sessions]);
+
+  // Focus the input after every open event, including re-fires while open.
+  // Two-stage attempt: a synchronous focus (handles re-fire when input is
+  // already mounted) and a microtask retry (handles first open where
+  // AnimatePresence hasn't mounted the panel yet).
+  useEffect(() => {
+    if (openTick === 0) return;
+    const tryFocus = () => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.select();
       }
     };
-  }, [tabs, sessions]);
+    tryFocus();
+    const id = window.setTimeout(tryFocus, 0);
+    const id2 = window.setTimeout(tryFocus, 50);
+    return () => {
+      window.clearTimeout(id);
+      window.clearTimeout(id2);
+    };
+  }, [openTick]);
 
   const filtered = useMemo(
     () => filterTabsAnnotated(tabs, query, { contextMap }),

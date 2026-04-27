@@ -760,6 +760,9 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
   };
 
   const handleQuitAndInstall = () => {
+    // Flip to "installing" optimistically so the UI gives feedback before
+    // the main process echoes the status back over IPC.
+    setStatus("installing");
     ipc?.quitAndInstall?.().catch(() => {});
   };
 
