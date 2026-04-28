@@ -467,8 +467,53 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return result.join("\n");
     });
 
-    // Register selection reader so context menu can read selected text
-    registerSelectionReader(sessionId, () => term.getSelection());
+    // Register selection reader so context menu can read selected text.
+    //
+    // xterm's default term.getSelection() inserts a literal '\n' at every
+    // visual row boundary in the selection — including soft-wraps where a
+    // single logical line was wrapped only because it was longer than the
+    // viewport width. On mobile (where the viewport is narrow) URLs and
+    // long output lines wrap routinely, and the inserted newlines break
+    // copy-paste of those URLs. xterm exposes `line.isWrapped` to tell us
+    // whether a row is a soft-wrap continuation of the row above; when it
+    // is, we join without a newline. Hard line breaks emitted by the
+    // process keep their '\n'.
+    registerSelectionReader(sessionId, () => {
+      const pos = term.getSelectionPosition();
+      const fallback = term.getSelection() || "";
+      if (!pos) return fallback;
+      const buf = term.buffer.active;
+      // xterm's IBufferCellPosition uses {x, y} not {row, column}
+      const startRow = pos.start.y;
+      const endRow = pos.end.y;
+      // Single-row selection has no wrap to fix up.
+      if (startRow === endRow) return fallback;
+      const startCol = pos.start.x;
+      const endCol = pos.end.x;
+      let out = "";
+      for (let r = startRow; r <= endRow; r++) {
+        const line = buf.getLine(r);
+        if (!line) continue;
+        const sCol = r === startRow ? startCol : 0;
+        const eCol = r === endRow ? endCol : line.length;
+        const text = line.translateToString(false, sCol, eCol);
+        if (r === startRow) {
+          out += text;
+          continue;
+        }
+        // The wrap flag belongs to the *current* row: line(r).isWrapped is
+        // true when row r is a continuation of row r-1.
+        if (line.isWrapped) {
+          out += text;
+        } else {
+          out += "\n" + text;
+        }
+      }
+      // Trim trailing whitespace per visual segment but preserve internal
+      // structure — match xterm's translateToString(true) semantics for
+      // the final segment only.
+      return out.replace(/[ \t]+$/g, "");
+    });
 
     // Register alternate buffer reader for TUI detection
     registerAlternateBufferReader(sessionId, () => term.buffer.active.type === "alternate");
