@@ -20,12 +20,27 @@ const TOOL_LABEL: Record<string, string> = {
   read_terminal: "reading output",
 };
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  return String(n);
+}
+
 function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resolvedTheme: string; onClick?: () => void }) {
   const statusText = agent.permission
     ? "needs approval"
     : agent.active
       ? (agent.tool ? TOOL_LABEL[agent.tool] || agent.tool : "working")
       : "idle";
+
+  // Tokens / elapsed are surfaced when an external agent (Claude Code etc.)
+  // is currently working — they come from the spinner suffix.
+  const meta: string[] = [];
+  if (agent.active && agent.elapsedSeconds != null) meta.push(`${agent.elapsedSeconds}s`);
+  if (agent.active && agent.tokens != null) meta.push(`${formatTokens(agent.tokens)} tok`);
+  const metaText = meta.length > 0 ? ` · ${meta.join(" · ")}` : "";
+
+  const tooltip = `${agent.label}: ${statusText}${metaText} — click to switch`;
 
   return (
     <span
@@ -47,7 +62,7 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
               modern: agent.active ? "text-green-300/80" : "text-white/15",
             })
       }`}
-      title={`${agent.label}: ${statusText} — click to switch`}
+      title={tooltip}
       onClick={onClick}
     >
       <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${agent.permission
@@ -64,6 +79,15 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
         {agent.label}
       </span>
       <span>{statusText}</span>
+      {metaText && (
+        <span className={themeClass(resolvedTheme, {
+          dark: "text-white/25",
+          light: "text-gray-400",
+          modern: "text-white/20",
+        })}>
+          {metaText}
+        </span>
+      )}
     </span>
   );
 }

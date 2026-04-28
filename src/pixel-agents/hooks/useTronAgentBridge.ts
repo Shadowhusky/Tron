@@ -3,6 +3,7 @@ import { AgentContext } from "../../contexts/AgentContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import { IPC } from "../../constants/ipc";
 import type { AgentStep, Tab, LayoutNode } from "../../types";
+import { detectExternalAgentSignal } from "../../utils/externalAgentStatus";
 
 /** Agent status for a single terminal session */
 export interface AgentStatus {
@@ -11,199 +12,20 @@ export interface AgentStatus {
   active: boolean;
   tool: string | null;
   permission: boolean;
+  /** External agent only — tokens used so far this turn (parsed from spinner) */
+  tokens?: number;
+  /** External agent only — elapsed seconds for the current turn */
+  elapsedSeconds?: number;
 }
 
 // ── Tool detection ──────────────────────────────────────────────────────────
+//
+// External-agent (Claude Code, Aider, etc.) signal extraction lives in
+// src/utils/externalAgentStatus.ts (unit-tested). This file only orchestrates
+// timing and per-session state. The legacy regex tables below are retained
+// behind unused-export markers for diff readability — they aren't called any
+// more but document the historical signals. Safe to delete in a follow-up.
 
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1B\[[0-9;?]*[a-zA-Z]|\x1B\].*?(?:\x07|\x1B\\)|\x1B[()][0-2]|\x1B[>=<]|\x1B\x1B|\x0F|\x0E/g;
-function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
-
-/** Claude Code tool bullet — must appear at start-of-line (after newline or start of chunk).
- *  Using `(?:^|\\n)\\s*` anchor prevents matching tool names in mid-line prose. */
-const CC_PREFIX = `(?:^|\\n)\\s*[⏺⏵►▶●]`;
-
-/** All known Claude Code tool display names → internal category.
- *  Covers both old names (WebFetch, WebSearch) and new short names (Fetch, Search). */
-const TOOL_NAMES: [string, string][] = [
-  // File operations
-  ["Read", "read_file"],
-  ["Write", "write_file"],
-  ["Edit", "edit_file"],
-  ["MultiEdit", "edit_file"],
-  // Search / browse
-  ["Glob", "list_dir"],
-  ["Grep", "search_dir"],
-  ["LS", "list_dir"],
-  ["ToolSearch", "search_dir"],
-  // Shell
-  ["Bash", "execute_command"],
-  ["BashOutput", "execute_command"],
-  ["KillShell", "execute_command"],
-  ["Skill", "execute_command"],
-  ["SlashCommand", "execute_command"],
-  // Web — both old (WebSearch/WebFetch) and new (Search/Fetch) display names
-  ["WebSearch", "web_search"],
-  ["WebFetch", "web_search"],
-  ["Search", "web_search"],
-  ["Fetch", "web_search"],
-  // Agents / tasks
-  ["Agent", "agent"],
-  ["Explore", "search_dir"],
-  ["Task", "agent"],
-  ["TaskCreate", "agent"],
-  ["TaskUpdate", "agent"],
-  ["TaskList", "agent"],
-  ["TaskGet", "agent"],
-  ["TaskOutput", "agent"],
-  ["TaskStop", "agent"],
-  // Notebook
-  ["NotebookEdit", "edit_file"],
-  ["NotebookRead", "read_file"],
-  // Todo
-  ["TodoRead", "read_file"],
-  ["TodoWrite", "write_file"],
-  // Planning / thinking
-  ["Plan", "thinking"],
-  ["ExitPlanMode", "thinking"],
-  ["EnterPlanMode", "thinking"],
-  // Cron
-  ["CronCreate", "execute_command"],
-  ["CronDelete", "execute_command"],
-  ["CronList", "list_dir"],
-  // User interaction
-  ["AskUser", "ask_question"],
-  ["AskUserQuestion", "ask_question"],
-];
-
-// Build regex arrays — longer names first to avoid prefix conflicts
-const sortedToolNames = [...TOOL_NAMES].sort((a, b) => b[0].length - a[0].length);
-
-const TOOL_CALL_RE: [RegExp, string][] = sortedToolNames.map(([name, cat]) =>
-  [new RegExp(`${CC_PREFIX}\\s*${name}\\b`), cat],
-);
-// Also match "Web Search" / "Web Fetch" (space-separated display variants)
-TOOL_CALL_RE.push(
-  [new RegExp(`${CC_PREFIX}\\s*Web\\s+Search\\b`), "web_search"],
-  [new RegExp(`${CC_PREFIX}\\s*Web\\s+Fetch\\b`), "web_search"],
-);
-
-// Compact/gerund-form tool display: "⏺ Reading 1 file…", "⏺ Writing to 2 files…",
-// "⏺ Editing 3 files…", "⏺ Searching…", "⏺ Running…", etc.
-const GERUND_TOOL_RE: [RegExp, string][] = [
-  [new RegExp(`${CC_PREFIX}\\s*Reading\\b`), "read_file"],
-  [new RegExp(`${CC_PREFIX}\\s*Writing\\b`), "write_file"],
-  [new RegExp(`${CC_PREFIX}\\s*Editing\\b`), "edit_file"],
-  [new RegExp(`${CC_PREFIX}\\s*Searching\\b`), "search_dir"],
-  [new RegExp(`${CC_PREFIX}\\s*Running\\b`), "execute_command"],
-  [new RegExp(`${CC_PREFIX}\\s*Listing\\b`), "list_dir"],
-  [new RegExp(`${CC_PREFIX}\\s*Fetching\\b`), "web_search"],
-  [new RegExp(`${CC_PREFIX}\\s*Launching\\b`), "agent"],
-  [new RegExp(`${CC_PREFIX}\\s*Spawning\\b`), "agent"],
-  [new RegExp(`${CC_PREFIX}\\s*Planning\\b`), "thinking"],
-  [new RegExp(`${CC_PREFIX}\\s*Thinking\\b`), "thinking"],
-];
-
-const EXTRA_TOOL_RE: [RegExp, string][] = [
-  [/"tool":\s*"(Read|read_file|NotebookRead|TodoRead)"/, "read_file"],
-  [/"tool":\s*"(Write|write_file|TodoWrite)"/, "write_file"],
-  [/"tool":\s*"(Edit|MultiEdit|edit_file|NotebookEdit)"/, "edit_file"],
-  [/"tool":\s*"(Bash|BashOutput|KillShell|execute_command|run_in_terminal|Skill|SlashCommand)"/, "execute_command"],
-  [/"tool":\s*"(Glob|LS|list_dir)"/, "list_dir"],
-  [/"tool":\s*"(Grep|ToolSearch|search_dir)"/, "search_dir"],
-  [/"tool":\s*"(WebSearch|WebFetch|Search|Fetch|web_search)"/, "web_search"],
-  [/"tool":\s*"(Agent|Explore|Task|TaskCreate|TaskUpdate|TaskList|TaskGet|TaskOutput|TaskStop)"/, "agent"],
-  [/"tool":\s*"(Plan|ExitPlanMode|EnterPlanMode|exit_plan_mode)"/, "thinking"],
-  [/"tool":\s*"(AskUser|AskUserQuestion|ask_question)"/, "ask_question"],
-  [/"tool":\s*"(CronCreate|CronDelete|CronList)"/, "execute_command"],
-];
-
-/** Claude Code thinking: spinner chars (· ✢ ✳ ✶ ✻ ✽) + random verb + … */
-const THINKING_RE = /[·✢✳✶✻✽]\s+[A-Z][a-z]+[….]/;
-
-/** Claude Code permission prompt — "Allow ToolName(...)" or "Allow mcp__..." */
-const PERMISSION_RE = /Allow\s+(?:Bash|Read|Edit|MultiEdit|Write|Glob|Grep|Fetch|Search|WebFetch|WebSearch|Agent|Explore|Task|Skill|NotebookEdit|mcp__)\b/;
-
-/** Known AI agent names / banners that indicate an agent session.
- *  Matching any of these marks the session as "has agent" so subsequent
- *  terminal activity is tracked as working status. */
-const AGENT_NAME_RE = /\bclaude\s*code\b|\bclaude\b|\bcopilot\b|\bcursor\b|\baider\b|\bcody\b|\bcodex\b|\bgithub\s*copilot\b|\bcontinue\b|\btabby\b|\bdevin\b|\bwindsurf\b/i;
-
-/** Generic interactive prompts that indicate the terminal needs user input.
- *  Covers npm init, Claude Code, cargo, pip, docker, git, etc. */
-const GENERIC_PERMISSION_PATTERNS = [
-  /do you want to proceed\??/i,
-  /would you like to proceed\??/i,
-  /do you want to continue\??/i,
-  /are you sure\??/i,
-  /\(y\/n\)\s*\??/i,
-  /\[y\/n\]\s*\??/i,
-  /\[yes\/no\]\s*\??/i,
-  /continue\?\s*\(y\/n\)/i,
-  /allow this action\??/i,
-  /press enter to continue/i,
-  /[❯►]\s*\d+\.\s+(?:Yes|No|Cancel|Skip|Continue|Abort)/i,
-  /[●○]\s+(?:Yes|No|Cancel|Skip|Continue|Abort)/i,
-  /◆\s+\S/,
-];
-
-const sessionLookback = new Map<string, string>();
-const LOOKBACK_MAX = 150;
-
-interface DetectResult {
-  tool: string | null;
-  permission: boolean;
-}
-
-function detectToolFromChunk(sessionId: string, rawData: string): DetectResult {
-  const stripped = stripAnsi(rawData);
-  const prev = sessionLookback.get(sessionId) || "";
-  const text = prev + stripped;
-
-  // Check for permission prompt first (highest priority)
-  // Includes both Claude Code specific "Allow ..." and generic interactive prompts
-  const hasPermission = PERMISSION_RE.test(text) ||
-    GENERIC_PERMISSION_PATTERNS.some(p => p.test(text));
-
-  // Check for tool patterns in the combined lookback + current chunk
-  for (const [re, tool] of TOOL_CALL_RE) {
-    if (re.test(text)) {
-      sessionLookback.delete(sessionId);
-      return { tool, permission: hasPermission };
-    }
-  }
-  for (const [re, tool] of GERUND_TOOL_RE) {
-    if (re.test(text)) {
-      sessionLookback.delete(sessionId);
-      return { tool, permission: hasPermission };
-    }
-  }
-  for (const [re, tool] of EXTRA_TOOL_RE) {
-    if (re.test(stripped)) {
-      sessionLookback.delete(sessionId);
-      return { tool, permission: hasPermission };
-    }
-  }
-  if (THINKING_RE.test(stripped)) {
-    sessionLookback.delete(sessionId);
-    return { tool: "thinking", permission: false };
-  }
-  // Permission prompt without a tool match — still counts as activity
-  if (hasPermission) {
-    sessionLookback.delete(sessionId);
-    return { tool: null, permission: true };
-  }
-  // Agent name/banner detected — no specific tool, but marks the session as agent
-  if (AGENT_NAME_RE.test(stripped)) {
-    sessionLookback.delete(sessionId);
-    return { tool: "agent_detected", permission: false };
-  }
-
-  // No match — keep the lookback for the next chunk (tool name may be split)
-  sessionLookback.set(sessionId, text.length > LOOKBACK_MAX
-    ? text.slice(text.length - LOOKBACK_MAX) : text);
-  return { tool: null, permission: false };
-}
 
 // ── Tron agent activity derivation ──────────────────────────────────────────
 
@@ -266,9 +88,13 @@ function findTabTitle(tabs: Tab[], sessionId: string): string | null {
 
 // ── Main hook ───────────────────────────────────────────────────────────────
 
-const TOOL_STICKY_MS = 2000;
-/** How long after last terminal data before we consider an external agent idle */
-const EXTERNAL_IDLE_MS = 5000;
+/** Display the last-seen tool for this long after it was detected. Short, so
+ *  the status reflects what's happening *now* rather than a stale label. */
+const TOOL_STICKY_MS = 600;
+/** Spinner not seen for this long → external agent treated as idle. The
+ *  spinner repaints every ~100ms while Claude Code is working, so 1.5s is
+ *  generous against transient WS lag without feeling stuck-on. */
+const SPINNER_IDLE_GAP_MS = 1500;
 
 export function useAgentStatuses(): AgentStatus[] {
   const store = useContext(AgentContext);
@@ -278,15 +104,19 @@ export function useAgentStatuses(): AgentStatus[] {
   const terminalDetectedTool = useRef(new Map<string, string | null>());
   const terminalToolTimestamp = useRef(new Map<string, number>());
   const terminalPermission = useRef(new Map<string, boolean>());
+  /** Last time we saw the spinner / tool line — primary "working" signal. */
+  const terminalSpinnerSeen = useRef(new Map<string, number>());
+  /** Tokens/elapsed parsed from the spinner suffix, for display. */
+  const terminalTokens = useRef(new Map<string, number>());
+  const terminalElapsed = useRef(new Map<string, number>());
+  /** Per-session ring of recent stripped data, for cross-chunk pattern match. */
+  const lookbackRing = useRef(new Map<string, string>());
 
   // Track which sessions have an actively running agent (via tron:agent-activity events)
   const agentRunning = useRef(new Set<string>());
 
   // Track which sessions have EVER had agent activity (persists until session removed)
   const everHadAgent = useRef(new Set<string>());
-
-  // Track last terminal data timestamp per session — used to detect external agent activity
-  const terminalLastData = useRef(new Map<string, number>());
 
   // Per-session: timestamp when detection should start (skips history replay & post-stop data)
   const sessionDetectAfter = useRef(new Map<string, number>());
@@ -295,6 +125,8 @@ export function useAgentStatuses(): AgentStatus[] {
   const HISTORY_GRACE_MS = 3000;
   /** Cooldown after Tron agent stops — ignore trailing terminal data */
   const STOP_COOLDOWN_MS = 2000;
+  /** Lookback ring size — large enough to catch a multi-line spinner repaint. */
+  const LOOKBACK_RING_MAX = 600;
 
   // Listen for terminal incoming data — detect tools AND track activity for external agents
   useEffect(() => {
@@ -308,45 +140,60 @@ export function useAgentStatuses(): AgentStatus[] {
         if (!sessionDetectAfter.current.has(id)) {
           sessionDetectAfter.current.set(id, now + HISTORY_GRACE_MS);
         }
-
-        // Skip detection during grace / cooldown period
         const detectAfter = sessionDetectAfter.current.get(id)!;
         if (now < detectAfter) return;
 
-        // Try tool detection — tool patterns are the only signal for external agents
-        const { tool, permission } = detectToolFromChunk(id, data);
+        // Maintain a small lookback ring per session so a spinner repaint
+        // split across two chunks still matches.
+        const prev = lookbackRing.current.get(id) ?? "";
+        const combined = prev + data;
+        const ring =
+          combined.length > LOOKBACK_RING_MAX
+            ? combined.slice(combined.length - LOOKBACK_RING_MAX)
+            : combined;
+        lookbackRing.current.set(id, ring);
 
-        // Track permission state from external agents (Claude Code "Allow ..." prompts)
-        terminalPermission.current.set(id, permission);
+        const sig = detectExternalAgentSignal(ring);
 
-        // While an agent is actively running (terminalLastData exists from a recent
-        // tool/thinking/name match), ANY terminal data keeps it alive as "working".
-        // Once the agent goes idle and terminalLastData is cleaned up by the
-        // reconcile loop, regular terminal data from non-agent commands won't
-        // re-trigger the working status — only new agent patterns will.
-        if (!tool && !permission && terminalLastData.current.has(id)) {
-          const printable = stripAnsi(data).replace(/[\x00-\x1F\x7F]/g, "").trim();
-          if (printable.length > 0) {
-            terminalLastData.current.set(id, now);
-          }
+        // Idle frame seen → Claude is showing its input prompt; mark idle
+        // immediately so the dot turns gray on the same frame.
+        if (sig.idle) {
+          terminalSpinnerSeen.current.delete(id);
+          terminalDetectedTool.current.delete(id);
+          terminalTokens.current.delete(id);
+          terminalElapsed.current.delete(id);
         }
 
-        if (tool || permission) {
-          // Tool/permission matches — primary activity signal, also marks agent presence
-          everHadAgent.current.add(id);
-          terminalLastData.current.set(id, now);
+        if (sig.permission != null) {
+          terminalPermission.current.set(id, sig.permission);
+        }
 
-          // "agent_detected" is just an identifier (agent name/banner seen),
-          // not a real tool — only used to mark everHadAgent + timestamp
-          if (tool === "agent_detected") {
-            // no-op for tool display
-          } else if (tool === "thinking") {
+        if (sig.working) {
+          everHadAgent.current.add(id);
+          terminalSpinnerSeen.current.set(id, now);
+          if (sig.tokens != null) terminalTokens.current.set(id, sig.tokens);
+          if (sig.elapsedSeconds != null)
+            terminalElapsed.current.set(id, sig.elapsedSeconds);
+          // Spinner alone implies "thinking" — but a more specific tool from
+          // the same chunk wins, since tool matches are more informative.
+        }
+
+        if (sig.tool) {
+          everHadAgent.current.add(id);
+          // Only refresh "spinner seen" if we actually saw the spinner; a
+          // bare ⏺ Read line is informational, not a heartbeat.
+          if (sig.tool === "thinking") {
+            // Spinner-derived "thinking" only sticks if no specific tool is
+            // currently displayed (or if the previous tool sticky has expired).
             const lastTs = terminalToolTimestamp.current.get(id) ?? 0;
-            if (now - lastTs > TOOL_STICKY_MS) {
-              terminalDetectedTool.current.set(id, tool);
+            if (
+              now - lastTs > TOOL_STICKY_MS ||
+              !terminalDetectedTool.current.get(id)
+            ) {
+              terminalDetectedTool.current.set(id, sig.tool);
             }
-          } else if (tool) {
-            terminalDetectedTool.current.set(id, tool);
+          } else {
+            terminalDetectedTool.current.set(id, sig.tool);
             terminalToolTimestamp.current.set(id, now);
           }
         }
@@ -362,13 +209,13 @@ export function useAgentStatuses(): AgentStatus[] {
         agentRunning.current.add(sessionId);
       } else {
         agentRunning.current.delete(sessionId);
-        // Clear all state when agent stops
         terminalDetectedTool.current.delete(sessionId);
         terminalToolTimestamp.current.delete(sessionId);
         terminalPermission.current.delete(sessionId);
-        terminalLastData.current.delete(sessionId);
-        sessionLookback.delete(sessionId);
-        // Set cooldown so trailing terminal data doesn't re-trigger detection
+        terminalSpinnerSeen.current.delete(sessionId);
+        terminalTokens.current.delete(sessionId);
+        terminalElapsed.current.delete(sessionId);
+        lookbackRing.current.delete(sessionId);
         sessionDetectAfter.current.set(sessionId, Date.now() + STOP_COOLDOWN_MS);
       }
     };
@@ -409,45 +256,57 @@ export function useAgentStatuses(): AgentStatus[] {
         continue;
       }
 
-      // Safety net: if AgentStore says agent is not running for this session,
-      // but agentRunning ref still has it (e.g. tron:agent-activity event was missed),
-      // clean it up so the session doesn't incorrectly appear as an active external agent.
+      // Safety net: AgentStore says not-running, clear stale ref state.
       if (agentRunning.current.has(id) && !agentState?.isAgentRunning) {
         agentRunning.current.delete(id);
         terminalDetectedTool.current.delete(id);
         terminalToolTimestamp.current.delete(id);
         terminalPermission.current.delete(id);
-        terminalLastData.current.delete(id);
-        sessionLookback.delete(id);
+        terminalSpinnerSeen.current.delete(id);
+        terminalTokens.current.delete(id);
+        terminalElapsed.current.delete(id);
+        lookbackRing.current.delete(id);
       }
 
-      // External agent (Claude Code CLI etc.) — detected via terminal data flow
-      // A session is considered externally active if:
-      // 1. We got an explicit tron:agent-activity start event, OR
-      // 2. We've seen agent tool patterns in terminal data recently (within EXTERNAL_IDLE_MS)
-      const lastData = terminalLastData.current.get(id);
-      const isExternalActive = agentRunning.current.has(id) ||
-        (lastData != null && (now - lastData) < EXTERNAL_IDLE_MS);
+      // External agent (Claude Code CLI etc.) is "active" if its spinner
+      // was seen within SPINNER_IDLE_GAP_MS. The spinner repaints every
+      // ~100ms while working, so a 1.5s gap is the canonical idle signal.
+      const spinnerSeen = terminalSpinnerSeen.current.get(id);
+      const spinnerActive =
+        spinnerSeen != null && now - spinnerSeen < SPINNER_IDLE_GAP_MS;
+      const isExternalActive = agentRunning.current.has(id) || spinnerActive;
 
       if (isExternalActive) {
         everHadAgent.current.add(id);
+        // Drop the displayed tool if its sticky window has expired and the
+        // spinner has moved on (avoids "Read" sticking after Claude is now
+        // thinking).
+        let tool = terminalDetectedTool.current.get(id) ?? null;
+        const toolTs = terminalToolTimestamp.current.get(id) ?? 0;
+        if (tool && tool !== "thinking" && now - toolTs > TOOL_STICKY_MS) {
+          tool = "thinking";
+          terminalDetectedTool.current.set(id, "thinking");
+        }
         result.push({
           sessionId: id,
           label,
           active: true,
-          tool: terminalDetectedTool.current.get(id) ?? null,
+          tool,
           permission: terminalPermission.current.get(id) ?? false,
+          tokens: terminalTokens.current.get(id),
+          elapsedSeconds: terminalElapsed.current.get(id),
         });
         continue;
       }
 
-      // Clean up stale external agent state
-      if (lastData != null && (now - lastData) >= EXTERNAL_IDLE_MS) {
-        terminalLastData.current.delete(id);
+      // Clean up stale external agent state when the spinner gap is exceeded.
+      if (spinnerSeen != null && now - spinnerSeen >= SPINNER_IDLE_GAP_MS) {
+        terminalSpinnerSeen.current.delete(id);
         terminalDetectedTool.current.delete(id);
         terminalToolTimestamp.current.delete(id);
         terminalPermission.current.delete(id);
-        sessionLookback.delete(id);
+        terminalTokens.current.delete(id);
+        terminalElapsed.current.delete(id);
       }
 
       // Only show sessions that have had agent activity at some point
@@ -457,11 +316,21 @@ export function useAgentStatuses(): AgentStatus[] {
     }
 
     setStatuses(prev => {
-      // Only update if something actually changed to avoid re-renders (#2)
+      // Only update if something actually changed to avoid re-renders.
+      // Token/elapsed are intentionally compared too — when they change the
+      // user sees real-time progress; the diff is the only re-render signal.
       if (prev.length !== result.length) return result;
       for (let i = 0; i < result.length; i++) {
         const a = prev[i], b = result[i];
-        if (a.sessionId !== b.sessionId || a.active !== b.active || a.tool !== b.tool || a.permission !== b.permission || a.label !== b.label) {
+        if (
+          a.sessionId !== b.sessionId ||
+          a.active !== b.active ||
+          a.tool !== b.tool ||
+          a.permission !== b.permission ||
+          a.label !== b.label ||
+          a.tokens !== b.tokens ||
+          a.elapsedSeconds !== b.elapsedSeconds
+        ) {
           return result;
         }
       }
