@@ -237,7 +237,15 @@ const TabBar: React.FC<TabBarProps> = ({
         axis="x"
         values={localTabs}
         onReorder={(newTabs) => {
+          // Only accept framer-motion's reorder events AFTER the drag has
+          // crossed the threshold (realDragRef set in the per-item onDrag
+          // handler below). Otherwise a click that lands near a tab edge
+          // can briefly swap the visual order before the click handler
+          // fires, producing the "tab shifted on click" flicker reported
+          // by the user. We still flag isDraggingRef so commitReorder can
+          // distinguish the post-click revert.
           isDraggingRef.current = true;
+          if (!realDragRef.current) return;
           setLocalTabs(newTabs);
         }}
         className="flex items-stretch"
@@ -267,7 +275,10 @@ const TabBar: React.FC<TabBarProps> = ({
                   realDragRef.current = false;
                 }}
                 onDrag={(_, info) => {
-                  if (!realDragRef.current && Math.abs(info.offset.x) > 8) {
+                  // 14px threshold (was 8) — macOS trackpad clicks can emit
+                  // 5-10px of incidental motion, and 14px is small enough
+                  // that intentional drags still feel responsive.
+                  if (!realDragRef.current && Math.abs(info.offset.x) > 14) {
                     realDragRef.current = true;
                     setDraggingTabId(tab.id);
                   }
