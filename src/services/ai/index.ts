@@ -2341,6 +2341,12 @@ ${agentPrompt}
     let substantiveSteps = 0;
     let hasPublishedPlan = (continuation?.agentTodos?.length ?? 0) > 0;
     let planNudgesSent = 0;
+    /** Counts consecutive todo_write emissions that don't move state forward
+     *  (same in-progress item, no new completed checkmarks). 2 = stagnation;
+     *  force escalation. Observed in e13450f1ee.json: model emitted the
+     *  identical "Find Telegram chat ID / Send via openclaw" plan twice
+     *  with no checkmarks moved — clear sign it's not converging. */
+    let stagnantPlanEmissions = 0;
     /** Per-binary error counts — keyed by `${binary} ${subcommand}` extracted
      *  from execute_command. When the same combo errors twice with no
      *  intervening web_search/web_fetch/man, we block further invocations of
@@ -3261,10 +3267,51 @@ ${agentPrompt}
         isConsecutiveSuspicion || isAlternatingSuspicion || isSemanticSuspicion;
 
       if (suspicionTriggered) {
-        // Rate-limit arbiter: don't call again within 3 steps of a previous call
-        // (arbiter itself costs an LLM roundtrip; false positives don't block)
-        if (lastArbiterStep >= 0 && i - lastArbiterStep < 3) {
+        // Rate-limit arbiter: don't call again within 3 steps of a previous
+        // call (arbiter itself costs an LLM roundtrip; false positives don't
+        // block) — UNLESS the suspicion is exact-string consecutive. Same
+        // action emitted three times in a row is unambiguous, no LLM check
+        // needed: just block. Observed in log e13450f1ee.json — `openclaw
+        // directory peers list … | grep -v '🦞'` ran 3 times in a row, the
+        // first triggered the arbiter, the next two were silently allowed
+        // through because of the rate limit.
+        const exactDup = isConsecutiveSuspicion;
+        if (lastArbiterStep >= 0 && i - lastArbiterStep < 3 && !exactDup) {
           // Treat as benign — heuristic already asked recently, give it space
+        } else if (exactDup && lastArbiterStep >= 0 && i - lastArbiterStep < 3) {
+          // Identical-string duplicate during arbiter cooldown: skip the LLM
+          // call but still block. The heuristic is decisive on its own here.
+          loopBreaks++;
+          if (actionKey) recentlyBlockedAction = actionKey;
+          recentActions.length = 0;
+          recentCoarseKeys.length = 0;
+          if (loopBreaks >= 3) {
+            const tried = recentActionDetails
+              .slice(-6)
+              .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
+              .join("; ");
+            return {
+              success: true,
+              message: `I'm stuck repeating the same action and can't figure out the right approach. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do?`,
+              type: "question",
+              continuation: {
+                history: [...history],
+                executedCommands: [...executedCommands],
+                usedScaffold,
+                wroteFiles,
+                usedWebTools,
+                lastWriteDir,
+                terminalBusy,
+                agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
+                agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
+              },
+            };
+          }
+          history.push({
+            role: "user",
+            content: `LOOP DETECTED: you ran "${action.tool}" with the SAME parameters again. The output won't change. This action is BLOCKED. Either parse the output you already have, try a structurally different approach (different tool, different file/path), or use ask_question / final_answer.`,
+          });
+          continue;
         } else {
           lastArbiterStep = i;
           // Don't emit a "thinking" update here — that surfaces as a thought
@@ -3404,6 +3451,43 @@ ${agentPrompt}
                 ? t.status
                 : "pending",
           }));
+
+        // Plan stagnation: if the new plan is identical to the existing one
+        // (same items in same order, same statuses), the model is restating
+        // without making progress. After two such re-emissions, escalate.
+        const sigOf = (todos: import("../../types").AgentTodo[]) =>
+          todos.map((t) => `${t.status}|${t.content}`).join("\n");
+        const newSig = sigOf(cleaned);
+        const oldSig = sigOf(agentTodos);
+        if (cleaned.length > 0 && newSig === oldSig) {
+          stagnantPlanEmissions++;
+        } else {
+          stagnantPlanEmissions = 0;
+        }
+        if (stagnantPlanEmissions >= 2) {
+          stagnantPlanEmissions = 0;
+          const inProg = cleaned.find((t: import("../../types").AgentTodo) => t.status === "in_progress");
+          const blocker = inProg
+            ? `I keep restating the plan without progress on "${inProg.content}".`
+            : "I keep restating the same plan without making progress.";
+          return {
+            success: true,
+            message: `${blocker} What would you like me to do? (e.g. provide a specific value, point me at docs, or have me abandon this sub-task)`,
+            type: "question",
+            continuation: {
+              history: [...history],
+              executedCommands: [...executedCommands],
+              usedScaffold,
+              wroteFiles,
+              usedWebTools,
+              lastWriteDir,
+              terminalBusy,
+              agentTodos: cleaned.length > 0 ? [...cleaned] : undefined,
+              agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
+            },
+          };
+        }
+
         agentTodos = cleaned;
         if (cleaned.length > 0) hasPublishedPlan = true;
         const summary =
