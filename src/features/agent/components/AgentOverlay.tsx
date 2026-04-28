@@ -1295,26 +1295,27 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
           return "Task Completed";
         })();
 
-  // Steps to show in panel: include executing steps (with spinner).
-  // We hide every plan step EXCEPT the most-recent one — instead we pin the
-  // active plan as a sticky card above the scrollable history (see below).
-  // Without this filter every todo_write re-emission would clutter the
-  // history with stale plan blocks (Claude Code shows only the live plan).
+  // Steps to show in panel: keep the agentThread reference itself — DO NOT
+  // clone via .map(). Cloning ran on every token-streaming update and broke
+  // downstream useMemo cache by reference, which observably froze the
+  // panel during long agent runs (the user reported it). Instead we pass
+  // the latest-plan index down to renderStep, which skips earlier plan
+  // entries inline.
+  const panelSteps = agentThread;
+
+  // Index of the most recent plan emission. Cheap O(n) — but the only
+  // dependency is agentThread length+last-step (stable identity for most
+  // updates), so it recomputes essentially never during streaming.
   const latestPlanIdx = useMemo(() => {
     for (let i = agentThread.length - 1; i >= 0; i--) {
       if (agentThread[i].step === "plan") return i;
     }
     return -1;
+    // Use length as the proxy — a new step appended (or replaced) bumps
+    // .length or replaces the last item; both flip array identity. We
+    // don't need to recompute on every streaming-thinking byte.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentThread]);
-  const panelSteps = useMemo(
-    () =>
-      agentThread.map((s, i) =>
-        s.step === "plan" && i !== latestPlanIdx
-          ? { ...s, step: "_hidden_plan" }
-          : s,
-      ),
-    [agentThread, latestPlanIdx],
-  );
 
   // Active plan summary: the most recent plan step's todo list, IF it has
   // any incomplete items. Once every item is done we let it scroll into
@@ -1720,7 +1721,10 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     key: string,
                     globalIdx: number,
                   ) => {
-                    if (step.step === "_hidden_plan") return null;
+                    // Hide every plan step except the most recent one — the
+                    // sticky pinned card above renders the live plan, so
+                    // older plan emissions are pure scroll-history noise.
+                    if (step.step === "plan" && globalIdx !== latestPlanIdx) return null;
                     const isStopped = step.step === "stopped";
                     const isError =
                       step.step === "error" || step.step === "failed";

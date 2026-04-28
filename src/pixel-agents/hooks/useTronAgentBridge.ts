@@ -268,10 +268,18 @@ export function useAgentStatuses(): AgentStatus[] {
       // when the PTY is actively emitting bytes — but an idle Claude Code
       // session at the input prompt may go many seconds with no chunks at
       // all, and a session that was already running BEFORE the user opened
-      // this Tron window has no chunk history. Reading the rendered xterm
-      // buffer every reconcile cycle catches both. Cheap: just a string
-      // scan over ~60 lines of already-rendered text.
-      const screenScan = readScreenBuffer(id, 60);
+      // this Tron window has no chunk history.
+      //
+      // Perf: the per-chunk handler already calls detectExternalAgentSignal
+      // on the rendered buffer, so this 500ms poll is only useful when no
+      // chunks have flowed recently. Skip when the session is being
+      // actively driven by Tron's own agent (we already have authoritative
+      // state for that path) and when chunks arrived within the last 1s.
+      const lastChunkAt = lookbackRing.current.has(id) ? terminalSpinnerSeen.current.get(id) ?? 0 : 0;
+      const skipPoll =
+        agentRunning.current.has(id) || // Tron's own agent — has its own state path below
+        now - lastChunkAt < 1000;        // chunks just arrived; per-chunk handler already ran the detector
+      const screenScan = skipPoll ? null : readScreenBuffer(id, 40);
       if (screenScan) {
         const inAlt = isAlternateBuffer(id);
         const sig2 = detectExternalAgentSignal(screenScan);

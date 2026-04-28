@@ -2347,6 +2347,11 @@ ${agentPrompt}
      *  identical "Find Telegram chat ID / Send via openclaw" plan twice
      *  with no checkmarks moved — clear sign it's not converging. */
     let stagnantPlanEmissions = 0;
+    /** Step index of the last todo_write call. Used to detect "in_progress
+     *  for too long" — the model often forgets to emit a status update
+     *  after finishing an item; we nudge it after a few substantive steps
+     *  with no plan refresh. */
+    let lastPlanWriteStep = -1;
     /** Per-binary error counts — keyed by `${binary} ${subcommand}` extracted
      *  from execute_command. When the same combo errors twice with no
      *  intervening web_search/web_fetch/man, we block further invocations of
@@ -2562,9 +2567,34 @@ ${agentPrompt}
             for (const m of agentMemory) lines.push(`- ${m}`);
             lines.push("");
           }
-          lines.push(
-            "(Stay on the in-progress / pending plan item. If the same kind of action keeps failing, web_search the docs OR ask_question. Use remember() to add new constraints.)",
+          // Plan-status freshness nudge: if the model hasn't called
+          // todo_write in 4+ substantive steps AND the plan still has an
+          // in_progress / pending item, the displayed plan is stale.
+          // Direct the model to either mark the current item completed
+          // (and start the next) or split it. Without this hint, weaker
+          // models emit todo_write once and never update statuses.
+          const stepsSincePlan =
+            lastPlanWriteStep >= 0 ? i - lastPlanWriteStep : Number.MAX_SAFE_INTEGER;
+          const hasIncomplete = agentTodos.some(
+            (t) => t.status !== "completed",
           );
+          if (
+            agentTodos.length > 0 &&
+            hasIncomplete &&
+            stepsSincePlan >= 4
+          ) {
+            const inProg = agentTodos.find((t) => t.status === "in_progress");
+            const target = inProg
+              ? `"${inProg.content.slice(0, 80)}"`
+              : "the current pending item";
+            lines.push(
+              `(⚠ Plan is stale: ${stepsSincePlan} steps since last todo_write update. If you finished ${target}, your NEXT response MUST be todo_write marking it 'completed' (and the next item 'in_progress'). If you're still working on it, continue — but emit a refreshed todo_write at least every 4 steps.)`,
+            );
+          } else {
+            lines.push(
+              "(Stay on the in-progress / pending plan item. If the same kind of action keeps failing, web_search the docs OR ask_question. Use remember() to add new constraints.)",
+            );
+          }
           history.push({ role: "user", content: lines.join("\n") });
         }
       }
@@ -3490,6 +3520,7 @@ ${agentPrompt}
 
         agentTodos = cleaned;
         if (cleaned.length > 0) hasPublishedPlan = true;
+        lastPlanWriteStep = i;
         const summary =
           cleaned.length === 0
             ? "Plan cleared."
