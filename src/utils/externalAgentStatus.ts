@@ -22,28 +22,38 @@ function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, "");
 }
 
-const SPINNER_GLYPHS = "·✢✳✶✻✽*";
-const SPINNER_GLYPH_CLASS = `[${SPINNER_GLYPHS}]`;
+// Spinner glyphs used by Claude Code (src/components/Spinner/utils.ts).
+// Kept here as documentation — the parser no longer requires the glyph
+// because Ink may wrap the spinner across lines and the unique phrase
+// "esc to interrupt" is sufficient on its own.
+// const SPINNER_GLYPHS = "·✢✳✶✻✽*";
 
 /**
- * Parse a Claude Code spinner line. Returns null if the line isn't one.
- * Canonical shape: `<glyph> <Verb>… (<Ns | NmNs> · ↑ <X[k]> tokens · esc to interrupt)`
+ * Parse Claude Code's spinner status from a chunk of text. The spinner is
+ * rendered by Ink as a flex-row with three Box children (glyph / verb /
+ * suffix), so on narrow terminals it wraps onto multiple lines and a
+ * line-by-line scan misses it. We work on the WHOLE stripped chunk and
+ * key off the load-bearing phrase "esc to interrupt", which only ever
+ * appears in Claude Code's spinner suffix and is unique enough to act
+ * as a positive identifier on its own.
+ *
+ * Canonical shape (single line): `<glyph> <Verb>… (<Ns> · ↑ <X[k]> tokens · esc to interrupt)`
+ * Wrapped shape (narrow terminal):
+ *   `<glyph> <Verb>…`
+ *   `(<Ns> · ↑ <X[k]> tokens · esc`
+ *   ` to interrupt)`
  */
-export function parseSpinnerLine(line: string): {
+export function parseSpinnerLine(input: string): {
   working: true;
   elapsedSeconds?: number;
   tokens?: number;
 } | null {
-  const stripped = stripAnsi(line);
+  const stripped = stripAnsi(input);
   if (!stripped) return null;
-  // Must contain "esc to interrupt" — that's the load-bearing signal that
-  // Claude is actually still busy. Verbs and glyphs alone leak across into
-  // idle frames (the last spinner frame sometimes lingers in scrollback).
-  if (!/esc to interrupt/i.test(stripped)) return null;
-  // And must look like a spinner (glyph + verb + ellipsis), not just a
-  // random message that happens to contain "esc to interrupt".
-  const spinnerRe = new RegExp(`${SPINNER_GLYPH_CLASS}\\s+[A-Z][a-z]+[…\\.]`);
-  if (!spinnerRe.test(stripped)) return null;
+  // The phrase "esc to interrupt" is unique to Claude Code's spinner —
+  // shells, TUIs (vim/htop/man), and other agent CLIs don't print it.
+  // Allow the phrase to span a wrap point (e.g. "esc\nto interrupt").
+  if (!/esc\s+to\s+interrupt/i.test(stripped)) return null;
 
   // Extract elapsed time. Tolerant of seconds (`5s`), minutes+seconds
   // (`1m20s`), and hours (`2h5m10s`). Always returned as total seconds.
@@ -202,19 +212,17 @@ export function detectExternalAgentSignal(rawData: string): ExternalAgentSignal 
   if (!stripped) return {};
   const result: ExternalAgentSignal = {};
 
-  // Spinner: line-level scan because each chunk usually contains exactly
-  // one spinner repaint, but we still walk lines so trailing junk doesn't
-  // veto the parse.
-  for (const line of stripped.split(/\r?\n/)) {
-    const sp = parseSpinnerLine(line);
-    if (sp) {
-      result.working = true;
-      if (sp.elapsedSeconds != null) result.elapsedSeconds = sp.elapsedSeconds;
-      if (sp.tokens != null) result.tokens = sp.tokens;
-      // Spinner without a more specific tool implies thinking
-      if (!result.tool) result.tool = "thinking";
-      break;
-    }
+  // Spinner: pass the whole chunk to the parser. The spinner is rendered
+  // as an Ink flex-row, so on narrow terminals the (esc to interrupt)
+  // suffix wraps to its own line. A per-line scan would miss the working
+  // state when wrapping happens.
+  const sp = parseSpinnerLine(stripped);
+  if (sp) {
+    result.working = true;
+    if (sp.elapsedSeconds != null) result.elapsedSeconds = sp.elapsedSeconds;
+    if (sp.tokens != null) result.tokens = sp.tokens;
+    // Spinner without a more specific tool implies thinking
+    if (!result.tool) result.tool = "thinking";
   }
 
   // Tool-call lines (⏺ Read, ⏺ Bash, ⏺ Editing 3 files…)

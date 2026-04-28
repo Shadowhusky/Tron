@@ -58,8 +58,35 @@ describe("parseSpinnerLine", () => {
     expect(parseSpinnerLine("")).toBeNull();
   });
 
-  it("ignores lines that contain a glyph but lack both the verb and the marker", () => {
+  it("ignores text that contains a glyph but lacks the esc-to-interrupt marker", () => {
     expect(parseSpinnerLine("✻ note: thinking is enabled")).toBeNull();
+    expect(parseSpinnerLine("✻ Welcome to Claude Code v1.0")).toBeNull();
+  });
+
+  it("matches when the spinner suffix wraps onto its own line (narrow terminal)", () => {
+    // Claude Code renders the spinner as a flex-row with three Ink Box
+    // children; on narrow terminals the suffix wraps and 'esc to interrupt'
+    // ends up on a separate line from the glyph + verb.
+    const wrapped = "✻ Cogitating…\n(5s · ↑ 2.3k tokens · esc to interrupt)";
+    const out = parseSpinnerLine(wrapped);
+    expect(out).not.toBeNull();
+    expect(out!.working).toBe(true);
+    expect(out!.elapsedSeconds).toBe(5);
+    expect(out!.tokens).toBe(2300);
+  });
+
+  it("tolerates 'esc' and 'to interrupt' on different lines", () => {
+    const split = "(5s · esc\n   to interrupt)";
+    expect(parseSpinnerLine(split)).not.toBeNull();
+  });
+
+  it("recognises the spinner WITHOUT a glyph (only the suffix arrived)", () => {
+    // When the screen scan only captures the bottom of a wrapped spinner,
+    // the glyph + verb are off-screen but the suffix line is enough since
+    // 'esc to interrupt' is unique to Claude Code.
+    expect(
+      parseSpinnerLine("(7s · esc to interrupt)"),
+    ).not.toBeNull();
   });
 });
 
