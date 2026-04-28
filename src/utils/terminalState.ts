@@ -34,6 +34,14 @@ const INPUT_PROMPT_PATTERNS = [
   /do you want to proceed\??/i,
   /would you like to proceed\??/i,
   /allow this action\??/i,
+  // Shell continuation prompts — bash/zsh/sh emit these when a command has
+  // an unclosed quote, backtick, brace, or heredoc. Without detection the
+  // agent thinks a command is "still running" and waits forever.
+  /^dquote>\s*$/,
+  /^quote>\s*$/,
+  /^cmdsubst>\s*$/,
+  /^heredoc>\s*$/,
+  /^\?>\s*$/,
 ];
 
 /**

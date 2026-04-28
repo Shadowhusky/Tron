@@ -2321,6 +2321,13 @@ ${agentPrompt}
     const agentMemory: string[] = continuation?.agentMemory
       ? [...continuation.agentMemory]
       : [];
+    /** Counts substantive tool calls (not parse retries / loop blocks). Used
+     *  to enforce plan-first: after N substantive calls without todo_write
+     *  we inject a hard reminder. Resumed runs (continuation) are treated as
+     *  if a plan already exists since the prior turn likely had one. */
+    let substantiveSteps = 0;
+    let hasPublishedPlan = (continuation?.agentTodos?.length ?? 0) > 0;
+    let planNudgesSent = 0;
 
     // ── Repeated error / stagnation detection ──────────────────────────────
     // Tracks error "signatures" (TypeError, SyntaxError, module not found, etc.)
@@ -2451,6 +2458,26 @@ ${agentPrompt}
           );
           history.push({ role: "user", content: lines.join("\n") });
         }
+      }
+
+      // Plan-first enforcement. Past a few substantive steps with no plan
+      // published, the agent is wandering — inject a forcing nudge. Models
+      // that ignored the system-prompt PLAN FIRST rule respond well to a
+      // mid-stream user message that demands the next action shape.
+      if (!hasPublishedPlan && substantiveSteps >= 5 && planNudgesSent === 0) {
+        history.push({
+          role: "user",
+          content:
+            "[plan check] You've taken 5+ tool calls without publishing a plan. STOP exploring. Your NEXT response MUST be a todo_write call with 3-7 short, verb-led steps describing the work ahead. After that, work the list one item at a time. If the original task is genuinely ambiguous (e.g. recipient unspecified, multiple plausible targets), use ask_question instead of guessing.",
+        });
+        planNudgesSent = 1;
+      } else if (!hasPublishedPlan && substantiveSteps >= 12 && planNudgesSent < 2) {
+        history.push({
+          role: "user",
+          content:
+            "[plan check — final] You have ignored the planning request. You are clearly stuck or going in circles. Either: (a) emit todo_write NOW with a plan reflecting what you've discovered, (b) emit ask_question to clarify the user's intent, or (c) emit final_answer reporting what you've found and what blocked you. Any other tool call will be terminated.",
+        });
+        planNudgesSent = 2;
       }
 
       if (thinkingEnabled) {
@@ -3193,6 +3220,18 @@ ${agentPrompt}
 
       // 3. Execute Tool
 
+      // Track substantive (non-parse-retry, non-blocked) tool calls — drives
+      // the plan-first nudge above. Don't count todo_write itself (that's
+      // the planning step) or final_answer/ask_question (terminal states).
+      if (
+        action.tool &&
+        action.tool !== "todo_write" &&
+        action.tool !== "final_answer" &&
+        action.tool !== "ask_question"
+      ) {
+        substantiveSteps++;
+      }
+
       // Plan step: structured plan with steps array
       // Only accept plans if the user explicitly asked for one AND agent hasn't executed anything yet
       const userAskedForPlan = /\b(plan\b|make a plan|outline the|break\s*down)/i.test(prompt);
@@ -3243,6 +3282,7 @@ ${agentPrompt}
                 : "pending",
           }));
         agentTodos = cleaned;
+        if (cleaned.length > 0) hasPublishedPlan = true;
         const summary =
           cleaned.length === 0
             ? "Plan cleared."
@@ -3982,7 +4022,22 @@ ${agentPrompt}
               content: `${output}\n\n⚠️ A TUI program is running: **${tuiProgram}**. The terminal is NOT at a shell prompt.\n- If your current task is UNRELATED to ${tuiProgram}: use execute_command or run_in_terminal for your next command — the system will automatically exit the TUI first.\n- If your task IS related to ${tuiProgram}: interact directly using send_text with appropriate keystrokes, then read_terminal to verify.`,
             });
           } else if (termState === "input_needed") {
-            if (identicalReadCount >= 3) {
+            // Shell continuation prompts mean an unclosed quote/brace/heredoc.
+            // The agent must Ctrl+C out, not try to "answer" the prompt.
+            const lastLine = (output || "").trimEnd().split(/\r?\n/).pop()?.trim() || "";
+            const stuckOnQuote = /^(dquote|quote|cmdsubst|heredoc|\?)>\s*$/.test(lastLine);
+            if (stuckOnQuote) {
+              const which =
+                lastLine.startsWith("dquote") ? "an unclosed double-quote" :
+                lastLine.startsWith("quote") ? "an unclosed single-quote" :
+                lastLine.startsWith("cmdsubst") ? "an unclosed $(...) command substitution" :
+                lastLine.startsWith("heredoc") ? "an unfinished heredoc" :
+                "an unclosed quote/brace";
+              history.push({
+                role: "user",
+                content: `${output}\n\n⚠️ Shell is waiting because your last execute_command had ${which} (the prompt now reads "${lastLine}"). Do NOT try to answer it. Send_text "\\x03" to abort, then re-run the command with proper quote escaping. Hint: wrap arguments containing double quotes in SINGLE quotes — e.g. instead of execute_command("foo --message \\"Hi 'there'\\""), use execute_command(\`foo --message 'Hi there'\`). For payloads with both quote styles, build the JSON in write_file and pass --data-file instead.`,
+              });
+            } else if (identicalReadCount >= 3) {
               history.push({
                 role: "user",
                 content: `${output}\n\n⚠️ IMPORTANT: Terminal has been waiting for user input for ${identicalReadCount} consecutive checks with NO CHANGE. The user needs to take action (e.g. complete a login flow in the browser, enter a password, etc.). You MUST use ask_question NOW to tell the user what you're waiting for and ask them to confirm when they're done. Do NOT call read_terminal again until the user responds.`,

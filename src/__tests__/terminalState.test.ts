@@ -149,6 +149,31 @@ transforming (143) src/components/App.tsx`;
   it("random text with no prompt or server pattern is busy", () => {
     expect(classifyTerminalOutput("doing something...")).toBe("busy");
   });
+
+  // ── Shell quote/heredoc continuation ───────────────────────────────────
+  it("classifies a stuck dquote> prompt as input_needed", () => {
+    expect(
+      classifyTerminalOutput("$ curl -X POST 'https://api/' --data \"unclosed\ndquote> "),
+    ).toBe("input_needed");
+  });
+
+  it("classifies a stuck quote> prompt as input_needed", () => {
+    expect(
+      classifyTerminalOutput("$ echo 'unclosed\nquote> "),
+    ).toBe("input_needed");
+  });
+
+  it("classifies a cmdsubst> continuation as input_needed", () => {
+    expect(
+      classifyTerminalOutput("$ echo $(unclosed\ncmdsubst> "),
+    ).toBe("input_needed");
+  });
+
+  it("classifies a heredoc> continuation as input_needed", () => {
+    expect(
+      classifyTerminalOutput("$ cat <<EOF\nheredoc> "),
+    ).toBe("input_needed");
+  });
 });
 
 // =============================================================================
