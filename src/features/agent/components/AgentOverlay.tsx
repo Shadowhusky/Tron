@@ -1295,8 +1295,40 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
           return "Task Completed";
         })();
 
-  // Steps to show in panel: include executing steps (with spinner)
-  const panelSteps = agentThread;
+  // Steps to show in panel: include executing steps (with spinner).
+  // We hide every plan step EXCEPT the most-recent one — instead we pin the
+  // active plan as a sticky card above the scrollable history (see below).
+  // Without this filter every todo_write re-emission would clutter the
+  // history with stale plan blocks (Claude Code shows only the live plan).
+  const latestPlanIdx = useMemo(() => {
+    for (let i = agentThread.length - 1; i >= 0; i--) {
+      if (agentThread[i].step === "plan") return i;
+    }
+    return -1;
+  }, [agentThread]);
+  const panelSteps = useMemo(
+    () =>
+      agentThread.map((s, i) =>
+        s.step === "plan" && i !== latestPlanIdx
+          ? { ...s, step: "_hidden_plan" }
+          : s,
+      ),
+    [agentThread, latestPlanIdx],
+  );
+
+  // Active plan summary: the most recent plan step's todo list, IF it has
+  // any incomplete items. Once every item is done we let it scroll into
+  // history alongside the final answer instead of staying pinned forever.
+  const activePlan = useMemo(() => {
+    if (latestPlanIdx < 0) return null;
+    const todos = agentThread[latestPlanIdx]?.payload?.todos as
+      | Array<{ content: string; status: "pending" | "in_progress" | "completed" }>
+      | undefined;
+    if (!todos || todos.length === 0) return null;
+    const allDone = todos.every((t) => t.status === "completed");
+    if (allDone) return null;
+    return todos;
+  }, [agentThread, latestPlanIdx]);
 
   // --- Virtual list for agent history ---
   const flatItems = useMemo(() => {
@@ -1607,11 +1639,80 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
           {/* Thread History */}
           {isExpanded && (panelSteps.length > 0 || isAgentRunning) && (
-            <div className="flex-1 relative min-h-0">
+            <div className="flex-1 relative min-h-0 flex flex-col">
+              {/* Pinned active plan — Claude-Code-style sticky card. Stays
+                  visible at the top of the panel while the agent works
+                  through it. Disappears (drops into history) once every
+                  todo is completed. */}
+              {activePlan && (
+                <div
+                  data-testid="agent-active-plan"
+                  className={`shrink-0 mx-3 mt-3 mb-1 rounded-lg border ${
+                    isLight
+                      ? "border-indigo-200 bg-indigo-50/60"
+                      : "border-indigo-500/30 bg-indigo-500/[0.06]"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1">
+                    <ListOrdered
+                      className={`w-3 h-3 ${isLight ? "text-indigo-500" : "text-indigo-400"}`}
+                    />
+                    <span
+                      className={`uppercase font-bold text-[10px] tracking-wider ${isLight ? "text-indigo-600" : "text-indigo-300"}`}
+                    >
+                      Active Plan
+                    </span>
+                    <span
+                      className={`ml-auto text-[10px] ${isLight ? "text-gray-500" : "text-gray-500"}`}
+                    >
+                      {activePlan.filter((t) => t.status === "completed").length}/
+                      {activePlan.length}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5 px-2.5 pb-2">
+                    {activePlan.map((t, i) => {
+                      const isDoneItem = t.status === "completed";
+                      const isActiveItem = t.status === "in_progress";
+                      const mark = isDoneItem ? "✓" : isActiveItem ? "→" : "○";
+                      const lineCls = isDoneItem
+                        ? isLight
+                          ? "text-gray-400 line-through"
+                          : "text-gray-500 line-through"
+                        : isActiveItem
+                          ? isLight
+                            ? "text-indigo-700 font-medium"
+                            : "text-indigo-200 font-medium"
+                          : isLight
+                            ? "text-gray-700"
+                            : "text-gray-300";
+                      const markCls = isDoneItem
+                        ? isLight
+                          ? "text-green-600"
+                          : "text-green-400"
+                        : isActiveItem
+                          ? isLight
+                            ? "text-indigo-500"
+                            : "text-indigo-300"
+                          : isLight
+                            ? "text-gray-400"
+                            : "text-gray-600";
+                      return (
+                        <div
+                          key={i}
+                          className="flex items-baseline gap-2 text-[11px] leading-snug"
+                        >
+                          <span className={`${markCls} font-mono w-3 shrink-0`}>{mark}</span>
+                          <span className={lineCls}>{t.content}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div
                 ref={scrollRef}
                 onScroll={handleScroll}
-                className="h-full overflow-y-auto font-mono text-xs"
+                className="flex-1 overflow-y-auto font-mono text-xs min-h-0"
               >
                 {(() => {
                   const renderStep = (
@@ -1619,6 +1720,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     key: string,
                     globalIdx: number,
                   ) => {
+                    if (step.step === "_hidden_plan") return null;
                     const isStopped = step.step === "stopped";
                     const isError =
                       step.step === "error" || step.step === "failed";
