@@ -141,6 +141,122 @@ const _stripTags = (s: string) => s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
   .replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 
+// ── Skills (Anthropic Agent Skills format) ──────────────────────────────
+//
+// Mirrors electron/ipc/skills.ts. Walks .tron/skills, .agents/skills,
+// .claude/skills, etc. under cwd + ~ for SKILL.md files; parses YAML
+// front-matter (name, description) so the agent gets a discoverable
+// list of available skills. Source-of-truth lives in electron/ipc/skills.ts;
+// keep these in sync. Tested by hand — no shared module because the
+// server lives in a separate tsconfig.
+
+const SKILL_PARENT_DIRS = [
+  ".tron/skills",
+  ".agents/skills",
+  ".claude/skills",
+  ".codex/skills",
+  ".cursor/skills",
+  ".warp/skills",
+  ".github/skills",
+];
+
+function _parseSkillFrontMatter(text: string): { name?: string; description?: string } {
+  if (!text.startsWith("---")) return {};
+  const end = text.indexOf("\n---", 3);
+  if (end < 0) return {};
+  const body = text.slice(3, end).trim();
+  const out: { name?: string; description?: string } = {};
+  let collecting: "name" | "description" | null = null;
+  let collected = "";
+  for (const rawLine of body.split(/\r?\n/)) {
+    const indented = /^\s+\S/.test(rawLine);
+    if (indented && collecting) {
+      collected += " " + rawLine.trim();
+      continue;
+    }
+    if (collecting) {
+      out[collecting] = collected.replace(/\s+/g, " ").trim();
+      collecting = null;
+      collected = "";
+    }
+    const m = rawLine.match(/^(\w+)\s*:\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    if (key !== "name" && key !== "description") continue;
+    if (value === "" || value === ">" || value === "|") {
+      collecting = key as "name" | "description";
+      collected = "";
+      continue;
+    }
+    out[key as "name" | "description"] = value.replace(/^["']|["']$/g, "");
+  }
+  if (collecting) out[collecting] = collected.replace(/\s+/g, " ").trim();
+  return out;
+}
+
+interface DiscoveredSkill {
+  name: string;
+  description: string;
+  path: string;
+  source: string;
+}
+
+function _discoverInParent(parent: string, source: string): DiscoveredSkill[] {
+  const out: DiscoveredSkill[] = [];
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(parent, { withFileTypes: true }); }
+  catch { return out; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(parent, entry.name);
+    const skillFile = ["SKILL.md", "skill.md", "Skill.md"]
+      .map((n) => path.join(skillDir, n))
+      .find((p) => fs.existsSync(p));
+    if (!skillFile) continue;
+    let content: string;
+    try { content = fs.readFileSync(skillFile, "utf-8"); }
+    catch { continue; }
+    const fm = _parseSkillFrontMatter(content);
+    out.push({
+      name: fm.name || entry.name,
+      description: fm.description || "",
+      path: skillFile,
+      source,
+    });
+  }
+  return out;
+}
+
+function discoverSkills(cwd?: string): DiscoveredSkill[] {
+  const home = os.homedir();
+  const projectRoot = cwd || process.cwd();
+  const seen = new Map<string, DiscoveredSkill>();
+  for (const sub of SKILL_PARENT_DIRS) {
+    for (const skill of _discoverInParent(path.join(projectRoot, sub), sub)) {
+      if (!seen.has(skill.name)) seen.set(skill.name, skill);
+    }
+  }
+  for (const sub of SKILL_PARENT_DIRS) {
+    for (const skill of _discoverInParent(path.join(home, sub), `~/${sub}`)) {
+      if (!seen.has(skill.name)) seen.set(skill.name, skill);
+    }
+  }
+  return [...seen.values()];
+}
+
+function readSkill(filePath: string): { success: boolean; content?: string; error?: string } {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > 256 * 1024) {
+      return { success: false, error: `Skill file too large (${stat.size} bytes; max 256KB)` };
+    }
+    return { success: true, content: fs.readFileSync(filePath, "utf-8") };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
 async function webSearchImpl(q: string): Promise<{ results: SR[]; error?: string }> {
   if (!q) return { results: [] };
 
@@ -648,6 +764,10 @@ async function handleInvoke(
       return webSearchImpl(data?.query || "");
     case "web.fetch":
       return webFetchImpl(data?.url || "");
+    case "skills.discover":
+      return discoverSkills(data?.cwd);
+    case "skills.read":
+      return readSkill(data?.path || "");
     case "file.saveTempImage": {
       const tmpDir = path.join(os.tmpdir(), "tron-images");
       if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });

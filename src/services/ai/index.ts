@@ -2043,11 +2043,39 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       usedWebTools = continuation.usedWebTools ?? false;
       terminalBusy = continuation.terminalBusy;
     } else {
+      // Discover Agent Skills under the session's cwd + ~. Skills are
+      // user-curated playbooks (Anthropic Agent Skills format, see also
+      // .claude/skills, .warp/skills) — we list each name + one-line
+      // description in the system prompt so the agent knows what's
+      // available, then expands a skill's body on demand via read_skill.
+      let skillsBlock = "";
+      try {
+        const ipc = (window as any)?.electron?.ipcRenderer;
+        if (ipc?.invoke) {
+          const sessionCwd = options?.sessionId
+            ? await ipc.invoke("terminal.getCwd", options.sessionId).catch(() => undefined)
+            : undefined;
+          const discovered = await ipc.invoke("skills.discover", { cwd: sessionCwd });
+          if (Array.isArray(discovered) && discovered.length > 0) {
+            const lines = discovered
+              .slice(0, 30)
+              .map(
+                (s: { name: string; description: string }) =>
+                  `- ${s.name}: ${s.description.slice(0, 200) || "(no description)"}`,
+              )
+              .join("\n");
+            skillsBlock = `\n═══ SKILLS (call read_skill to expand) ═══\n\n${lines}\n`;
+          }
+        }
+      } catch {
+        /* skill discovery is best-effort — never block agent startup */
+      }
+
       history = [
         {
           role: "system",
           content: `Terminal agent. Respond ONLY with one valid JSON tool call per turn.
-
+${skillsBlock}
 ═══ TOOLS ═══
 
 {"tool":"execute_command","command":"..."}
@@ -2114,6 +2142,14 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
   Fetch a single page as plain text. Use after web_search on a URL that looks
   promising — README, docs page, Stack Overflow answer. NEVER use this on JSON
   API endpoints (yahoo finance, stock/weather APIs) — those are forbidden.
+
+{"tool":"read_skill","name":"<skill-name>"}
+  Load the body of a discoverable Agent Skill (Anthropic Agent Skills format).
+  Available skills are listed in [SKILLS] above with their name + one-line
+  description; call read_skill with the name to expand the full body into your
+  context. Use when the description matches the user's task — skills are
+  curated playbooks for common workflows (deploy a Vite app, run a security
+  review, etc.).
 
 {"tool":"todo_write","todos":[{"content":"...","status":"pending|in_progress|completed"}, ...]}
   ANNOUNCE A PLAN. For any task that needs 3+ tool calls, START by writing a
@@ -2911,7 +2947,7 @@ ${agentPrompt}
         "execute_command", "run_in_terminal", "send_text", "read_terminal",
         "write_file", "read_file", "edit_file", "list_dir", "search_dir",
         "web_search", "web_fetch",
-        "todo_write", "remember",
+        "todo_write", "remember", "read_skill",
         "ask_question", "final_answer",
       ]);
 
@@ -3536,6 +3572,60 @@ ${agentPrompt}
           role: "user",
           content: `Plan updated:\n${summary}\n\nNow execute the next 'in_progress' (or 'pending') item.`,
         });
+        continue;
+      }
+
+      if (action.tool === "read_skill") {
+        // Expand an Agent Skill body into context. Look up by `name` against
+        // the discovered list (re-discovered on demand to pick up newly
+        // created skill files mid-session). Bounded by the 256KB cap on
+        // the IPC handler so a malformed SKILL.md can't blow the context.
+        const wantedName = (action.name || action.skill || "").trim();
+        if (!wantedName) {
+          history.push({
+            role: "user",
+            content: `<tool_use_error>read_skill requires a 'name' parameter (one of the names listed under [SKILLS] in your system prompt)</tool_use_error>`,
+          });
+          continue;
+        }
+        try {
+          const ipc = (window as any)?.electron?.ipcRenderer;
+          const sessionCwd = options?.sessionId
+            ? await ipc.invoke("terminal.getCwd", options.sessionId).catch(() => undefined)
+            : undefined;
+          const discovered = await ipc.invoke("skills.discover", { cwd: sessionCwd });
+          const match = (discovered || []).find(
+            (s: { name: string }) => s.name === wantedName,
+          );
+          if (!match) {
+            history.push({
+              role: "user",
+              content: `<tool_use_error>read_skill: no skill named "${wantedName}". Available: ${(discovered || []).map((s: any) => s.name).join(", ") || "(none)"}</tool_use_error>`,
+            });
+            continue;
+          }
+          const result = await ipc.invoke("skills.read", { path: match.path });
+          if (!result?.success) {
+            history.push({
+              role: "user",
+              content: `<tool_use_error>read_skill: ${result?.error || "unknown error"}</tool_use_error>`,
+            });
+            continue;
+          }
+          onUpdate("executed", `Loaded skill: ${match.name}`, {
+            tool: "read_skill",
+            name: match.name,
+          });
+          history.push({
+            role: "user",
+            content: `[SKILL: ${match.name}]\n${result.content}\n[/SKILL]\n\nNow follow the skill's guidance for the user's task.`,
+          });
+        } catch (err: any) {
+          history.push({
+            role: "user",
+            content: `<tool_use_error>read_skill failed: ${err.message}</tool_use_error>`,
+          });
+        }
         continue;
       }
 

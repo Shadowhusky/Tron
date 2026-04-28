@@ -14,6 +14,7 @@ import { registerSSHHandlers, cleanupAllSSHSessions } from "./ipc/ssh";
 import { registerWebServerHandlers, startWebServerManaged, stopWebServer, readWebServerConfig } from "./ipc/web-server";
 import { registerUpdaterHandlers, autoCheckForUpdates } from "./ipc/updater";
 import { registerWebHandlers } from "./ipc/web";
+import { registerSkillsHandlers } from "./ipc/skills";
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -274,6 +275,7 @@ registerAIHandlers();
 registerConfigHandlers();
 registerWebServerHandlers();
 registerWebHandlers();
+registerSkillsHandlers();
 registerUpdaterHandlers(() => mainWindow, () => { forceQuit = true; });
 
 // --- Window close response from renderer ---

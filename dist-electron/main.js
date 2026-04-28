@@ -46,6 +46,7 @@ const ssh_1 = require("./ipc/ssh");
 const web_server_1 = require("./ipc/web-server");
 const updater_1 = require("./ipc/updater");
 const web_1 = require("./ipc/web");
+const skills_1 = require("./ipc/skills");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
@@ -298,6 +299,7 @@ electron_1.ipcMain.handle("clipboard.readFilePaths", async () => {
 (0, config_1.registerConfigHandlers)();
 (0, web_server_1.registerWebServerHandlers)();
 (0, web_1.registerWebHandlers)();
+(0, skills_1.registerSkillsHandlers)();
 (0, updater_1.registerUpdaterHandlers)(() => mainWindow, () => { forceQuit = true; });
 // --- Window close response from renderer ---
 electron_1.ipcMain.on("window.closeConfirmed", () => {

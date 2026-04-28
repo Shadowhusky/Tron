@@ -60,6 +60,8 @@ const ALLOWED_INVOKE_CHANNELS = [
     "clipboard.readFilePaths",
     "web.search",
     "web.fetch",
+    "skills.discover",
+    "skills.read",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -175,6 +177,12 @@ const electronAPI = {
         getAppVersion: () => electron_1.ipcRenderer.invoke("updater.getVersion"),
         readClipboardImage: () => electron_1.ipcRenderer.invoke("clipboard.readImage"),
         readClipboardFilePaths: () => electron_1.ipcRenderer.invoke("clipboard.readFilePaths"),
+        /** Walk standard skill directories under cwd + ~ — Anthropic Agent
+         *  Skills format. Returns {name, description, path, source} entries
+         *  parseable from SKILL.md YAML front-matter. Free interop with the
+         *  Claude Code / Warp / Cursor / Codex skill ecosystems. */
+        discoverSkills: (cwd) => electron_1.ipcRenderer.invoke("skills.discover", { cwd }),
+        readSkill: (path) => electron_1.ipcRenderer.invoke("skills.read", { path }),
     },
 };
 // Expose via contextBridge to "_electronBridge" (frozen/read-only).

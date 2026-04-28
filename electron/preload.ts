@@ -60,6 +60,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   "clipboard.readFilePaths",
   "web.search",
   "web.fetch",
+  "skills.discover",
+  "skills.read",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -262,6 +264,25 @@ const electronAPI = {
       ipcRenderer.invoke("clipboard.readImage") as Promise<string | null>,
     readClipboardFilePaths: () =>
       ipcRenderer.invoke("clipboard.readFilePaths") as Promise<string[] | null>,
+    /** Walk standard skill directories under cwd + ~ — Anthropic Agent
+     *  Skills format. Returns {name, description, path, source} entries
+     *  parseable from SKILL.md YAML front-matter. Free interop with the
+     *  Claude Code / Warp / Cursor / Codex skill ecosystems. */
+    discoverSkills: (cwd?: string) =>
+      ipcRenderer.invoke("skills.discover", { cwd }) as Promise<
+        Array<{
+          name: string;
+          description: string;
+          path: string;
+          source: string;
+        }>
+      >,
+    readSkill: (path: string) =>
+      ipcRenderer.invoke("skills.read", { path }) as Promise<{
+        success: boolean;
+        content?: string;
+        error?: string;
+      }>,
   },
 };
 
