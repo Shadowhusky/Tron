@@ -522,18 +522,33 @@ const AppContent = () => {
           onDismiss={dismissNotification}
         />
         <TabSearchPalette />
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className="absolute inset-0"
-            style={{
-              visibility: tab.id === activeTabId ? "visible" : "hidden",
-              zIndex: tab.id === activeTabId ? 1 : 0,
-            }}
-          >
-            <SplitPane node={tab.root} />
-          </div>
-        ))}
+        {/* Render tabs in a STABLE DOM order (first-seen ascending) so a
+            TabBar reorder never causes React to move existing tab DOM
+            nodes via insertBefore — moving an xterm canvas mid-render
+            forces a GPU re-rasterize and produces a visible flicker on
+            the currently-active tab. The workspace doesn't care about
+            visual order (all tabs are absolutely positioned and fully
+            overlapping); only the TabBar does. */}
+        {(() => {
+          // Stable workspace ordering — sort by id for determinism. Each
+          // tab.id is a stable uuid so this produces a consistent order
+          // that's independent of the user-visible tab order.
+          const stableTabs = [...tabs].sort((a, b) =>
+            a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+          );
+          return stableTabs.map((tab) => (
+            <div
+              key={tab.id}
+              className="absolute inset-0"
+              style={{
+                visibility: tab.id === activeTabId ? "visible" : "hidden",
+                zIndex: tab.id === activeTabId ? 1 : 0,
+              }}
+            >
+              <SplitPane node={tab.root} />
+            </div>
+          ));
+        })()}
       </div>
 
       <AnimatePresence>
