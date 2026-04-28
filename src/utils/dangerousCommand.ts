@@ -109,11 +109,21 @@ const RULES: DangerRule[] = [
     level: "warning", reason: "Deletes Kubernetes resources" },
 
   // ─── Remote code execution / injection ───
-  { pattern: /\bcurl\s.*\|\s*(sudo\s+)?(ba)?sh\b/,
+  // Pipes to `bash` / `sh` / `zsh` with NO further argument (or only `-`,
+  // `-s`, `-i`, `-l` which all read from stdin). Whitelist explicit script
+  // arguments — `curl URL | bash script.sh` doesn't actually evaluate the
+  // curl payload as code.
+  { pattern: /\bcurl\s[^|]*\|\s*(sudo\s+)?(ba|z)?sh\s*(-[silSL]\s*)*(\||;|$)/,
     level: "danger", reason: "Pipes remote content to shell execution" },
-  { pattern: /\bwget\s.*\|\s*(sudo\s+)?(ba)?sh\b/,
+  { pattern: /\bwget\s[^|]*\|\s*(sudo\s+)?(ba|z)?sh\s*(-[silSL]\s*)*(\||;|$)/,
     level: "danger", reason: "Pipes remote content to shell execution" },
-  { pattern: /\bcurl\s.*\|\s*(sudo\s+)?python[0-9]*(\s+(?!-c\b)\S|\s*$)/,
+  // Pipes to Python only when Python is invoked WITHOUT -m (run named local
+  // module) and WITHOUT -c (run inline code from the args). Bare `python`
+  // and `python -` read the piped curl output and execute it as code;
+  // `python -m json.tool`, `python -m http.server` etc. only consume the
+  // pipe as data and are safe (this is the false positive that flagged the
+  // benign `curl … | python3 -m json.tool` JSON-formatting idiom).
+  { pattern: /\bcurl\s[^|]*\|\s*(sudo\s+)?python[0-9]*(\b(?!\s+-(?:m|c)\b))/,
     level: "danger", reason: "Pipes remote content to Python execution" },
   { pattern: /\beval\s*\(/,
     level: "warning", reason: "eval() executes arbitrary code" },
