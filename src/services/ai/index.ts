@@ -3206,11 +3206,28 @@ ${agentPrompt}
           if (parseFailures === MAX_INLINE_RETRIES) {
             const truncatedResponse = (responseText || "(empty)").slice(0, 500);
             history.push({ role: "assistant", content: truncatedResponse });
-            history.push({
-              role: "user",
-              content:
-                'Error: Invalid response. You MUST respond with ONLY a JSON object. No markdown, no explanation, no thinking. Example: {"tool": "execute_command", "command": "ls"} or {"tool": "final_answer", "content": "Done."}',
-            });
+            // If real work has already happened, the most likely cause of
+            // empty/malformed responses is the model thinking it's done.
+            // Steer the correction toward final_answer rather than a
+            // generic "you must use JSON" — saves the run when the work
+            // is already complete (observed in log 4304fe81c5.json: vite
+            // app scaffolded, files written, dev server running, then
+            // the model fell silent and we surfaced "model failed").
+            const workComplete =
+              wroteFiles || executedCommands.size > 0 || usedWebTools;
+            if (workComplete) {
+              history.push({
+                role: "user",
+                content:
+                  'Your previous response was empty or unparseable. The work appears to be complete (files written / commands run). If you are done, respond with EXACTLY this JSON: {"tool":"final_answer","content":"<one or two sentences summarising what you did>"}. If you still have a step to do, respond with ONE more tool call.',
+              });
+            } else {
+              history.push({
+                role: "user",
+                content:
+                  'Error: Invalid response. You MUST respond with ONLY a JSON object. No markdown, no explanation, no thinking. Example: {"tool": "execute_command", "command": "ls"} or {"tool": "final_answer", "content": "Done."}',
+              });
+            }
           }
           continue;
         }
@@ -3223,6 +3240,30 @@ ${agentPrompt}
           return {
             success: true,
             message: fallbackText.slice(0, 2000),
+            type: "success",
+          };
+        }
+        // Synthesise a success result if the agent already DID work but
+        // can't articulate it. wroteFiles / executedCommands / usedWebTools
+        // are true post-success-side-effect; surfacing "model failed" then
+        // is straightforwardly wrong (observed in log 4304fe81c5.json).
+        const workComplete =
+          wroteFiles || executedCommands.size > 0 || usedWebTools;
+        if (workComplete) {
+          const summaryParts: string[] = [];
+          if (wroteFiles) summaryParts.push("wrote project files");
+          if (executedCommands.size > 0) {
+            summaryParts.push(
+              `ran ${executedCommands.size} command${executedCommands.size === 1 ? "" : "s"}`,
+            );
+          }
+          if (usedWebTools) summaryParts.push("looked up docs online");
+          return {
+            success: true,
+            message:
+              "Task likely complete — " +
+              summaryParts.join(", ") +
+              ". (The model stopped responding before sending a final summary; check the terminal for the exact result.)",
             type: "success",
           };
         }
