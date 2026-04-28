@@ -3186,11 +3186,31 @@ ${agentPrompt}
             recentCoarseKeys.length = 0;
 
             if (loopBreaks >= 3) {
+              // Don't terminate silently — flip to ask_question so the user
+              // can unblock. The agent has been spinning; the user knows
+              // what they want and can usually clarify in one sentence.
+              const tried = recentActionDetails
+                .slice(-6)
+                .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
+                .join("; ");
+              const question = arbiter.suggestion
+                ? `I've gotten stuck. ${arbiter.suggestion} (Recent attempts: ${tried || "various"}). How should I proceed?`
+                : `I've tried several approaches but can't make progress. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. provide a specific command, point me at docs, or ask me to abandon the task)`;
               return {
-                success: false,
-                message:
-                  "Agent terminated: stuck in repeated loops confirmed by three independent checks.",
-                type: "failure",
+                success: true,
+                message: question,
+                type: "question",
+                continuation: {
+                  history: [...history],
+                  executedCommands: [...executedCommands],
+                  usedScaffold,
+                  wroteFiles,
+                  usedWebTools,
+                  lastWriteDir,
+                  terminalBusy,
+                  agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
+                  agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
+                },
               };
             }
 
@@ -3201,8 +3221,8 @@ ${agentPrompt}
               role: "user",
               content:
                 loopBreaks === 1
-                  ? `LOOP DETECTED (confirmed by independent check): you are repeating similar "${action.tool}" calls without converging on the task. This action is BLOCKED.${suggestion} If this prerequisite is blocking the real task, use final_answer to report the blocker.`
-                  : `LOOP DETECTED AGAIN (${loopBreaks}/3, confirmed). You are still stuck.${suggestion} Use final_answer NOW to explain what you tried, what failed, and ask the user how to proceed. One more loop will terminate the agent.`,
+                  ? `LOOP DETECTED (confirmed by independent check): you are repeating similar "${action.tool}" calls without converging on the task. This action is BLOCKED.${suggestion} STRONGLY consider using ask_question to clarify with the user — they can usually unblock you in one sentence (e.g. providing a chat ID, an API key, the right command, or a doc URL).`
+                  : `LOOP DETECTED AGAIN (${loopBreaks}/3, confirmed). You are still stuck.${suggestion} Your NEXT response MUST be either ask_question (preferred — get user help) or final_answer (only if you truly cannot proceed). One more loop will auto-escalate to the user.`,
             });
             continue;
           }
