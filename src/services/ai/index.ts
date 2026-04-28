@@ -3809,10 +3809,14 @@ ${agentPrompt}
                   continue;
                 }
                 terminalBusy = true;
-                onUpdate("executed", `Stopping process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
-              } else {
-                onUpdate("executed", `Stopped ${pfState === "server" ? "server" : "process"}`, action);
+                // No UI event here — the next real "executed" step shows the
+                // command + output, and we don't want to clutter the agent
+                // overlay with a duplicate step for the pre-flight stop.
               }
+              // No UI event when stop succeeded either — same reason. The
+              // serverNote appended to the command-output history.push tells
+              // the model "a dev server was stopped" so its reasoning still
+              // has the context.
             }
 
             // TUI detection
@@ -4779,12 +4783,15 @@ ${agentPrompt}
           const pfOutput = await readTerminal(30);
           const pfState = classifyTerminalOutput(pfOutput || "");
 
-          // Server/daemon or busy process — stop it first so the command runs in a shell
+          // Server/daemon or busy process — stop it first so the command can
+          // run in a shell. We deliberately do NOT emit any UI events for
+          // the pre-flight stop: when the actual command's "executed" step
+          // renders, it will already include the serverNote ("a dev server
+          // was automatically stopped") in its output, so the user gets the
+          // context without a duplicated step block per logical action.
           if (pfState === "server" || pfState === "busy") {
-            onUpdate("executing", `Stopping ${pfState === "server" ? "server" : "process"} to run: ${(action.command || "").slice(0, 60)}…`, action);
             const stopped = await smartStopProcess();
             if (stopped) {
-              onUpdate("executed", `Stopped ${pfState === "server" ? "server" : "process"}`, action);
               stoppedServerForExec = true;
               terminalBusy = false;
             } else if (pfState === "server") {
@@ -4795,7 +4802,6 @@ ${agentPrompt}
               });
               continue;
             } else {
-              onUpdate("executed", `Stopping process to run: ${(action.command || "").slice(0, 60)}… (process still busy)`, action);
               terminalBusy = true;
             }
           }
