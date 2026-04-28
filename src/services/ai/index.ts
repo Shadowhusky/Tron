@@ -2328,6 +2328,14 @@ ${agentPrompt}
     let substantiveSteps = 0;
     let hasPublishedPlan = (continuation?.agentTodos?.length ?? 0) > 0;
     let planNudgesSent = 0;
+    /** Per-binary error counts — keyed by `${binary} ${subcommand}` extracted
+     *  from execute_command. When the same combo errors twice with no
+     *  intervening web_search/web_fetch/man, we block further invocations of
+     *  that combo until research happens. Pure harness rule — small models
+     *  ignore prompt directives but obey hard tool-call rejections. */
+    const binaryErrorCounts = new Map<string, number>();
+    /** Blocked binary combos waiting for research before retry. */
+    const blockedBinaries = new Set<string>();
 
     // ── Repeated error / stagnation detection ──────────────────────────────
     // Tracks error "signatures" (TypeError, SyntaxError, module not found, etc.)
@@ -2386,6 +2394,32 @@ ${agentPrompt}
       return null;
     };
 
+    /** Extract `${binary} ${subcommand}` from an execute_command — the unit
+     *  we track for the "search before reprobing" rule. Skips shell glue
+     *  like `cd …`, pipes, redirects so `cd /tmp && openclaw foo` keys on
+     *  `openclaw foo`, not `cd /tmp`. */
+    const extractBinaryKey = (cmd: string): string | null => {
+      if (!cmd) return null;
+      // Strip leading `cd path && ` / `cd path; ` chunks
+      const stripped = cmd
+        .replace(/^cd\s+\S+\s*(?:&&|;)\s*/g, "")
+        .replace(/^env\s+\S+=\S+\s+/g, "")
+        .trim();
+      // Take first command before the first pipe/&&/||/;
+      const head = stripped.split(/[|;]|&&|\|\|/)[0].trim();
+      const tokens = head.split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return null;
+      const bin = tokens[0];
+      // Skip generic shell builtins where this rule isn't useful
+      if (/^(ls|cat|grep|find|echo|printf|cd|pwd|head|tail|wc|sed|awk|cut|sort|uniq|tr|xargs|test|true|false|exit|return)$/.test(bin)) {
+        return null;
+      }
+      // For `docker exec NAME node X.mjs sub args`, key on `docker exec node X.mjs sub`
+      // We compress to first 4 tokens to avoid overfitting on argument values.
+      const sub = tokens.slice(1, 4).filter((t) => !t.startsWith("-")).join(" ");
+      return sub ? `${bin} ${sub}` : bin;
+    };
+
     // "User ready / continue" signal from UI (e.g. Continue button in overlay)
     // Uses a global flag checked each read_terminal iteration
     (globalThis as any).__tronAgentContinue = false;
@@ -2420,6 +2454,7 @@ ${agentPrompt}
       // eslint-disable-next-line no-inner-declarations
       {
         const SENTINEL = "[STATE_REMINDER]";
+        // Drop any prior reminder so we can push a fresh one without growth.
         for (let k = history.length - 1; k >= 0; k--) {
           const m = history[k];
           if (
@@ -2432,7 +2467,54 @@ ${agentPrompt}
             break;
           }
         }
-        if (agentTodos.length > 0 || agentMemory.length > 0) {
+
+        // Scan recent history for <tool_use_error> blocks so we can show the
+        // model what's already failed. Walks last 30 messages, dedupes by
+        // (tool, first-80-chars-of-args), keeps most recent 5. The model's
+        // own attention often misses these in long histories — re-injecting
+        // at the top of every turn makes them impossible to ignore.
+        const failures: Array<{ tool: string; args: string; error: string }> = [];
+        const seen = new Set<string>();
+        const ERR_RE = /<tool_use_error>([^:]+?)\s*(?:failed)?:\s*([^<]*)<\/tool_use_error>/i;
+        // Walk newest → oldest; insert at front so final order is oldest → newest
+        // (newest at the bottom = closest to the model's attention).
+        const HISTORY_SCAN = Math.min(30, history.length);
+        const collected: typeof failures = [];
+        for (let k = history.length - 1; k >= history.length - HISTORY_SCAN; k--) {
+          const m = history[k];
+          if (!m || m.role !== "user" || typeof m.content !== "string") continue;
+          const match = m.content.match(ERR_RE);
+          if (!match) continue;
+          const tool = match[1].trim().slice(0, 30);
+          const error = match[2].trim().slice(0, 160);
+          // Pull the action that triggered this from the preceding assistant msg
+          let args = "";
+          for (let j = k - 1; j >= Math.max(0, k - 3); j--) {
+            const am = history[j];
+            if (am?.role === "assistant" && typeof am.content === "string") {
+              try {
+                const obj = JSON.parse(am.content);
+                args = String(
+                  obj?.command ?? obj?.path ?? obj?.url ?? obj?.query ?? "",
+                ).slice(0, 80);
+              } catch { /* ignore parse — args stays "" */ }
+              break;
+            }
+          }
+          const dedup = `${tool}:${args}`;
+          if (seen.has(dedup)) continue;
+          seen.add(dedup);
+          collected.unshift({ tool, args, error });
+          if (collected.length >= 5) break;
+        }
+        failures.push(...collected);
+
+        const hasState =
+          agentTodos.length > 0 ||
+          agentMemory.length > 0 ||
+          failures.length > 0;
+
+        if (hasState) {
           const lines: string[] = [SENTINEL];
           if (agentTodos.length > 0) {
             lines.push("[PLAN]");
@@ -2448,13 +2530,21 @@ ${agentPrompt}
             }
             lines.push("");
           }
+          if (failures.length > 0) {
+            lines.push("[FAILED ATTEMPTS — do not retry these verbatim]");
+            for (const f of failures) {
+              const argPart = f.args ? ` ${f.args}` : "";
+              lines.push(`- ${f.tool}${argPart} → ${f.error}`);
+            }
+            lines.push("");
+          }
           if (agentMemory.length > 0) {
             lines.push("[MEMORY]");
             for (const m of agentMemory) lines.push(`- ${m}`);
             lines.push("");
           }
           lines.push(
-            "(Stay on the in-progress / pending plan item. Use remember() to add new constraints. Use ask_question if blocked.)",
+            "(Stay on the in-progress / pending plan item. If the same kind of action keeps failing, web_search the docs OR ask_question. Use remember() to add new constraints.)",
           );
           history.push({ role: "user", content: lines.join("\n") });
         }
@@ -4464,6 +4554,13 @@ ${agentPrompt}
           history.push({ role: "user", content: "web_search requires a 'query' parameter." });
           continue;
         }
+        // Web search counts as research → unblock any binary that was
+        // gated waiting for docs lookup. Clear the per-binary error
+        // counts too so a second-attempt streak doesn't immediately re-block.
+        if (blockedBinaries.size > 0) {
+          blockedBinaries.clear();
+          binaryErrorCounts.clear();
+        }
         onUpdate("executing", `Searching web: ${query}`, action);
         try {
           // Use IPC invoke — works in both Electron (preload IPC) and web mode (WS bridge → server)
@@ -4492,6 +4589,11 @@ ${agentPrompt}
       }
 
       if (action.tool === "web_fetch") {
+        // Same as web_search — fetching docs unblocks reprobe gate.
+        if (blockedBinaries.size > 0) {
+          blockedBinaries.clear();
+          binaryErrorCounts.clear();
+        }
         const url = action.url;
         if (!url) {
           history.push({ role: "user", content: "web_fetch requires a 'url' parameter." });
@@ -4519,6 +4621,25 @@ ${agentPrompt}
       }
 
       if (action.tool === "execute_command") {
+        // Search-before-reprobe gate: if this binary+subcommand has already
+        // failed twice without an intervening web_search/web_fetch, block
+        // and force the agent to look it up. Pure harness rule — small
+        // models ignore prompt directives but obey hard tool rejections.
+        const binaryKey = extractBinaryKey(action.command || "");
+        if (binaryKey && blockedBinaries.has(binaryKey)) {
+          onUpdate(
+            "failed",
+            `Blocked: '${binaryKey}' has failed repeatedly. web_search the docs or ask_question first.`,
+            action,
+          );
+          history.push({
+            role: "user",
+            content: `<tool_use_error>execute_command blocked: '${binaryKey}' has already errored twice. Before invoking it again you MUST either (a) web_search "${binaryKey} documentation" and web_fetch a result, OR (b) ask_question to get the correct invocation from the user. Probing more --help variants will not help — the help output you've already seen has been processed.</tool_use_error>`,
+          });
+          consecutiveGuardBlocks++;
+          continue;
+        }
+
         // Interactive commands MUST use run_in_terminal — sentinel exec can't handle TUI prompts.
         // Also check parts after `&&` or `;` to properly catch `cd foo && npm create`
         const INTERACTIVE_CMD_RE =
@@ -4836,6 +4957,17 @@ ${agentPrompt}
             role: "user",
             content: `Command Output: \n${output}${serverNote}`,
           });
+          // Search-before-reprobe bookkeeping: a non-zero exit (output
+          // starts with "Exit Code N:") counts as a failure for this
+          // binary even though the harness call itself didn't throw.
+          if (binaryKey && /^Exit Code\s+[1-9]\d*:/i.test(output)) {
+            const n = (binaryErrorCounts.get(binaryKey) ?? 0) + 1;
+            binaryErrorCounts.set(binaryKey, n);
+            if (n >= 2) blockedBinaries.add(binaryKey);
+          } else if (binaryKey) {
+            // Any successful run resets the counter for that binary.
+            binaryErrorCounts.delete(binaryKey);
+          }
         } catch (err: any) {
           const isDeny = err.message === "User denied command execution.";
           onUpdate("failed", cmd + "\n---\n" + err.message, action);
@@ -4847,8 +4979,15 @@ ${agentPrompt}
           } else {
             history.push({
               role: "user",
-              content: `<tool_use_error>run_in_terminal failed: ${err.message}</tool_use_error>`,
+              content: `<tool_use_error>execute_command failed: ${err.message}</tool_use_error>`,
             });
+            // Bump the per-binary error count too — thrown errors are
+            // also failures by any reasonable definition.
+            if (binaryKey) {
+              const n = (binaryErrorCounts.get(binaryKey) ?? 0) + 1;
+              binaryErrorCounts.set(binaryKey, n);
+              if (n >= 2) blockedBinaries.add(binaryKey);
+            }
             // Check for repeated error patterns — force root-cause investigation
             const intervention = checkRepeatedErrors(err.message);
             if (intervention) {
