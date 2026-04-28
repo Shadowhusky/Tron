@@ -4,6 +4,10 @@ import { useLayout } from "../../contexts/LayoutContext";
 import { IPC } from "../../constants/ipc";
 import type { AgentStep, Tab, LayoutNode } from "../../types";
 import { detectExternalAgentSignal } from "../../utils/externalAgentStatus";
+import {
+  readScreenBuffer,
+  isAlternateBuffer,
+} from "../../services/terminalBuffer";
 
 /** Agent status for a single terminal session */
 export interface AgentStatus {
@@ -158,7 +162,23 @@ export function useAgentStatuses(): AgentStatus[] {
             : combined;
         lookbackRing.current.set(id, ring);
 
-        const sig = detectExternalAgentSignal(ring);
+        // Also pull the currently rendered screen from xterm — a Ink-based
+        // CLI like Claude Code repaints to the alternate buffer using
+        // cursor positioning, so the *raw* PTY chunks may contain only
+        // escape codes while the *visible* screen reads cleanly. Grabbing
+        // both the chunk lookback (for tool-call lines that scroll past)
+        // and the rendered buffer (for static welcome banners and idle
+        // frames) gives us coverage across all states.
+        const rendered = readScreenBuffer(id, 60) || "";
+        const inAlt = isAlternateBuffer(id);
+        const sig = detectExternalAgentSignal(ring + "\n" + rendered);
+
+        // Bonus: any agent CLI runs in the alternate screen buffer (vim,
+        // htop, claude, aider, codex…). Combined with ANY positive signal
+        // from detector, alt-buffer is strong corroboration.
+        if (inAlt && (sig.agentPresent || sig.tool || sig.working || sig.idle)) {
+          everHadAgent.current.add(id);
+        }
 
         // Any presence signal (banner, idle frame, working spinner, tool line)
         // marks this session as "an agent CLI is here" so it shows up in the
@@ -243,6 +263,39 @@ export function useAgentStatuses(): AgentStatus[] {
     const result: AgentStatus[] = [];
     for (const [id] of sessions) {
       if (id === "settings" || id.startsWith("ssh-connect") || id.startsWith("browser-") || id.startsWith("editor-") || id.startsWith("pixel-agents")) continue;
+
+      // Periodic screen-buffer scan. The chunk-based detector only fires
+      // when the PTY is actively emitting bytes — but an idle Claude Code
+      // session at the input prompt may go many seconds with no chunks at
+      // all, and a session that was already running BEFORE the user opened
+      // this Tron window has no chunk history. Reading the rendered xterm
+      // buffer every reconcile cycle catches both. Cheap: just a string
+      // scan over ~60 lines of already-rendered text.
+      const screenScan = readScreenBuffer(id, 60);
+      if (screenScan) {
+        const inAlt = isAlternateBuffer(id);
+        const sig2 = detectExternalAgentSignal(screenScan);
+        if (sig2.agentPresent || (inAlt && (sig2.tool || sig2.working || sig2.idle))) {
+          everHadAgent.current.add(id);
+        }
+        // Refresh spinner-seen timestamp if the spinner is currently visible
+        // on screen — keeps the "active" dot lit even when Tron isn't
+        // receiving new chunks (e.g. terminal hasn't focused recently).
+        if (sig2.working) {
+          terminalSpinnerSeen.current.set(id, now);
+          if (sig2.tokens != null) terminalTokens.current.set(id, sig2.tokens);
+          if (sig2.elapsedSeconds != null) terminalElapsed.current.set(id, sig2.elapsedSeconds);
+          if (!terminalDetectedTool.current.get(id)) {
+            terminalDetectedTool.current.set(id, sig2.tool || "thinking");
+          }
+        }
+        if (sig2.idle) {
+          // Only clear if the LAST signal was idle (not racing with a
+          // mid-frame paint that happens to lack the spinner). The
+          // chunk-based path already handles this on data arrival.
+          terminalDetectedTool.current.delete(id);
+        }
+      }
 
       // Use tab title as label (#4), fall back to session title
       const tabTitle = findTabTitle(tabs, id);
