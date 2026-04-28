@@ -45,6 +45,109 @@ exports.getSessionHistory = getSessionHistory;
 exports.cleanupAllSessions = cleanupAllSessions;
 exports.getShellHistory = getShellHistory;
 exports.registerTerminalHandlers = registerTerminalHandlers;
+// =============================================================================
+// fileEdit — tolerant search-and-replace
+// Mirrors src/utils/fileEdit.ts (kept in sync manually because electron/
+// tsconfig has rootDir "./", preventing direct import from src/).
+// Source of truth + unit tests live in src/__tests__/fileEdit.test.ts.
+// =============================================================================
+function _normalizeForEdit(s) {
+    return s
+        .replace(/\r\n/g, "\n")
+        .replace(/[“”‟″❝❞＂]/g, '"')
+        .replace(/[‘’‚‛′❛❜＇]/g, "'")
+        .replace(/[   ]/g, " ");
+}
+function _indexOfAll(hay, needle) {
+    if (!needle)
+        return [];
+    const out = [];
+    let i = 0;
+    while (i <= hay.length - needle.length) {
+        const j = hay.indexOf(needle, i);
+        if (j < 0)
+            break;
+        out.push(j);
+        i = j + needle.length;
+    }
+    return out;
+}
+function _restyleEdit(replace, originalSpan) {
+    const hasCurlyDouble = /[“”]/.test(originalSpan);
+    const hasCurlySingle = /[‘’]/.test(originalSpan);
+    const hasCRLF = originalSpan.includes("\r\n");
+    let out = replace;
+    if (hasCurlyDouble) {
+        let openNext = true;
+        out = out.replace(/"/g, () => {
+            const ch = openNext ? "“" : "”";
+            openNext = !openNext;
+            return ch;
+        });
+    }
+    if (hasCurlySingle) {
+        let openNext = true;
+        out = out.replace(/'/g, () => {
+            const ch = openNext ? "‘" : "’";
+            openNext = !openNext;
+            return ch;
+        });
+    }
+    if (hasCRLF)
+        out = out.replace(/\r?\n/g, "\r\n");
+    return out;
+}
+/** Try strict match, then a normalized (curly→straight, CRLF→LF, NBSP→space)
+ * fallback. Returns the new content + replacement count, or null on miss. */
+function applyTolerantEdit(content, search, replace) {
+    if (!search)
+        return null;
+    const exact = _indexOfAll(content, search);
+    if (exact.length > 0) {
+        let updated = "";
+        let cursor = 0;
+        for (const idx of exact) {
+            updated += content.slice(cursor, idx) + replace;
+            cursor = idx + search.length;
+        }
+        updated += content.slice(cursor);
+        return { content: updated, replacements: exact.length, mode: "exact" };
+    }
+    const nContent = _normalizeForEdit(content);
+    const nSearch = _normalizeForEdit(search);
+    if (nSearch === search && nContent === content)
+        return null;
+    const matches = _indexOfAll(nContent, nSearch);
+    if (matches.length === 0)
+        return null;
+    const map = new Array(nContent.length);
+    let oi = 0, ni = 0;
+    while (oi < content.length && ni < nContent.length) {
+        if (content[oi] === "\r" && content[oi + 1] === "\n") {
+            map[ni] = oi + 1;
+            oi += 2;
+            ni += 1;
+            continue;
+        }
+        map[ni] = oi;
+        oi += 1;
+        ni += 1;
+    }
+    let updated = "";
+    let cursor = 0;
+    for (const nIdx of matches) {
+        const startOrig = map[nIdx];
+        const endOrigInclusive = map[nIdx + nSearch.length - 1];
+        if (startOrig == null || endOrigInclusive == null)
+            continue;
+        const endOrig = endOrigInclusive + 1;
+        const span = content.slice(startOrig, endOrig);
+        updated += content.slice(cursor, startOrig) + _restyleEdit(replace, span);
+        cursor = endOrig;
+    }
+    updated += content.slice(cursor);
+    return { content: updated, replacements: matches.length, mode: "normalized" };
+}
 const electron_1 = require("electron");
 const pty = __importStar(require("node-pty"));
 const os_1 = __importDefault(require("os"));
@@ -1123,22 +1226,15 @@ function registerTerminalHandlers(getMainWindow) {
                 return { success: false, error: `File not found: ${filePath}.${sugStr}` };
             }
             const content = fs_1.default.readFileSync(filePath, "utf-8");
-            if (!content.includes(search)) {
+            const edit = applyTolerantEdit(content, search, replace);
+            if (!edit) {
                 return {
                     success: false,
-                    error: `Search string not found in file. Make sure the search text matches exactly (including whitespace and newlines).`,
+                    error: `Search string not found in file. Make sure the search text matches exactly (including whitespace and newlines). Curly quotes, CRLF endings and NBSP are tolerated.`,
                 };
             }
-            // Count occurrences
-            let count = 0;
-            let idx = 0;
-            while ((idx = content.indexOf(search, idx)) !== -1) {
-                count++;
-                idx += search.length;
-            }
-            const updated = content.split(search).join(replace);
-            fs_1.default.writeFileSync(filePath, updated, "utf-8");
-            return { success: true, replacements: count };
+            fs_1.default.writeFileSync(filePath, edit.content, "utf-8");
+            return { success: true, replacements: edit.replacements, mode: edit.mode };
         }
         catch (err) {
             return { success: false, error: err.message };

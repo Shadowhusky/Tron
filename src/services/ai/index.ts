@@ -2896,7 +2896,13 @@ ${agentPrompt}
       if (recentActions.length > 8) recentActions.shift();
 
       // Consecutive suspicion: same exact action N times in a row.
-      const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 3;
+      // Tools that legitimately repeat (send_text for menu nav, read_terminal
+      // for monitoring) get a higher tolerance. Everything else (exec, edits,
+      // file reads) is suspicious on the *second* identical call — re-running
+      // the same `sed` or `edit_file` back-to-back is almost always a model
+      // glitch (observed pattern: model emits the same command twice in
+      // consecutive responses without learning from the first result).
+      const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 2;
       let isConsecutiveSuspicion = false;
       if (actionKey != null && recentActions.length >= maxConsecutive) {
         isConsecutiveSuspicion = true;
@@ -2947,7 +2953,11 @@ ${agentPrompt}
           // Treat as benign — heuristic already asked recently, give it space
         } else {
           lastArbiterStep = i;
-          onUpdate("thinking", "Checking for agent loop...");
+          // Don't emit a "thinking" update here — that surfaces as a thought
+          // entry in the agent thread (especially jarring on non-thinking
+          // models). The arbiter is a fast background check; users only need
+          // to know about it if it actually blocks an action, in which case
+          // the LOOP DETECTED message below handles it.
           const taskForArbiter = options?.rawUserTask || prompt || "";
           const arbiter = await this.arbitrateAgentLoop(
             taskForArbiter,
@@ -4144,11 +4154,17 @@ ${agentPrompt}
           const data: any = await (window as any).electron.ipcRenderer.invoke("web.search", { query });
           const results = data.results || [];
           if (results.length === 0) {
-            onUpdate("executed", `Web search: no results for "${query}"`, action);
+            onUpdate("executed", `Web search: no results for "${query}"`, { ...action, searchResults: [] });
             history.push({ role: "user", content: `Web search for "${query}" returned no results.` });
           } else {
             const formatted = results.map((r: any, i: number) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n\n");
-            onUpdate("executed", `Web search: ${results.length} results for "${query}"`, action);
+            // Pass the structured results in the payload so the renderer can
+            // show clickable title+url+snippet cards instead of just a count.
+            onUpdate(
+              "executed",
+              `Web search: ${results.length} results for "${query}"`,
+              { ...action, searchResults: results.slice(0, 10) },
+            );
             history.push({ role: "user", content: `Web search results for "${query}":\n\n${formatted}\n\nUse these results to answer the user's question. You may web_fetch any URL above for more details.` });
             usedWebTools = true;
           }

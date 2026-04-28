@@ -1860,10 +1860,75 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             </div>
                           )}
                         </div>
+                        {/* Web search results: clickable cards (rendered before
+                            the generic exec-output branch so the snippet text
+                            in execOutput doesn't also display below). */}
+                        {!isCollapsed &&
+                          isExecuted &&
+                          step.payload?.tool === "web_search" &&
+                          Array.isArray(step.payload?.searchResults) &&
+                          step.payload.searchResults.length > 0 ? (
+                          <div className="mt-1 flex flex-col gap-1.5">
+                            {(step.payload.searchResults as Array<{
+                              title: string;
+                              url: string;
+                              snippet?: string;
+                            }>).map((r, ri) => {
+                              let host = "";
+                              try {
+                                host = new URL(r.url).hostname.replace(/^www\./, "");
+                              } catch { /* ignore */ }
+                              const open = (e: React.MouseEvent) => {
+                                e.stopPropagation();
+                                if (window.electron?.ipcRenderer?.invoke) {
+                                  window.electron.ipcRenderer.invoke(
+                                    "shell.openExternal",
+                                    r.url,
+                                  );
+                                } else {
+                                  window.open(r.url, "_blank", "noopener,noreferrer");
+                                }
+                              };
+                              return (
+                                <button
+                                  key={ri}
+                                  onClick={open}
+                                  className={`text-left rounded-md px-2 py-1.5 transition-colors ${
+                                    isLight
+                                      ? "bg-blue-50 hover:bg-blue-100 border border-blue-100"
+                                      : "bg-white/[0.03] hover:bg-white/[0.06] border border-white/5"
+                                  }`}
+                                >
+                                  <div
+                                    className={`text-[11px] font-medium leading-snug ${isLight ? "text-blue-700" : "text-blue-300"} hover:underline`}
+                                  >
+                                    {r.title || r.url}
+                                  </div>
+                                  {host && (
+                                    <div
+                                      className={`text-[9px] ${isLight ? "text-gray-500" : "text-gray-500"} mt-0.5`}
+                                    >
+                                      {host}
+                                    </div>
+                                  )}
+                                  {r.snippet && (
+                                    <div
+                                      className={`text-[10px] leading-snug mt-1 line-clamp-2 ${isLight ? "text-gray-600" : "text-gray-400"}`}
+                                    >
+                                      {r.snippet}
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+
                         {/* Output — hidden when collapsed */}
                         {isCollapsed ? null : (isExecuted ||
                             (isError && execCommand)) &&
-                          execCommand ? (
+                          execCommand &&
+                          step.payload?.tool !== "web_search" ? (
                           (() => {
                             // File write preview: syntax-highlighted code
                             const isFileWrite =

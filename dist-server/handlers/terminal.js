@@ -4,6 +4,98 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { exec } from "child_process";
 import { sshSessionIds, sshSessions } from "./ssh.js";
+// =============================================================================
+// fileEdit — tolerant search-and-replace
+// Mirrors src/utils/fileEdit.ts (kept in sync manually). Tested by
+// src/__tests__/fileEdit.test.ts; do not edit without updating both copies.
+// =============================================================================
+function _normalizeForEdit(s) {
+    return s
+        .replace(/\r\n/g, "\n")
+        .replace(/[“”‟″❝❞＂]/g, '"')
+        .replace(/[‘’‚‛′❛❜＇]/g, "'")
+        .replace(/[   ]/g, " ");
+}
+function _indexOfAll(hay, needle) {
+    if (!needle)
+        return [];
+    const out = [];
+    let i = 0;
+    while (i <= hay.length - needle.length) {
+        const j = hay.indexOf(needle, i);
+        if (j < 0)
+            break;
+        out.push(j);
+        i = j + needle.length;
+    }
+    return out;
+}
+function _restyleEdit(replace, originalSpan) {
+    const hasCurlyDouble = /[“”]/.test(originalSpan);
+    const hasCurlySingle = /[‘’]/.test(originalSpan);
+    const hasCRLF = originalSpan.includes("\r\n");
+    let out = replace;
+    if (hasCurlyDouble) {
+        let openNext = true;
+        out = out.replace(/"/g, () => { const ch = openNext ? "“" : "”"; openNext = !openNext; return ch; });
+    }
+    if (hasCurlySingle) {
+        let openNext = true;
+        out = out.replace(/'/g, () => { const ch = openNext ? "‘" : "’"; openNext = !openNext; return ch; });
+    }
+    if (hasCRLF)
+        out = out.replace(/\r?\n/g, "\r\n");
+    return out;
+}
+function applyTolerantEdit(content, search, replace) {
+    if (!search)
+        return null;
+    const exact = _indexOfAll(content, search);
+    if (exact.length > 0) {
+        let updated = "";
+        let cursor = 0;
+        for (const idx of exact) {
+            updated += content.slice(cursor, idx) + replace;
+            cursor = idx + search.length;
+        }
+        updated += content.slice(cursor);
+        return { content: updated, replacements: exact.length, mode: "exact" };
+    }
+    const nContent = _normalizeForEdit(content);
+    const nSearch = _normalizeForEdit(search);
+    if (nSearch === search && nContent === content)
+        return null;
+    const matches = _indexOfAll(nContent, nSearch);
+    if (matches.length === 0)
+        return null;
+    const map = new Array(nContent.length);
+    let oi = 0, ni = 0;
+    while (oi < content.length && ni < nContent.length) {
+        if (content[oi] === "\r" && content[oi + 1] === "\n") {
+            map[ni] = oi + 1;
+            oi += 2;
+            ni += 1;
+            continue;
+        }
+        map[ni] = oi;
+        oi += 1;
+        ni += 1;
+    }
+    let updated = "";
+    let cursor = 0;
+    for (const nIdx of matches) {
+        const startOrig = map[nIdx];
+        const endOrigInclusive = map[nIdx + nSearch.length - 1];
+        if (startOrig == null || endOrigInclusive == null)
+            continue;
+        const endOrig = endOrigInclusive + 1;
+        const span = content.slice(startOrig, endOrig);
+        updated += content.slice(cursor, startOrig) + _restyleEdit(replace, span);
+        cursor = endOrig;
+    }
+    updated += content.slice(cursor);
+    return { content: updated, replacements: matches.length, mode: "normalized" };
+}
 // Conditional node-pty import — gateway deployments may not have the native module
 let pty = null;
 try {
@@ -907,18 +999,12 @@ export function editFile(filePath, search, replace) {
             return { success: false, error: `File not found: ${filePath}` };
         }
         const content = fs.readFileSync(filePath, "utf-8");
-        if (!content.includes(search)) {
-            return { success: false, error: "Search string not found in file." };
+        const edit = applyTolerantEdit(content, search, replace);
+        if (!edit) {
+            return { success: false, error: "Search string not found in file. Curly quotes, CRLF endings and NBSP are tolerated." };
         }
-        let count = 0;
-        let idx = 0;
-        while ((idx = content.indexOf(search, idx)) !== -1) {
-            count++;
-            idx += search.length;
-        }
-        const updated = content.split(search).join(replace);
-        fs.writeFileSync(filePath, updated, "utf-8");
-        return { success: true, replacements: count };
+        fs.writeFileSync(filePath, edit.content, "utf-8");
+        return { success: true, replacements: edit.replacements, mode: edit.mode };
     }
     catch (err) {
         return { success: false, error: err.message };
