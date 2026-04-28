@@ -62,6 +62,11 @@ const TabBar: React.FC<TabBarProps> = ({
   // Refs to track which tab is being dragged and whether it moved far enough to count as a real drag
   const draggingTabIdRef = useRef<string | null>(null);
   const realDragRef = useRef(false);
+  /** True for a brief window after a real drag ends — used to suppress the
+   *  synthetic click event that bubbles from framer-motion's Reorder.Item
+   *  on drag release. Without this, a successful drag-and-drop would also
+   *  refocus the dragged tab, which the user explicitly doesn't want. */
+  const justFinishedDragRef = useRef(false);
 
   // Long-press for mobile context menu
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -193,6 +198,14 @@ const TabBar: React.FC<TabBarProps> = ({
       return;
     }
 
+    // Real drag finished — flag the next click as drag-tail so the click
+    // handler skips onSelect. Cleared on the next event-loop tick so a
+    // subsequent intentional click on the same tab still works.
+    justFinishedDragRef.current = true;
+    setTimeout(() => {
+      justFinishedDragRef.current = false;
+    }, 0);
+
     const oldIds = tabs.map((t) => t.id);
     const newIds = localTabs.map((t) => t.id);
     const fromIndex = oldIds.indexOf(draggedId);
@@ -322,6 +335,14 @@ const TabBar: React.FC<TabBarProps> = ({
                 data-testid={`tab-${tab.id}`}
                 onClick={() => {
                   if (longPressFired.current) return; // Prevent click after long-press
+                  // Suppress the click that fires immediately after a drag
+                  // release — framer-motion's Reorder.Item bubbles a click
+                  // event when the drag ends, which would refocus the
+                  // dragged tab even when the user just wanted to reposition
+                  // it. realDragRef stays true through onDragEnd; we read
+                  // it (via a ref synced in commitReorder before reset)
+                  // to know "this click is the tail of a real drag".
+                  if (justFinishedDragRef.current) return;
                   onSelect(tab.id);
                 }}
                 onTouchStart={(e) => handleTouchStart(tab, e)}
