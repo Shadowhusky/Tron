@@ -72,6 +72,86 @@ function sendToRenderer(
   }
 }
 
+/**
+ * Normalize electron-updater's polymorphic `releaseNotes` into an HTML
+ * string. The shape is:
+ *   - string (HTML or plain text) — pass through.
+ *   - Array<{version, note}>     — concatenate notes with version headers.
+ *   - undefined / null           — return empty.
+ *
+ * latest.yml from electron-builder doesn't always include notes. We rely on
+ * `fetchReleaseNotesFromGitHub` as a fallback when this returns "".
+ */
+function normalizeReleaseNotes(raw: unknown): string {
+  if (!raw) return "";
+  if (typeof raw === "string") return raw.trim();
+  if (Array.isArray(raw)) {
+    return raw
+      .map((entry) => {
+        if (!entry) return "";
+        if (typeof entry === "string") return entry;
+        const v = (entry as any).version;
+        const n = (entry as any).note;
+        if (!n) return "";
+        return v ? `<h4>v${v}</h4>${n}` : String(n);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+/** Fetch the GitHub release body for a tag — fallback when electron-updater
+ *  doesn't have notes. Markdown body becomes the modal content (rendered as
+ *  text since the main process doesn't ship a markdown parser). */
+async function fetchReleaseNotesFromGitHub(version: string): Promise<string> {
+  try {
+    const tag = `v${version}`;
+    const res = await fetch(
+      `https://api.github.com/repos/Shadowhusky/Tron/releases/tags/${tag}`,
+      { headers: { Accept: "application/vnd.github+json" } },
+    );
+    if (!res.ok) return "";
+    const data = (await res.json()) as { body?: string; html_url?: string };
+    const body = (data?.body || "").trim();
+    if (!body) return "";
+    // Convert minimal Markdown → HTML so the renderer's
+    // dangerouslySetInnerHTML produces something readable. Headings, lists,
+    // bold, inline code, and links are the common shapes Anthropic-style
+    // release notes use; full Markdown rendering is overkill here.
+    const escapeHtml = (s: string) =>
+      s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    let html = escapeHtml(body);
+    html = html.replace(/^### (.+)$/gm, "<h4>$1</h4>");
+    html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
+    html = html.replace(/^# (.+)$/gm, "<h3>$1</h3>");
+    html = html.replace(/^[-*] (.+)$/gm, "<li>$1</li>");
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, "<ul>$&</ul>");
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    html = html.replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
+    );
+    html = html.replace(/\n\n+/g, "<br/><br/>");
+    return html;
+  } catch {
+    return "";
+  }
+}
+
+async function captureReleaseNotes(
+  rawNotes: unknown,
+  version: string,
+): Promise<string> {
+  const normalized = normalizeReleaseNotes(rawNotes);
+  if (normalized) return normalized;
+  return await fetchReleaseNotesFromGitHub(version);
+}
+
 function wireEvents(
   autoUpdater: typeof import("electron-updater").autoUpdater,
   getMainWindow: () => BrowserWindow | null,
@@ -81,9 +161,10 @@ function wireEvents(
     sendToRenderer(getMainWindow, "updater.status", { status: updateStatus });
   });
 
-  autoUpdater.on("update-available", (info) => {
+  autoUpdater.on("update-available", async (info) => {
     updateStatus = "available";
-    updateInfo = { version: info.version, releaseNotes: info.releaseNotes as string | undefined };
+    const notes = await captureReleaseNotes(info.releaseNotes, info.version);
+    updateInfo = { version: info.version, releaseNotes: notes };
     sendToRenderer(getMainWindow, "updater.status", {
       status: updateStatus,
       updateInfo,
@@ -119,9 +200,15 @@ function wireEvents(
     });
   });
 
-  autoUpdater.on("update-downloaded", (info) => {
+  autoUpdater.on("update-downloaded", async (info) => {
     updateStatus = "downloaded";
-    updateInfo = { version: info.version, releaseNotes: info.releaseNotes as string | undefined };
+    // Prefer the notes captured during update-available (already populated,
+    // including GitHub fallback). Re-capture only if that pass produced
+    // nothing — covers the edge case where update-available didn't fire
+    // (cached check-for-update result).
+    const existing = updateInfo?.version === info.version ? updateInfo.releaseNotes : "";
+    const notes = existing || (await captureReleaseNotes(info.releaseNotes, info.version));
+    updateInfo = { version: info.version, releaseNotes: notes };
     sendToRenderer(getMainWindow, "updater.status", {
       status: updateStatus,
       updateInfo,
