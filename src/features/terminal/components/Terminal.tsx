@@ -75,6 +75,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   const xtermRef = useRef<Xterm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  /** Handler for the document-level "copy" interceptor; tracked so we can
+   *  remove it on unmount without leaking listeners. */
+  const copyHandlerRef = useRef<((e: ClipboardEvent) => void) | null>(null);
   const { resolvedTheme } = useTheme();
   const { hotkeys } = useConfig();
 
@@ -450,6 +453,33 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
     }
 
+    // Intercept the browser's native copy event (mobile long-press →
+    // "Copy", desktop Cmd/Ctrl+C, drag-select-then-copy). xterm renders
+    // each visual row as its own DOM line, so window.getSelection()
+    // joins wrapped continuations with '\n' — exactly the artefact the
+    // user reported when copying a multi-line URL on mobile. Replace the
+    // event's clipboard data with the wrap-aware buffer-walk reader.
+    const onCopy = (e: ClipboardEvent) => {
+      // Only interfere when the user has an actual xterm selection.
+      const xs = term.getSelection();
+      if (!xs) return;
+      const docSel = window.getSelection()?.toString() ?? "";
+      // If the document selection is from somewhere else (agent overlay,
+      // SmartInput), don't touch it. xterm owns the selection only when
+      // its own selection text matches the document's.
+      if (docSel && docSel.trim() !== xs.trim()) return;
+      const fixed = readSelectionUnwrapped();
+      if (!fixed || fixed === xs) return;
+      e.preventDefault();
+      e.clipboardData?.setData("text/plain", fixed);
+    };
+    // Listen at document level — mobile long-press "Copy" fires the copy
+    // event on document, not on individual elements. We still scope the
+    // handler to "xterm has the selection" via the docSel-vs-xs check
+    // above, so other components' copies are unaffected.
+    document.addEventListener("copy", onCopy, true);
+    copyHandlerRef.current = onCopy;
+
     // Register screen buffer reader so the agent can read rendered TUI content
     registerScreenBufferReader(sessionId, (lines: number) => {
       const buf = term.buffer.active;
@@ -467,18 +497,22 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return result.join("\n");
     });
 
-    // Register selection reader so context menu can read selected text.
+    // Wrap-aware selection reader. xterm's default term.getSelection()
+    // inserts a literal '\n' at every visual row boundary in the
+    // selection — including soft-wraps where a single logical line was
+    // wrapped only because it was longer than the viewport width. On
+    // mobile (where the viewport is narrow) URLs and long output lines
+    // wrap routinely, and the inserted newlines break copy-paste of
+    // those URLs. xterm exposes `line.isWrapped` to tell us whether a
+    // row is a soft-wrap continuation of the row above; when it is, we
+    // join without a newline. Hard line breaks emitted by the process
+    // keep their '\n'.
     //
-    // xterm's default term.getSelection() inserts a literal '\n' at every
-    // visual row boundary in the selection — including soft-wraps where a
-    // single logical line was wrapped only because it was longer than the
-    // viewport width. On mobile (where the viewport is narrow) URLs and
-    // long output lines wrap routinely, and the inserted newlines break
-    // copy-paste of those URLs. xterm exposes `line.isWrapped` to tell us
-    // whether a row is a soft-wrap continuation of the row above; when it
-    // is, we join without a newline. Hard line breaks emitted by the
-    // process keep their '\n'.
-    registerSelectionReader(sessionId, () => {
+    // Hoisted as a named function so both the registered selection
+    // reader (used by the context menu Copy) and the native copy event
+    // listener (used by mobile long-press → Copy and desktop Cmd+C
+    // when xterm's selection IS the document selection) can call it.
+    function readSelectionUnwrapped(): string {
       const pos = term.getSelectionPosition();
       const fallback = term.getSelection() || "";
       if (!pos) return fallback;
@@ -513,7 +547,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       // structure — match xterm's translateToString(true) semantics for
       // the final segment only.
       return out.replace(/[ \t]+$/g, "");
-    });
+    }
+    registerSelectionReader(sessionId, readSelectionUnwrapped);
 
     // Register alternate buffer reader for TUI detection
     registerAlternateBufferReader(sessionId, () => term.buffer.active.type === "alternate");
@@ -1388,6 +1423,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       unregisterSelectionReader(sessionId);
       unregisterViewportTextReader(sessionId);
       unregisterAlternateBufferReader(sessionId);
+      if (copyHandlerRef.current) {
+        document.removeEventListener("copy", copyHandlerRef.current, true);
+        copyHandlerRef.current = null;
+      }
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
