@@ -160,11 +160,19 @@ const IDLE_PROMPT_FRAME_RE = /╭─{3,}.*\n[\s\S]{0,300}?[│|][\s\S]{0,80}?[>�
  * Used to mark "agent is present" even before any spinner / tool line shows
  * up — covers Claude Code's startup splash, between-tool gaps, and the input
  * frame on terminals that render box drawing differently. Match is
- * intentionally conservative (word-boundary, not just the word "claude" in
- * arbitrary prose) so plain shell output doesn't false-positive.
+ * intentionally conservative (word-boundary, plus a minimum-context
+ * requirement) so plain shell output doesn't false-positive.
+ *
+ * Verified against Claude Code source (`src/components/LogoV2/WelcomeV2.tsx`
+ * "Welcome to Claude Code v…", `src/components/LogoV2/CondensedLogo.tsx`
+ * "claude-3-5-sonnet · …", "cwd: /…").
  */
 const AGENT_BANNER_RE =
-  /\bClaude\s+Code\b|✻\s*Welcome\s+to\s+Claude|\bcwd:\s+\/[\w/.\-]+|\b(?:sonnet|opus|haiku)-?[0-9]/i;
+  /Welcome\s+to\s+Claude\s+Code|✻\s*Welcome\s+to\s+Claude|✻\s*Claude\s+Code\b|\bClaude\s+Code\s+v\d/i;
+/** Brand-specific lines that show up *outside* the welcome banner —
+ *  e.g. between turns, on auth flows, on /help, on `claude --version`. */
+const AGENT_SECONDARY_RE =
+  /\bcwd:\s+\/[\w/.\-]+|\b(?:claude-)?(?:sonnet|opus|haiku)-?\d|\bClaude\s+Code\b.*\bv\d/i;
 const AIDER_BANNER_RE = /\baider\b\s*v?\d|^Aider\s/im;
 const CODEX_BANNER_RE = /\bcodex\s+(?:cli|chat|repl)\b/i;
 const CURSOR_BANNER_RE = /\bcursor\s+(?:cli|agent)\b/i;
@@ -249,6 +257,7 @@ export function detectExternalAgentSignal(rawData: string): ExternalAgentSignal 
     result.working ||
     result.tool ||
     AGENT_BANNER_RE.test(stripped) ||
+    AGENT_SECONDARY_RE.test(stripped) ||
     AIDER_BANNER_RE.test(stripped) ||
     CODEX_BANNER_RE.test(stripped) ||
     CURSOR_BANNER_RE.test(stripped)

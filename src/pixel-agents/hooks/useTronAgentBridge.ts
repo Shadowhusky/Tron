@@ -121,12 +121,17 @@ export function useAgentStatuses(): AgentStatus[] {
   // Per-session: timestamp when detection should start (skips history replay & post-stop data)
   const sessionDetectAfter = useRef(new Map<string, number>());
 
-  /** Grace period for history replay on page refresh / reconnect */
-  const HISTORY_GRACE_MS = 3000;
+  /** Grace period for history replay on page refresh / reconnect. Kept small
+   *  so Claude Code's startup banner (which paints within ~200ms of `claude`
+   *  being run on a fresh shell) isn't filtered out. Replay on a reconnect
+   *  arrives in a single big chunk and 600ms is plenty to skip it. */
+  const HISTORY_GRACE_MS = 600;
   /** Cooldown after Tron agent stops — ignore trailing terminal data */
   const STOP_COOLDOWN_MS = 2000;
-  /** Lookback ring size — large enough to catch a multi-line spinner repaint. */
-  const LOOKBACK_RING_MAX = 600;
+  /** Lookback ring size — must be large enough to keep a full startup banner
+   *  in scope for several chunks. Claude Code's welcome + logo + cwd + model
+   *  line runs ~1.5KB, so 4KB gives comfortable headroom. */
+  const LOOKBACK_RING_MAX = 4096;
 
   // Listen for terminal incoming data — detect tools AND track activity for external agents
   useEffect(() => {

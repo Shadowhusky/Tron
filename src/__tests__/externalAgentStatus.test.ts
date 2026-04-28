@@ -134,6 +134,18 @@ describe("detectExternalAgentSignal", () => {
     expect(out.tool).toBeUndefined();
   });
 
+  it("flags agentPresent on 'Welcome to Claude Code v1.x'", () => {
+    // Verbatim from src/components/LogoV2/WelcomeV2.tsx
+    const out = detectExternalAgentSignal("Welcome to Claude Code v1.0.42");
+    expect(out.agentPresent).toBe(true);
+  });
+
+  it("flags agentPresent on the condensed logo line ('claude-3-5-sonnet · …')", () => {
+    // Verbatim shape from src/components/LogoV2/CondensedLogo.tsx
+    const out = detectExternalAgentSignal("Claude Code v1.0.42\nclaude-3-5-sonnet · billing");
+    expect(out.agentPresent).toBe(true);
+  });
+
   it("flags agentPresent on cwd: path in Claude Code's startup", () => {
     const out = detectExternalAgentSignal(" cwd: /Users/me/projects/foo");
     expect(out.agentPresent).toBe(true);
