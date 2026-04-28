@@ -155,6 +155,13 @@ export function useAgentStatuses(): AgentStatus[] {
 
         const sig = detectExternalAgentSignal(ring);
 
+        // Any presence signal (banner, idle frame, working spinner, tool line)
+        // marks this session as "an agent CLI is here" so it shows up in the
+        // status bar even when not actively working.
+        if (sig.agentPresent) {
+          everHadAgent.current.add(id);
+        }
+
         // Idle frame seen → Claude is showing its input prompt; mark idle
         // immediately so the dot turns gray on the same frame.
         if (sig.idle) {

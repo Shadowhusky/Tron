@@ -125,4 +125,44 @@ describe("detectExternalAgentSignal", () => {
     const out = detectExternalAgentSignal(ansi);
     expect(out.working).toBe(true);
   });
+
+  it("flags agentPresent on the Claude Code welcome banner", () => {
+    const out = detectExternalAgentSignal("✻ Welcome to Claude Code");
+    expect(out.agentPresent).toBe(true);
+    // No working / tool / idle yet — just presence
+    expect(out.working).toBeUndefined();
+    expect(out.tool).toBeUndefined();
+  });
+
+  it("flags agentPresent on cwd: path in Claude Code's startup", () => {
+    const out = detectExternalAgentSignal(" cwd: /Users/me/projects/foo");
+    expect(out.agentPresent).toBe(true);
+  });
+
+  it("flags agentPresent on a model id like sonnet-4-6", () => {
+    const out = detectExternalAgentSignal("Using sonnet-4-6 (1M context)");
+    expect(out.agentPresent).toBe(true);
+  });
+
+  it("does NOT flag agentPresent on plain prose mentioning 'claude'", () => {
+    // The word 'claude' alone shouldn't false-positive — needs a stronger signal
+    const out = detectExternalAgentSignal("hello claude how are you");
+    expect(out.agentPresent).toBeUndefined();
+  });
+
+  it("treats the idle prompt frame as both idle and agentPresent", () => {
+    const out = detectExternalAgentSignal(
+      "╭───────────────────╮\n│ > _              │\n╰───────────────────╯",
+    );
+    expect(out.idle).toBe(true);
+    expect(out.agentPresent).toBe(true);
+  });
+
+  it("a working spinner also implies agentPresent", () => {
+    const out = detectExternalAgentSignal(
+      "✻ Crafting… (3s · esc to interrupt)",
+    );
+    expect(out.working).toBe(true);
+    expect(out.agentPresent).toBe(true);
+  });
 });

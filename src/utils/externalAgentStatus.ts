@@ -155,6 +155,20 @@ const GENERIC_PERMISSION_PATTERNS = [
  */
 const IDLE_PROMPT_FRAME_RE = /╭─{3,}.*\n[\s\S]{0,300}?[│|][\s\S]{0,80}?[>›]\s*_?/;
 
+/**
+ * Banners / brand markers that mean an agent CLI is running in this session.
+ * Used to mark "agent is present" even before any spinner / tool line shows
+ * up — covers Claude Code's startup splash, between-tool gaps, and the input
+ * frame on terminals that render box drawing differently. Match is
+ * intentionally conservative (word-boundary, not just the word "claude" in
+ * arbitrary prose) so plain shell output doesn't false-positive.
+ */
+const AGENT_BANNER_RE =
+  /\bClaude\s+Code\b|✻\s*Welcome\s+to\s+Claude|\bcwd:\s+\/[\w/.\-]+|\b(?:sonnet|opus|haiku)-?[0-9]/i;
+const AIDER_BANNER_RE = /\baider\b\s*v?\d|^Aider\s/im;
+const CODEX_BANNER_RE = /\bcodex\s+(?:cli|chat|repl)\b/i;
+const CURSOR_BANNER_RE = /\bcursor\s+(?:cli|agent)\b/i;
+
 // =============================================================================
 
 export interface ExternalAgentSignal {
@@ -166,6 +180,9 @@ export interface ExternalAgentSignal {
   working?: true;
   /** True when the chunk shows Claude Code's input frame (idle). */
   idle?: true;
+  /** True when an agent CLI banner / brand marker is present — used to
+   *  mark "agent is here" even when no spinner or tool line is visible. */
+  agentPresent?: true;
   /** Token count from the spinner suffix, if present. */
   tokens?: number;
   /** Elapsed seconds from the spinner suffix, if present. */
@@ -221,6 +238,22 @@ export function detectExternalAgentSignal(rawData: string): ExternalAgentSignal 
   // Idle prompt frame — Claude is waiting for input.
   if (IDLE_PROMPT_FRAME_RE.test(stripped)) {
     result.idle = true;
+  }
+
+  // Agent banner / brand marker — mark presence even when the chunk has no
+  // active spinner, tool line, or input frame. The idle-frame test above
+  // implies presence; banners cover the gaps (startup splash, between
+  // tool calls, alt-screen redraws that don't include the frame).
+  if (
+    result.idle ||
+    result.working ||
+    result.tool ||
+    AGENT_BANNER_RE.test(stripped) ||
+    AIDER_BANNER_RE.test(stripped) ||
+    CODEX_BANNER_RE.test(stripped) ||
+    CURSOR_BANNER_RE.test(stripped)
+  ) {
+    result.agentPresent = true;
   }
 
   return result;
