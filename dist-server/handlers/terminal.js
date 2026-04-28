@@ -794,8 +794,15 @@ export async function execInTerminal(sessionId, command, pushEvent) {
         // Flush any remaining buffered display data with a tiny delay for last chunk
         setTimeout(() => flushDisplayBuffer(sessionId), 15);
     };
+    // Send the line-clear key TWICE with a brief gap to defeat a race
+    // where a single \x15 lands while the shell is still redrawing its
+    // prompt — observed in log 1fc9961d1f.json producing 'lls -la' from a
+    // leaked `l` byte. \x15 = Ctrl+U on bash/zsh; \x1b = Esc on PowerShell.
     const clearChar = isWin ? "\x1b" : "\x15";
     session.write(clearChar);
+    await new Promise((r) => setTimeout(r, 30));
+    session.write(clearChar);
+    await new Promise((r) => setTimeout(r, 30));
     return new Promise((resolve) => {
         let output = "";
         let resolved = false;

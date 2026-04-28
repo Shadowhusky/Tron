@@ -1017,15 +1017,21 @@ function registerTerminalHandlers(getMainWindow) {
             execActiveSessions.delete(sessionId);
             flushDisplayBuffer(sessionId);
         };
+        // Clear any text the user (or a prior agent strategy like q\r) may
+        // have left in the terminal's input buffer. Ctrl+U on bash/zsh,
+        // Esc on Windows PowerShell/Cmd. We send TWICE with a brief gap
+        // because a single \x15 race-condition'd with a still-arriving
+        // shell prompt redraw can be ineffective — observed in log
+        // 1fc9961d1f.json producing 'lls -la' from a leaked `l` byte.
+        const clearChar = os_1.default.platform() === "win32" ? "\x1b" : "\x15";
+        session.write(clearChar);
+        await new Promise((r) => setTimeout(r, 30));
+        session.write(clearChar);
+        await new Promise((r) => setTimeout(r, 30));
         return new Promise((resolve) => {
             let output = "";
             let resolved = false;
             let stallTimer = null;
-            // Clear any text the user may have typed in the terminal before injecting the command.
-            // Ctrl+U clears the current line in bash/zsh without killing a running process.
-            // On Windows PowerShell/Cmd, Escape (\x1b) clears the line.
-            const clearChar = os_1.default.platform() === "win32" ? "\x1b" : "\x15";
-            session.write(clearChar);
             // Stall detection: if no new PTY output for 8s, assume process is
             // waiting for input. Return early so agent can interact via send_text.
             // Do NOT kill the process — mark session as occupied instead.

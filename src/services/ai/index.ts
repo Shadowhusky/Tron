@@ -2268,20 +2268,33 @@ ${agentPrompt}
      * Returns true if terminal reached idle state.
      */
     const smartStopProcess = async (): Promise<boolean> => {
+      // Each strategy escalates a step. We deliberately exclude `q\r` and
+      // bare `\x04` — they print literal characters into the shell input
+      // buffer when the foreground process has already exited (the very
+      // common case here, since smartStopProcess fires whenever Tron
+      // *thinks* a process might be running). That left strays like
+      // `lls -la` corrupting subsequent execs (observed in log
+      // 1fc9961d1f.json). Rapid Ctrl+C bursts and Esc are buffer-safe.
       const strategies: { keys: string; label: string; delay: number }[] = [
-        { keys: "\x03", label: "Ctrl+C", delay: 500 },
-        { keys: "\x03", label: "Ctrl+C (retry)", delay: 500 },
-        { keys: "\r\x03", label: "Enter + Ctrl+C", delay: 500 },
-        { keys: "q\r", label: "q + Enter", delay: 500 },
-        { keys: "\x04", label: "Ctrl+D (EOF)", delay: 500 },
+        { keys: "\x03", label: "Ctrl+C", delay: 400 },
+        { keys: "\x03\x03", label: "Ctrl+C x2", delay: 500 },
+        { keys: "\x1b", label: "Esc (TUI exit)", delay: 400 },
+        { keys: "\x03\x03\x03", label: "Ctrl+C x3", delay: 500 },
       ];
       for (const strategy of strategies) {
         await writeToTerminal(strategy.keys, true);
-        // Wait and check up to 3 times per strategy
         for (let check = 0; check < 3; check++) {
           await new Promise((r) => setTimeout(r, strategy.delay));
           const state = classifyTerminalOutput(await readTerminal(10) || "");
-          if (state === "idle") return true;
+          if (state === "idle") {
+            // Belt-and-suspenders: send Ctrl+U to wipe any partial input
+            // that the shell may still hold even when classifyTerminal-
+            // Output reads "idle" — the prompt redraws on \r before the
+            // input buffer is cleared.
+            await writeToTerminal("\x15", true);
+            await new Promise((r) => setTimeout(r, 50));
+            return true;
+          }
         }
       }
       return false;
