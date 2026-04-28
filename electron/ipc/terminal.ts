@@ -101,6 +101,7 @@ import path from "path";
 import { randomUUID, randomBytes } from "crypto";
 import { exec, ChildProcess } from "child_process";
 import { sshSessionIds, sshSessions } from "./ssh";
+import { applyShellIntegrationEnv } from "./shellIntegration";
 
 /** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text: string): string {
@@ -638,12 +639,17 @@ export function registerTerminalHandlers(
           safeCwd = os.homedir();
         }
 
+        // Inject Tron shell-integration env (sets ZDOTDIR for zsh →
+        // a Tron-managed .zshrc that emits OSC block markers around
+        // every command). No-op for bash/fish/PowerShell in v1.
+        const ptyEnv = applyShellIntegrationEnv(cleanEnv, shell);
+
         const ptyProcess = pty.spawn(shell, shellArgs, {
           name: "xterm-256color",
           cols: cols || 80,
           rows: rows || 30,
           cwd: safeCwd,
-          env: cleanEnv,
+          env: ptyEnv,
         });
 
         // Preserve persisted history (loaded above) or start fresh

@@ -2143,6 +2143,16 @@ ${skillsBlock}
   promising — README, docs page, Stack Overflow answer. NEVER use this on JSON
   API endpoints (yahoo finance, stock/weather APIs) — those are forbidden.
 
+{"tool":"get_recent_blocks","n":5}
+  Read the user's last N completed shell commands as structured blocks
+  (cmd + exit_code + cwd + output, one block per command). PREFER this
+  over read_terminal when you need to know what the user has been doing —
+  it's pre-segmented by command, free of ANSI artefacts, and returns
+  exit codes explicitly. read_terminal is for monitoring an in-flight
+  command; get_recent_blocks is for understanding history. Available
+  ONLY in zsh sessions where Tron's shell-integration is loaded; falls
+  back to "(no blocks recorded)" otherwise.
+
 {"tool":"read_skill","name":"<skill-name>"}
   Load the body of a discoverable Agent Skill (Anthropic Agent Skills format).
   Available skills are listed in [SKILLS] above with their name + one-line
@@ -2947,7 +2957,7 @@ ${agentPrompt}
         "execute_command", "run_in_terminal", "send_text", "read_terminal",
         "write_file", "read_file", "edit_file", "list_dir", "search_dir",
         "web_search", "web_fetch",
-        "todo_write", "remember", "read_skill",
+        "todo_write", "remember", "read_skill", "get_recent_blocks",
         "ask_question", "final_answer",
       ]);
 
@@ -3572,6 +3582,47 @@ ${agentPrompt}
           role: "user",
           content: `Plan updated:\n${summary}\n\nNow execute the next 'in_progress' (or 'pending') item.`,
         });
+        continue;
+      }
+
+      if (action.tool === "get_recent_blocks") {
+        // Pull structured shell blocks captured by the OSC-1337 markers
+        // that Tron's zsh shell-integration emits around every command.
+        // This is the structured replacement for regex-strip-ANSI
+        // scrollback feeds — clean cmd/exit/cwd/output triples.
+        try {
+          const { getRecentCompletedBlocks } = await import("../blocks");
+          const n = Math.max(1, Math.min(20, parseInt(action.n ?? action.count ?? "5", 10) || 5));
+          const sid = options?.sessionId || "";
+          const blocks = sid ? getRecentCompletedBlocks(sid, n) : [];
+          if (blocks.length === 0) {
+            history.push({
+              role: "user",
+              content: `(No shell blocks recorded — this can happen on bash/fish/PowerShell, or before the user has run any commands. Use read_terminal to read raw scrollback instead.)`,
+            });
+          } else {
+            const formatted = blocks
+              .map((b, i) => {
+                const truncOut = b.output.slice(0, 4000);
+                const tail = b.output.length > 4000 ? "\n[...truncated]" : "";
+                return `BLOCK ${i + 1}/${blocks.length}\ncmd: ${b.command}\nexit: ${b.exitCode}\ncwd: ${b.cwd}\noutput:\n${truncOut}${tail}`;
+              })
+              .join("\n\n---\n\n");
+            onUpdate("executed", `Read ${blocks.length} recent block${blocks.length === 1 ? "" : "s"}`, {
+              tool: "get_recent_blocks",
+              count: blocks.length,
+            });
+            history.push({
+              role: "user",
+              content: `Recent shell blocks (newest last):\n\n${formatted}`,
+            });
+          }
+        } catch (err: any) {
+          history.push({
+            role: "user",
+            content: `<tool_use_error>get_recent_blocks failed: ${err.message}</tool_use_error>`,
+          });
+        }
         continue;
       }
 

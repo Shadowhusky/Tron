@@ -9,6 +9,7 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
 import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader } from "../../../services/terminalBuffer";
+import { startBlock, endBlock, appendBlockOutput, clearBlocks } from "../../../services/blocks";
 import { isElectronApp, isMacOS, isTouchDevice, normalizePath } from "../../../utils/platform";
 import { isRemoteSession } from "../../../services/remote-bridge";
 import "@xterm/xterm/css/xterm.css";
@@ -451,6 +452,42 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     }
 
 
+    // Shell-integrated blocks (Warp pattern #1). Tron's injected zsh
+    // hook emits OSC 1337 markers around every command:
+    //   ESC ] 1337 ; TronBlockStart ; <pid> ; <id> ; <urlenc cmd> BEL
+    //   ESC ] 1337 ; TronBlockEnd   ; <pid> ; <id> ; <exit> ; <urlenc cwd> BEL
+    // xterm's parser strips the OSC sequence so it never renders as text.
+    // The handler returns true to claim ownership; false would let xterm's
+    // default OSC handling (none for 1337) print it.
+    term.parser.registerOscHandler(1337, (data: string) => {
+      try {
+        if (data.startsWith("TronBlockStart;")) {
+          const parts = data.split(";");
+          // [TronBlockStart, pid, id, urlencCmd, ...]
+          if (parts.length >= 4) {
+            const blockId = `${parts[1]}-${parts[2]}`;
+            const cmd = decodeURIComponent(parts.slice(3).join(";"));
+            startBlock(sessionId, blockId, cmd);
+          }
+          return true;
+        }
+        if (data.startsWith("TronBlockEnd;")) {
+          const parts = data.split(";");
+          // [TronBlockEnd, pid, id, exit_code, urlencCwd, ...]
+          if (parts.length >= 5) {
+            const blockId = `${parts[1]}-${parts[2]}`;
+            const exitCode = parseInt(parts[3], 10);
+            const cwd = decodeURIComponent(parts.slice(4).join(";"));
+            endBlock(sessionId, blockId, isNaN(exitCode) ? -1 : exitCode, cwd);
+          }
+          return true;
+        }
+      } catch {
+        /* never let a malformed marker break terminal rendering */
+      }
+      return false;
+    });
+
     // Register screen buffer reader so the agent can read rendered TUI content
     registerScreenBufferReader(sessionId, (lines: number) => {
       const buf = term.buffer.active;
@@ -539,6 +576,30 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     };
 
     const syncWrite = (data: string) => {
+      // Feed incoming chunk into the block-store output capture. The OSC
+      // markers themselves are extracted with a regex to (a) bound which
+      // text gets attributed to which block and (b) keep the markers out
+      // of the captured output. xterm's OSC handler still fires for visual
+      // dispatch of the markers — they just don't render as text. We
+      // intentionally append even before xterm has rendered: the OSC
+      // handler runs synchronously inside term.write() so by the time
+      // syncWrite returns, the block-store transitions and xterm
+      // rendering are in lockstep.
+      try {
+        // eslint-disable-next-line no-control-regex
+        const OSC_RE = /\x1b\]1337;TronBlock(?:Start|End);[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+        let lastIdx = 0;
+        let m: RegExpExecArray | null;
+        while ((m = OSC_RE.exec(data)) !== null) {
+          const between = data.slice(lastIdx, m.index);
+          if (between) appendBlockOutput(sessionId, between);
+          lastIdx = m.index + m[0].length;
+        }
+        const tail = data.slice(lastIdx);
+        if (tail) appendBlockOutput(sessionId, tail);
+      } catch {
+        /* never let block capture break terminal rendering */
+      }
       // Check for sync markers in the data
       if (!inSyncMode) {
         const beginIdx = data.indexOf(SYNC_BEGIN);
@@ -1344,6 +1405,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       unregisterSelectionReader(sessionId);
       unregisterViewportTextReader(sessionId);
       unregisterAlternateBufferReader(sessionId);
+      clearBlocks(sessionId);
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;

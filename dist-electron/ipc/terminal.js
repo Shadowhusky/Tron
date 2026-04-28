@@ -156,6 +156,7 @@ const path_1 = __importDefault(require("path"));
 const crypto_1 = require("crypto");
 const child_process_1 = require("child_process");
 const ssh_1 = require("./ssh");
+const shellIntegration_1 = require("./shellIntegration");
 /** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text) {
     let d = text;
@@ -671,12 +672,16 @@ function registerTerminalHandlers(getMainWindow) {
                 console.warn(`[Terminal] CWD inaccessible, falling back to home: ${safeCwd}`);
                 safeCwd = os_1.default.homedir();
             }
+            // Inject Tron shell-integration env (sets ZDOTDIR for zsh →
+            // a Tron-managed .zshrc that emits OSC block markers around
+            // every command). No-op for bash/fish/PowerShell in v1.
+            const ptyEnv = (0, shellIntegration_1.applyShellIntegrationEnv)(cleanEnv, shell);
             const ptyProcess = pty.spawn(shell, shellArgs, {
                 name: "xterm-256color",
                 cols: cols || 80,
                 rows: rows || 30,
                 cwd: safeCwd,
-                env: cleanEnv,
+                env: ptyEnv,
             });
             // Preserve persisted history (loaded above) or start fresh
             if (!sessionHistory.has(sessionId)) {
