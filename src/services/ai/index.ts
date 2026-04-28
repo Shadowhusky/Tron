@@ -25,6 +25,10 @@ export interface AgentContinuation {
   usedWebTools?: boolean;
   lastWriteDir: string;
   terminalBusy: boolean;
+  /** Active plan published via todo_write — survives ask_question pauses. */
+  agentTodos?: import("../../types").AgentTodo[];
+  /** Memory entries published via remember() — survives across turns. */
+  agentMemory?: string[];
 }
 
 // Extend AgentResult locally if not updating types.d.ts yet, or assume it's there
@@ -2042,36 +2046,155 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       history = [
         {
           role: "system",
-          content: `Terminal agent. Respond ONLY with valid JSON.
+          content: `Terminal agent. Respond ONLY with one valid JSON tool call per turn.
 
-TOOLS:
-1. {"tool":"execute_command","command":"..."} — Run a non-interactive command, get output.
-2. {"tool":"run_in_terminal","command":"..."} — Run interactive/long-running commands (npm create, dev servers). Monitor with read_terminal after.
-3. {"tool":"read_terminal","lines":50} — Read last N lines of terminal output.
-4. {"tool":"send_text","text":"...","description":"..."} — Send keystrokes. Include description. Keys: \\r=Enter, \\x1B[B=Down, \\x1B[A=Up, \\x03=Ctrl+C.
-5. {"tool":"ask_question","question":"..."} — Ask user ONLY for credentials, preferences, or ambiguous choices. NEVER ask about system state, hardware, files, paths — check yourself first.
-6. {"tool":"final_answer","content":"..."} — Task complete. 1-3 lines.
-7. {"tool":"write_file","path":"/absolute/path","content":"..."} — Create a NEW file or fully replace a small file. Use edit_file for modifying existing files.
-8. {"tool":"read_file","path":"/absolute/path"} — Read a file directly. Use instead of cat.
-9. {"tool":"list_dir","path":"/absolute/path"} — List directory. Use instead of ls/dir.
-10. {"tool":"search_dir","path":"/absolute/path","query":"..."} — Search text recursively. Use instead of grep.
-11. {"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."} — PREFERRED for modifying existing files. Exact search-and-replace. Multiple edit_file calls are better than rewriting with write_file.
-12. {"tool":"web_search","query":"..."} — Search the web. Use to look up error messages, library docs, API references, version compatibility. ALWAYS use this when you encounter an unfamiliar error 3+ times.
-13. {"tool":"web_fetch","url":"..."} — Fetch and read a web page. Returns plain text. Use after web_search to read documentation pages, Stack Overflow answers, etc. NEVER use this to call external APIs (Yahoo Finance, stock APIs, weather APIs, etc.) — only fetch human-readable web pages.
+═══ TOOLS ═══
 
-RULES:
-1. Execute directly — never explain. Be FULLY autonomous: check system state (ps, curl, lsof, ls), hardware info (system_profiler, diskutil), file locations (find, ls) yourself. NEVER ask the user for information you can discover via commands.
-2. On failure, analyze the error, fix root cause proactively (missing files, permissions, paths, deps), then retry. Don't give up or retry blindly.
-3. If user denies permission, STOP.
-4. FILE OPS: Use read_file, list_dir, search_dir, edit_file, write_file (new files only). Never use cat/heredoc/grep/ls/printf through the terminal.
-5. INTERACTIVE: After interactive command, loop read_terminal → send_text until done. Auto-accept defaults with send_text("\\r") or send_text("y\\r") — only ask user about critical unresolved choices.
-6. Start dev server ONLY as the LAST step after all code/deps/config are complete.
-7. SCAFFOLDING: Let scaffolding tools create directories — don't mkdir first. Use non-interactive flags (--yes). If directory exists and conflicts, clean it first.
-8. CONTEXT: Check [PROJECT FILES] before creating files. Don't recreate existing files or re-scaffold existing projects — use edit_file to modify.
-9. IMAGES: User-mentioned images were analyzed in a prior step. Use the description — don't try to access them.
-10. FOCUS: Execute ONLY the [CURRENT TASK]. Prior conversation is reference — don't re-execute previous actions.
-11. CONVERSATIONAL: If the user sends a greeting (hi, hello, hey) or casual chat with NO task, respond with a brief friendly reply via final_answer. Do NOT explore files, run commands, or take any action.
-12. NO EXTERNAL APIS: Never call external APIs directly (via curl, web_fetch, or execute_command). For information gathering, use web_search to find web pages, then web_fetch to read those pages. Do not construct API endpoint URLs (e.g. Yahoo Finance API, stock APIs, weather APIs, REST endpoints).
+{"tool":"execute_command","command":"..."}
+  Run ONE non-interactive shell command. Get exit code + stdout + stderr.
+  GOOD: read state ('ls -la /etc'), run a build ('npm run lint'), one-shot scripts.
+  BAD: dev servers, REPLs, vim/htop/claude — those are run_in_terminal.
+  BAD: 'cat /file' — use read_file. 'grep -r foo' — use search_dir. 'ls' — use list_dir.
+  BAD: external API calls (yahoo finance, stock APIs, REST). Use web_fetch on a human-readable page instead.
+  Errors come back as <tool_use_error>…</tool_use_error>. Read them; do NOT retry the same command.
+
+{"tool":"run_in_terminal","command":"..."}
+  Long-running / interactive commands: dev servers, scaffolders, vim, REPLs.
+  Then call read_terminal repeatedly to monitor — DO NOT run another command while one is running.
+  Tron auto-stops a previous server when you start a new one.
+
+{"tool":"read_terminal","lines":50}
+  Read the last N lines of terminal output. Use after run_in_terminal to monitor progress
+  or to see what an interactive program is showing. Tron classifies the state for you
+  (idle/busy/server/input_needed) and waits with backoff.
+
+{"tool":"send_text","text":"...","description":"..."}
+  Send keystrokes to a running interactive program (TUI menus, prompts).
+  Special keys: \\r = Enter, \\x1B[B = Down, \\x1B[A = Up, \\x03 = Ctrl+C, \\x04 = Ctrl+D.
+  Always provide 'description' (e.g. "Down arrow + Enter to select React").
+  Auto-accept defaults: send_text("\\r") or send_text("y\\r"). Only ask the user about
+  CRITICAL unresolved choices — defaults are usually fine.
+
+{"tool":"read_file","path":"/absolute/path"}
+  Read a file. Returns up to ~50KB of content. Use instead of 'cat'.
+  Always use ABSOLUTE paths. If unsure where a file lives, list_dir or search_dir first.
+  REQUIRED before edit_file on a file you haven't already seen this session — without
+  reading first you'll guess at the contents and edit_file's search will fail.
+
+{"tool":"write_file","path":"/absolute/path","content":"..."}
+  Create a NEW file or fully replace a small (<200 lines) existing file. Creates
+  parent dirs as needed. Always use ABSOLUTE paths.
+  PREFER edit_file for any existing file with content you want to keep — write_file
+  destroys whatever was there.
+
+{"tool":"edit_file","path":"/absolute/path","search":"...","replace":"..."}
+  Targeted search-and-replace inside an existing file. Tron tolerates curly quotes
+  ('"' vs '"'/'"'), CRLF vs LF, and NBSP — you don't have to match those exactly.
+  But search must include enough surrounding context to be unique in the file.
+  GOOD search: 'function foo() {\\n  return 1;\\n}' (the whole function)
+  BAD search: 'return 1;' (likely matches many places)
+  When the same edit applies to several files, call edit_file once per file rather
+  than trying to glob.
+
+{"tool":"list_dir","path":"/absolute/path"}
+  List one directory. Returns names + types (dir/file). Use instead of 'ls'.
+  Won't recurse. Use search_dir for recursive search.
+
+{"tool":"search_dir","path":"/absolute/path","query":"..."}
+  Recursively search file CONTENTS for a string. Returns matches with file+line.
+  Use instead of 'grep -r'. Query is a literal string, not a regex.
+
+{"tool":"web_search","query":"..."}
+  Search the web. Returns title/url/snippet for ~10 results. The user can click them.
+  USE WHEN: unfamiliar error message, library API question, version compat,
+  "what's the right syntax for X". Don't grind on '--help' output if a 5-second
+  web search would tell you the answer.
+
+{"tool":"web_fetch","url":"..."}
+  Fetch a single page as plain text. Use after web_search on a URL that looks
+  promising — README, docs page, Stack Overflow answer. NEVER use this on JSON
+  API endpoints (yahoo finance, stock/weather APIs) — those are forbidden.
+
+{"tool":"todo_write","todos":[{"content":"...","status":"pending|in_progress|completed"}, ...]}
+  ANNOUNCE A PLAN. For any task that needs 3+ tool calls, START by writing a
+  short todo list (3-7 items, one verb each). Then for each step:
+    - mark it 'in_progress' BEFORE starting
+    - mark it 'completed' immediately after finishing — do not batch
+  Re-emit the full list each time you want to update state. Be specific:
+    GOOD: "Find the openclaw config file"
+    BAD:  "Investigate the system"
+  The user sees this list. Trivial single-action requests (greetings, "show me X")
+  do NOT need a todo list — skip straight to the action.
+
+{"tool":"remember","content":"..."}
+  Persist a short fact across the rest of the session. Use for:
+    - approaches that already failed and why
+    - file paths / IDs / config values you'll need later
+    - constraints discovered (e.g. "Docker is not installed", "user prefers tabs")
+  Memory is shown to you under [MEMORY] at the start of each turn.
+  Keep entries short (one line each). Don't dump file contents here.
+
+{"tool":"ask_question","question":"..."}
+  Pause and ask the user. Use ONLY when:
+    - You need credentials, an API key, or a personal preference.
+    - You've already tried 2-3 distinct approaches and are genuinely stuck.
+    - The blocker is something only the user can fix (start a service,
+      install software, choose between non-obvious options).
+  Do NOT use for things you can discover yourself (paths, system state, file
+  contents). Do NOT use as "is this OK?" — just do the work.
+
+{"tool":"final_answer","content":"..."}
+  Task complete (or you've decided you can't proceed and need to report).
+  1-3 lines. State what you did, or what blocked you.
+
+═══ HOW TO WORK ═══
+
+PLAN FIRST. For multi-step tasks emit todo_write before any other tool call.
+The list is your contract with yourself — work the list, don't wander off it.
+
+DIAGNOSE BEFORE RETRYING. When a tool fails:
+  1. READ the <tool_use_error> message — exit codes, "command not found",
+     "permission denied", "no such file" all tell you something specific.
+  2. Identify the ROOT CAUSE: missing dep, wrong path, auth, service not
+     running, syntax error.
+  3. Try a FOCUSED fix that addresses the cause. Do NOT rerun the same
+     command — Tron will block consecutive duplicates as a loop.
+  4. If three different fixes don't work, REMEMBER what you tried and ASK
+     the user (ask_question) or REPORT the blocker (final_answer).
+
+ASK WHEN STUCK. After 2-3 distinct attempts at one sub-problem, STOP. Don't
+spend 30 commands on a prerequisite. ask_question describing what you've
+tried — the user can usually unblock you in one sentence.
+
+DON'T GO DOWN INFRASTRUCTURE RABBIT HOLES. If the actual task is "send a
+telegram message" and Docker isn't running, ask_question first ("Docker
+isn't running — should I start it or is it OK to skip?"). Don't spend 15
+commands installing/starting tooling on the user's behalf without checking.
+
+ONE TOOL PER RESPONSE. Output exactly ONE JSON object then STOP. Wait for
+the result. The result is either the tool's output or a <tool_use_error>
+tag with the failure reason — both must be read carefully.
+
+═══ STANDING RULES ═══
+
+- Be FULLY autonomous on read-only checks (ps, lsof, ls, system_profiler) —
+  never ask the user for state you can discover yourself.
+- If the user denies a permission, STOP and final_answer.
+- FILE OPS: prefer read_file/list_dir/search_dir/edit_file/write_file over
+  cat/grep/ls/heredoc/printf via the terminal.
+- Start dev servers ONLY as the LAST step, after all code/deps/config done.
+- SCAFFOLDING: let scaffolders create their own dirs (don't mkdir first).
+  Use non-interactive flags (--yes). If a target dir exists and conflicts,
+  clean it first.
+- IMAGES the user mentions were analyzed in a prior step — use the
+  description, don't try to access them.
+- TASK FOCUS: execute ONLY the [CURRENT TASK]. Prior conversation is
+  reference; never re-run previous actions.
+- CONVERSATIONAL: a greeting / casual chat with no task = brief friendly
+  reply via final_answer. No exploration.
+- NO EXTERNAL APIS: never curl/web_fetch JSON endpoints (yahoo finance,
+  stock, weather). web_fetch on human-readable pages only.
+
 ${agentPrompt}
 `,
         },
@@ -2186,6 +2309,19 @@ ${agentPrompt}
     let readTerminalCount = 0; // Total consecutive read_terminal calls (for UI merging + backoff)
     let multiToolWarnings = 0; // Consecutive responses where model outputs multiple tool calls
 
+    // ── Plan + Memory (Claude Code-inspired) ───────────────────────────────
+    // Plan: agent emits todo_write to publish a checklist. We re-inject it
+    // into history every loop iteration so the model can't "forget" what it
+    // committed to. Memory: short notes the agent wants to keep across turns
+    // (failed approaches, key paths, constraints). Both restore from
+    // continuation so they survive ask_question pauses.
+    let agentTodos: import("../../types").AgentTodo[] = continuation?.agentTodos
+      ? [...continuation.agentTodos]
+      : [];
+    const agentMemory: string[] = continuation?.agentMemory
+      ? [...continuation.agentMemory]
+      : [];
+
     // ── Repeated error / stagnation detection ──────────────────────────────
     // Tracks error "signatures" (TypeError, SyntaxError, module not found, etc.)
     // across both command failures (exit code != 0) and successful outputs that
@@ -2269,6 +2405,53 @@ ${agentPrompt}
       }
       // Clear any leftover streaming entries from previous iteration (e.g. guard-rejected responses)
       onUpdate("clear_streaming", "");
+
+      // Re-inject the current plan + memory at the top of each iteration so
+      // the model can't drift from its committed checklist or forget what it
+      // already learned. Sentinel lets us drop the previous block before
+      // pushing a fresh one — keeps history bounded.
+      // eslint-disable-next-line no-inner-declarations
+      {
+        const SENTINEL = "[STATE_REMINDER]";
+        for (let k = history.length - 1; k >= 0; k--) {
+          const m = history[k];
+          if (
+            m &&
+            m.role === "user" &&
+            typeof m.content === "string" &&
+            m.content.startsWith(SENTINEL)
+          ) {
+            history.splice(k, 1);
+            break;
+          }
+        }
+        if (agentTodos.length > 0 || agentMemory.length > 0) {
+          const lines: string[] = [SENTINEL];
+          if (agentTodos.length > 0) {
+            lines.push("[PLAN]");
+            for (let i = 0; i < agentTodos.length; i++) {
+              const t = agentTodos[i];
+              const mark =
+                t.status === "completed"
+                  ? "✓"
+                  : t.status === "in_progress"
+                    ? "→"
+                    : "○";
+              lines.push(`${mark} ${i + 1}. ${t.content}`);
+            }
+            lines.push("");
+          }
+          if (agentMemory.length > 0) {
+            lines.push("[MEMORY]");
+            for (const m of agentMemory) lines.push(`- ${m}`);
+            lines.push("");
+          }
+          lines.push(
+            "(Stay on the in-progress / pending plan item. Use remember() to add new constraints. Use ask_question if blocked.)",
+          );
+          history.push({ role: "user", content: lines.join("\n") });
+        }
+      }
 
       if (thinkingEnabled) {
         onUpdate("thinking", "Agent is thinking...");
@@ -2562,6 +2745,7 @@ ${agentPrompt}
         "execute_command", "run_in_terminal", "send_text", "read_terminal",
         "write_file", "read_file", "edit_file", "list_dir", "search_dir",
         "web_search", "web_fetch",
+        "todo_write", "remember",
         "ask_question", "final_answer",
       ]);
 
@@ -3044,6 +3228,61 @@ ${agentPrompt}
       delete action._action;
       delete action._step_done;
 
+      if (action.tool === "todo_write") {
+        // Replace the plan wholesale — model re-emits the full list each time
+        // so it can update statuses. Validate and clamp.
+        const raw = Array.isArray(action.todos) ? action.todos : [];
+        const cleaned = raw
+          .filter((t: any) => t && typeof t.content === "string" && t.content.trim())
+          .slice(0, 20)
+          .map((t: any): import("../../types").AgentTodo => ({
+            content: String(t.content).trim().slice(0, 200),
+            status:
+              t.status === "in_progress" || t.status === "completed"
+                ? t.status
+                : "pending",
+          }));
+        agentTodos = cleaned;
+        const summary =
+          cleaned.length === 0
+            ? "Plan cleared."
+            : cleaned
+                .map((t: import("../../types").AgentTodo, i: number) => {
+                  const mark =
+                    t.status === "completed" ? "✓" : t.status === "in_progress" ? "→" : "○";
+                  return `${mark} ${i + 1}. ${t.content}`;
+                })
+                .join("\n");
+        onUpdate("plan", summary, { tool: "todo_write", todos: cleaned });
+        history.push({
+          role: "user",
+          content: `Plan updated:\n${summary}\n\nNow execute the next 'in_progress' (or 'pending') item.`,
+        });
+        continue;
+      }
+
+      if (action.tool === "remember") {
+        const text = (action.content || "").trim();
+        if (!text) {
+          history.push({
+            role: "user",
+            content: `<tool_use_error>remember requires non-empty 'content'</tool_use_error>`,
+          });
+          continue;
+        }
+        // Cap entry length so a runaway model can't fill memory with file dumps
+        const entry = text.slice(0, 280);
+        agentMemory.push(entry);
+        // Cap total memory entries
+        if (agentMemory.length > 30) agentMemory.shift();
+        onUpdate("system", `Remembered: ${entry}`, { tool: "remember", content: entry });
+        history.push({
+          role: "user",
+          content: `Remembered. ${agentMemory.length} memory ${agentMemory.length === 1 ? "entry" : "entries"} now stored.`,
+        });
+        continue;
+      }
+
       if (action.tool === "final_answer") {
         // Reject if the content is clearly a tool name — model confused output format
         const finalContent = (action.content || "").trim();
@@ -3296,6 +3535,8 @@ ${agentPrompt}
             usedWebTools,
             lastWriteDir,
             terminalBusy,
+            agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
+            agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
           },
         };
       }
@@ -3562,7 +3803,7 @@ ${agentPrompt}
           } else {
             history.push({
               role: "user",
-              content: `Command Failed: ${err.message}`,
+              content: `<tool_use_error>execute_command failed: ${err.message}</tool_use_error>`,
             });
           }
         }
@@ -3798,7 +4039,7 @@ ${agentPrompt}
           onUpdate("failed", "Read terminal failed: " + err.message, action);
           history.push({
             role: "user",
-            content: `Read Failed: ${err.message} `,
+            content: `<tool_use_error>read_file failed: ${err.message}</tool_use_error>`,
           });
         }
         // Throttle: when terminal is busy, delay before next LLM call to avoid rapid API calls
@@ -3908,7 +4149,7 @@ ${agentPrompt}
           onUpdate("failed", "Write file failed: " + err.message, action);
           history.push({
             role: "user",
-            content: `Write File Failed: ${err.message}`,
+            content: `<tool_use_error>write_file failed: ${err.message}</tool_use_error>`,
           });
         }
         continue;
@@ -4036,7 +4277,7 @@ ${agentPrompt}
           onUpdate("failed", "Edit file failed: " + err.message, action);
           history.push({
             role: "user",
-            content: `Edit File Failed: ${err.message}`,
+            content: `<tool_use_error>edit_file failed: ${err.message}</tool_use_error>`,
           });
         }
         continue;
@@ -4081,7 +4322,7 @@ ${agentPrompt}
           onUpdate("executed", `Could not list ${action.path || action.dirPath || "directory"} (${err.message})`, action);
           history.push({
             role: "user",
-            content: `list_dir was unable to read that directory (${err.message}). This is non-critical — proceed with your task using other tools.`,
+            content: `<tool_use_error>list_dir failed: ${err.message}</tool_use_error>`,
           });
         }
         continue;
@@ -4136,7 +4377,7 @@ ${agentPrompt}
           onUpdate("executed", `Could not search ${action.path || action.dirPath || "directory"} (${err.message})`, action);
           history.push({
             role: "user",
-            content: `search_dir was unable to search that directory (${err.message}). This is non-critical — proceed with your task using other tools.`,
+            content: `<tool_use_error>search_dir failed: ${err.message}</tool_use_error>`,
           });
         }
         continue;
@@ -4170,7 +4411,7 @@ ${agentPrompt}
           }
         } catch (err: any) {
           onUpdate("executed", `Web search failed: ${err.message}`, action);
-          history.push({ role: "user", content: `web_search failed: ${err.message}. Try using execute_command with curl instead.` });
+          history.push({ role: "user", content: `<tool_use_error>web_search failed: ${err.message}</tool_use_error>` });
         }
         continue;
       }
@@ -4187,7 +4428,7 @@ ${agentPrompt}
           const data: any = await (window as any).electron.ipcRenderer.invoke("web.fetch", { url });
           if (data.error) {
             onUpdate("executed", `Fetch failed: ${data.error}`, action);
-            history.push({ role: "user", content: `web_fetch error: ${data.error}` });
+            history.push({ role: "user", content: `<tool_use_error>web_fetch failed: ${data.error}</tool_use_error>` });
           } else {
             const content = data.content || "";
             const truncated = content.length > 12000 ? content.slice(0, 12000) + "\n\n[Content truncated — 12KB limit]" : content;
@@ -4197,7 +4438,7 @@ ${agentPrompt}
           }
         } catch (err: any) {
           onUpdate("executed", `Web fetch failed: ${err.message}`, action);
-          history.push({ role: "user", content: `web_fetch failed: ${err.message}. Try using execute_command with curl instead.` });
+          history.push({ role: "user", content: `<tool_use_error>web_fetch failed: ${err.message}</tool_use_error>` });
         }
         continue;
       }
@@ -4531,7 +4772,7 @@ ${agentPrompt}
           } else {
             history.push({
               role: "user",
-              content: `Command Failed: \n${err.message}`,
+              content: `<tool_use_error>run_in_terminal failed: ${err.message}</tool_use_error>`,
             });
             // Check for repeated error patterns — force root-cause investigation
             const intervention = checkRepeatedErrors(err.message);

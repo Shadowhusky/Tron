@@ -1656,28 +1656,73 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     if (isThought && hiddenThoughts.has(globalIdx)) return null;
 
                     // Stopped: render a tiny inline indicator, not a full step block
-                    // Structured plan — render as checklist
-                    if (isPlan && step.payload?.steps?.length > 0) {
-                      return (
-                        <div
-                          key={key}
-                          className={`border-l-2 pl-4 py-2 ${isLight ? "border-indigo-300" : "border-indigo-500/30"}`}
-                        >
-                          <div className="flex items-center gap-1.5 mb-1.5">
-                            <ListOrdered className={`w-3 h-3 ${isLight ? "text-indigo-500" : "text-indigo-400"}`} />
-                            <span className={`uppercase font-bold text-[10px] tracking-wider ${isLight ? "text-indigo-500" : "text-indigo-400"}`}>
-                              Plan
-                            </span>
-                          </div>
-                          <div className="flex flex-col gap-0.5">
-                            {(step.payload.steps as string[]).map((s: string, i: number) => (
-                              <span key={i} className={`text-[11px] leading-relaxed ${isLight ? "text-gray-700" : "text-gray-300"}`}>
-                                {i + 1}. {s}
+                    // Structured plan — render as checklist. Supports both the
+                    // legacy `payload.steps: string[]` shape and the richer
+                    // `payload.todos: {content, status}[]` from todo_write.
+                    {
+                      const todoArr =
+                        isPlan && Array.isArray(step.payload?.todos)
+                          ? (step.payload.todos as Array<{
+                              content: string;
+                              status: "pending" | "in_progress" | "completed";
+                            }>)
+                          : null;
+                      const stepArr =
+                        isPlan && !todoArr && Array.isArray(step.payload?.steps)
+                          ? (step.payload.steps as string[])
+                          : null;
+                      if ((todoArr && todoArr.length > 0) || (stepArr && stepArr.length > 0)) {
+                        return (
+                          <div
+                            key={key}
+                            className={`border-l-2 pl-4 py-2 ${isLight ? "border-indigo-300" : "border-indigo-500/30"}`}
+                          >
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <ListOrdered className={`w-3 h-3 ${isLight ? "text-indigo-500" : "text-indigo-400"}`} />
+                              <span className={`uppercase font-bold text-[10px] tracking-wider ${isLight ? "text-indigo-500" : "text-indigo-400"}`}>
+                                Plan
                               </span>
-                            ))}
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              {todoArr ? (
+                                todoArr.map((t, i) => {
+                                  const isDone = t.status === "completed";
+                                  const isActive = t.status === "in_progress";
+                                  const mark = isDone ? "✓" : isActive ? "→" : "○";
+                                  const lineCls = isDone
+                                    ? isLight
+                                      ? "text-gray-400 line-through"
+                                      : "text-gray-500 line-through"
+                                    : isActive
+                                      ? isLight
+                                        ? "text-indigo-700 font-medium"
+                                        : "text-indigo-300 font-medium"
+                                      : isLight
+                                        ? "text-gray-700"
+                                        : "text-gray-300";
+                                  const markCls = isDone
+                                    ? isLight ? "text-green-600" : "text-green-400"
+                                    : isActive
+                                      ? isLight ? "text-indigo-500" : "text-indigo-400"
+                                      : isLight ? "text-gray-400" : "text-gray-600";
+                                  return (
+                                    <div key={i} className="flex items-baseline gap-2 text-[11px] leading-relaxed">
+                                      <span className={`${markCls} font-mono w-3 shrink-0`}>{mark}</span>
+                                      <span className={lineCls}>{t.content}</span>
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                stepArr!.map((s, i) => (
+                                  <span key={i} className={`text-[11px] leading-relaxed ${isLight ? "text-gray-700" : "text-gray-300"}`}>
+                                    {i + 1}. {s}
+                                  </span>
+                                ))
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
+                        );
+                      }
                     }
 
                     if (isStopped) {

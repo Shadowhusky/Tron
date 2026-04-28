@@ -31,6 +31,14 @@ export interface AgentStep {
   payload?: any;
 }
 
+/** A single item on the agent's plan list (todo_write tool). */
+export interface AgentTodo {
+  /** Plan-tense description, shown to the user. */
+  content: string;
+  /** Lifecycle: pending → in_progress → completed. */
+  status: "pending" | "in_progress" | "completed";
+}
+
 export interface AttachedImage {
   base64: string;      // raw base64 data (no data: prefix)
   mediaType: string;   // image/jpeg, image/png, image/webp, image/gif
