@@ -2195,8 +2195,10 @@ ${skillsBlock}
 
 ═══ HOW TO WORK ═══
 
-PLAN FIRST. For multi-step tasks emit todo_write before any other tool call.
-The list is your contract with yourself — work the list, don't wander off it.
+PLAN FIRST. For tasks needing 3+ tool calls, emit todo_write with 3+ concrete
+sub-steps before any other tool call. The list is your contract with yourself —
+work the list, don't wander off it. NEVER emit a 1-item plan; for trivial 1–2
+step tasks skip todo_write entirely and just execute the work.
 
 DIAGNOSE BEFORE RETRYING. When a tool fails:
   1. READ the <tool_use_error> message — exit codes, "command not found",
@@ -2380,6 +2382,22 @@ ${agentPrompt}
     const agentMemory: string[] = continuation?.agentMemory
       ? [...continuation.agentMemory]
       : [];
+
+    /** When the agent declares done (final_answer or reclassified ask_question),
+     *  flip every remaining pending/in_progress item to completed and re-emit
+     *  the plan. Otherwise the AgentOverlay's sticky plan card stays visible
+     *  with stale "in_progress" markers because the model frequently forgets
+     *  to emit a final todo_write before final_answer. */
+    const markPlanCompleteOnFinish = () => {
+      if (agentTodos.length === 0) return;
+      const hasIncomplete = agentTodos.some((t) => t.status !== "completed");
+      if (!hasIncomplete) return;
+      agentTodos = agentTodos.map((t) => ({ ...t, status: "completed" as const }));
+      const summary = agentTodos
+        .map((t, idx) => `✓ ${idx + 1}. ${t.content}`)
+        .join("\n");
+      onUpdate("plan", summary, { tool: "todo_write", todos: agentTodos });
+    };
     /** Counts substantive tool calls (not parse retries / loop blocks). Used
      *  to enforce plan-first: after N substantive calls without todo_write
      *  we inject a hard reminder. Resumed runs (continuation) are treated as
@@ -3237,6 +3255,7 @@ ${agentPrompt}
         // If we got plain text that isn't a confused JSON tool call, use it as the answer
         const hasToolCallJSON = /{"tool"\s*:/.test(fallbackText);
         if (fallbackText.length > 0 && !hasToolCallJSON) {
+          markPlanCompleteOnFinish();
           return {
             success: true,
             message: fallbackText.slice(0, 2000),
@@ -3258,6 +3277,7 @@ ${agentPrompt}
             );
           }
           if (usedWebTools) summaryParts.push("looked up docs online");
+          markPlanCompleteOnFinish();
           return {
             success: true,
             message:
@@ -3568,6 +3588,18 @@ ${agentPrompt}
                 ? t.status
                 : "pending",
           }));
+
+        // Reject single-item plans — they're noise. Either the task is trivial
+        // (skip planning, just do it) or the agent under-decomposed it. Allow
+        // 1-item plans only if the existing plan already had ≥2 items and the
+        // model is collapsing it as part of a status update (rare but valid).
+        if (cleaned.length === 1 && agentTodos.length < 2) {
+          history.push({
+            role: "user",
+            content: `REJECTED: A 1-item plan is noise. Either (a) skip todo_write and just execute the work directly with the relevant tool (execute_command, write_file, run_in_terminal), or (b) split the task into 3+ concrete sub-steps and re-emit todo_write. Do NOT publish single-item plans.`,
+          });
+          continue;
+        }
 
         // Plan stagnation: if the new plan is identical to the existing one
         // (same items in same order, same statuses), the model is restating
@@ -3939,6 +3971,7 @@ ${agentPrompt}
             }
           } catch { /* non-critical */ }
         }
+        markPlanCompleteOnFinish();
         return { success: true, message: finalMessage, type: "success", payload: action };
       }
 
@@ -3969,17 +4002,29 @@ ${agentPrompt}
         const hasQuestionMark = questionText.includes("?");
         const isLongAnswer = questionText.length > 150;
         if (isLongAnswer && !endsWithQuestion) {
-          // Long response without trailing "?" — this is a done response, not a question
-          onUpdate("done", questionText, { tool: "final_answer", content: questionText });
-          return { success: true, message: questionText };
+          // Long response without trailing "?" — this is a done response, not a question.
+          // Don't emit our own "done" here — useAgentRunner appends a single done step
+          // from the success return below. Emitting here would double up.
+          markPlanCompleteOnFinish();
+          return {
+            success: true,
+            message: questionText,
+            type: "success",
+            payload: { tool: "final_answer", content: questionText },
+          };
         }
         // Also catch: has a "?" buried in middle but the bulk is analysis/results
         if (questionText.length > 300 && hasQuestionMark) {
           // Count question marks vs total content — if <1 per 200 chars, it's mostly answer
           const qCount = (questionText.match(/\?/g) || []).length;
           if (qCount <= 1 && questionText.length > 400) {
-            onUpdate("done", questionText, { tool: "final_answer", content: questionText });
-            return { success: true, message: questionText };
+            markPlanCompleteOnFinish();
+            return {
+              success: true,
+              message: questionText,
+              type: "success",
+              payload: { tool: "final_answer", content: questionText },
+            };
           }
         }
 

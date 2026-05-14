@@ -394,6 +394,9 @@ export function cleanupAllServerSessions() {
     sessionCreationOrder.length = 0;
 }
 export function sessionExists(sessionId) {
+    if (sshSessionIds.has(sessionId)) {
+        return sshSessions.get(sessionId)?.connected === true;
+    }
     return sessions.has(sessionId);
 }
 export function createSession({ cols, rows, cwd, reconnectId }, clientId, pushEvent) {

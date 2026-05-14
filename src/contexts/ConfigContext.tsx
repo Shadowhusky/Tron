@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import type { TronConfig, HotkeyMap, AIBehavior } from "../types";
 import { STORAGE_KEYS } from "../constants/storage";
+import { aiService } from "../services/ai";
 
 export const DEFAULT_AI_BEHAVIOR: AIBehavior = {
   ghostText: true,
@@ -95,6 +96,15 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             ...fileConfig,
             hotkeys: { ...DEFAULT_HOTKEYS, ...(fileConfig.hotkeys || {}) },
           };
+          if (merged.ai) aiService.saveConfig(merged.ai);
+          if (merged.providerConfigs) {
+            try {
+              localStorage.setItem(
+                STORAGE_KEYS.PROVIDER_CONFIGS,
+                JSON.stringify(merged.providerConfigs),
+              );
+            } catch { /* private mode */ }
+          }
           setConfig(merged);
         } else {
           // No config file — migrate from localStorage and write

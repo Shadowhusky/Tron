@@ -591,6 +591,9 @@ export function registerTerminalHandlers(
 
   // Check if a PTY session is still alive (for reconnection after renderer refresh)
   ipcMain.handle("terminal.sessionExists", (_event, sessionId: string) => {
+    if (sshSessionIds.has(sessionId)) {
+      return sshSessions.get(sessionId)?.connected === true;
+    }
     return sessions.has(sessionId);
   });
 

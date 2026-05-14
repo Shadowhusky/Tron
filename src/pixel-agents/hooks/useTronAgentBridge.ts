@@ -99,15 +99,27 @@ const TOOL_STICKY_MS = 600;
  *  spinner repaints every ~100ms while Claude Code is working, so 1.5s is
  *  generous against transient WS lag without feeling stuck-on. */
 const SPINNER_IDLE_GAP_MS = 1500;
+/** Permission prompts are rendered UI, not transcript history. Only inspect
+ *  the live tail of the terminal frame so an approved prompt doesn't stay
+ *  latched from scrollback / lookback text. */
+const PERMISSION_FRAME_LINES = 24;
+
+function tailLines(text: string, lines: number): string {
+  if (!text) return "";
+  const parts = text.split(/\r?\n/);
+  return parts.slice(Math.max(0, parts.length - lines)).join("\n");
+}
 
 export function useAgentStatuses(): AgentStatus[] {
   const store = useContext(AgentContext);
   const { sessions, tabs } = useLayout();
   const [statuses, setStatuses] = useState<AgentStatus[]>([]);
+  const [externalSignalVersion, setExternalSignalVersion] = useState(0);
 
   const terminalDetectedTool = useRef(new Map<string, string | null>());
   const terminalToolTimestamp = useRef(new Map<string, number>());
   const terminalPermission = useRef(new Map<string, boolean>());
+  const terminalDataSeen = useRef(new Map<string, number>());
   /** Last time we saw the spinner / tool line — primary "working" signal. */
   const terminalSpinnerSeen = useRef(new Map<string, number>());
   /** Tokens/elapsed parsed from the spinner suffix, for display. */
@@ -137,6 +149,19 @@ export function useAgentStatuses(): AgentStatus[] {
    *  line runs ~1.5KB, so 4KB gives comfortable headroom. */
   const LOOKBACK_RING_MAX = 4096;
 
+  const updatePermissionState = useCallback((id: string, next: boolean) => {
+    const prev = terminalPermission.current.get(id) ?? false;
+    if (next) {
+      terminalPermission.current.set(id, true);
+      everHadAgent.current.add(id);
+    } else {
+      terminalPermission.current.delete(id);
+    }
+    if (prev !== next) {
+      setExternalSignalVersion((v) => (v + 1) % 1_000_000);
+    }
+  }, []);
+
   // Listen for terminal incoming data — detect tools AND track activity for external agents
   useEffect(() => {
     if (!window.electron?.ipcRenderer?.on) return;
@@ -151,6 +176,7 @@ export function useAgentStatuses(): AgentStatus[] {
         }
         const detectAfter = sessionDetectAfter.current.get(id)!;
         if (now < detectAfter) return;
+        terminalDataSeen.current.set(id, now);
 
         // Maintain a small lookback ring per session so a spinner repaint
         // split across two chunks still matches.
@@ -170,8 +196,27 @@ export function useAgentStatuses(): AgentStatus[] {
         // and the rendered buffer (for static welcome banners and idle
         // frames) gives us coverage across all states.
         const rendered = readScreenBuffer(id, 60) || "";
+        const liveFrame = [data, tailLines(rendered, PERMISSION_FRAME_LINES)]
+          .filter(Boolean)
+          .join("\n");
         const inAlt = isAlternateBuffer(id);
         const sig = detectExternalAgentSignal(ring + "\n" + rendered);
+        const liveSig = detectExternalAgentSignal(liveFrame, {
+          allowTersePermission: everHadAgent.current.has(id),
+        });
+
+        // Permission is a live UI state. Never derive it from the lookback
+        // ring, because that ring intentionally keeps old transcript lines
+        // around for tool detection and would otherwise latch onto approved
+        // prompts.
+        if (liveSig.permission) {
+          updatePermissionState(id, true);
+        } else if (
+          terminalPermission.current.get(id) &&
+          (liveFrame.trim() || liveSig.working || liveSig.idle || liveSig.agentPresent)
+        ) {
+          updatePermissionState(id, false);
+        }
 
         // Bonus: any agent CLI runs in the alternate screen buffer (vim,
         // htop, claude, aider, codex…). Combined with ANY positive signal
@@ -194,10 +239,7 @@ export function useAgentStatuses(): AgentStatus[] {
           terminalDetectedTool.current.delete(id);
           terminalTokens.current.delete(id);
           terminalElapsed.current.delete(id);
-        }
-
-        if (sig.permission != null) {
-          terminalPermission.current.set(id, sig.permission);
+          updatePermissionState(id, false);
         }
 
         if (sig.working) {
@@ -231,7 +273,7 @@ export function useAgentStatuses(): AgentStatus[] {
         }
       },
     );
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps — refs only, no re-subscribe needed
+  }, [updatePermissionState]);
 
   // Listen for Tron agent activity events — authoritative source for running state
   useEffect(() => {
@@ -244,6 +286,7 @@ export function useAgentStatuses(): AgentStatus[] {
         terminalDetectedTool.current.delete(sessionId);
         terminalToolTimestamp.current.delete(sessionId);
         terminalPermission.current.delete(sessionId);
+        terminalDataSeen.current.delete(sessionId);
         terminalSpinnerSeen.current.delete(sessionId);
         terminalTokens.current.delete(sessionId);
         terminalElapsed.current.delete(sessionId);
@@ -270,38 +313,50 @@ export function useAgentStatuses(): AgentStatus[] {
       // all, and a session that was already running BEFORE the user opened
       // this Tron window has no chunk history.
       //
-      // Perf: the per-chunk handler already calls detectExternalAgentSignal
-      // on the rendered buffer, so this 500ms poll is only useful when no
-      // chunks have flowed recently. Skip when the session is being
-      // actively driven by Tron's own agent (we already have authoritative
-      // state for that path) and when chunks arrived within the last 1s.
-      const lastChunkAt = lookbackRing.current.has(id) ? terminalSpinnerSeen.current.get(id) ?? 0 : 0;
-      const skipPoll =
-        agentRunning.current.has(id) || // Tron's own agent — has its own state path below
-        now - lastChunkAt < 1000;        // chunks just arrived; per-chunk handler already ran the detector
-      const screenScan = skipPoll ? null : readScreenBuffer(id, 40);
+      // Perf: when bytes are flowing, the per-chunk handler already does the
+      // heavier lookback scan. We still read a short live tail every interval
+      // for permission prompts, because approval dialogs can appear/disappear
+      // via cursor repaint without a clean transcript line.
+      const lastChunkAt = terminalDataSeen.current.get(id) ?? 0;
+      const recentChunks = now - lastChunkAt < 1000;
+      const skipDeepPoll = agentRunning.current.has(id) || recentChunks;
+      const screenScan = agentRunning.current.has(id)
+        ? null
+        : readScreenBuffer(id, skipDeepPoll ? PERMISSION_FRAME_LINES : 40);
       if (screenScan) {
         const inAlt = isAlternateBuffer(id);
-        const sig2 = detectExternalAgentSignal(screenScan);
-        if (sig2.agentPresent || (inAlt && (sig2.tool || sig2.working || sig2.idle))) {
-          everHadAgent.current.add(id);
+        const sig2 = detectExternalAgentSignal(screenScan, {
+          allowTersePermission: everHadAgent.current.has(id),
+        });
+
+        if (sig2.permission) {
+          updatePermissionState(id, true);
+        } else if (terminalPermission.current.get(id)) {
+          updatePermissionState(id, false);
         }
-        // Refresh spinner-seen timestamp if the spinner is currently visible
-        // on screen — keeps the "active" dot lit even when Tron isn't
-        // receiving new chunks (e.g. terminal hasn't focused recently).
-        if (sig2.working) {
-          terminalSpinnerSeen.current.set(id, now);
-          if (sig2.tokens != null) terminalTokens.current.set(id, sig2.tokens);
-          if (sig2.elapsedSeconds != null) terminalElapsed.current.set(id, sig2.elapsedSeconds);
-          if (!terminalDetectedTool.current.get(id)) {
-            terminalDetectedTool.current.set(id, sig2.tool || "thinking");
+
+        if (!skipDeepPoll) {
+          if (sig2.agentPresent || (inAlt && (sig2.tool || sig2.working || sig2.idle))) {
+            everHadAgent.current.add(id);
           }
-        }
-        if (sig2.idle) {
-          // Only clear if the LAST signal was idle (not racing with a
-          // mid-frame paint that happens to lack the spinner). The
-          // chunk-based path already handles this on data arrival.
-          terminalDetectedTool.current.delete(id);
+          // Refresh spinner-seen timestamp if the spinner is currently visible
+          // on screen — keeps the "active" dot lit even when Tron isn't
+          // receiving new chunks (e.g. terminal hasn't focused recently).
+          if (sig2.working) {
+            terminalSpinnerSeen.current.set(id, now);
+            if (sig2.tokens != null) terminalTokens.current.set(id, sig2.tokens);
+            if (sig2.elapsedSeconds != null) terminalElapsed.current.set(id, sig2.elapsedSeconds);
+            if (!terminalDetectedTool.current.get(id)) {
+              terminalDetectedTool.current.set(id, sig2.tool || "thinking");
+            }
+          }
+          if (sig2.idle) {
+            // Only clear if the LAST signal was idle (not racing with a
+            // mid-frame paint that happens to lack the spinner). The
+            // chunk-based path already handles this on data arrival.
+            terminalDetectedTool.current.delete(id);
+            updatePermissionState(id, false);
+          }
         }
       }
 
@@ -335,6 +390,7 @@ export function useAgentStatuses(): AgentStatus[] {
         terminalDetectedTool.current.delete(id);
         terminalToolTimestamp.current.delete(id);
         terminalPermission.current.delete(id);
+        terminalDataSeen.current.delete(id);
         terminalSpinnerSeen.current.delete(id);
         terminalTokens.current.delete(id);
         terminalElapsed.current.delete(id);
@@ -347,7 +403,9 @@ export function useAgentStatuses(): AgentStatus[] {
       const spinnerSeen = terminalSpinnerSeen.current.get(id);
       const spinnerActive =
         spinnerSeen != null && now - spinnerSeen < SPINNER_IDLE_GAP_MS;
-      const isExternalActive = agentRunning.current.has(id) || spinnerActive;
+      const permissionActive = terminalPermission.current.get(id) ?? false;
+      const isExternalActive =
+        agentRunning.current.has(id) || spinnerActive || permissionActive;
 
       if (isExternalActive) {
         everHadAgent.current.add(id);
@@ -365,7 +423,7 @@ export function useAgentStatuses(): AgentStatus[] {
           label,
           active: true,
           tool,
-          permission: terminalPermission.current.get(id) ?? false,
+          permission: permissionActive,
           tokens: terminalTokens.current.get(id),
           elapsedSeconds: terminalElapsed.current.get(id),
         });
@@ -377,7 +435,6 @@ export function useAgentStatuses(): AgentStatus[] {
         terminalSpinnerSeen.current.delete(id);
         terminalDetectedTool.current.delete(id);
         terminalToolTimestamp.current.delete(id);
-        terminalPermission.current.delete(id);
         terminalTokens.current.delete(id);
         terminalElapsed.current.delete(id);
       }
@@ -409,13 +466,16 @@ export function useAgentStatuses(): AgentStatus[] {
       }
       return prev;
     });
-  }, [sessions, tabs, store]);
+  }, [sessions, tabs, store, updatePermissionState]);
 
   useEffect(() => {
-    reconcile();
+    const timeout = window.setTimeout(reconcile, 0);
     const interval = setInterval(reconcile, 500);
-    return () => clearInterval(interval);
-  }, [reconcile]);
+    return () => {
+      clearTimeout(timeout);
+      clearInterval(interval);
+    };
+  }, [reconcile, externalSignalVersion]);
 
   return statuses;
 }

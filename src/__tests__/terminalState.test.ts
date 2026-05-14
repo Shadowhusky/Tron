@@ -142,8 +142,8 @@ transforming (143) src/components/App.tsx`;
     expect(classifyTerminalOutput(output)).toBe("busy");
   });
 
-  it("empty output is busy (no prompt visible)", () => {
-    expect(classifyTerminalOutput("")).toBe("busy");
+  it("empty output is idle (fresh session, no process running)", () => {
+    expect(classifyTerminalOutput("")).toBe("idle");
   });
 
   it("random text with no prompt or server pattern is busy", () => {

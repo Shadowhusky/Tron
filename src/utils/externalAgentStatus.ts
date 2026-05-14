@@ -131,31 +131,43 @@ const TOOL_CALL_RE: Array<[RegExp, string]> = sortedToolNames.map(([n, c]) => [
 ]);
 
 const GERUND_RE: Array<[RegExp, string]> = [
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Reading\b/i, "read_file"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Writing\b/i, "write_file"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Editing\b/i, "edit_file"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Searching\b/i, "search_dir"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Listing\b/i, "list_dir"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Running\b/i, "execute_command"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Fetching\b/i, "web_search"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Launching\b/i, "agent"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Spawning\b/i, "agent"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Planning\b/i, "thinking"],
-  [/(?:^|\n)\s*[⏺⏵►▶●]\s*Thinking\b/i, "thinking"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Reading\b/i, "read_file"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Writing\b/i, "write_file"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Editing\b/i, "edit_file"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Searching\b/i, "search_dir"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Listing\b/i, "list_dir"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*(?:Running|Ran)\b/i, "execute_command"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Fetching\b/i, "web_search"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Launching\b/i, "agent"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Spawning\b/i, "agent"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Planning\b/i, "thinking"],
+  [/(?:^|\n)\s*[⏺⏵►▶●•]\s*Thinking\b/i, "thinking"],
+  [/(?:^|\n)\s*(?:exec|shell|command)\s*:/i, "execute_command"],
+  [/(?:^|\n)\s*(?:apply_patch|patch)\s*:/i, "edit_file"],
 ];
 
-const PERMISSION_RE = /Allow\s+(?:Bash|Read|Edit|MultiEdit|Write|Glob|Grep|Fetch|Search|WebFetch|WebSearch|Agent|Explore|Task|Skill|NotebookEdit|mcp__)\b/;
+const CLAUDE_PERMISSION_TOOL_RE =
+  /\b(?:Allow|Approve)\s+(?:Bash|Read|Edit|MultiEdit|Write|Glob|Grep|Fetch|Search|WebFetch|WebSearch|Agent|Explore|Task|Skill|NotebookEdit|PowerShell|mcp__)\b/i;
 
-const GENERIC_PERMISSION_PATTERNS = [
-  /do you want to proceed\??/i,
-  /would you like to proceed\??/i,
-  /do you want to continue\??/i,
-  /are you sure\??/i,
-  /\(y\/n\)\s*\??/i,
-  /\[y\/n\]\s*\??/i,
-  /\[yes\/no\]\s*\??/i,
+const CONTEXTUAL_PERMISSION_PATTERNS = [
+  // Claude Code's current permission UI renders this shared question plus
+  // a Select with Yes/No options and an "Esc to cancel" footer.
+  /do you want to proceed\??[\s\S]{0,900}(?:Esc to cancel|[❯►›>]\s*\d+\.\s*Yes|\bYes\b[\s\S]{0,300}\bNo\b)/i,
+  /would you like to proceed\??[\s\S]{0,500}(?:\bYes\b[\s\S]{0,200}\bNo\b|\(y\/n\)|\[y\/n\]|\[Y\/n\]|\[y\/N\])/i,
+  /do you want to continue\??[\s\S]{0,500}(?:\bYes\b[\s\S]{0,200}\bNo\b|\(y\/n\)|\[y\/n\]|\[Y\/n\]|\[y\/N\])/i,
+  /are you sure\??[\s\S]{0,300}(?:\bYes\b[\s\S]{0,200}\bNo\b|\(y\/n\)|\[y\/n\]|\[Y\/n\]|\[y\/N\])/i,
+  /\b(?:allow|approve)\s+(?:this\s+)?(?:command|execution|tool|edit|edits|change|changes|patch)\??[\s\S]{0,300}(?:\(y\/n\)|\[y\/n\]|\[Y\/n\]|\[y\/N\]|\bYes\b[\s\S]{0,200}\bNo\b)/i,
+  /\b(?:waiting for|needs?)\s+(?:user\s+)?(?:approval|permission)\b/i,
   /allow this action\??/i,
   /[❯►]\s*\d+\.\s+(?:Yes|No|Cancel|Skip|Continue|Abort)/i,
+];
+
+const TERSE_PERMISSION_PATTERNS = [
+  /\(y\/n\)\s*\??/i,
+  /\[y\/n\]\s*\??/i,
+  /\[Y\/n\]\s*\??/i,
+  /\[y\/N\]\s*\??/i,
+  /\[yes\/no\]\s*\??/i,
 ];
 
 /**
@@ -182,9 +194,10 @@ const AGENT_BANNER_RE =
 /** Brand-specific lines that show up *outside* the welcome banner —
  *  e.g. between turns, on auth flows, on /help, on `claude --version`. */
 const AGENT_SECONDARY_RE =
-  /\bcwd:\s+\/[\w/.\-]+|\b(?:claude-)?(?:sonnet|opus|haiku)-?\d|\bClaude\s+Code\b.*\bv\d/i;
+  /\bcwd:\s+\/[\w/.-]+|\b(?:claude-)?(?:sonnet|opus|haiku)-?\d|\bClaude\s+Code\b.*\bv\d/i;
 const AIDER_BANNER_RE = /\baider\b\s*v?\d|^Aider\s/im;
-const CODEX_BANNER_RE = /\bcodex\s+(?:cli|chat|repl)\b/i;
+const CODEX_BANNER_RE =
+  /\bOpenAI\s+Codex(?:\s+(?:CLI|v?\d[\w.-]*))?\b|\bCodex\s+(?:CLI|v?\d[\w.-]*|agent|chat|repl)\b/i;
 const CURSOR_BANNER_RE = /\bcursor\s+(?:cli|agent)\b/i;
 
 // =============================================================================
@@ -207,10 +220,26 @@ export interface ExternalAgentSignal {
   elapsedSeconds?: number;
 }
 
-export function detectExternalAgentSignal(rawData: string): ExternalAgentSignal {
+export interface ExternalAgentDetectionOptions {
+  /** Allow terse yes/no permission prompts once the caller already knows
+   *  this terminal is running an agent. Prevents ordinary shell prompts from
+   *  bootstrapping a false-positive agent status. */
+  allowTersePermission?: boolean;
+}
+
+export function detectExternalAgentSignal(
+  rawData: string,
+  options: ExternalAgentDetectionOptions = {},
+): ExternalAgentSignal {
   const stripped = stripAnsi(rawData);
   if (!stripped) return {};
   const result: ExternalAgentSignal = {};
+  const hasAgentMarker =
+    AGENT_BANNER_RE.test(stripped) ||
+    AGENT_SECONDARY_RE.test(stripped) ||
+    AIDER_BANNER_RE.test(stripped) ||
+    CODEX_BANNER_RE.test(stripped) ||
+    CURSOR_BANNER_RE.test(stripped);
 
   // Spinner: pass the whole chunk to the parser. The spinner is rendered
   // as an Ink flex-row, so on narrow terminals the (esc to interrupt)
@@ -245,8 +274,10 @@ export function detectExternalAgentSignal(rawData: string): ExternalAgentSignal 
 
   // Permission prompt
   if (
-    PERMISSION_RE.test(stripped) ||
-    GENERIC_PERMISSION_PATTERNS.some((p) => p.test(stripped))
+    CLAUDE_PERMISSION_TOOL_RE.test(stripped) ||
+    CONTEXTUAL_PERMISSION_PATTERNS.some((p) => p.test(stripped)) ||
+    ((options.allowTersePermission || hasAgentMarker) &&
+      TERSE_PERMISSION_PATTERNS.some((p) => p.test(stripped)))
   ) {
     result.permission = true;
   }
@@ -263,12 +294,9 @@ export function detectExternalAgentSignal(rawData: string): ExternalAgentSignal 
   if (
     result.idle ||
     result.working ||
+    result.permission ||
     result.tool ||
-    AGENT_BANNER_RE.test(stripped) ||
-    AGENT_SECONDARY_RE.test(stripped) ||
-    AIDER_BANNER_RE.test(stripped) ||
-    CODEX_BANNER_RE.test(stripped) ||
-    CURSOR_BANNER_RE.test(stripped)
+    hasAgentMarker
   ) {
     result.agentPresent = true;
   }

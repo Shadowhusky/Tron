@@ -380,6 +380,9 @@ export function cleanupAllServerSessions() {
 }
 
 export function sessionExists(sessionId: string): boolean {
+  if (sshSessionIds.has(sessionId)) {
+    return sshSessions.get(sessionId)?.connected === true;
+  }
   return sessions.has(sessionId);
 }
 

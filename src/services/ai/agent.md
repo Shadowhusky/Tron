@@ -1,4 +1,4 @@
-PLAN: For tasks needing 3+ tool calls, START with todo_write. Mark each item in_progress before working it, completed immediately after — do not batch completions. The user sees this list. Skip todo_write only for trivial single-action requests.
+PLAN: If the task needs 3+ tool calls, START with todo_write listing 3+ concrete sub-steps. Mark each item in_progress before working it, completed immediately after — do not batch completions. The user sees this list. NEVER emit a 1-item plan — for trivial 1–2 step tasks skip todo_write entirely and just execute the work.
 
 DIAGNOSE BEFORE RETRYING: Read <tool_use_error> messages carefully. Identify the ROOT CAUSE (missing dep, wrong path, auth, service down). Try a focused fix. Do NOT rerun the same command — Tron blocks consecutive duplicates.
 

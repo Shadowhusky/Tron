@@ -114,6 +114,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   // Suppress outgoing onData → PTY writes during reconnect to prevent DSR
   // response corruption (xterm responds to stale cursor-position requests)
   const suppressOutgoingRef = useRef(false);
+  const flushPendingOutputRef = useRef<() => void>(() => {});
 
   /**
    * Strip alternate-buffer sections and cursor-positioning artifacts from PTY
@@ -217,12 +218,18 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // macOS iCloud paths (com~apple~CloudDocs), possessives ("Husky's SSD").
     // Spaces allowed within interior segments (between two /) but not in the
     // final segment, to avoid capturing trailing sentence text.
-    const S = "[\\w.$@+~\\-\\[\\]()\']"; // path segment char (no space)
+    const S = "[\\w.$@+~\\-\\[\\]()']"; // path segment char (no space)
     const interiorSeg = "/" + S + "+(?:\\s+" + S + "+)*(?=/)"; // spaces ok, lookahead for next /
     const finalSeg = "/" + S + "+"; // no spaces in last segment
     const absUnixRe  = new RegExp("(?:" + interiorSeg + ")+" + finalSeg + "(?:\\.\\w+)?", "g");
     const winRe      = new RegExp("[A-Z]:\\\\(?:" + S + "+\\\\)*" + S + "+(?:\\.\\w+)?", "gi");
     const relRe      = new RegExp("(?:\\.\\/)?(?:" + S + "+\\/){1,}" + S + "+\\.\\w+", "g");
+    // Looser pass: paths in terminals often contain escaped spaces, spaces in
+    // the final filename, or hard-wrapped output. We prefer a wider visual link
+    // and resolve the exact existing path on click.
+    const absUnixLooseRe = /\/(?:[^\s"'`<>|;&]|\s(?!\s)[^\s"'`<>|;&])+/g;
+    const winLooseRe = /[A-Z]:\\(?:[^\s"'`<>|;&]|\s(?!\s)[^\s"'`<>|;&])+/gi;
+    const relLooseRe = /(?:\.{1,2}\/)?(?:[\w.$@+~\-[\]()']+(?:\s(?!\s)[\w.$@+~\-[\]()']+)*\/)+(?:[\w.$@+~\-[\]()']+(?:\s(?!\s)[\w.$@+~\-[\]()']+)*)/g;
 
     const editorExts = new Set([
       "js","mjs","cjs","jsx","ts","mts","cts","tsx","py","pyw","json","jsonc",
@@ -279,63 +286,114 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return p;
     };
 
-    const activateFilePath = async (filePath: string, event?: MouseEvent) => {
-      let resolved = filePath;
+    const shellEscapedPathCharRe = new RegExp("\\\\([\"'\\\\(){}\\[\\]\\s!#$&*;<>?`|])", "g");
+    const unescapeShellPath = (p: string): string => {
+      if (/^[A-Z]:\\/i.test(p)) return p;
+      return p.replace(shellEscapedPathCharRe, "$1");
+    };
 
-      // Resolve relative paths against session CWD
-      const isRelative = !filePath.startsWith("/") && !/^[A-Z]:\\/i.test(filePath);
-      if (isRelative) {
-        try {
-          const cwd = await window.electron?.ipcRenderer?.getCwd?.(sessionId);
-          if (cwd) {
-            resolved = normalizePath(cwd.replace(/\/+$/, "") + "/" + filePath);
-          }
-        } catch { /* use as-is */ }
+    const listDir = (dirPath: string) =>
+      window.electron?.ipcRenderer?.invoke?.("file.listDir", {
+        dirPath,
+        sessionId,
+      });
+
+    const statPath = async (resolvedPath: string): Promise<{
+      exists: boolean;
+      isDirectory: boolean;
+      isFile: boolean;
+    }> => {
+      const parentDir = resolvedPath.replace(/[/\\][^/\\]+$/, "") || "/";
+      const fileName = resolvedPath.split(/[/\\]/).pop() || "";
+      const dirResult = await listDir(parentDir);
+      if (dirResult?.success && dirResult.contents) {
+        const found = dirResult.contents.some((entry: { name: string }) => entry.name === fileName);
+        if (found) {
+          const selfDir = await listDir(resolvedPath);
+          const isDirectory = selfDir?.success ?? false;
+          return { exists: true, isDirectory, isFile: !isDirectory };
+        }
+      }
+      const selfDir = await listDir(resolvedPath);
+      if (selfDir?.success) return { exists: true, isDirectory: true, isFile: false };
+      return { exists: false, isDirectory: false, isFile: false };
+    };
+
+    const resolveCandidatePath = async (candidate: string): Promise<{
+      displayPath: string;
+      resolvedPath: string;
+      isDirectory: boolean;
+      isFile: boolean;
+    } | null> => {
+      const cleaned = unescapeShellPath(cleanTrailing(cleanLeading(candidate)).trim());
+      if (!cleaned) return null;
+
+      // If the captured text clearly names a file (last segment has an
+      // extension), we must not fall back to a parent directory when the
+      // exact file doesn't exist — otherwise a stale "src/foo.tsx" click
+      // would navigate to "src/" or worse, "/Users".
+      const originalLastSegment = cleaned.split(/[/\\]/).pop() || "";
+      const originalHasExtension = /\.\w+$/.test(originalLastSegment);
+
+      const attempts: string[] = [];
+      let current = cleaned;
+      while (current.length > 0) {
+        attempts.push(current);
+        const next = cleanTrailing(current.replace(/\s+\S+$/, "").trim());
+        if (!next || next === current || !next.includes("/")) break;
+        current = next;
       }
 
-      // Validate path exists before showing popover
-      let isDirectory = false;
-      let isFile = false;
-      try {
-        const parentDir = resolved.replace(/[/\\][^/\\]+$/, "") || "/";
-        const fileName = resolved.split(/[/\\]/).pop() || "";
-        const dirResult = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: parentDir });
-        if (dirResult?.success && dirResult.contents) {
-          const found = dirResult.contents.some((entry: { name: string }) => entry.name === fileName);
-          if (found) {
-            // Check if it's a directory by trying to list it
-            const selfDir = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: resolved });
-            isDirectory = selfDir?.success ?? false;
-            isFile = !isDirectory;
-          } else {
-            // Not found as file — check if it's a directory itself
-            const selfDir = await window.electron?.ipcRenderer?.invoke?.("file.listDir", { dirPath: resolved });
-            if (selfDir?.success) {
-              isDirectory = true;
-            } else {
-              window.dispatchEvent(new CustomEvent("tron:toast", {
-                detail: { message: `File not found: ${filePath}` },
-              }));
-              return;
-            }
-          }
-        } else if (dirResult && !dirResult.success) {
-          window.dispatchEvent(new CustomEvent("tron:toast", {
-            detail: { message: `File not found: ${filePath}` },
-          }));
-          return;
+      for (const attempt of attempts) {
+        let resolved = attempt;
+        const isRelative = !resolved.startsWith("/") && !/^[A-Z]:\\/i.test(resolved);
+        if (isRelative) {
+          try {
+            const cwd = await window.electron?.ipcRenderer?.getCwd?.(sessionId);
+            if (cwd) resolved = normalizePath(cwd.replace(/\/+$/, "") + "/" + resolved);
+          } catch { /* use as-is */ }
         }
-      } catch { /* validation failed — proceed anyway, treat as file */ isFile = true; }
+        try {
+          const stat = await statPath(resolved);
+          if (stat.exists) {
+            // Guard against directory-ancestor fallback when the user clicked
+            // a file-like reference (e.g. "/Users/me/foo/bar.tsx" with junk
+            // after it).
+            if (originalHasExtension && stat.isDirectory) {
+              const attemptLastSegment = attempt.split(/[/\\]/).pop() || "";
+              if (!/\.\w+$/.test(attemptLastSegment)) continue;
+            }
+            return {
+              displayPath: attempt,
+              resolvedPath: resolved,
+              isDirectory: stat.isDirectory,
+              isFile: stat.isFile,
+            };
+          }
+        } catch { /* try a shorter candidate */ }
+      }
+      return null;
+    };
 
-      const ext = resolved.split(".").pop()?.toLowerCase() || "";
-      const baseName = resolved.split(/[/\\]/).pop() || "";
+    const activateFilePath = async (filePath: string, event?: MouseEvent) => {
+      const resolvedCandidate = await resolveCandidatePath(filePath);
+      if (!resolvedCandidate) {
+        window.dispatchEvent(new CustomEvent("tron:toast", {
+          detail: { message: `File not found: ${filePath}` },
+        }));
+        return;
+      }
+
+      const { displayPath, resolvedPath, isDirectory, isFile } = resolvedCandidate;
+      const ext = resolvedPath.split(".").pop()?.toLowerCase() || "";
+      const baseName = resolvedPath.split(/[/\\]/).pop() || "";
       const canEdit = editorExts.has(ext) || editorFiles.has(baseName);
 
       // Dispatch event to show file popover at click position
       window.dispatchEvent(new CustomEvent("tron:fileClicked", {
         detail: {
-          filePath: resolved,
-          displayPath: filePath,
+          filePath: resolvedPath,
+          displayPath,
           x: event?.clientX ?? 0,
           y: event?.clientY ?? 0,
           isDirectory,
@@ -374,7 +432,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
         // Collect raw matches with character offsets, then deduplicate overlaps
         const rawMatches: { start: number; end: number; text: string }[] = [];
-        for (const regex of [absUnixRe, winRe, relRe]) {
+        for (const regex of [absUnixLooseRe, winLooseRe, relLooseRe, absUnixRe, winRe, relRe]) {
           regex.lastIndex = 0;
           let m: RegExpExecArray | null;
           while ((m = regex.exec(fullText)) !== null) {
@@ -644,6 +702,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         batchWrite(buffered);
         if (rest) syncWrite(rest);
       }
+    };
+
+    flushPendingOutputRef.current = () => {
+      if (batchRaf !== null) {
+        cancelAnimationFrame(batchRaf);
+        batchRaf = null;
+      }
+      if (batchBuffer) {
+        safeWrite(batchBuffer);
+        batchBuffer = "";
+      }
+      if (inSyncMode && syncBuffer) {
+        clearTimeout(syncTimer);
+        inSyncMode = false;
+        safeWrite(syncBuffer);
+        syncBuffer = "";
+      }
+      try {
+        term.refresh(0, Math.max(0, term.rows - 1));
+      } catch { /* non-critical */ }
     };
 
     // Local-only fit (adjusts xterm cols/rows to container — no IPC to backend).
@@ -1426,6 +1504,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       el.removeEventListener("paste", onPaste, true);
+      flushPendingOutputRef.current = () => {};
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();
       disposableOnData.dispose();
@@ -1485,9 +1564,26 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   // ---- Focus when tab becomes active (only if user last focused terminal) ----
   useEffect(() => {
     if (isActive && xtermRef.current && focusTarget === "terminal") {
+      flushPendingOutputRef.current();
       xtermRef.current.focus();
     }
   }, [isActive, focusTarget]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const flush = () => flushPendingOutputRef.current();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") flush();
+    };
+    window.addEventListener("focus", flush);
+    window.addEventListener("pageshow", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", flush);
+      window.removeEventListener("pageshow", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [isActive]);
 
   const theme = THEMES[resolvedTheme] || THEMES.dark;
 

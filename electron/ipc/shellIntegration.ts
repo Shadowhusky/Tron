@@ -70,8 +70,10 @@ fi
 # embedded semicolons don't break the wire format.
 __tron_url_encode() {
   local s="$1" out="" c
+  # Note: in zsh, \${s:i:1} is parsed as a modifier; we need \${s:$i:1} so the
+  # offset is read as an arithmetic value. Same goes for the loop bound.
   for ((i=0; i<\${#s}; i++)); do
-    c="\${s:i:1}"
+    c="\${s:$i:1}"
     case "$c" in
       [a-zA-Z0-9._~-]) out+="$c" ;;
       *) out+="$(printf '%%%02X' "'$c")" ;;

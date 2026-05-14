@@ -19,6 +19,11 @@ interface PendingInvoke {
 
 export type RemoteConnectionState = "connected" | "reconnecting" | "disconnected";
 
+interface HealthCheckWaiter {
+  resolve: (ok: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 class RemoteConnection {
   private ws: WebSocket | null = null;
   private connected = false;
@@ -33,6 +38,7 @@ class RemoteConnection {
   private eventListeners = new Map<string, Set<Listener>>();
   private messageQueue: string[] = [];
   private _stateListeners = new Set<(state: RemoteConnectionState) => void>();
+  private healthCheckWaiters = new Set<HealthCheckWaiter>();
   readonly url: string;
   /** Persistent token reused across reconnections so the server maps the new WS to the same client. */
   private readonly clientToken: string;
@@ -110,6 +116,7 @@ class RemoteConnection {
 
       // Track last message time for backward-compatible heartbeat
       this.lastMessageTime = Date.now();
+      this.resolveHealthChecks(true);
 
       if (msg.type === "mode") {
         if (!modeReceived) {
@@ -216,6 +223,7 @@ class RemoteConnection {
   forceReconnect(): void {
     if (this.intentionalClose) return;
     this.stopHeartbeat();
+    this.resolveHealthChecks(false);
     if (this.ws) {
       // Null handlers to prevent double onclose handling
       this.ws.onclose = null;
@@ -257,30 +265,41 @@ class RemoteConnection {
    * Send an immediate ping to check connection health.
    * If no pong within timeout, forces reconnect.
    */
-  checkHealth(): void {
-    if (this.intentionalClose) return;
+  checkHealth(timeoutMs = 3000): Promise<boolean> {
+    if (this.intentionalClose) return Promise.resolve(false);
     // Reset to aggressive mode so visibility-change retries are fast
     this.reconnectAttempts = 0;
     if (!this.connected) {
       // Not connected — cancel any patient-phase timer and retry aggressively
       if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
       this.scheduleReconnect();
-      return;
+      return Promise.resolve(false);
     }
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.forceReconnect();
-      return;
+      return Promise.resolve(false);
     }
-    // Cancel any existing heartbeat timeout and send immediate ping
-    if (this.heartbeatTimeout) {
-      clearTimeout(this.heartbeatTimeout);
-      this.heartbeatTimeout = null;
-    }
-    try { this.ws.send(JSON.stringify({ type: "ping" })); } catch { return; }
-    this.heartbeatTimeout = setTimeout(() => {
-      console.warn("[Remote] Health check failed for", this.url);
-      this.forceReconnect();
-    }, RemoteConnection.HEARTBEAT_TIMEOUT_MS);
+
+    return new Promise((resolve) => {
+      const waiter: HealthCheckWaiter = {
+        resolve,
+        timer: setTimeout(() => {
+          this.healthCheckWaiters.delete(waiter);
+          console.warn("[Remote] Health check failed for", this.url);
+          this.forceReconnect();
+          resolve(false);
+        }, timeoutMs),
+      };
+      this.healthCheckWaiters.add(waiter);
+      try {
+        this.ws!.send(JSON.stringify({ type: "ping" }));
+      } catch {
+        clearTimeout(waiter.timer);
+        this.healthCheckWaiters.delete(waiter);
+        this.forceReconnect();
+        resolve(false);
+      }
+    });
   }
 
   // ---- IPC ----
@@ -320,6 +339,7 @@ class RemoteConnection {
     this.intentionalClose = true;
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     this.stopHeartbeat();
+    this.resolveHealthChecks(false);
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();
@@ -350,7 +370,38 @@ class RemoteConnection {
     for (const cb of this._stateListeners) cb(state);
   }
 
+  waitUntilConnected(timeoutMs = 8000): Promise<boolean> {
+    if (this.connected && this.ws?.readyState === WebSocket.OPEN) {
+      return Promise.resolve(true);
+    }
+    if (!this.reconnectTimer && !this.intentionalClose) {
+      this.scheduleReconnect();
+    }
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, timeoutMs);
+      const cleanup = this.onStateChange((state) => {
+        if (state !== "connected") return;
+        clearTimeout(timeout);
+        cleanup();
+        resolve(true);
+      });
+    });
+  }
+
   // ---- Internal ----
+
+  private resolveHealthChecks(ok: boolean): void {
+    if (this.healthCheckWaiters.size === 0) return;
+    const waiters = [...this.healthCheckWaiters];
+    this.healthCheckWaiters.clear();
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(ok);
+    }
+  }
 
   private sendRaw(data: string): void {
     if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -436,6 +487,58 @@ export function onRemoteStateChange(
   return conn.onStateChange(cb);
 }
 
+/** Proactively check the remote connection that owns a session. */
+export function checkRemoteConnection(sessionId: string): Promise<boolean> {
+  const conn = getRemoteConnection(sessionId);
+  if (!conn) return Promise.resolve(false);
+  return conn.checkHealth();
+}
+
+/**
+ * Ensure a remote session still has a backend PTY. If the WebSocket silently
+ * died, reconnect first; if the PTY disappeared on the remote server, recreate
+ * it with the same session id so the mounted terminal pane keeps working.
+ */
+export async function reviveRemoteSession(
+  sessionId: string,
+  cwd?: string,
+  cols = 80,
+  rows = 30,
+): Promise<{ ok: boolean; reconnected?: boolean }> {
+  const connId = sessionRoutes.get(sessionId);
+  if (!connId) return { ok: false };
+  const conn = connections.get(connId);
+  if (!conn) return { ok: false };
+
+  const healthy = await conn.checkHealth();
+  if (!healthy) {
+    const connected = await conn.waitUntilConnected();
+    if (!connected) return { ok: false };
+  }
+
+  let exists = false;
+  try {
+    exists = !!(await conn.invoke("terminal.sessionExists", sessionId));
+  } catch {
+    const connected = await conn.waitUntilConnected();
+    if (!connected) return { ok: false };
+    try {
+      exists = !!(await conn.invoke("terminal.sessionExists", sessionId));
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  if (exists) return { ok: true, reconnected: true };
+
+  try {
+    const result = await createRemotePTY(connId, cols, rows, cwd, sessionId);
+    return { ok: result.sessionId === sessionId, reconnected: result.reconnected };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // --- Visibility Change Handler ---
 // When the tab is hidden for >2s (mobile sleep, tab switch), the remote WS
 // may have silently died. On resume, send an immediate health-check ping
@@ -469,6 +572,7 @@ function installVisibilityHandler(): void {
 
 /** Channels where the sessionId is passed as the direct data argument (string). */
 const SESSION_AS_DATA_CHANNELS = new Set([
+  "terminal.sessionExists",
   "terminal.getHistory",
   "terminal.getCwd",
   "terminal.clearHistory",
@@ -479,6 +583,7 @@ const SESSION_AS_DATA_CHANNELS = new Set([
 /** Channels where data is an object with a sessionId field. */
 const SESSION_IN_OBJECT_CHANNELS = new Set([
   "terminal.create",
+  "terminal.checkCommand",
   "terminal.exec",
   "terminal.execInTerminal",
   "terminal.getCompletions",

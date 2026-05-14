@@ -118,6 +118,50 @@ describe("detectExternalAgentSignal", () => {
     expect(out.permission).toBe(true);
   });
 
+  it("recognises Claude Code's current permission dialog frame", () => {
+    const out = detectExternalAgentSignal(
+      [
+        "╭─ Run command ─────────────────────────────╮",
+        "│ npm test                                  │",
+        "│ Do you want to proceed?                   │",
+        "│ ❯ 1. Yes                                  │",
+        "│   2. Yes, and don't ask again for npm:*   │",
+        "│   3. No                                   │",
+        "╰───────────────────────────────────────────╯",
+        "Esc to cancel · Tab to amend",
+      ].join("\n"),
+    );
+    expect(out.permission).toBe(true);
+    expect(out.agentPresent).toBe(true);
+  });
+
+  it("recognises Codex-style approval prompts", () => {
+    const out = detectExternalAgentSignal(
+      "OpenAI Codex\nAllow command `npm test`? [y/N]",
+    );
+    expect(out.permission).toBe(true);
+    expect(out.agentPresent).toBe(true);
+  });
+
+  it("does not treat permission-denied output as an approval prompt", () => {
+    const out = detectExternalAgentSignal("mkdir: permission denied");
+    expect(out.permission).toBeFalsy();
+  });
+
+  it("does not bootstrap agent status from a bare yes/no shell prompt", () => {
+    const out = detectExternalAgentSignal("Overwrite file? [y/N]");
+    expect(out.permission).toBeFalsy();
+    expect(out.agentPresent).toBeUndefined();
+  });
+
+  it("allows terse approval prompts once the session is already an agent", () => {
+    const out = detectExternalAgentSignal("Overwrite changes? [y/N]", {
+      allowTersePermission: true,
+    });
+    expect(out.permission).toBe(true);
+    expect(out.agentPresent).toBe(true);
+  });
+
   it("treats the input prompt box as an idle marker", () => {
     // Claude Code's idle state shows a prompt box — these glyphs are unique
     // to the input frame and never appear during work.
@@ -181,6 +225,16 @@ describe("detectExternalAgentSignal", () => {
   it("flags agentPresent on a model id like sonnet-4-6", () => {
     const out = detectExternalAgentSignal("Using sonnet-4-6 (1M context)");
     expect(out.agentPresent).toBe(true);
+  });
+
+  it("flags agentPresent on an OpenAI Codex banner", () => {
+    const out = detectExternalAgentSignal("OpenAI Codex CLI");
+    expect(out.agentPresent).toBe(true);
+  });
+
+  it("does NOT flag agentPresent on plain prose mentioning codex", () => {
+    const out = detectExternalAgentSignal("see the ancient codex entry");
+    expect(out.agentPresent).toBeUndefined();
   });
 
   it("does NOT flag agentPresent on plain prose mentioning 'claude'", () => {

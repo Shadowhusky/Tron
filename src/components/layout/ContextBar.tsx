@@ -122,7 +122,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const modelBtnRef = useRef<HTMLDivElement>(null);
   const { data: availableModels = [] } = useAllConfiguredModels();
   useThinkingModelInvalidation();
-  const activeModel = availableModels.length > 0 ? rawModel : null;
+  const activeModel = rawModel || null;
 
   const displayModels = React.useMemo(() => {
     let filtered = availableModels;
@@ -168,9 +168,13 @@ const ContextBar: React.FC<ContextBarProps> = ({
     return grouped;
   }, [availableModels, searchQuery, activeModel, showModelMenu]);
 
-  // Auto-select model if current model is empty or unavailable — prefer user's saved choice
+  // Auto-select a model only when the session has no saved model. A configured
+  // model can be temporarily absent while providers are still loading or a
+  // remote/local provider is offline; replacing it here makes per-panel model
+  // choices look like they reset after restart.
   useEffect(() => {
     if (availableModels.length === 0) return;
+    if (rawModel?.trim()) return;
     const modelStillAvailable =
       activeModel && availableModels.some((m) => m.name === activeModel);
     if (!modelStillAvailable) {
@@ -213,7 +217,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
         update.baseUrl = baseUrl;
       updateSessionConfig(sessionId, update);
     }
-  }, [activeModel, availableModels, sessionId, updateSessionConfig]);
+  }, [activeModel, appConfig.providerConfigs, availableModels, rawModel, sessionId, updateSessionConfig]);
 
   // Update local state when session changes
   useEffect(() => {

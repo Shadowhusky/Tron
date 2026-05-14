@@ -18,13 +18,29 @@ import { matchesHotkey } from "../hooks/useHotkey";
 import { selectTabByIndex } from "../utils/tabSwitcher";
 import { useConfig } from "./ConfigContext";
 import { isElectronApp } from "../utils/platform";
-import { connectRemote, createRemotePTY, getRemoteConnectionId, unregisterRemoteSession } from "../services/remote-bridge";
+import { connectRemote, createRemotePTY, getRemoteConnectionId, reviveRemoteSession, unregisterRemoteSession } from "../services/remote-bridge";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
   return typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).substring(2);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 interface LayoutContextType {
@@ -1608,6 +1624,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const activeSessionId = getActiveTab()?.activeSessionId || null;
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
 
   // Poll CWD for the active session every 3 seconds (with in-flight guard)
   const cwdInFlightRef = useRef(false);
@@ -1720,6 +1738,77 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn(`Failed to reconnect SSH session ${sessionId}:`, err.message);
     }
   }, []);
+
+  const responsiveCheckInFlightRef = useRef(new Set<string>());
+  const responsiveCheckLastAtRef = useRef(new Map<string, number>());
+
+  const ensureActiveSessionResponsive = useCallback(async (sessionId?: string | null) => {
+    const sid = sessionId || activeSessionIdRef.current;
+    if (!sid || sid === "settings" || sid.startsWith("ssh-connect") || sid.startsWith("browser-") || sid.startsWith("editor-") || sid.startsWith("pixel-agents")) return;
+    const session = sessionsRef.current.get(sid);
+    if (!session) return;
+    if (!session.remoteUrl && !session.sshProfileId) return;
+
+    const now = Date.now();
+    const last = responsiveCheckLastAtRef.current.get(sid) ?? 0;
+    if (now - last < 5000 || responsiveCheckInFlightRef.current.has(sid)) return;
+    responsiveCheckLastAtRef.current.set(sid, now);
+    responsiveCheckInFlightRef.current.add(sid);
+
+    try {
+      if (session.remoteUrl) {
+        await reviveRemoteSession(sid, session.cwd);
+        return;
+      }
+
+      if (session.sshProfileId) {
+        const ipc = window.electron?.ipcRenderer;
+        if (!ipc) return;
+        const exists = await withTimeout(
+          ipc.invoke(IPC.TERMINAL_SESSION_EXISTS, sid),
+          2500,
+          "SSH session check",
+        ).catch(() => false);
+        if (!exists) {
+          await reconnectSSH(sid);
+          return;
+        }
+
+        const ping = await withTimeout(
+          ipc.invoke(IPC.TERMINAL_EXEC, {
+            sessionId: sid,
+            command: "printf __TRON_PING__",
+          }),
+          6000,
+          "SSH ping",
+        ).catch(() => null);
+        if (!ping || ping.exitCode !== 0 || !String(ping.stdout || "").includes("__TRON_PING__")) {
+          await reconnectSSH(sid);
+        }
+      }
+    } finally {
+      responsiveCheckInFlightRef.current.delete(sid);
+    }
+  }, [reconnectSSH]);
+
+  useEffect(() => {
+    ensureActiveSessionResponsive(activeSessionId);
+  }, [activeSessionId, ensureActiveSessionResponsive]);
+
+  useEffect(() => {
+    const check = () => ensureActiveSessionResponsive(activeTabIdRef.current ? activeSessionIdRef.current : null);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    window.addEventListener("focus", check);
+    window.addEventListener("pageshow", check);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", check);
+      window.removeEventListener("pageshow", check);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [ensureActiveSessionResponsive]);
 
   // Keyboard Shortcuts (customizable via hotkey system)
   // In web mode, Cmd+W/Cmd+D/Cmd+Shift+D conflict with browser shortcuts
