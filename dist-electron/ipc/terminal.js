@@ -630,6 +630,9 @@ function registerTerminalHandlers(getMainWindow) {
     electron_1.ipcMain.handle("terminal.getShellHistory", () => getShellHistory());
     // Check if a PTY session is still alive (for reconnection after renderer refresh)
     electron_1.ipcMain.handle("terminal.sessionExists", (_event, sessionId) => {
+        if (ssh_1.sshSessionIds.has(sessionId)) {
+            return ssh_1.sshSessions.get(sessionId)?.connected === true;
+        }
         return sessions.has(sessionId);
     });
     // Create Session (or reconnect to existing one)
