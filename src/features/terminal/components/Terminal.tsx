@@ -1562,9 +1562,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   }, [resolvedTheme]);
 
   // ---- Focus when tab becomes active (only if user last focused terminal) ----
+  // ALWAYS flush+refresh when becoming active or focusTarget changes so the
+  // xterm canvas redraws on every focus regain. Without this, switching to a
+  // sibling tab and back (or focus-cycling between split panes) leaves the
+  // canvas with stale/garbled cells that don't repaint until the container
+  // resizes — flush calls term.refresh(0, rows-1) which forces a redraw.
   useEffect(() => {
-    if (isActive && xtermRef.current && focusTarget === "terminal") {
-      flushPendingOutputRef.current();
+    if (!isActive || !xtermRef.current) return;
+    flushPendingOutputRef.current();
+    if (focusTarget === "terminal") {
       xtermRef.current.focus();
     }
   }, [isActive, focusTarget]);
@@ -1582,6 +1588,34 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       window.removeEventListener("focus", flush);
       window.removeEventListener("pageshow", flush);
       document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [isActive]);
+
+  // ---- Refresh on pane focus regain (split-pane case) ----
+  // Tab switch is covered above via isActive. Inter-pane focus changes inside
+  // the same tab don't toggle isActive — listen for focus/click on our own
+  // wrapper element and refresh xterm so stale cells repaint immediately.
+  useEffect(() => {
+    if (!isActive) return;
+    const root = terminalRef.current?.parentElement;
+    if (!root) return;
+    let refreshScheduled = false;
+    const scheduleRefresh = () => {
+      if (refreshScheduled) return;
+      refreshScheduled = true;
+      requestAnimationFrame(() => {
+        refreshScheduled = false;
+        try {
+          const t = xtermRef.current;
+          if (t) t.refresh(0, Math.max(0, t.rows - 1));
+        } catch { /* non-critical */ }
+      });
+    };
+    root.addEventListener("focusin", scheduleRefresh);
+    root.addEventListener("pointerdown", scheduleRefresh);
+    return () => {
+      root.removeEventListener("focusin", scheduleRefresh);
+      root.removeEventListener("pointerdown", scheduleRefresh);
     };
   }, [isActive]);
 

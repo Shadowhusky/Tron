@@ -11,7 +11,7 @@ import { registerSystemHandlers } from "./ipc/system";
 import { registerAIHandlers } from "./ipc/ai";
 import { registerConfigHandlers } from "./ipc/config";
 import { registerSSHHandlers, cleanupAllSSHSessions } from "./ipc/ssh";
-import { registerWebServerHandlers, startWebServerManaged, stopWebServer, readWebServerConfig } from "./ipc/web-server";
+import { registerWebServerHandlers, startWebServerManaged, stopWebServerSync, readWebServerConfig } from "./ipc/web-server";
 import { registerUpdaterHandlers, autoCheckForUpdates } from "./ipc/updater";
 import { registerWebHandlers } from "./ipc/web";
 import { registerSkillsHandlers } from "./ipc/skills";
@@ -345,7 +345,10 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   cleanupAllSessions();
-  stopWebServer();
+  // Synchronous shutdown — async stopWebServer can be aborted by Electron's
+  // quit sequence, orphaning the child and leaving the port bound for the
+  // next launch. The sync variant SIGKILLs and reaps the port immediately.
+  stopWebServerSync();
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -354,7 +357,10 @@ app.on("before-quit", (e) => {
     // Already confirmed or force-closing — proceed with cleanup
     cleanupAllSSHSessions();
     cleanupAllSessions();
-    stopWebServer();
+    // See note above — sync variant survives Electron tearing down before
+    // an async kill resolves. Critical on auto-update where the new app
+    // instance starts within seconds of the old one quitting.
+    stopWebServerSync();
     return;
   }
 

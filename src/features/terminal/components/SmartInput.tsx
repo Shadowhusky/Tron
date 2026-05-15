@@ -237,6 +237,17 @@ const SmartInput: React.FC<SmartInputProps> = ({
   const resizeTextarea = useCallback((el: HTMLTextAreaElement) => {
     if (resizeRafRef.current) cancelAnimationFrame(resizeRafRef.current);
     resizeRafRef.current = requestAnimationFrame(() => {
+      // When the textarea is empty, pin to the single-line minHeight: in
+      // narrow panels Chromium's scrollHeight includes the wrapped
+      // placeholder, which would grow the input box by N lines just
+      // because the placeholder doesn't fit on one row. The placeholder
+      // still renders but is clipped horizontally by the overflow-hidden
+      // wrapper above the textarea.
+      if (!el.value) {
+        el.style.height = "1.5em";
+        resizeRafRef.current = 0;
+        return;
+      }
       el.style.height = "auto";
       el.style.height = el.scrollHeight + "px";
       resizeRafRef.current = 0;
@@ -283,6 +294,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
     const el = inputRef.current;
     if (!el) return;
     if (el.value !== reactValue) el.value = reactValue;
+    // Empty value → pin to single line; scrollHeight includes the wrapped
+    // placeholder in narrow panels and would inflate height.
+    if (!reactValue) {
+      el.style.height = "1.5em";
+      return;
+    }
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
   }, [reactValue]);

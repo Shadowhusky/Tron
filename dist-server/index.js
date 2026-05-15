@@ -897,6 +897,35 @@ function handleSend(channel, data) {
             break;
     }
 }
+// Track whether the listening event has fired — used by both the explicit
+// server.on("error") handler below and the uncaughtException safety net
+// to decide whether to terminate or stay alive.
+let serverStarted = false;
+server.on("listening", () => { serverStarted = true; });
+// Explicit error listener — without this, EADDRINUSE surfaces as an
+// uncaughtException with the generic "fatal startup error" message and the
+// Electron parent can't tell the difference between "port busy" (recoverable
+// by force-kill) and "code crashed" (not). Report the precise reason via IPC
+// so the parent can react. Post-startup errors are logged but don't exit —
+// matches the historical uncaughtException semantics so transient network
+// errors don't take down the server.
+server.on("error", (err) => {
+    const code = err?.code || "EUNKNOWN";
+    const msg = `${code}: ${err?.message || String(err)}`;
+    if (serverStarted) {
+        console.error(`[Tron Web] Server error after start (keeping alive): ${msg}`);
+        return;
+    }
+    console.error(`[Tron Web] Server startup error: ${msg}`);
+    if (typeof process.send === "function") {
+        try {
+            process.send({ type: "startup_error", code, message: msg, port: PORT });
+        }
+        catch { /* parent gone */ }
+    }
+    // Brief delay so the IPC message lands before exit
+    setTimeout(() => process.exit(1), 50);
+});
 server.listen(PORT, HOST, () => {
     console.log(`[Tron Web] Server running on http://${HOST}:${PORT}`);
     if (isDev) {
@@ -917,8 +946,6 @@ process.on("SIGINT", shutdownHandler);
 process.on("SIGTERM", shutdownHandler);
 // Prevent server crashes from unhandled stream/network errors — log and continue.
 // Fatal startup errors (e.g. EADDRINUSE) should still crash.
-let serverStarted = false;
-server.on("listening", () => { serverStarted = true; });
 process.on("uncaughtException", (err) => {
     if (!serverStarted) {
         console.error("[Tron Web] Fatal startup error:", err.message);

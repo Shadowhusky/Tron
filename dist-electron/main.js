@@ -373,7 +373,10 @@ electron_1.app.whenReady().then(async () => {
 });
 electron_1.app.on("window-all-closed", () => {
     (0, terminal_1.cleanupAllSessions)();
-    (0, web_server_1.stopWebServer)();
+    // Synchronous shutdown — async stopWebServer can be aborted by Electron's
+    // quit sequence, orphaning the child and leaving the port bound for the
+    // next launch. The sync variant SIGKILLs and reaps the port immediately.
+    (0, web_server_1.stopWebServerSync)();
     if (process.platform !== "darwin")
         electron_1.app.quit();
 });
@@ -382,7 +385,10 @@ electron_1.app.on("before-quit", (e) => {
         // Already confirmed or force-closing — proceed with cleanup
         (0, ssh_1.cleanupAllSSHSessions)();
         (0, terminal_1.cleanupAllSessions)();
-        (0, web_server_1.stopWebServer)();
+        // See note above — sync variant survives Electron tearing down before
+        // an async kill resolves. Critical on auto-update where the new app
+        // instance starts within seconds of the old one quitting.
+        (0, web_server_1.stopWebServerSync)();
         return;
     }
     // Intercept Cmd+Q / dock quit to show the close confirm modal,

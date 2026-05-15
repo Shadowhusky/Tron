@@ -3143,7 +3143,23 @@ ${agentPrompt}
           const bracketMatch = trimmed.match(/^\[(\w+)\](.*)$/s);
           if (bracketMatch && TOOL_NAMES.has(bracketMatch[1])) {
             const toolName = bracketMatch[1];
-            const arg = bracketMatch[2].trim();
+            // Sanitize the argument: strip JSON-closing artifacts ("}, "], }, ], etc.)
+            // and any second-line garbage. Some models output the bracket form
+            // followed by trailing JSON fragments or a second tool call that
+            // would otherwise be passed verbatim into the shell, causing
+            // "unmatched quote" / parse errors (e.g. "ls -la"} or "npm start&*/").
+            let arg = bracketMatch[2];
+            // Cut off at the first newline that starts a new tool / JSON / bracket call
+            const nlIdx = arg.search(/\r?\n\s*(?:\[\w+\]|\{|\["?tool"?)/);
+            if (nlIdx >= 0) arg = arg.slice(0, nlIdx);
+            // Strip trailing JSON closing fragments / stray punctuation
+            arg = arg.replace(/\s*(?:["'`]?\s*[\]}]+\s*[,;]?\s*)+$/, "");
+            // Also strip a lone trailing single/double quote with no opening match
+            const dq = (arg.match(/"/g) || []).length;
+            const sq = (arg.match(/'/g) || []).length;
+            if (dq % 2 === 1 && arg.endsWith('"')) arg = arg.slice(0, -1);
+            if (sq % 2 === 1 && arg.endsWith("'")) arg = arg.slice(0, -1);
+            arg = arg.trim();
             action = { tool: toolName };
             if (toolName === "execute_command" || toolName === "run_in_terminal") {
               action.command = arg || "echo 'no command provided'";
@@ -3255,6 +3271,23 @@ ${agentPrompt}
         // If we got plain text that isn't a confused JSON tool call, use it as the answer
         const hasToolCallJSON = /{"tool"\s*:/.test(fallbackText);
         if (fallbackText.length > 0 && !hasToolCallJSON) {
+          // Don't synthesise success from a generic completion claim when zero
+          // work has been done — that's a false "done" (observed bug). Force
+          // the model to actually do something or admit failure.
+          const looksLikeFalseDone =
+            fallbackText.length < 80 &&
+            /^(done|ok|okay|task completed|finished|completed|all done|that'?s it)\b/i.test(
+              fallbackText,
+            );
+          const didAnyWork =
+            wroteFiles || executedCommands.size > 0 || usedWebTools;
+          if (looksLikeFalseDone && !didAnyWork) {
+            return {
+              success: false,
+              message:
+                "The model claimed to be done without actually running any commands, writing files, or looking anything up. Try a more capable model or rephrase the task.",
+            };
+          }
           markPlanCompleteOnFinish();
           return {
             success: true,
@@ -3325,6 +3358,22 @@ ${agentPrompt}
       // Loop detection: heuristics flag suspicion; an LLM arbiter confirms
       // whether the agent is actually stuck. Arbiter-confirmed loops redirect
       // with concrete suggestions; 3 confirmations terminate the agent.
+      // For file edits we hash the full edit payload (search/replace/content)
+      // so identical re-emissions are blocked even when only the path is the
+      // same. Without this, agents loop "edit_file foo.ts" with the same
+      // search/replace pair indefinitely (the actionKey would be identical
+      // for any-content match but only-path was being recorded, so the
+      // duplicate-suppression branch never fired). Hash to keep the key
+      // bounded for large payloads.
+      const hashContent = (s: string | undefined): string | undefined => {
+        if (typeof s !== "string" || s.length === 0) return s;
+        if (s.length <= 64) return s;
+        let h = 0;
+        for (let i = 0; i < s.length; i++) {
+          h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+        }
+        return `${s.length}#${h}`;
+      };
       const actionKey = JSON.stringify({
         tool: action.tool,
         path: action.path,
@@ -3332,6 +3381,9 @@ ${agentPrompt}
         text: action.text,
         query: action.query,
         url: action.url,
+        search: hashContent(action.search),
+        replace: hashContent(action.replace),
+        content: hashContent(action.content),
       });
 
       // Block the most recently *arbiter-confirmed* looped action — cleared
@@ -3385,10 +3437,17 @@ ${agentPrompt}
 
       // Semantic suspicion: coarse-prefix match catches minor-variation probes
       // (different python one-liners, grep patterns, JSON paths) all doing the
-      // same diagnostic work.
+      // same diagnostic work. For file edits, include a short prefix of the
+      // search/replace/content so we don't flag legitimate "5 different edits
+      // to the same file" as semantically repeated — only re-emissions of
+      // the same edit (which the exact-string consecutive check above also
+      // catches) and minor reword-only reattempts.
       const coarseArgs = action.command || action.query || action.path || action.url || "";
+      const fileEditFingerprint = action.tool === "write_file" || action.tool === "edit_file"
+        ? `:${(action.search || action.content || "").slice(0, 30)}>${(action.replace || "").slice(0, 30)}`
+        : "";
       const coarseKey = action.tool === "write_file" || action.tool === "edit_file"
-        ? `${action.tool}:${action.path || ""}`
+        ? `${action.tool}:${action.path || ""}${fileEditFingerprint}`
         : `${action.tool}:${coarseArgs.slice(0, 50)}`;
       recentCoarseKeys.push(coarseKey);
       if (recentCoarseKeys.length > 12) recentCoarseKeys.shift();
@@ -3787,6 +3846,27 @@ ${agentPrompt}
           continue;
         }
 
+        // Reject hallucinated tool-use error tags embedded in the final_answer
+        // content. Observed bug: model emits a final_answer whose content is
+        // literally "<tool_use_error>Tool not found: foo</tool_use_error>"
+        // because it tried to call a non-existent tool and then surfaced its
+        // own pretend-error as the answer. The user sees this as a failed
+        // task instead of getting the real work done. Bounce back with the
+        // valid tool list so the model retries with a real one.
+        const hallucinatedToolError =
+          /<tool_use_error>/i.test(finalContent) ||
+          /\btool not found\b/i.test(finalContent) ||
+          /^I (don'?t|do not) have (a |an |the )?(tool|function|capability)/i.test(finalContent) ||
+          /^I cannot (find|access|use) (a |an |the )?\w+ tool/i.test(finalContent);
+        if (hallucinatedToolError) {
+          const validTools = Array.from(TOOL_NAMES).join(", ");
+          history.push({
+            role: "user",
+            content: `REJECTED: Your final_answer contains a fake tool-use error. You called a tool that does not exist. The valid tools are: ${validTools}. For "search online" / "look up" / "find recent" tasks, use web_search and web_fetch. Pick a real tool and try again — do NOT give final_answer until you have the actual answer.`,
+          });
+          continue;
+        }
+
         // Reject premature completion: scaffolded a project but never wrote any code
         if (usedScaffold && !wroteFiles) {
           history.push({
@@ -3917,13 +3997,29 @@ ${agentPrompt}
           continue;
         }
 
-        // Reject generic terse completion messages that don't convey actual results
-        const genericCompletionPatterns = /^(task completed|done|finished|completed|all done|it'?s done|that'?s it|everything is (set up|done|ready))\s*[.!]?\s*$/i;
-        if (genericCompletionPatterns.test(trimmedAnswer) && executedCommands.size > 0 && !isShortAck) {
-          // Silent retry — don't show guard rejection to user
+        // Reject generic terse completion messages that don't convey actual results.
+        // Two sub-cases:
+        //   (a) Work was actually done (commands/files/web): demand specifics
+        //   (b) NO work happened at all (no commands, no files, no web): claim
+        //       of completion is false — reject and force action. Without this
+        //       branch the agent could answer "Done." after zero work and the
+        //       user would see a misleading success bubble (observed bug).
+        const genericCompletionPatterns = /^(task completed|done|finished|completed|all done|it'?s done|that'?s it|everything is (set up|done|ready)|ok|okay)\s*[.!]?\s*$/i;
+        const isGenericCompletion = genericCompletionPatterns.test(trimmedAnswer);
+        if (isGenericCompletion && !isShortAck) {
+          const didWork =
+            executedCommands.size > 0 || wroteFiles || usedWebTools;
+          if (didWork) {
+            history.push({
+              role: "user",
+              content: `REJECTED: Your final_answer "${trimmedAnswer}" is too generic. Provide the ACTUAL results/output of what you did. For example, if you ran a command, include what it returned. If you modified files, explain what changed. Be specific.`,
+            });
+            continue;
+          }
+          // Zero-work generic completion — agent is hallucinating success.
           history.push({
             role: "user",
-            content: `REJECTED: Your final_answer "${trimmedAnswer}" is too generic. Provide the ACTUAL results/output of what you did. For example, if you ran a command, include what it returned. If you modified files, explain what changed. Be specific.`,
+            content: `REJECTED: You answered "${trimmedAnswer}" but you have NOT executed any command, written any file, or fetched anything from the web. The task is NOT done. Use execute_command / write_file / web_search to actually do the work, THEN summarise what you did in final_answer.`,
           });
           continue;
         }
@@ -5283,6 +5379,37 @@ ${agentPrompt}
           }
         }
 
+        // Defense-in-depth: detect commands with obvious shell parse errors
+        // (unbalanced quotes from partial-streaming / model artifacts like &*/).
+        // Walk the string respecting shell quote/escape state: backslash
+        // escapes the next char OUTSIDE single quotes (handles `echo \"hi`);
+        // single quotes are literal (no escapes inside); double quotes allow
+        // backslash escapes.
+        {
+          let inSq = false, inDq = false, esc = false;
+          for (let i = 0; i < cmd.length; i++) {
+            const ch = cmd[i];
+            if (esc) { esc = false; continue; }
+            if (!inSq && ch === "\\") { esc = true; continue; }
+            if (!inSq && ch === '"') { inDq = !inDq; continue; }
+            if (!inDq && ch === "'") { inSq = !inSq; continue; }
+          }
+          if (inSq || inDq) {
+            const quoteType = inSq ? "single quote (')" : 'double quote (")';
+            onUpdate(
+              "failed",
+              `Blocked: command has unbalanced ${quoteType} — would hang the shell`,
+              action
+            );
+            history.push({
+              role: "user",
+              content: `<tool_use_error>execute_command failed: the command has an unbalanced ${quoteType}, which would leave the shell waiting for input. Re-emit the command with balanced quotes. Original command was: ${cmd.slice(0, 200)}</tool_use_error>`,
+            });
+            consecutiveGuardBlocks++;
+            continue;
+          }
+        }
+
         executedCommands.add(cmd);
 
         onUpdate("executing", cmd, action);
@@ -5356,6 +5483,24 @@ ${agentPrompt}
             }
           }
         }
+      }
+
+      // --- Unknown tool catch ---
+      // If the action's tool name isn't in TOOL_NAMES, no dispatch branch
+      // matched and no tool result was pushed to history. The model would
+      // see its own action followed by silence and often emits final_answer
+      // with a hallucinated "Tool not found" message (observed bug). Push a
+      // real tool_use_error so the model picks a valid tool next turn.
+      if (
+        action.tool &&
+        !TOOL_NAMES.has(action.tool) &&
+        !action._plan
+      ) {
+        const validTools = Array.from(TOOL_NAMES).join(", ");
+        history.push({
+          role: "user",
+          content: `<tool_use_error>Unknown tool "${action.tool}". Valid tools: ${validTools}. For online lookups use web_search then web_fetch.</tool_use_error>`,
+        });
       }
 
       // --- Multi-tool-call correction ---

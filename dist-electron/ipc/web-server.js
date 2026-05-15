@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.readWebServerConfig = readWebServerConfig;
 exports.startWebServer = startWebServer;
+exports.stopWebServerSync = stopWebServerSync;
 exports.stopWebServer = stopWebServer;
 exports.startWebServerManaged = startWebServerManaged;
 exports.getWebServerStatus = getWebServerStatus;
@@ -65,6 +66,32 @@ function isPortAvailable(port, host = "127.0.0.1") {
         server.listen(port, host);
     });
 }
+/** Force-kill whatever process is currently bound to `port`. Used to recover
+ * after restart/update when the previous Tron server child didn't release
+ * the port before the new instance tried to claim it. Returns true if we
+ * believe the kill actually happened (port is free afterwards). */
+async function forceKillPort(port, host) {
+    try {
+        const { execSync } = require("child_process");
+        if (process.platform === "win32") {
+            execSync(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :${port} ^| findstr LISTENING') do taskkill /PID %a /F`, { timeout: 5000, stdio: "ignore" });
+        }
+        else {
+            execSync(`lsof -ti:${port} | xargs kill -9`, { timeout: 5000, stdio: "ignore" });
+        }
+    }
+    catch {
+        // No process on port, or lsof/taskkill failed — fall through to the
+        // availability check; the caller will decide what to do.
+    }
+    // Some OSes hold the port in TIME_WAIT briefly after kill; poll up to ~1.5s.
+    for (let i = 0; i < 6; i++) {
+        if (await isPortAvailable(port, host))
+            return true;
+        await new Promise((r) => setTimeout(r, 250));
+    }
+    return false;
+}
 /** Schedule an auto-restart with exponential backoff. */
 function scheduleRestart() {
     if (intentionalStop)
@@ -78,6 +105,17 @@ function scheduleRestart() {
     console.log(`[Tron] Scheduling web server restart in ${backoff}ms (attempt ${restartAttempts}/${MAX_RESTART_ATTEMPTS})...`);
     restartTimer = setTimeout(async () => {
         restartTimer = null;
+        // If the previous failure was EADDRINUSE, the offending process is
+        // almost always a stale Tron server child from before the update/restart.
+        // Force-kill it here (not just inside startWebServer) so we attack the
+        // problem head-on instead of waiting for startWebServer's own ladder.
+        const portInUse = typeof lastError === "string" &&
+            /EADDRINUSE|already in use/i.test(lastError);
+        if (portInUse) {
+            const host = lastStartExpose ? "0.0.0.0" : "127.0.0.1";
+            console.warn(`[Tron] Previous start failed with port-in-use; force-killing port ${lastStartPort} before retry…`);
+            await forceKillPort(lastStartPort, host);
+        }
         const result = await startWebServer(lastStartPort, lastStartExpose);
         if (!result.success) {
             console.error(`[Tron] Web server restart failed: ${result.error}`);
@@ -99,18 +137,44 @@ async function startWebServer(port, expose = true) {
         return { success: false, error: lastError };
     }
     const host = expose ? "0.0.0.0" : "127.0.0.1";
-    const available = await isPortAvailable(port, host);
-    if (!available) {
-        lastError = `Port ${port} is already in use`;
-        return { success: false, error: lastError };
+    // Port-in-use recovery: a previous Tron server (from before update/restart)
+    // can hold the port if it didn't exit cleanly. Walk a small ladder:
+    //   1. requested port
+    //   2. requested port after force-killing the holder
+    //   3. fallback ports (port+1 ... port+4)
+    // This means the user's browser bookmark to e.g. :3888 may end up on :3889
+    // until next restart, but the server actually comes up — far better than
+    // permanently stuck.
+    let effectivePort = port;
+    if (!(await isPortAvailable(port, host))) {
+        console.warn(`[Tron] Port ${port} is in use; attempting force-kill of holder…`);
+        const freed = await forceKillPort(port, host);
+        if (!freed) {
+            // Try alternate ports
+            let found = false;
+            for (let alt = port + 1; alt <= port + 4; alt++) {
+                if (await isPortAvailable(alt, host)) {
+                    console.warn(`[Tron] Falling back to port ${alt}`);
+                    effectivePort = alt;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                lastError = `Port ${port} is already in use and nearby ports are also taken`;
+                return { success: false, error: lastError };
+            }
+        }
     }
+    // Make sure we record what we're actually starting on, so retries reuse it.
+    lastStartPort = effectivePort;
     return new Promise((resolve) => {
         const isDev = !electron_1.app.isPackaged;
         const child = (0, child_process_1.fork)(serverPath, isDev ? ["--dev"] : [], {
             env: {
                 ...process.env,
                 ELECTRON_RUN_AS_NODE: "1",
-                TRON_PORT: String(port),
+                TRON_PORT: String(effectivePort),
                 TRON_HOST: host,
                 TRON_DEV: isDev ? "true" : "false",
             },
@@ -118,6 +182,7 @@ async function startWebServer(port, expose = true) {
         });
         // Collect stderr for error reporting
         let stderrBuf = "";
+        let startupErrorReported = false;
         const timeout = setTimeout(() => {
             child.kill("SIGTERM");
             serverProcess = null;
@@ -129,7 +194,7 @@ async function startWebServer(port, expose = true) {
             if (msg?.type === "ready") {
                 clearTimeout(timeout);
                 serverProcess = child;
-                currentPort = msg.port || port;
+                currentPort = msg.port || effectivePort;
                 lastError = null;
                 restartAttempts = 0; // Reset backoff on successful start
                 // Monitor for unexpected crashes after successful startup
@@ -143,6 +208,13 @@ async function startWebServer(port, expose = true) {
                 });
                 console.log(`[Tron] Web server started on port ${currentPort}`);
                 resolve({ success: true, port: currentPort });
+            }
+            else if (msg?.type === "startup_error") {
+                // Server failed to bind (typically EADDRINUSE racing with a stale
+                // child after restart). Capture a precise error so the retry loop
+                // surfaces it instead of the generic "exited with code 1".
+                startupErrorReported = true;
+                lastError = `${msg.code || "Server error"}: ${msg.message || "startup failed"}`;
             }
         });
         child.on("error", (err) => {
@@ -162,8 +234,13 @@ async function startWebServer(port, expose = true) {
             // Always resolve — if the child exits before sending "ready",
             // this ensures the IPC handler doesn't hang ("reply was never sent").
             // If "ready" already resolved the Promise, this second call is a no-op.
-            lastError = stderrBuf.trim() || `Server exited with code ${code}`;
-            resolve({ success: false, error: lastError });
+            // Prefer the structured startup_error message (e.g. "EADDRINUSE: ...")
+            // over the generic stderr/exit-code text — the retry loop uses this
+            // to decide whether to force-kill the port.
+            if (!startupErrorReported) {
+                lastError = stderrBuf.trim() || `Server exited with code ${code}`;
+            }
+            resolve({ success: false, error: lastError || undefined });
         });
         // Forward server stdout/stderr to Electron's console
         child.stdout?.on("data", (data) => {
@@ -174,6 +251,45 @@ async function startWebServer(port, expose = true) {
             process.stderr.write(`[WebServer] ${data}`);
         });
     });
+}
+/** Synchronous shutdown used from `before-quit` / `window-all-closed`. The
+ * async `stopWebServer` may not complete before Electron tears down the
+ * event loop on quit, which can leave the server child orphaned and
+ * holding the port — the next app instance then can't bind. This variant
+ * SIGKILLs the child and synchronously force-frees the port so the post-
+ * quit/restart bring-up succeeds. Safe to call multiple times. */
+function stopWebServerSync() {
+    intentionalStop = true;
+    if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+    }
+    restartAttempts = 0;
+    const child = serverProcess;
+    const stoppedPort = currentPort ?? lastStartPort;
+    serverProcess = null;
+    currentPort = null;
+    if (child) {
+        try {
+            child.kill("SIGKILL");
+        }
+        catch { /* already gone */ }
+    }
+    // Synchronous best-effort port reap. execSync may throw if nothing is on
+    // the port; that's the success case for us — swallow it.
+    try {
+        const { execSync } = require("child_process");
+        if (process.platform === "win32") {
+            execSync(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :${stoppedPort} ^| findstr LISTENING') do taskkill /PID %a /F`, { timeout: 2000, stdio: "ignore" });
+        }
+        else {
+            execSync(`lsof -ti:${stoppedPort} | xargs kill -9 2>/dev/null || true`, {
+                timeout: 2000,
+                stdio: "ignore",
+            });
+        }
+    }
+    catch { /* nothing to kill */ }
 }
 /** Stop the web server process. */
 async function stopWebServer() {
@@ -186,9 +302,11 @@ async function stopWebServer() {
     if (!serverProcess)
         return;
     const child = serverProcess;
+    const stoppedPort = currentPort ?? lastStartPort;
+    const stoppedHost = lastStartExpose ? "0.0.0.0" : "127.0.0.1";
     serverProcess = null;
     currentPort = null;
-    return new Promise((resolve) => {
+    await new Promise((resolve) => {
         const forceTimeout = setTimeout(() => {
             try {
                 child.kill("SIGKILL");
@@ -208,6 +326,14 @@ async function stopWebServer() {
             resolve();
         }
     });
+    // Defence: if the OS hasn't released the port (e.g. child crashed mid-shutdown
+    // leaving an orphaned listening socket, or another stray process is still on
+    // it), reap it now so the next launch doesn't hit EADDRINUSE. This is the
+    // counterpart to the start-time force-kill — together they survive the
+    // update/restart cycle where one app instance immediately replaces another.
+    if (stoppedPort && !(await isPortAvailable(stoppedPort, stoppedHost))) {
+        await forceKillPort(stoppedPort, stoppedHost);
+    }
 }
 /** Get non-internal IPv4 addresses for this machine. */
 function getLocalIPs() {
@@ -255,6 +381,14 @@ function getWebServerStatus() {
 /** Register all web server IPC handlers. */
 function registerWebServerHandlers() {
     electron_1.ipcMain.handle("webServer.start", async (_event, port, expose) => {
+        // Manual start from Settings should reset the restart counter so a stuck
+        // server (max attempts hit) can be unwedged without restarting the app.
+        intentionalStop = false;
+        restartAttempts = 0;
+        if (restartTimer) {
+            clearTimeout(restartTimer);
+            restartTimer = null;
+        }
         return startWebServer(port || 3888, expose ?? true);
     });
     electron_1.ipcMain.handle("webServer.stop", async () => {
