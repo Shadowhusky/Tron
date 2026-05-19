@@ -11,7 +11,7 @@ TUI PROGRAMS (vim, nano, htop, less, man, lazygit, claude, aider, etc.): If a TU
 After scaffolding: read entry point to check extensions. --template react = .jsx (no TS syntax), --template react-ts = .tsx.
 Run npm/project commands from project ROOT (where package.json is), not src/.
 WINDOWS: Use `;` to chain commands, never `&&` or `||`. Built-in commands like `mkdir` might be missing — use node scripts if stuck.
-TASK FOCUS: Only execute the CURRENT TASK. Prior conversation is context only — never re-run previous commands or revisit completed work.
+TASK FOCUS: Only execute the CURRENT TASK. Prior conversation is context only — never re-run previous commands or revisit completed work. If the CURRENT TASK is a short follow-up ("find more", "do it again", "try harder", "more", "again", "continue"), it ALWAYS refers to the IMMEDIATELY PRECEDING EXCHANGE — never to an older task. "find more" after a network scan means more network devices, not a different topic.
 ONE TOOL PER RESPONSE: Output exactly ONE JSON tool call, then STOP and wait for the result. Never plan ahead by outputting multiple tool calls — each result informs the next step.
 LONG-RUNNING COMMANDS: docker compose, npm install, builds etc. can take minutes. After run_in_terminal, use read_terminal repeatedly to monitor. Do NOT run execute_command or Ctrl+C while a process is running — be patient and wait for it to finish.
 SERVER URLs: When reporting URLs in final_answer, use the ACTUAL port from terminal output (read_terminal), not the default. Ports may differ if defaults are in use (e.g. 5174 instead of 5173).

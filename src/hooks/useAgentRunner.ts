@@ -563,21 +563,69 @@ System Paths:
         // session?.interactions may be stale (from render closure), so read from
         // the interactions we know exist at this point — the current prompt was
         // just added but may not be reflected in `session` yet.
-        const priorInteractions = (session?.interactions || [])
+        //
+        // We split prior interactions into TWO sections so the model anchors
+        // follow-up prompts ("find more", "do it again", "fix that") on the
+        // IMMEDIATELY PRECEDING agent response instead of latching onto an
+        // older, easier-to-handle task earlier in the list (observed bug:
+        // after a network scan finished and the user said "find more", the
+        // agent jumped back to a 2-tasks-earlier web search about CS:GO).
+        //
+        // Section A — older history (last 6 minus the latest pair), truncated
+        //             to 80 chars. Just enough for distant references.
+        // Section B — the LAST exchange (most recent user prompt + the agent's
+        //             reply), shown with much higher fidelity (up to 600 chars
+        //             on the agent response) so the model can correctly
+        //             interpret a follow-up.
+        const allInteractions = session?.interactions || [];
+        // Exclude the just-pushed prompt itself (the CURRENT TASK below) so
+        // we don't double-show it.
+        const nonCurrent = allInteractions.filter(
+          (i) => !(i.role === "user" && typeof i.content === "string" && i.content === prompt),
+        );
+        // Pull off the most-recent (user, agent) pair if present.
+        let lastAgent: typeof allInteractions[number] | null = null;
+        let lastUserBeforeAgent: typeof allInteractions[number] | null = null;
+        for (let k = nonCurrent.length - 1; k >= 0; k--) {
+          const m = nonCurrent[k];
+          if (!lastAgent && m.role === "agent") {
+            lastAgent = m;
+            // Walk back to the user prompt that triggered it.
+            for (let j = k - 1; j >= 0; j--) {
+              if (nonCurrent[j].role === "user") {
+                lastUserBeforeAgent = nonCurrent[j];
+                break;
+              }
+            }
+            break;
+          }
+        }
+        const olderInteractions = nonCurrent
+          .filter((i) => i !== lastAgent && i !== lastUserBeforeAgent)
           .slice(-6)
           .map((i) => {
             const role = i.role === "user" ? "User" : "Agent";
             const text = typeof i.content === "string" ? i.content : "";
-            // Truncate to first 80 chars to prevent the model from re-executing old tasks
             const summary = text.length > 80 ? text.slice(0, 80) + "…" : text;
             return `${role}: ${summary}`;
           })
           .join("\n");
 
-        // Always include history section so the agent sees prior prompts + responses
-        const interactionContext = priorInteractions
-          ? `\n[PRIOR CONVERSATION — reference only, do NOT re-execute previous tasks]\n${priorInteractions}\n`
+        const lastUserText = (lastUserBeforeAgent?.content as string) || "";
+        const lastAgentText = (lastAgent?.content as string) || "";
+        const lastUserSummary =
+          lastUserText.length > 200 ? lastUserText.slice(0, 200) + "…" : lastUserText;
+        const lastAgentSummary =
+          lastAgentText.length > 600 ? lastAgentText.slice(0, 600) + "…" : lastAgentText;
+
+        const olderSection = olderInteractions
+          ? `\n[OLDER CONVERSATION — distant context, do NOT re-execute]\n${olderInteractions}\n`
           : "";
+        const lastExchangeSection = lastAgent
+          ? `\n[IMMEDIATELY PRECEDING EXCHANGE — the CURRENT TASK is most likely a follow-up to THIS, not to older tasks]\nUser: ${lastUserSummary}\nAgent: ${lastAgentSummary}\n`
+          : "";
+
+        const interactionContext = olderSection + lastExchangeSection;
 
         if (images && images.length > 0) {
           // Image analysis mode: strip noisy terminal context to avoid the model
@@ -592,6 +640,19 @@ User: ${prompt}
 
 Respond with {"tool":"final_answer","content":"your detailed description of what you see in the image(s), plus any response to the user's request"}. If the user explicitly asks you to perform actions based on the image (e.g. "implement this design"), you may then use other tools AFTER first describing what you see.`;
         } else {
+          // Vague follow-up cue: short prompts like "find more", "do it again",
+          // "try harder", "what about X" almost always refer to the immediately
+          // preceding agent action. Detect this so we can flag it explicitly
+          // — the model otherwise picks the most "interesting" earlier task.
+          const isVagueFollowUp =
+            lastAgent &&
+            prompt.trim().length <= 80 &&
+            /^(find more|do it again|try (again|harder|smarter|.{0,30}? more)|more|continue|keep going|go on|next|again|what about|how about|why not|fix that|do that|run that|same thing|like before|the same)\b/i.test(
+              prompt.trim(),
+            );
+          const followUpHint = isVagueFollowUp
+            ? "\nThis prompt is a short follow-up phrase. It refers to the IMMEDIATELY PRECEDING EXCHANGE shown above, NOT to any older task. Do not switch topics."
+            : "";
           finalPrompt = `
 [ENVIRONMENT]
 Date: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
@@ -600,7 +661,7 @@ ${projectFiles ? `\n[PROJECT FILES]\n${projectFiles}\n` : ""}
 [TERMINAL OUTPUT]
 ${sessionHistory}
 ${interactionContext}
-[CURRENT TASK — focus ONLY on this, ignore all prior tasks above]
+[CURRENT TASK — focus ONLY on this; if it is a follow-up, it follows the IMMEDIATELY PRECEDING EXCHANGE above, NOT older tasks]${followUpHint}
 ${prompt}
 `;
         }

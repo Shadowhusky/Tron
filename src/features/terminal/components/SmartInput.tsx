@@ -1127,8 +1127,10 @@ const SmartInput: React.FC<SmartInputProps> = ({
     }
 
     // Up/Down: navigate completions dropdown when visible, otherwise navigate history.
-    // Pass through to native behavior when modifier keys are held
-    // (Cmd+Up/Down = go to start/end, Shift+Up/Down = text selection).
+    // For multi-line input, only navigate history when the cursor is on the
+    // first (Up) or last (Down) logical line — otherwise let the browser do
+    // its native caret-up/down so the user can move within the textarea.
+    // Modifier keys (Cmd/Shift/Ctrl/Alt) pass through to native behavior.
     if (
       e.key === "ArrowUp" &&
       !e.metaKey &&
@@ -1136,13 +1138,27 @@ const SmartInput: React.FC<SmartInputProps> = ({
       !e.shiftKey &&
       !e.altKey
     ) {
-      e.preventDefault();
       if (showCompletions && completions.length > 0) {
+        e.preventDefault();
         navigatedCompletionsRef.current = true;
         setSelectedIndex((prev) => Math.max(0, prev - 1));
         return;
       }
-      // No dropdown — navigate global history
+      // Multi-line guard: if the textarea has newlines AND the cursor is not
+      // on the first logical line, let the browser move the caret up
+      // naturally. We use the DOM textarea's selectionStart (live, not React
+      // state) so this stays correct even mid-IME or after a paste.
+      const ta = inputRef.current;
+      const cursorPos = ta?.selectionStart ?? 0;
+      const liveValue = ta?.value ?? value;
+      const onFirstLine =
+        !liveValue.includes("\n") ||
+        !liveValue.slice(0, cursorPos).includes("\n");
+      if (!onFirstLine) {
+        return; // native textarea Up — moves caret to previous line
+      }
+      e.preventDefault();
+      // No dropdown, on first line — navigate global history
       if (history.length === 0) return;
       if (historyIndex === -1) {
         setSavedInput(value);
@@ -1171,13 +1187,25 @@ const SmartInput: React.FC<SmartInputProps> = ({
       !e.shiftKey &&
       !e.altKey
     ) {
-      e.preventDefault();
       if (showCompletions && completions.length > 0) {
+        e.preventDefault();
         navigatedCompletionsRef.current = true;
         setSelectedIndex((prev) => Math.min(completions.length - 1, prev + 1));
         return;
       }
-      // No dropdown — navigate global history
+      // Multi-line guard: only navigate history when cursor is on the last
+      // logical line — otherwise let the browser move the caret down.
+      const ta = inputRef.current;
+      const cursorPos = ta?.selectionStart ?? 0;
+      const liveValue = ta?.value ?? value;
+      const onLastLine =
+        !liveValue.includes("\n") ||
+        !liveValue.slice(cursorPos).includes("\n");
+      if (!onLastLine) {
+        return; // native textarea Down — moves caret to next line
+      }
+      e.preventDefault();
+      // No dropdown, on last line — navigate global history
       if (historyIndex === -1) return;
       if (historyIndex < history.length - 1) {
         const newIndex = historyIndex + 1;
@@ -1760,7 +1788,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
               ref={inputRef}
               data-testid="smart-input-textarea"
               rows={1}
-              className={`w-full resize-none overflow-hidden bg-transparent font-mono text-sm outline-none ${
+              className={`w-full resize-none overflow-x-hidden overflow-y-auto bg-transparent font-mono text-sm outline-none ${
                 theme === "light"
                   ? "text-gray-900 placeholder-gray-400"
                   : "text-gray-100 placeholder-gray-500"
