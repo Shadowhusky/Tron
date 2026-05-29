@@ -29,6 +29,11 @@ interface ModalProps {
   testId?: string;
   /** z-index class (default: "z-50") */
   zIndex?: string;
+  /** Vertical alignment. "center" (default) vertically centers the panel.
+   *  "top" anchors it a fixed distance from the top — use this for modals
+   *  whose body height changes (e.g. a file browser navigating dirs) so the
+   *  panel doesn't jump around as content grows/shrinks. */
+  align?: "center" | "top";
 }
 
 const panelTheme = (t: ResolvedTheme) =>
@@ -83,6 +88,7 @@ const Modal: React.FC<ModalProps> = ({
   maxWidth = "max-w-sm",
   testId,
   zIndex = "z-50",
+  align = "center",
 }) => {
   const divider = dividerCls(resolvedTheme);
 
@@ -95,7 +101,9 @@ const Modal: React.FC<ModalProps> = ({
           initial="hidden"
           animate="visible"
           exit="exit"
-          className={`fixed inset-0 ${zIndex} flex items-center justify-center bg-black/60`}
+          className={`fixed inset-0 ${zIndex} flex justify-center bg-black/60 ${
+            align === "top" ? "items-start pt-[10vh]" : "items-center"
+          }`}
           onMouseDown={(e) => {
             // Only dismiss on direct backdrop clicks — not clicks that propagated
             // from the trigger button through the portal (click-through bug)

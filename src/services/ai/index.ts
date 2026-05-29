@@ -16,6 +16,11 @@ import {
 } from "../../utils/terminalState";
 import agentPrompt from "./agent.md?raw";
 import DEFAULT_MODELS from "../../constants/models.json";
+import {
+  isHardRepetitionLoop,
+  isFirstCapCross,
+  isNovelAction,
+} from "../../utils/agentLoop";
 
 export interface AgentContinuation {
   history: any[];
@@ -2352,6 +2357,10 @@ ${agentPrompt}
     // Loop detection: track recent actions to break repetitive patterns
     const recentActions: string[] = [];
     const recentCoarseKeys: string[] = []; // Coarse prefix-based tracking for semantic-loop detection
+    // Cumulative count of each coarse action shape across the WHOLE task —
+    // arbiter-independent backstop against "death by a thousand variations".
+    const coarseKeyTotals = new Map<string, number>();
+    const cappedCoarseKeys = new Set<string>(); // shapes already flagged as exhausted (cap crossed)
     // Full action history for LLM arbiter (tool, args, last outcome)
     const recentActionDetails: Array<{ tool: string; args: string; outcome?: string }> = [];
     let loopBreaks = 0; // Confirmed loops (by LLM arbiter). 3 → terminate.
@@ -2362,6 +2371,7 @@ ${agentPrompt}
     let lastProgressStep = 0;
     let commandsSucceeded = 0;
     let commandsFailed = 0;
+    let reflectionCount = 0; // How many stagnation reflections have fired without progress since — 2 → escalate
     let consecutiveBusy = 0; // Count consecutive busy-state skips to avoid infinite loops
     let consecutiveGuardBlocks = 0; // Global counter for ANY guard rejection — force-stops when too high
     let tuiExitFailures = 0; // Count consecutive TUI auto-exit failures — escalates to ask_question
@@ -3455,12 +3465,68 @@ ${agentPrompt}
       const coarseCount = recentCoarseKeys.filter((k) => k === coarseKey).length;
       const isSemanticSuspicion = coarseCount >= coarseThreshold;
 
+      // Cumulative shape count across the whole task (arbiter-independent).
+      const coarseTotal = (coarseKeyTotals.get(coarseKey) ?? 0) + 1;
+      coarseKeyTotals.set(coarseKey, coarseTotal);
+      const isHardRep = isHardRepetitionLoop(coarseTotal, action.tool);
+      // Genuine forward progress = exploring a NEW action shape (not merely
+      // producing output, which a stuck agent does every step). Reset the
+      // stagnation counters when the agent tries something genuinely new.
+      const actionWasNovel = isNovelAction(coarseTotal);
+      if (actionWasNovel) {
+        lastProgressStep = i;
+        reflectionCount = 0;
+      }
+
       // Record action detail for arbiter context (cap at last 15)
       recentActionDetails.push({ tool: action.tool, args: coarseArgs || action.text || "" });
       if (recentActionDetails.length > 15) recentActionDetails.shift();
 
       const suspicionTriggered =
-        isConsecutiveSuspicion || isAlternatingSuspicion || isSemanticSuspicion;
+        isConsecutiveSuspicion || isAlternatingSuspicion || isSemanticSuspicion || isHardRep;
+
+      // ── Cumulative repetition cap (arbiter-independent) ──────────────────
+      // A coarse action shape that has run ≥12 times across the task is an
+      // exhausted, looping approach — no LLM judgement needed (the arbiter has
+      // usually been lenient, which is exactly why we got here). Block the
+      // dead shape every time it recurs; count it as a loop break only on the
+      // first crossing so 3 DISTINCT exhausted approaches still escalate.
+      if (isHardRep) {
+        if (isFirstCapCross(coarseTotal, action.tool) && !cappedCoarseKeys.has(coarseKey)) {
+          loopBreaks++;
+          cappedCoarseKeys.add(coarseKey);
+        }
+        if (actionKey) recentlyBlockedAction = actionKey;
+        recentActions.length = 0;
+        recentCoarseKeys.length = 0;
+        if (loopBreaks >= 3) {
+          const tried = recentActionDetails
+            .slice(-6)
+            .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
+            .join("; ");
+          return {
+            success: true,
+            message: `I've tried several approaches but can't make progress on this. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. give me a specific command, point me at docs, or tell me to stop)`,
+            type: "question",
+            continuation: {
+              history: [...history],
+              executedCommands: [...executedCommands],
+              usedScaffold,
+              wroteFiles,
+              usedWebTools,
+              lastWriteDir,
+              terminalBusy,
+              agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
+              agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
+            },
+          };
+        }
+        history.push({
+          role: "user",
+          content: `STOP: you've run essentially the same ${action.tool} approach ~${coarseTotal} times ("${(coarseArgs || action.text || "").slice(0, 60)}…") without resolving the task. This approach is EXHAUSTED and is now BLOCKED — do not retry variations of it. Either (a) try a STRUCTURALLY different approach (different tool / different data source), (b) use ask_question to get the missing piece from the user, or (c) use final_answer to report what you DID find and what's blocking you.`,
+        });
+        continue;
+      }
 
       if (suspicionTriggered) {
         // Rate-limit arbiter: don't call again within 3 steps of a previous
@@ -5514,16 +5580,19 @@ ${agentPrompt}
       }
 
       // --- Progress tracking & reflection ---
-      // Track meaningful progress
+      // Stats only. NOTE: lastProgressStep is advanced earlier on NOVEL action
+      // shapes (see coarseTotal handling) — producing command output is NOT
+      // counted as progress here, because a stuck agent produces output every
+      // step (the old behaviour let it spin forever without the reflection
+      // ever firing).
       const lastStep = history[history.length - 1]?.content || "";
-      const madeProgress =
+      const madeOutput =
         lastStep.includes("Command Output:") ||
         lastStep.includes("File written successfully") ||
         lastStep.includes("File edited successfully") ||
         lastStep.includes("Command started in terminal");
-      if (madeProgress) {
+      if (madeOutput) {
         commandsSucceeded++;
-        lastProgressStep = i;
       } else if (
         lastStep.startsWith("Command Failed") ||
         lastStep.startsWith("Edit File Failed") ||
@@ -5532,14 +5601,39 @@ ${agentPrompt}
         commandsFailed++;
       }
 
-      // Reflection checkpoint every 8 steps
+      // Reflection checkpoint every 8 steps. "Progress" = a novel action shape;
+      // ≥6 steps of only-repeated shapes means the agent is spinning. First
+      // reflection nudges; the second (≈16 stagnant steps) escalates to the
+      // user instead of letting it grind to maxSteps.
       if (i > 0 && i % 8 === 0) {
         const stepsSinceProgress = i - lastProgressStep;
         if (stepsSinceProgress >= 6) {
-          // No meaningful progress in 6+ steps — force reflection
+          reflectionCount++;
+          if (reflectionCount >= 2) {
+            const tried = recentActionDetails
+              .slice(-6)
+              .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
+              .join("; ");
+            return {
+              success: true,
+              message: `I've been working on this for a while without making real progress. Recent attempts: ${tried || "various exploration commands"}. Could you point me in the right direction — a specific command, a doc, or what exactly you're after?`,
+              type: "question",
+              continuation: {
+                history: [...history],
+                executedCommands: [...executedCommands],
+                usedScaffold,
+                wroteFiles,
+                usedWebTools,
+                lastWriteDir,
+                terminalBusy,
+                agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
+                agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
+              },
+            };
+          }
           history.push({
             role: "user",
-            content: `REFLECTION (step ${i}/${maxSteps}): You have not made meaningful progress in ${stepsSinceProgress} steps (${commandsFailed} failures, ${commandsSucceeded} successes total). Step back and consider:\n1. What is the original task?\n2. What is actually blocking you?\n3. Is there a simpler approach?\nIf you cannot make progress, use final_answer to explain what went wrong.`,
+            content: `REFLECTION (step ${i}/${maxSteps}): You have not tried a genuinely new approach in ${stepsSinceProgress} steps (${commandsFailed} failures, ${commandsSucceeded} successes total). You are repeating variations of approaches that aren't working. Step back: 1. What is the original task? 2. What is ACTUALLY blocking you? 3. Is there a structurally different approach, or should you ask the user for the missing piece? If you cannot make progress, use ask_question or final_answer.`,
           });
         }
       }

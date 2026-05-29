@@ -259,3 +259,64 @@ describe("detectExternalAgentSignal", () => {
     expect(out.agentPresent).toBe(true);
   });
 });
+
+// =============================================================================
+// Permission staleness — root-cause regression guards.
+//
+// Bug: after a Claude Code permission prompt is approved, the answered
+// "Do you want to proceed? … Yes … No" box lingers in scrollback. The detector
+// scanned the whole buffer, so it kept reporting permission=true and the
+// status dot stayed latched yellow ("needs approval") even though Claude had
+// resumed working. Fixes: (1) the working spinner and a permission prompt are
+// mutually exclusive — Claude hides the spinner while awaiting approval, so a
+// live spinner means it is NOT waiting; (2) permission is a live bottom-of-
+// screen UI state, so only the bottom region is scanned, not scrollback.
+// =============================================================================
+
+describe("permission staleness (root-cause regression guards)", () => {
+  it("does NOT report permission when the working spinner is present (approval resumed work)", () => {
+    const frame = [
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. No",
+      "⏺ Bash(npm test)",
+      "  ⎿ running…",
+      "✻ Running… (3s · ↑ 1.2k tokens · esc to interrupt)",
+    ].join("\n");
+    const out = detectExternalAgentSignal(frame);
+    expect(out.working).toBe(true);
+    expect(out.permission).toBeFalsy();
+  });
+
+  it("does NOT report permission from an answered prompt scrolled out of the live region", () => {
+    const lines = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"];
+    for (let i = 0; i < 25; i++) lines.push(`output line ${i}`);
+    const out = detectExternalAgentSignal(lines.join("\n"));
+    expect(out.permission).toBeFalsy();
+  });
+
+  it("still reports a live permission prompt at the bottom of the screen", () => {
+    const lines: string[] = [];
+    for (let i = 0; i < 25; i++) lines.push(`scrollback line ${i}`);
+    lines.push(
+      "╭─ Run command ───────────╮",
+      "│ npm test                │",
+      "│ Do you want to proceed? │",
+      "│ ❯ 1. Yes                │",
+      "│   2. No                 │",
+      "╰──────────────────────────╯",
+    );
+    const out = detectExternalAgentSignal(lines.join("\n"));
+    expect(out.permission).toBe(true);
+  });
+
+  it("still reports a terse live prompt at the bottom for a known agent session", () => {
+    const lines: string[] = [];
+    for (let i = 0; i < 25; i++) lines.push(`scrollback line ${i}`);
+    lines.push("Apply this patch? [y/N]");
+    const out = detectExternalAgentSignal(lines.join("\n"), {
+      allowTersePermission: true,
+    });
+    expect(out.permission).toBe(true);
+  });
+});

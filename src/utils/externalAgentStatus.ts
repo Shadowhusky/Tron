@@ -171,6 +171,28 @@ const TERSE_PERMISSION_PATTERNS = [
 ];
 
 /**
+ * Permission prompts are a LIVE bottom-of-screen UI state. An agent's prompt
+ * box is always the bottommost interactive element; once answered, fresh
+ * output / the spinner / the idle frame take its place at the bottom while the
+ * answered question scrolls up. Scanning the whole buffer therefore re-matches
+ * already-answered prompts still sitting in scrollback — the root cause of the
+ * status dot latching on "needs approval" forever. We only scan the bottom
+ * region. A permission box (incl. wrapped on a narrow terminal) is ~13 lines,
+ * so 20 gives headroom without reaching into stale scrollback.
+ */
+const PERMISSION_SCAN_LINES = 20;
+
+/** Return the last `n` lines of `s`, ignoring trailing blank lines (mirrors
+ *  how the xterm screen-buffer reader trims trailing whitespace). */
+function bottomLines(s: string, n: number): string {
+  const lines = s.split(/\r?\n/);
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+    lines.pop();
+  }
+  return lines.slice(Math.max(0, lines.length - n)).join("\n");
+}
+
+/**
  * The Claude Code idle prompt frame uses these distinct box-drawing
  * characters together with the input cursor. Seeing them strongly suggests
  * Claude is showing its input box — i.e. it's idle, waiting for the user.
@@ -272,14 +294,23 @@ export function detectExternalAgentSignal(
     }
   }
 
-  // Permission prompt
-  if (
-    CLAUDE_PERMISSION_TOOL_RE.test(stripped) ||
-    CONTEXTUAL_PERMISSION_PATTERNS.some((p) => p.test(stripped)) ||
-    ((options.allowTersePermission || hasAgentMarker) &&
-      TERSE_PERMISSION_PATTERNS.some((p) => p.test(stripped)))
-  ) {
-    result.permission = true;
+  // Permission prompt — mutually exclusive with the working spinner. Claude
+  // Code hides the "esc to interrupt" spinner while it waits for approval, so
+  // a live spinner means it is NOT waiting (the user already answered and work
+  // resumed). Skipping permission detection when working=true is the load-
+  // bearing fix for stale "needs approval": approval always brings the spinner
+  // back. Scan only the bottom region so an answered prompt sitting in
+  // scrollback can't re-trigger.
+  if (!result.working) {
+    const permScope = bottomLines(stripped, PERMISSION_SCAN_LINES);
+    if (
+      CLAUDE_PERMISSION_TOOL_RE.test(permScope) ||
+      CONTEXTUAL_PERMISSION_PATTERNS.some((p) => p.test(permScope)) ||
+      ((options.allowTersePermission || hasAgentMarker) &&
+        TERSE_PERMISSION_PATTERNS.some((p) => p.test(permScope)))
+    ) {
+      result.permission = true;
+    }
   }
 
   // Idle prompt frame — Claude is waiting for input.

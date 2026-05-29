@@ -23,6 +23,7 @@ import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import SavedTabsModal from "./components/layout/SavedTabsModal";
 import RemoteConnectionModal from "./components/layout/RemoteConnectionModal";
 import Modal from "./components/ui/Modal";
+import { Markdown } from "./components/ui/Markdown";
 import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
 import { isTouchDevice } from "./utils/platform";
@@ -639,6 +640,7 @@ const AppContent = () => {
       <Modal
         show={updateReady}
         resolvedTheme={resolvedTheme}
+        maxWidth="max-w-md"
         onClose={updateInstalling ? () => {} : () => { updateDismissedRef.current = true; setUpdateReady(false); }}
         title={updateInstalling ? "Installing Update" : "Update Ready"}
         description={updateInstalling ? undefined : `A new version (v${updateVersion}) has been downloaded and is ready to install.`}
@@ -670,8 +672,8 @@ const AppContent = () => {
             </p>
           </div>
         ) : updateNotes ? (
-          <div className={`px-4 pb-3 text-[11px] leading-relaxed max-h-40 overflow-y-auto ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
-            <div dangerouslySetInnerHTML={{ __html: updateNotes }} />
+          <div className={`px-4 pb-3 max-h-64 overflow-y-auto text-xs leading-relaxed ${resolvedTheme === "light" ? "text-gray-600" : "text-gray-300"}`}>
+            <Markdown content={updateNotes} className={resolvedTheme === "light" ? "markdown-light" : ""} />
           </div>
         ) : null}
       </Modal>
@@ -708,6 +710,7 @@ const AppContent = () => {
       <Modal
         show={updateAvailable && !updateReady && !updateDownloading}
         resolvedTheme={resolvedTheme}
+        maxWidth="max-w-md"
         onClose={() => { updateDismissedRef.current = true; setUpdateAvailable(false); }}
         title="Update Available"
         description={`A new version (v${updateVersion}) is available.`}
@@ -721,8 +724,8 @@ const AppContent = () => {
         ]}
       >
         {updateNotes && (
-          <div className={`px-4 pb-3 text-[11px] leading-relaxed max-h-40 overflow-y-auto ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
-            <div dangerouslySetInnerHTML={{ __html: updateNotes }} />
+          <div className={`px-4 pb-3 max-h-64 overflow-y-auto text-xs leading-relaxed ${resolvedTheme === "light" ? "text-gray-600" : "text-gray-300"}`}>
+            <Markdown content={updateNotes} className={resolvedTheme === "light" ? "markdown-light" : ""} />
           </div>
         )}
       </Modal>

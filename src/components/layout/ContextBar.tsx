@@ -5,7 +5,7 @@ import { useLayout } from "../../contexts/LayoutContext";
 import { aiService, providerUsesBaseUrl } from "../../services/ai";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useConfig } from "../../contexts/ConfigContext";
-import { Folder, X, Loader2, Trash2, Search, Settings } from "lucide-react";
+import { Folder, X, Loader2, Trash2, Search, Settings, ChevronDown } from "lucide-react";
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platform";
@@ -65,6 +65,8 @@ interface ContextBarProps {
   hasAgentThread: boolean;
   isOverlayVisible: boolean;
   onShowOverlay: () => void;
+  /** Collapse the footer (panel-chrome). When provided, a chevron button shows. */
+  onHide?: () => void;
 }
 
 const ContextBar: React.FC<ContextBarProps> = ({
@@ -72,6 +74,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   hasAgentThread,
   isOverlayVisible,
   onShowOverlay,
+  onHide,
 }) => {
   const { sessions, updateSessionConfig, updateSession, openSettingsTab, refreshCwd } = useLayout();
   const { resolvedTheme: theme } = useTheme();
@@ -803,6 +806,16 @@ const ContextBar: React.FC<ContextBarProps> = ({
               document.body,
             )}
         </div>
+        {onHide && (
+          <button
+            type="button"
+            onClick={onHide}
+            title="Hide this bar"
+            className="flex shrink-0 items-center opacity-50 transition-opacity hover:opacity-100"
+          >
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        )}
       </div>
 
       {/* Context Modal — portal to body to escape stacking contexts */}

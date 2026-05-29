@@ -174,6 +174,24 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 - **Race-safe mode detection**: Enter handler re-classifies synchronously to prevent stale mode from async PATH checks when typing fast.
 - **Completion cancellation on send**: Enter handler calls `cancelPendingCompletions()` to clear debounced IPC and reset `latestInputRef`, preventing stale async completions from re-showing the popover after send.
 - **AI placeholder stale guard**: The placeholder timer callback checks `inputRef.current?.value?.trim()` before setting `aiPlaceholder`, and the effect clears `aiPlaceholder` when value becomes non-empty.
+- **Multi-line scroll + arrow history**: textarea uses `overflow-y-auto` so it scrolls at max-height. Up/Down navigate input history only when the cursor is on the first/last logical line; otherwise native caret movement (checks live `selectionStart` for `\n` before/after cursor).
+
+## Collapsible Panel Chrome
+
+Three terminal-panel regions collapse independently: `input` (SmartInput card), `hints` (the desc bar under it), `footer` (ContextBar). Region keys are `PanelChromeRegion`.
+- **Resolution** (`src/utils/panelChrome.ts`, pure + unit-tested): precedence is global master-hide (`config.hidePanelInput/Hints/Footer`) → per-panel override (`agentState.panelChrome`, tri-state) → auto-hide by measured panel height (footer <220px, hints <170px; input never auto-hides). `usePanelChrome(sessionId, height)` composes these.
+- **Per-panel persistence**: `panelChrome` lives in `AgentState`, round-tripped via `PersistedSession` (readSessions/writeSessions) — persisted when non-empty.
+- **Controls**: hide buttons live in the hints bar (clickable hotkey-labelled spans for input/footer + ✕ for hints) and a chevron in ContextBar (`onHide`). Hotkeys `togglePanelInput/Hints/Footer` (configurable) act on the focused pane via `src/services/panelFocus.ts` (`getFocusedSession()`), set in `TerminalPane.handlePaneFocus` + `onFocusCapture`. A slim hover-expand restore strip at the pane bottom (`chromeAnyHidden`) calls `showAll`.
+- **Animation**: `src/components/ui/Collapsible.tsx` (framer-motion height+opacity). Clips overflow only while animating (onAnimationStart/Complete) so child popovers aren't cut off in steady state. Re-shows unmount/remount the children — SmartInput re-syncs the uncontrolled textarea value on `inputVisible` so an in-progress draft isn't visually lost.
+
+## Agent Status Bar (`src/pixel-agents/`)
+
+- **External agent detection** (`src/utils/externalAgentStatus.ts`, unit-tested): infers Claude Code / Codex / Aider status from terminal output. Spinner phrase "esc to interrupt" = working; idle input frame = idle; banners = present.
+- **Permission staleness fix**: permission prompts are a LIVE bottom-of-screen state. Detection only scans the bottom region (`PERMISSION_SCAN_LINES`) — never scrollback — and is suppressed when a working spinner is present (Claude hides the spinner while awaiting approval, so a live spinner means it's NOT waiting). Prevents an answered prompt lingering in scrollback from latching the dot yellow. `permission` takes display priority over `active` in `AgentStatusBar`.
+
+## Modal alignment
+
+`Modal` accepts `align="center" | "top"`. Use `"top"` for modals whose body height changes (e.g. `FolderPickerModal` browsing dirs) so the panel doesn't jump; the picker also uses a fixed-height list (`min(420px, 55vh)`) so total height is constant across navigation.
 
 ## Build & Dev
 

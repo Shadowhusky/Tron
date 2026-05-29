@@ -74,10 +74,12 @@ function sendToRenderer(getMainWindow, channel, data) {
     }
 }
 /**
- * Normalize electron-updater's polymorphic `releaseNotes` into an HTML
- * string. The shape is:
- *   - string (HTML or plain text) — pass through.
- *   - Array<{version, note}>     — concatenate notes with version headers.
+ * Normalize electron-updater's polymorphic `releaseNotes` into a raw Markdown
+ * string. The renderer (App.tsx) renders it with `marked` + the shared
+ * `.markdown-content` styles, so we deliberately keep Markdown here rather than
+ * hand-rolling HTML in the main process. Shapes:
+ *   - string (the GitHub release body — Markdown) — pass through.
+ *   - Array<{version, note}>     — concatenate with `## vX.Y.Z` headers.
  *   - undefined / null           — return empty.
  *
  * latest.yml from electron-builder doesn't always include notes. We rely on
@@ -99,16 +101,16 @@ function normalizeReleaseNotes(raw) {
             const n = entry.note;
             if (!n)
                 return "";
-            return v ? `<h4>v${v}</h4>${n}` : String(n);
+            return v ? `## v${v}\n\n${n}` : String(n);
         })
             .filter(Boolean)
-            .join("\n");
+            .join("\n\n");
     }
     return "";
 }
-/** Fetch the GitHub release body for a tag — fallback when electron-updater
- *  doesn't have notes. Markdown body becomes the modal content (rendered as
- *  text since the main process doesn't ship a markdown parser). */
+/** Fetch the GitHub release body (raw Markdown) for a tag — fallback when
+ *  electron-updater doesn't include notes in latest.yml. The renderer renders
+ *  the Markdown with `marked`, so no main-process conversion is needed. */
 async function fetchReleaseNotesFromGitHub(version) {
     try {
         const tag = `v${version}`;
@@ -116,28 +118,7 @@ async function fetchReleaseNotesFromGitHub(version) {
         if (!res.ok)
             return "";
         const data = (await res.json());
-        const body = (data?.body || "").trim();
-        if (!body)
-            return "";
-        // Convert minimal Markdown → HTML so the renderer's
-        // dangerouslySetInnerHTML produces something readable. Headings, lists,
-        // bold, inline code, and links are the common shapes Anthropic-style
-        // release notes use; full Markdown rendering is overkill here.
-        const escapeHtml = (s) => s
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-        let html = escapeHtml(body);
-        html = html.replace(/^### (.+)$/gm, "<h4>$1</h4>");
-        html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
-        html = html.replace(/^# (.+)$/gm, "<h3>$1</h3>");
-        html = html.replace(/^[-*] (.+)$/gm, "<li>$1</li>");
-        html = html.replace(/(<li>.*<\/li>\n?)+/g, "<ul>$&</ul>");
-        html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-        html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-        html = html.replace(/\n\n+/g, "<br/><br/>");
-        return html;
+        return (data?.body || "").trim();
     }
     catch {
         return "";

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search } from "lucide-react";
+import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -14,6 +14,10 @@ import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
 import logoSvg from "../../assets/logo.svg";
 import { useHotkey } from "../../hooks/useHotkey";
+import { usePanelChrome } from "../../hooks/usePanelChrome";
+import { Collapsible } from "../ui/Collapsible";
+import { setFocusedSession, getFocusedSession } from "../../services/panelFocus";
+import type { PanelChromeRegion } from "../../types";
 import {
   isInteractiveCommand,
   smartQuotePaths,
@@ -115,6 +119,42 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     (v: string | undefined) => setDraftInputRef.current(v),
     [],
   );
+
+  // ── Collapsible panel chrome (input / hints / footer) ──────────────────
+  const paneRootRef = useRef<HTMLDivElement>(null);
+  const [panelHeight, setPanelHeight] = useState(0);
+  useEffect(() => {
+    const el = paneRootRef.current;
+    if (!el) return;
+    setPanelHeight(el.getBoundingClientRect().height);
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setPanelHeight(e.contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const {
+    visible: chromeVisible,
+    toggle: toggleChrome,
+    showAll: showAllChrome,
+    anyHidden: chromeAnyHidden,
+  } = usePanelChrome(sessionId, panelHeight);
+  const stableToggleChrome = useCallback(
+    (region: PanelChromeRegion) => toggleChrome(region),
+    [toggleChrome],
+  );
+  // Panel-chrome hotkeys act on the focused pane only (matters with splits /
+  // multiple tabs mounted at once). No focused pane yet → no-op (the user
+  // clicks a pane first, which sets focus via handlePaneFocus).
+  const toggleRegionIfFocused = useCallback(
+    (region: PanelChromeRegion) => {
+      if (getFocusedSession() === sessionId) toggleChrome(region);
+    },
+    [sessionId, toggleChrome],
+  );
+  useHotkey("togglePanelInput", () => toggleRegionIfFocused("input"), [toggleRegionIfFocused]);
+  useHotkey("togglePanelHints", () => toggleRegionIfFocused("hints"), [toggleRegionIfFocused]);
+  useHotkey("togglePanelFooter", () => toggleRegionIfFocused("footer"), [toggleRegionIfFocused]);
 
   // Stable callback refs for SmartInput memo (assigned after functions are defined below)
   const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => {});
@@ -573,6 +613,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   }
 
   const handlePaneFocus = () => {
+    setFocusedSession(sessionId);
     if (!isActive) focusSession(sessionId);
   };
 
@@ -803,7 +844,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
   return (
     <div
+      ref={paneRootRef}
       onMouseDown={handlePaneFocus}
+      onFocusCapture={() => setFocusedSession(sessionId)}
       className={`relative flex h-full w-full flex-col border border-transparent ${isActive ? "z-10 ring-1 ring-purple-500/50" : "opacity-80 hover:opacity-100"}`}
     >
       {/* Server disconnected overlay — shown when tabs are restored offline */}
@@ -1209,7 +1252,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       </AnimatePresence>
 
       <div
-        className={`relative shrink-0 border-t p-2 ${pendingCommand ? "z-0" : "z-20"} ${themeClass(
+        className={`relative shrink-0 ${(chromeVisible.input || chromeVisible.hints) ? "border-t p-2" : ""} ${pendingCommand ? "z-0" : "z-20"} ${themeClass(
           resolvedTheme,
           {
             dark: "border-white/5 bg-[#0a0a0a]",
@@ -1239,16 +1282,44 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           onFocusInput={() => setFocusTarget("input")}
           noModelConfigured={noModelConfigured}
           onNoModel={stableHandleNoModel}
+          inputVisible={chromeVisible.input}
+          hintsVisible={chromeVisible.hints}
+          onToggleRegion={stableToggleChrome}
         />
       </div>
-      <div className="relative z-30 shrink-0">
-        <ContextBar
-          sessionId={sessionId}
-          hasAgentThread={agentThread.length > 0}
-          isOverlayVisible={isOverlayVisible}
-          onShowOverlay={() => setIsOverlayVisible(true)}
-        />
-      </div>
+      <Collapsible visible={chromeVisible.footer}>
+        <div className="relative z-30 shrink-0">
+          <ContextBar
+            sessionId={sessionId}
+            hasAgentThread={agentThread.length > 0}
+            isOverlayVisible={isOverlayVisible}
+            onShowOverlay={() => setIsOverlayVisible(true)}
+            onHide={() => stableToggleChrome("footer")}
+          />
+        </div>
+      </Collapsible>
+      {/* Restore strip — appears when any chrome region is hidden. A slim
+          hover-expand bar that brings everything back (also via hotkeys). */}
+      {chromeAnyHidden && (
+        <button
+          type="button"
+          onClick={showAllChrome}
+          title="Show hidden panel areas"
+          className={`group/restore relative flex h-1.5 w-full shrink-0 items-center justify-center overflow-hidden transition-all duration-200 hover:h-5 ${themeClass(
+            resolvedTheme,
+            {
+              dark: "bg-white/[0.03] hover:bg-white/[0.06] text-gray-500",
+              modern: "bg-white/[0.03] hover:bg-white/[0.07] text-gray-400",
+              light: "bg-gray-100 hover:bg-gray-200 text-gray-500",
+            },
+          )}`}
+        >
+          <span className="flex items-center gap-1 text-[9px] opacity-0 transition-opacity duration-200 group-hover/restore:opacity-100">
+            <ChevronUp className="h-2.5 w-2.5" />
+            show panel
+          </span>
+        </button>
+      )}
 
       {isConnectPane && (
         <SSHConnectModal

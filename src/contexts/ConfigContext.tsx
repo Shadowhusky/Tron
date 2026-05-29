@@ -39,6 +39,9 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   switchTab9: "meta+9",
   switchTabLast: "meta+0",
   tabSearch: "meta+shift+p",
+  togglePanelInput: "meta+shift+i",
+  togglePanelHints: "meta+shift+j",
+  togglePanelFooter: "meta+shift+u",
 };
 
 const DEFAULT_CONFIG: TronConfig = {

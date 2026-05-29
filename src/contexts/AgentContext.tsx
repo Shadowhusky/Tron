@@ -8,7 +8,7 @@ import React, {
   useSyncExternalStore,
   useMemo,
 } from "react";
-import type { AgentStep } from "../types";
+import type { AgentStep, PanelChromeState } from "../types";
 import { IPC } from "../constants/ipc";
 
 interface AgentState {
@@ -28,6 +28,8 @@ interface AgentState {
   focusTarget?: "input" | "terminal";
   /** Persisted scroll position (scrollTop px) for the agent panel. */
   scrollPosition?: number;
+  /** Per-panel collapsible-chrome overrides (input / hints / footer). */
+  panelChrome?: PanelChromeState;
 }
 
 const defaultState: AgentState = {
@@ -288,7 +290,7 @@ class AgentStore {
 
 const AgentContext = createContext<AgentStore | null>(null);
 
-type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number; isOverlayVisible?: boolean };
+type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number; isOverlayVisible?: boolean; panelChrome?: PanelChromeState };
 
 function parsePersistedData(parsed: Record<string, PersistedSession>): Map<string, AgentState> {
   const map = new Map<string, AgentState>();
@@ -298,8 +300,9 @@ function parsePersistedData(parsed: Record<string, PersistedSession>): Map<strin
     const hasThread = data.agentThread?.length > 0;
     const hasDraft = !!data.draftInput;
     const hasHeight = typeof data.overlayHeight === "number";
+    const hasChrome = !!data.panelChrome && Object.keys(data.panelChrome).length > 0;
 
-    if (hasThread || hasDraft || hasHeight) {
+    if (hasThread || hasDraft || hasHeight || hasChrome) {
       let wasInterrupted = false;
       const cleanedThread = (data.agentThread || []).filter((s) => {
         if (transientSteps.has(s.step)) {
@@ -325,6 +328,7 @@ function parsePersistedData(parsed: Record<string, PersistedSession>): Map<strin
         draftInput: data.draftInput,
         thinkingEnabled: data.thinkingEnabled ?? defaultState.thinkingEnabled,
         scrollPosition: data.scrollPosition,
+        panelChrome: data.panelChrome,
       });
     }
   }
@@ -377,8 +381,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
       const hasThread = state.agentThread.length > 0;
       const hasDraft = !!state.draftInput;
       const hasHeight = typeof state.overlayHeight === "number";
+      const hasChrome = !!state.panelChrome && Object.keys(state.panelChrome).length > 0;
 
-      if (hasThread || hasDraft || hasHeight) {
+      if (hasThread || hasDraft || hasHeight || hasChrome) {
         const persistableThread = state.agentThread.filter(
           (s) => s.step !== "thinking" && s.step !== "streaming",
         );
@@ -389,6 +394,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
           thinkingEnabled: state.thinkingEnabled,
           ...(typeof state.scrollPosition === "number" ? { scrollPosition: state.scrollPosition } : {}),
           isOverlayVisible: state.isOverlayVisible,
+          ...(hasChrome ? { panelChrome: state.panelChrome } : {}),
         };
       }
     }
@@ -504,6 +510,8 @@ export const useAgent = (sessionId: string) => {
     setFocusTarget: (target: "input" | "terminal") => store.updateState(sessionId, { focusTarget: target }),
     scrollPosition: state.scrollPosition,
     setScrollPosition: (pos: number | undefined) => store.updateState(sessionId, { scrollPosition: pos }),
+    panelChrome: state.panelChrome,
+    setPanelChrome: (chrome: PanelChromeState | undefined) => store.updateState(sessionId, { panelChrome: chrome }),
     registerAbortController: (controller: AbortController) => store.registerAbortController(sessionId, controller),
     stopAgent: () => store.stopAgent(sessionId),
     resetSession: () => store.resetSession(sessionId),

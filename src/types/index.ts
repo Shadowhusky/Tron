@@ -85,6 +85,9 @@ export interface HotkeyMap {
   switchTab9: string;
   switchTabLast: string;
   tabSearch: string;
+  togglePanelInput: string;
+  togglePanelHints: string;
+  togglePanelFooter: string;
   [key: string]: string;
 }
 
@@ -106,7 +109,21 @@ export interface TronConfig {
   webServer?: WebServerConfig;
   autoUpdate?: boolean;
   showAgentStatusBar?: boolean;
+  /** Global master-hide for the per-panel input box. When true, hidden in
+   *  ALL panels regardless of per-panel state. */
+  hidePanelInput?: boolean;
+  /** Global master-hide for the per-panel hints/desc bar under the input. */
+  hidePanelHints?: boolean;
+  /** Global master-hide for the per-panel footer (context bar). */
+  hidePanelFooter?: boolean;
 }
+
+/** The three independently-collapsible chrome regions of a terminal panel. */
+export type PanelChromeRegion = "input" | "hints" | "footer";
+
+/** Per-panel visibility overrides. A region absent from the map follows the
+ *  auto (height-based) default; `true` forces shown, `false` forces hidden. */
+export type PanelChromeState = Partial<Record<PanelChromeRegion, boolean>>;
 
 // --- SSH Types ---
 

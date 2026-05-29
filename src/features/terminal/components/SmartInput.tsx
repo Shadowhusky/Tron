@@ -39,6 +39,8 @@ import { useLayout } from "../../../contexts/LayoutContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { matchesHotkey, formatHotkey } from "../../../hooks/useHotkey";
 import { slideDown, fadeScale } from "../../../utils/motion";
+import { Collapsible } from "../../../components/ui/Collapsible";
+import type { PanelChromeRegion } from "../../../types";
 import { isTouchDevice } from "../../../utils/platform";
 import { stripAnsi } from "../../../utils/contextCleaner";
 
@@ -64,6 +66,11 @@ interface SmartInputProps {
   onBlurInput?: () => void;
   noModelConfigured?: boolean;
   onNoModel?: () => void;
+  /** Collapsible-chrome visibility for the input card and hints bar. */
+  inputVisible?: boolean;
+  hintsVisible?: boolean;
+  /** Toggle a panel-chrome region (input / hints / footer). */
+  onToggleRegion?: (region: PanelChromeRegion) => void;
 }
 
 /** Thinking display for advice mode — mirrors AgentOverlay's ThinkingBlock */
@@ -212,6 +219,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
   sessionAIConfig,
   noModelConfigured = false,
   onNoModel,
+  inputVisible = true,
+  hintsVisible = true,
+  onToggleRegion,
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId: layoutActiveSessionId } = useLayout();
@@ -303,6 +313,22 @@ const SmartInput: React.FC<SmartInputProps> = ({
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
   }, [reactValue]);
+
+  // The textarea is uncontrolled (value lives in the DOM, synced via the effect
+  // above on reactValue change). When the input card is collapsed and later
+  // re-shown, the card subtree unmounts/remounts but SmartInput itself stays
+  // mounted — so reactValue is unchanged and the effect above won't re-run,
+  // leaving the freshly-mounted textarea blank. Re-sync the DOM value when the
+  // input becomes visible again so an in-progress draft isn't visually lost.
+  useLayoutEffect(() => {
+    if (!inputVisible) return;
+    const el = inputRef.current;
+    if (!el || el.value === reactValue) return;
+    el.value = reactValue;
+    el.style.height = "auto";
+    el.style.height = reactValue ? el.scrollHeight + "px" : "1.5em";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputVisible]);
 
   // Mode State
   const [isAuto, setIsAuto] = useState(true);
@@ -1545,6 +1571,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
       data-tutorial="smart-input"
       data-testid="smart-input"
     >
+      <Collapsible visible={inputVisible}>
       <div
         onDragEnter={(e) => {
           if (!supportsVision) return;
@@ -1988,9 +2015,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
           </button>
         </div>
       </div>
+      </Collapsible>
 
-      {/* Hints bar — hidden on touch devices to reduce footer clutter */}
-      {aiBehavior.inputHints && !isTouchDevice() && (
+      {/* Hints / desc bar — collapsible per-panel (and via the global setting).
+          Shows mode + shortcut hints, plus the panel-toggle hotkeys/buttons. */}
+      <Collapsible visible={hintsVisible && aiBehavior.inputHints && !isTouchDevice()}>
         <div
           className={`flex h-5 items-center justify-between overflow-hidden px-2 text-[10px] whitespace-nowrap select-none ${
             theme === "light" ? "text-gray-500" : "text-gray-400"
@@ -2059,10 +2088,40 @@ const SmartInput: React.FC<SmartInputProps> = ({
               <span>{formatHotkey(hotkeys.newTab)} tab</span>
               <span className="mx-1 opacity-40">·</span>
               <span>{formatHotkey(hotkeys.splitHorizontal)} split</span>
+              {onToggleRegion && (
+                <>
+                  <span className="mx-1 opacity-40">·</span>
+                  <button
+                    type="button"
+                    onClick={() => onToggleRegion("input")}
+                    title={`Hide input (${formatHotkey(hotkeys.togglePanelInput)})`}
+                    className="opacity-70 transition-opacity hover:opacity-100"
+                  >
+                    {formatHotkey(hotkeys.togglePanelInput)} input
+                  </button>
+                  <span className="mx-1 opacity-40">·</span>
+                  <button
+                    type="button"
+                    onClick={() => onToggleRegion("footer")}
+                    title={`Hide bar (${formatHotkey(hotkeys.togglePanelFooter)})`}
+                    className="opacity-70 transition-opacity hover:opacity-100"
+                  >
+                    {formatHotkey(hotkeys.togglePanelFooter)} bar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onToggleRegion("hints")}
+                    title={`Hide hints (${formatHotkey(hotkeys.togglePanelHints)})`}
+                    className="ml-1.5 opacity-60 transition-opacity hover:opacity-100"
+                  >
+                    ✕
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
-      )}
+      </Collapsible>
 
       {/* Completions Dropdown */}
       <AnimatePresence>

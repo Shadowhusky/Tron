@@ -72,6 +72,9 @@ const HOTKEY_LABELS: Record<string, string> = {
   switchTab9: "Switch to Tab 9",
   switchTabLast: "Switch to Last Tab",
   tabSearch: "Tab Search Palette",
+  togglePanelInput: "Toggle Input Box",
+  togglePanelHints: "Toggle Hints Bar",
+  togglePanelFooter: "Toggle Footer Bar",
 };
 
 const NAV_SECTIONS_BASE = [
@@ -1887,6 +1890,45 @@ const SettingsPane = () => {
                       />
                     </button>
                   </div>
+                </div>
+
+                {/* Panel layout — global hide for the input / hints / footer.
+                    These hide the region in ALL panels. Per-panel hiding is via
+                    the hide buttons in the hints bar or the toggle hotkeys. */}
+                <div className={cardClass}>
+                  <div className="mb-1">
+                    <label className={`text-xs font-medium ${t.textMuted}`}>Panel Layout</label>
+                    <p className={`text-[10px] ${t.textFaint} mt-0.5`}>
+                      Hide these areas in every panel. You can also hide them per-panel
+                      with the hide buttons in the hints bar or the toggle shortcuts
+                      (configurable under Keyboard Shortcuts).
+                    </p>
+                  </div>
+                  {([
+                    { key: "hidePanelInput", label: "Hide input box" },
+                    { key: "hidePanelHints", label: "Hide hints bar" },
+                    { key: "hidePanelFooter", label: "Hide footer (context bar)" },
+                  ] as const).map(({ key, label }) => {
+                    const on = !!appConfig[key];
+                    return (
+                      <div key={key} className="flex items-center justify-between py-1">
+                        <span className={`text-[11px] ${t.textMuted}`}>{label}</span>
+                        <button
+                          role="switch"
+                          aria-checked={on}
+                          onClick={() => updateAppConfig({ [key]: !on })}
+                          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${on
+                            ? "bg-blue-500"
+                            : resolvedTheme === "light" ? "bg-gray-300" : "bg-white/20"
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${on ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+                          />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

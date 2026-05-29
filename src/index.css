@@ -212,6 +212,9 @@ button:disabled {
   font-weight: 600;
   margin: 0.5em 0 0.25em;
 }
+.markdown-content > :first-child {
+  margin-top: 0;
+}
 .markdown-content h1 {
   font-size: 1.1em;
 }

@@ -173,6 +173,7 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
       title={mode === "file" ? "Select File" : "Select Folder"}
       maxWidth="max-w-md"
       zIndex="z-[200]"
+      align="top"
       buttons={[
         { label: "Cancel", type: "ghost", onClick: onClose },
         {
@@ -205,14 +206,17 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
         </div>
       </div>
 
-      {/* Directory listing */}
+      {/* Directory listing — FIXED height (not max-height) so the modal's
+          total height stays constant across navigation. Combined with the
+          top-anchored Modal (align="top"), the panel never shifts position or
+          resizes as you browse into dirs with more/fewer entries. */}
       <div
         ref={listRef}
         className="overflow-y-auto"
-        style={{ maxHeight: "50vh" }}
+        style={{ height: "min(420px, 55vh)" }}
       >
         {loading && (
-          <div className="flex items-center justify-center py-8">
+          <div className="flex h-full items-center justify-center py-8">
             <Loader2 className="w-4 h-4 animate-spin opacity-50" />
           </div>
         )}
