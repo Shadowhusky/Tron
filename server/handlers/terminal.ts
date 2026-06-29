@@ -525,20 +525,48 @@ export function closeSession(id: string) {
   }
 }
 
+const commandExistsCache = new Map<string, boolean>();
+
 export async function checkCommand(command: string, sessionId?: string): Promise<boolean> {
+  // Sanitize: only allow alphanumeric, dashes, underscores, dots
+  if (!/^[a-zA-Z0-9._-]+$/.test(command)) return false;
+
   // SSH session: check on remote
   if (sessionId && sshSessionIds.has(sessionId)) {
     const sshSession = sshSessions.get(sessionId);
     if (sshSession) return sshSession.checkCommand(command);
     return false;
   }
+
+  const cached = commandExistsCache.get(command);
+  if (cached !== undefined) return cached;
+
+  let exists = false;
   try {
-    const checkCmd = os.platform() === "win32" ? `where ${command}` : `which ${command}`;
-    await trackedExec(checkCmd);
-    return true;
+    if (os.platform() === "win32") {
+      await trackedExec(`where ${command}`);
+      exists = true;
+    } else {
+      // Resolve through the user's login+interactive shell so rc-file PATH,
+      // functions, and aliases are visible (a bare `which` misses them).
+      const shell = process.env.SHELL || "/bin/bash";
+      try {
+        await trackedExec(`${shell} -lic 'command -v ${command}' </dev/null`, { timeout: 6000 });
+        exists = true;
+      } catch {
+        try {
+          await trackedExec(`which ${command}`);
+          exists = true;
+        } catch {
+          exists = false;
+        }
+      }
+    }
   } catch {
-    return false;
+    exists = false;
   }
+  commandExistsCache.set(command, exists);
+  return exists;
 }
 
 async function getSessionCwd(sessionId: string): Promise<string> {

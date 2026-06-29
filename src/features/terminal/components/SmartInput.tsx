@@ -274,6 +274,28 @@ const SmartInput: React.FC<SmartInputProps> = ({
     }
   }, [draftInput]);
 
+  // When the user manually stops a running agent, offer the unfinished prompt
+  // back — but only into an EMPTY box so we never clobber text they've typed.
+  useEffect(() => {
+    const onStopped = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { sessionId?: string; prompt?: string };
+      const prompt = detail?.prompt?.trim();
+      if (!prompt) return;
+      if (sessionId && detail.sessionId && detail.sessionId !== sessionId) return;
+      if ((inputRef.current?.value ?? "").trim()) return; // box has typed text — leave it
+      setReactValue(detail.prompt!);
+      if (inputRef.current) {
+        inputRef.current.value = detail.prompt!;
+        inputRef.current.focus();
+        const end = inputRef.current.value.length;
+        inputRef.current.setSelectionRange(end, end);
+      }
+      onDraftChange?.(detail.prompt);
+    };
+    window.addEventListener("tron:agentManuallyStopped", onStopped);
+    return () => window.removeEventListener("tron:agentManuallyStopped", onStopped);
+  }, [sessionId, onDraftChange]);
+
   const value = reactValue;
   const setValue = useCallback(
     (valOrUpdater: string | ((prev: string) => string)) => {

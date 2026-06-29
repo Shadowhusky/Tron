@@ -20,7 +20,11 @@ import {
   isHardRepetitionLoop,
   isFirstCapCross,
   isNovelAction,
+  isUselessFetchResult,
+  parseBracketToolCall,
 } from "../../utils/agentLoop";
+import { searchQualityHint } from "../../utils/searchQuality";
+import { smartQuotePaths } from "../../utils/commandClassifier";
 
 export interface AgentContinuation {
   history: any[];
@@ -34,6 +38,13 @@ export interface AgentContinuation {
   agentTodos?: import("../../types").AgentTodo[];
   /** Memory entries published via remember() — survives across turns. */
   agentMemory?: string[];
+  /** URLs whose web_fetch returned no usable text — re-fetching is blocked.
+   *  Persisted so a dead anti-scrape source stays dead after a user nudge. */
+  emptyFetchUrls?: string[];
+  /** Consecutive stuck-guard escalations across continuation turns. Reset to 0
+   *  on any productive turn; once it reaches the cap the agent ends with an
+   *  honest terminal answer instead of re-asking the same question forever. */
+  escalations?: number;
 }
 
 // Extend AgentResult locally if not updating types.d.ts yet, or assume it's there
@@ -2142,6 +2153,13 @@ ${skillsBlock}
   USE WHEN: unfamiliar error message, library API question, version compat,
   "what's the right syntax for X". Don't grind on '--help' output if a 5-second
   web search would tell you the answer.
+  SEARCH LIKE A SEARCH ENGINE, NOT A CHATBOT — this is a keyword index, not an
+  AI chat. Write terse keyword queries (proper nouns, identifiers, error text),
+  NOT full questions. Use operators: "exact phrase" in quotes, site:domain.com to
+  target an authoritative source, -term to exclude, OR for alternatives, and
+  year/version numbers for recency. Decompose a hard question into focused
+  searches. If results look off-topic or you already ran a similar query, do NOT
+  repeat it — reformulate (different keywords / a site: filter / an exact phrase).
 
 {"tool":"web_fetch","url":"..."}
   Fetch a single page as plain text. Use after web_search on a URL that looks
@@ -2379,6 +2397,23 @@ ${agentPrompt}
     let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
     let readTerminalCount = 0; // Total consecutive read_terminal calls (for UI merging + backoff)
     let multiToolWarnings = 0; // Consecutive responses where model outputs multiple tool calls
+    // ── Dead-source / cross-turn escalation tracking ───────────────────────
+    // URLs that returned no usable text (anti-scrape / JS-only pages). Persisted
+    // across continuations so a dead source stays dead after a user nudge.
+    const emptyFetchUrls = new Set<string>(continuation?.emptyFetchUrls ?? []);
+    // True once any tool produced real forward progress THIS run (a successful
+    // command, a file write, or a non-empty web result). Drives the escalation
+    // reset so a productive turn is never punished as "stuck".
+    let nonEmptyWebThisRun = false;
+    // Recent web_search queries — used to flag near-duplicate searches and
+    // nudge the agent to reformulate instead of re-running the same search.
+    const recentSearchQueries: string[] = [];
+    // Consecutive stuck-guard escalations carried in from prior turns.
+    const priorEscalations = continuation?.escalations ?? 0;
+    // Stop re-asking the same "what would you like me to do?" question forever:
+    // once the agent has stalled for this many consecutive turns with no real
+    // progress, end with an honest terminal answer instead (88ab9361f7.json).
+    const STUCK_ESCALATION_CAP = 2;
 
     // ── Plan + Memory (Claude Code-inspired) ───────────────────────────────
     // Plan: agent emits todo_write to publish a checklist. We re-inject it
@@ -2408,6 +2443,63 @@ ${agentPrompt}
         .join("\n");
       onUpdate("plan", summary, { tool: "todo_write", todos: agentTodos });
     };
+
+    /** True when this run produced real forward progress (a successful command,
+     *  a file write, or a non-empty web result). Empty fetches and re-emitted
+     *  plans do NOT count. Used to reset the cross-turn escalation counter so a
+     *  genuinely productive turn is never force-terminated. */
+    const madeProgressThisRun = () =>
+      commandsSucceeded > 0 || wroteFiles || nonEmptyWebThisRun;
+
+    /** Continuation fields that must ride along on EVERY question continuation so
+     *  dead-source and escalation state survives a user nudge. escalations is
+     *  reset to 0 on a productive turn (callers that escalate override it). */
+    const continuationExtras = () => ({
+      emptyFetchUrls: emptyFetchUrls.size > 0 ? [...emptyFetchUrls] : undefined,
+      escalations: madeProgressThisRun() ? 0 : priorEscalations,
+    });
+
+    /** Shared exit for the stuck-loop guards (loopBreaks≥3, stagnant plan≥2,
+     *  reflection≥2). On the first stuck turn it asks the user `questionMsg`;
+     *  once the agent has stalled for STUCK_ESCALATION_CAP consecutive turns
+     *  with no real progress it STOPS re-asking and returns an honest terminal
+     *  answer — breaking the infinite "what would you like me to do?" loop. */
+    const escalateStuck = (
+      questionMsg: string,
+      todos?: import("../../types").AgentTodo[],
+    ): AgentResult => {
+      const escalations = madeProgressThisRun() ? 1 : priorEscalations + 1;
+      if (escalations >= STUCK_ESCALATION_CAP) {
+        markPlanCompleteOnFinish();
+        const msg = `${questionMsg}\n\nI've gone a couple of turns without real progress and can't reach a usable source, so I'll stop here instead of looping. If you can point me at a specific source, value, or a different approach, I'll pick it back up.`;
+        return {
+          success: true,
+          message: msg,
+          type: "success",
+          payload: { tool: "final_answer", content: msg },
+        };
+      }
+      const planForCont = todos ?? agentTodos;
+      return {
+        success: true,
+        message: questionMsg,
+        type: "question",
+        continuation: {
+          history: [...history],
+          executedCommands: [...executedCommands],
+          usedScaffold,
+          wroteFiles,
+          usedWebTools,
+          lastWriteDir,
+          terminalBusy,
+          agentTodos: planForCont.length > 0 ? [...planForCont] : undefined,
+          agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
+          emptyFetchUrls: emptyFetchUrls.size > 0 ? [...emptyFetchUrls] : undefined,
+          escalations,
+        },
+      };
+    };
+
     /** Counts substantive tool calls (not parse retries / loop blocks). Used
      *  to enforce plan-first: after N substantive calls without todo_write
      *  we inject a hard reminder. Resumed runs (continuation) are treated as
@@ -3148,51 +3240,36 @@ ${agentPrompt}
         if (!action) {
           const trimmed = (responseText || "").trim();
 
-          // Detect bracket-style tool invocations: [read_terminal], [execute_command ls], etc.
-          // Some models output tool names in brackets instead of JSON.
-          const bracketMatch = trimmed.match(/^\[(\w+)\](.*)$/s);
-          if (bracketMatch && TOOL_NAMES.has(bracketMatch[1])) {
-            const toolName = bracketMatch[1];
-            // Sanitize the argument: strip JSON-closing artifacts ("}, "], }, ], etc.)
-            // and any second-line garbage. Some models output the bracket form
-            // followed by trailing JSON fragments or a second tool call that
-            // would otherwise be passed verbatim into the shell, causing
-            // "unmatched quote" / parse errors (e.g. "ls -la"} or "npm start&*/").
-            let arg = bracketMatch[2];
-            // Cut off at the first newline that starts a new tool / JSON / bracket call
-            const nlIdx = arg.search(/\r?\n\s*(?:\[\w+\]|\{|\["?tool"?)/);
-            if (nlIdx >= 0) arg = arg.slice(0, nlIdx);
-            // Strip trailing JSON closing fragments / stray punctuation
-            arg = arg.replace(/\s*(?:["'`]?\s*[\]}]+\s*[,;]?\s*)+$/, "");
-            // Also strip a lone trailing single/double quote with no opening match
-            const dq = (arg.match(/"/g) || []).length;
-            const sq = (arg.match(/'/g) || []).length;
-            if (dq % 2 === 1 && arg.endsWith('"')) arg = arg.slice(0, -1);
-            if (sq % 2 === 1 && arg.endsWith("'")) arg = arg.slice(0, -1);
-            arg = arg.trim();
-            action = { tool: toolName };
-            if (toolName === "execute_command" || toolName === "run_in_terminal") {
-              action.command = arg || "echo 'no command provided'";
-            } else if (toolName === "read_terminal") {
-              action.lines = 50;
-            } else if (toolName === "final_answer") {
-              action.content = arg || "Done.";
-            } else if (toolName === "ask_question") {
-              action.question = arg || "Could you clarify?";
-            } else if (arg) {
-              action.content = arg;
-            }
+          // Detect bracket-style tool invocations that non-JSON models emit in
+          // many shapes — [read_terminal], [read_terminal(lines=50)],
+          // [execute_command ls], [execute_command(ls)], [execute_command] ls.
+          // The previous regex only matched the last form, so
+          // "[read_terminal(lines=50)]" fell through and became a bogus "done"
+          // final_answer (observed in log ce6d216e7e). parseBracketToolCall
+          // (pure + unit-tested) handles all shapes.
+          const bracketAction = parseBracketToolCall(trimmed, (n) => TOOL_NAMES.has(n));
+          if (bracketAction) {
+            action = bracketAction;
           } else if (trimmed && !trimmed.includes("{")) {
-            // Plain text without JSON braces
-            action = {};
-            if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(trimmed) || trimmed.includes("?")) {
-              action.tool = "ask_question";
-              action.question = trimmed;
-            } else if (trimmed.length < 500) {
-              action.tool = "final_answer";
-              action.content = trimmed;
+            // Plain text without JSON braces.
+            // Guard: a bracketed token whose name is a KNOWN tool but that
+            // somehow reached here must NOT become a final answer (that's the
+            // bogus-"done" bug). Force a parse retry + correction instead.
+            const btool = trimmed.match(/^\[\s*(\w+)/);
+            const looksLikeBracketToolCall = !!(btool && TOOL_NAMES.has(btool[1]));
+            if (looksLikeBracketToolCall) {
+              action = null;
             } else {
-              action = null; // Too long, let it fail
+              action = {};
+              if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(trimmed) || trimmed.includes("?")) {
+                action.tool = "ask_question";
+                action.question = trimmed;
+              } else if (trimmed.length < 500) {
+                action.tool = "final_answer";
+                action.content = trimmed;
+              } else {
+                action = null; // Too long, let it fail
+              }
             }
           }
         } else if (typeof action.command === "string") {
@@ -3504,22 +3581,9 @@ ${agentPrompt}
             .slice(-6)
             .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
             .join("; ");
-          return {
-            success: true,
-            message: `I've tried several approaches but can't make progress on this. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. give me a specific command, point me at docs, or tell me to stop)`,
-            type: "question",
-            continuation: {
-              history: [...history],
-              executedCommands: [...executedCommands],
-              usedScaffold,
-              wroteFiles,
-              usedWebTools,
-              lastWriteDir,
-              terminalBusy,
-              agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
-              agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
-            },
-          };
+          return escalateStuck(
+            `I've tried several approaches but can't make progress on this. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. give me a specific command, point me at docs, or tell me to stop)`,
+          );
         }
         history.push({
           role: "user",
@@ -3552,22 +3616,9 @@ ${agentPrompt}
               .slice(-6)
               .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
               .join("; ");
-            return {
-              success: true,
-              message: `I'm stuck repeating the same action and can't figure out the right approach. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do?`,
-              type: "question",
-              continuation: {
-                history: [...history],
-                executedCommands: [...executedCommands],
-                usedScaffold,
-                wroteFiles,
-                usedWebTools,
-                lastWriteDir,
-                terminalBusy,
-                agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
-                agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
-              },
-            };
+            return escalateStuck(
+              `I'm stuck repeating the same action and can't figure out the right approach. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do?`,
+            );
           }
           history.push({
             role: "user",
@@ -3608,22 +3659,7 @@ ${agentPrompt}
               const question = arbiter.suggestion
                 ? `I've gotten stuck. ${arbiter.suggestion} (Recent attempts: ${tried || "various"}). How should I proceed?`
                 : `I've tried several approaches but can't make progress. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. provide a specific command, point me at docs, or ask me to abandon the task)`;
-              return {
-                success: true,
-                message: question,
-                type: "question",
-                continuation: {
-                  history: [...history],
-                  executedCommands: [...executedCommands],
-                  usedScaffold,
-                  wroteFiles,
-                  usedWebTools,
-                  lastWriteDir,
-                  terminalBusy,
-                  agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
-                  agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
-                },
-              };
+              return escalateStuck(question);
             }
 
             const suggestion = arbiter.suggestion
@@ -3744,22 +3780,10 @@ ${agentPrompt}
           const blocker = inProg
             ? `I keep restating the plan without progress on "${inProg.content}".`
             : "I keep restating the same plan without making progress.";
-          return {
-            success: true,
-            message: `${blocker} What would you like me to do? (e.g. provide a specific value, point me at docs, or have me abandon this sub-task)`,
-            type: "question",
-            continuation: {
-              history: [...history],
-              executedCommands: [...executedCommands],
-              usedScaffold,
-              wroteFiles,
-              usedWebTools,
-              lastWriteDir,
-              terminalBusy,
-              agentTodos: cleaned.length > 0 ? [...cleaned] : undefined,
-              agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
-            },
-          };
+          return escalateStuck(
+            `${blocker} What would you like me to do? (e.g. provide a specific value, point me at docs, or have me abandon this sub-task)`,
+            cleaned,
+          );
         }
 
         agentTodos = cleaned;
@@ -4204,6 +4228,7 @@ ${agentPrompt}
             terminalBusy,
             agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
             agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
+            ...continuationExtras(),
           },
         };
       }
@@ -5087,9 +5112,18 @@ ${agentPrompt}
           // Use IPC invoke — works in both Electron (preload IPC) and web mode (WS bridge → server)
           const data: any = await (window as any).electron.ipcRenderer.invoke("web.search", { query });
           const results = data.results || [];
+          // Detect a near-duplicate query or off-topic result set so we can
+          // nudge the agent to reformulate (smarter search) instead of
+          // re-running the same search or fetching noise.
+          const qualityHint = searchQualityHint(query, results, recentSearchQueries);
+          recentSearchQueries.push(query);
+          if (recentSearchQueries.length > 12) recentSearchQueries.shift();
           if (results.length === 0) {
             onUpdate("executed", `Web search: no results for "${query}"`, { ...action, searchResults: [] });
-            history.push({ role: "user", content: `Web search for "${query}" returned no results.` });
+            history.push({
+              role: "user",
+              content: `Web search for "${query}" returned no results.\n\n⚠ Reformulate: use specific keywords (not a full question), try fewer/different terms, drop quotes, or add a site: filter. Don't re-run the same query.`,
+            });
           } else {
             const formatted = results.map((r: any, i: number) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n\n");
             // Pass the structured results in the payload so the renderer can
@@ -5099,8 +5133,13 @@ ${agentPrompt}
               `Web search: ${results.length} results for "${query}"`,
               { ...action, searchResults: results.slice(0, 10) },
             );
-            history.push({ role: "user", content: `Web search results for "${query}":\n\n${formatted}\n\nUse these results to answer the user's question. You may web_fetch any URL above for more details.` });
+            const guidance = qualityHint
+              ? `\n\n${qualityHint}`
+              : "\n\nUse these results to answer the user's question. You may web_fetch any URL above for more details.";
+            history.push({ role: "user", content: `Web search results for "${query}":\n\n${formatted}${guidance}` });
             usedWebTools = true;
+            // Off-topic results aren't real progress — only count a relevant hit.
+            if (!qualityHint) nonEmptyWebThisRun = true;
           }
         } catch (err: any) {
           onUpdate("executed", `Web search failed: ${err.message}`, action);
@@ -5120,6 +5159,19 @@ ${agentPrompt}
           history.push({ role: "user", content: "web_fetch requires a 'url' parameter." });
           continue;
         }
+        // Dead source guard: a URL that already returned no usable text is a
+        // JS-rendered / anti-scrape page. Re-fetching only burns turns (the
+        // 88ab9361f7.json loop hammered moomoo/futunn/cfi forever). One result
+        // is allowed; any re-fetch of that URL — this turn or a later one (the
+        // Set is restored from continuation) — is blocked instead.
+        if (emptyFetchUrls.has(url)) {
+          onUpdate("executed", `Skipped ${url.slice(0, 60)} — already returned no usable text`, action);
+          history.push({
+            role: "user",
+            content: `<tool_use_error>web_fetch skipped: ${url} already returned no usable text. This page is JS-rendered or blocks automated access, so re-fetching won't help. Use a DIFFERENT source, or if you have enough from other sources, give final_answer with what you found.</tool_use_error>`,
+          });
+          continue;
+        }
         onUpdate("executing", `Fetching: ${url.slice(0, 80)}`, action);
         try {
           // Use IPC invoke — works in both Electron (preload IPC) and web mode (WS bridge → server)
@@ -5129,10 +5181,25 @@ ${agentPrompt}
             history.push({ role: "user", content: `<tool_use_error>web_fetch failed: ${data.error}</tool_use_error>` });
           } else {
             const content = data.content || "";
-            const truncated = content.length > 12000 ? content.slice(0, 12000) + "\n\n[Content truncated — 12KB limit]" : content;
-            onUpdate("executed", `Fetched ${url.slice(0, 60)} (${content.length} chars)`, action);
-            history.push({ role: "user", content: `Content from ${url}:\n\n${truncated}` });
-            usedWebTools = true;
+            if (isUselessFetchResult(content)) {
+              // 200 OK but no readable text — anti-scrape / JS shell. Record the
+              // URL so any re-fetch is blocked, and tell the agent to move on.
+              // usedWebTools stays true so the agent can still finalise from
+              // other sources, but this does NOT count as real progress.
+              emptyFetchUrls.add(url);
+              onUpdate("executed", `Fetched ${url.slice(0, 60)} (${content.length} chars — no usable text)`, action);
+              history.push({
+                role: "user",
+                content: `web_fetch of ${url} returned almost no readable text (${content.length} chars) — the page is likely JS-rendered or blocks scraping. Do NOT re-fetch it. Try a different source, or if you already have enough information, answer now with final_answer.`,
+              });
+              usedWebTools = true;
+            } else {
+              const truncated = content.length > 12000 ? content.slice(0, 12000) + "\n\n[Content truncated — 12KB limit]" : content;
+              onUpdate("executed", `Fetched ${url.slice(0, 60)} (${content.length} chars)`, action);
+              history.push({ role: "user", content: `Content from ${url}:\n\n${truncated}` });
+              usedWebTools = true;
+              nonEmptyWebThisRun = true;
+            }
           }
         } catch (err: any) {
           onUpdate("executed", `Web fetch failed: ${err.message}`, action);
@@ -5373,8 +5440,17 @@ ${agentPrompt}
           }
         }
 
+        // Auto-quote file paths with spaces/apostrophes (e.g.
+        // `cd /Volumes/Husky's SSD 4T` → `cd "/Volumes/Husky's SSD 4T"`).
+        // Without this the bare apostrophe trips the unbalanced-quote guard
+        // below and the model often "fixes" it with single quotes (which is
+        // still broken for apostrophe paths) — two failed attempts before it
+        // lands on double quotes. smartQuotePaths is a no-op when the command
+        // already has quotes/operators, so it won't disturb intentional syntax.
+        const quotedCommand = smartQuotePaths(action.command);
+
         // Auto-prepend cd if agent wrote files to a project dir but forgot to cd
-        let cmd = autoCdCommand(action.command, lastWriteDir);
+        let cmd = autoCdCommand(quotedCommand, lastWriteDir);
 
         // Guard: block recursive ls/find on broad directories to prevent massive output
         const cmdForCheck = cmd
@@ -5462,6 +5538,13 @@ ${agentPrompt}
           }
           if (inSq || inDq) {
             const quoteType = inSq ? "single quote (')" : 'double quote (")';
+            // The overwhelmingly common cause is an apostrophe in an unquoted
+            // path/word (e.g. /Volumes/Husky's SSD). Tell the model exactly how
+            // to fix it — wrap in DOUBLE quotes — so it doesn't waste a retry
+            // naively single-quoting (which re-breaks an apostrophe path).
+            const fixHint = inSq
+              ? ` If the text contains an apostrophe (e.g. a path like /Volumes/Husky's SSD), wrap the WHOLE argument in DOUBLE quotes ("…"), not single quotes.`
+              : "";
             onUpdate(
               "failed",
               `Blocked: command has unbalanced ${quoteType} — would hang the shell`,
@@ -5469,7 +5552,7 @@ ${agentPrompt}
             );
             history.push({
               role: "user",
-              content: `<tool_use_error>execute_command failed: the command has an unbalanced ${quoteType}, which would leave the shell waiting for input. Re-emit the command with balanced quotes. Original command was: ${cmd.slice(0, 200)}</tool_use_error>`,
+              content: `<tool_use_error>execute_command failed: the command has an unbalanced ${quoteType}, which would leave the shell waiting for input.${fixHint} Re-emit the command with balanced quotes. Original command was: ${cmd.slice(0, 200)}</tool_use_error>`,
             });
             consecutiveGuardBlocks++;
             continue;
@@ -5614,22 +5697,9 @@ ${agentPrompt}
               .slice(-6)
               .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
               .join("; ");
-            return {
-              success: true,
-              message: `I've been working on this for a while without making real progress. Recent attempts: ${tried || "various exploration commands"}. Could you point me in the right direction — a specific command, a doc, or what exactly you're after?`,
-              type: "question",
-              continuation: {
-                history: [...history],
-                executedCommands: [...executedCommands],
-                usedScaffold,
-                wroteFiles,
-                usedWebTools,
-                lastWriteDir,
-                terminalBusy,
-                agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
-                agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
-              },
-            };
+            return escalateStuck(
+              `I've been working on this for a while without making real progress. Recent attempts: ${tried || "various exploration commands"}. Could you point me in the right direction — a specific command, a doc, or what exactly you're after?`,
+            );
           }
           history.push({
             role: "user",

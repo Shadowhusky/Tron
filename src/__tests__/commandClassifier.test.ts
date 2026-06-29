@@ -265,4 +265,34 @@ describe("isCommand — agent-relevant commands", () => {
   it('"help me debug this" is natural language', () => {
     expect(isCommand("help me debug this")).toBe(false);
   });
+
+  // AI agent CLIs and interactive TUIs — common single-word commands that were
+  // previously misclassified as prompts (not in the static command list).
+  it("claude is a command", () => {
+    expect(isCommand("claude")).toBe(true);
+  });
+
+  it("claude --version is a command", () => {
+    expect(isCommand("claude --version")).toBe(true);
+  });
+
+  it("aider is a command", () => {
+    expect(isCommand("aider")).toBe(true);
+  });
+
+  it("codex is a command", () => {
+    expect(isCommand("codex")).toBe(true);
+  });
+
+  it("gemini is a command", () => {
+    expect(isCommand("gemini")).toBe(true);
+  });
+
+  it("lazygit is a command", () => {
+    expect(isCommand("lazygit")).toBe(true);
+  });
+
+  it("tig is a command", () => {
+    expect(isCommand("tig")).toBe(true);
+  });
 });

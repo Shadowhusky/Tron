@@ -296,6 +296,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const [inputQueue, setInputQueue] = useState<
     Array<{ type: "command" | "agent"; content: string }>
   >([]);
+  // When the user manually stops the agent we suppress ONE queue drain so the
+  // next queued message isn't silently auto-fired — it stays in the queue for
+  // the user to run or edit. Reset when a new run starts.
+  const suppressQueueDrainRef = useRef(false);
 
   // Stable ref for queueItem so stableOnRunAgent can use it
   const queueItemRef = useRef<
@@ -417,7 +421,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
 
   // Process Queue Effect
   useEffect(() => {
-    if (!isAgentRunning && inputQueue.length > 0) {
+    // A new run resets the manual-stop suppression so the queue drains normally
+    // after the agent finishes on its own.
+    if (isAgentRunning) suppressQueueDrainRef.current = false;
+    if (!isAgentRunning && inputQueue.length > 0 && !suppressQueueDrainRef.current) {
       const nextItem = inputQueue[0];
       setInputQueue((prev) => prev.slice(1));
 
@@ -444,6 +451,18 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     handleAgentRun,
     isAgentMode,
   ]);
+
+  // On a manual stop, pause the queue for this pane so the next queued message
+  // isn't auto-fired the instant the agent stops (see AgentContext.stopAgent).
+  useEffect(() => {
+    const onStopped = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { sessionId?: string };
+      if (detail?.sessionId && detail.sessionId !== sessionId) return;
+      suppressQueueDrainRef.current = true;
+    };
+    window.addEventListener("tron:agentManuallyStopped", onStopped);
+    return () => window.removeEventListener("tron:agentManuallyStopped", onStopped);
+  }, [sessionId]);
 
   const queueItem = (item: { type: "command" | "agent"; content: string }) => {
     setInputQueue((prev) => [...prev, item]);

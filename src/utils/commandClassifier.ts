@@ -401,6 +401,15 @@ const UNAMBIGUOUS_COMMANDS = new Set([
   // ── AI / ML ────────────────────────────────────────────────────────────
   "ollama",
   "transformers-cli", "huggingface-cli",
+  // AI coding agents / CLIs — common single-word commands users launch
+  "claude", "codex", "gemini", "aider", "cursor", "cursor-agent",
+  "llm", "aichat", "goose", "opencode", "crush", "amp", "qwen",
+
+  // ── Interactive TUIs (git / file / monitor) ────────────────────────────
+  "lazygit", "lazydocker", "gitui", "tig",
+  "ranger", "nnn", "mc", "yazi", "lf", "broot",
+  "ncdu", "duf", "gdu", "dust",
+  "zellij", "helix", "hx", "neovim",
 
   // ── Version / environment managers (often shell functions) ─────────────
   "nvm", "fnm", "n",

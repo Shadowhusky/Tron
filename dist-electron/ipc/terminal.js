@@ -428,6 +428,11 @@ function trackedExec(command, options) {
 /** CWD cache — avoids spawning lsof/readlink on every IPC call (completions fire per keystroke). */
 const cwdCache = new Map();
 const CWD_CACHE_TTL = 2000; // 2 seconds
+/** command-existence cache for terminal.checkCommand. The auto-mode classifier
+ *  probes per keystroke; the interactive-shell resolve is slow, so memoize the
+ *  result for the process lifetime (a command appearing/disappearing mid-session
+ *  is rare and the worst case is one stale classification). */
+const commandExistsCache = new Map();
 /** Strip ANSI escape sequences (CSI, OSC, simple escapes) from a string. */
 function stripAnsiCodes(text) {
     return text
@@ -777,14 +782,47 @@ function registerTerminalHandlers(getMainWindow) {
                 return sshSession.checkCommand(command);
             return false;
         }
+        // Cache: the auto-mode classifier calls this per keystroke for unknown
+        // words, and the interactive-shell probe below is relatively slow.
+        const cached = commandExistsCache.get(command);
+        if (cached !== undefined)
+            return cached;
+        let exists = false;
         try {
-            const checkCmd = os_1.default.platform() === "win32" ? `where ${command}` : `which ${command}`;
-            await trackedExec(checkCmd);
-            return true;
+            if (os_1.default.platform() === "win32") {
+                await trackedExec(`where ${command}`);
+                exists = true;
+            }
+            else {
+                // Resolve through the user's LOGIN + INTERACTIVE shell so PATH set in
+                // ~/.zprofile/.zshrc, shell functions, and aliases are visible. A bare
+                // `which` runs in GUI-Electron's truncated PATH and misses rc-file
+                // tools (claude, nvm/asdf shims, ~/.local/bin) — the root cause of
+                // such commands being misclassified as prompts. `command -v` also
+                // resolves aliases/functions/builtins, not just PATH executables.
+                const shell = process.env.SHELL || "/bin/bash";
+                try {
+                    await trackedExec(`${shell} -lic 'command -v ${command}' </dev/null`, { timeout: 6000 });
+                    exists = true;
+                }
+                catch {
+                    // Fall back to a bare `which` (covers the case where the interactive
+                    // shell errors out, e.g. a noisy rc that exits non-zero).
+                    try {
+                        await trackedExec(`which ${command}`);
+                        exists = true;
+                    }
+                    catch {
+                        exists = false;
+                    }
+                }
+            }
         }
         catch {
-            return false;
+            exists = false;
         }
+        commandExistsCache.set(command, exists);
+        return exists;
     });
     // Agent Execution (with 30s timeout to prevent blocking on long-running commands)
     electron_1.ipcMain.handle("terminal.exec", async (_event, { sessionId, command }) => {

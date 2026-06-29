@@ -163,7 +163,7 @@ The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 
 ## SmartInput Features
 
-- **Mode detection**: Auto, Command, Advice, Agent. Multiline auto-classifies as agent.
+- **Mode detection**: Auto, Command, Advice, Agent. Multiline auto-classifies as agent. Auto-mode pipeline (`commandClassifier.ts` + SmartInput effect): NL check → static `isCommand` (UNAMBIGUOUS_COMMANDS includes common AI CLIs `claude`/`codex`/`aider`/etc + interactive TUIs) → scanned-cmd cache → live `terminal.checkCommand` PATH probe. `checkCommand` resolves via the user's **login+interactive shell** (`$SHELL -lic 'command -v <cmd>'`) — a bare `which` runs in GUI-Electron's truncated PATH and misses rc-file tools (nvm/asdf shims, `~/.local/bin`); results are cached per process.
 - **Advice mode**: AI suggests a single command with explanation. Tab accepts, Enter runs.
 - **Slash commands**: `/log` exports agent thread to structured JSON.
 - **AI ghost text**: Inline suggestions after 3s inactivity.

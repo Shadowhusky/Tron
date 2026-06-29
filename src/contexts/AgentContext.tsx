@@ -173,6 +173,16 @@ class AgentStore {
       current.permissionResolve(false);
     }
 
+    // Recover the unfinished prompt so SmartInput can offer it back. The running
+    // task is recorded as the most recent "separator" step (see useAgentRunner);
+    // strip any encoded image payload that follows the prompt text.
+    const lastSeparator = [...current.agentThread]
+      .reverse()
+      .find((s) => s.step === "separator");
+    let unfinishedPrompt = lastSeparator?.output ?? "";
+    const imgIdx = unfinishedPrompt.indexOf("\n---images---\n");
+    if (imgIdx >= 0) unfinishedPrompt = unfinishedPrompt.slice(0, imgIdx);
+
     this.updateState(sessionId, {
       isAgentRunning: false,
       isThinking: false,
@@ -203,6 +213,16 @@ class AgentStore {
     // Without this, useTronAgentBridge's agentRunning ref retains the sessionId
     // and reconcile() incorrectly shows the session as an active external agent.
     window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
+
+    // Offer the unfinished prompt back to the input box and pause the queue so
+    // a manual stop doesn't silently auto-fire the next queued message.
+    // SmartInput (restores the prompt if its box is empty) and TerminalPane
+    // (suppresses one queue-drain) listen for this.
+    window.dispatchEvent(
+      new CustomEvent("tron:agentManuallyStopped", {
+        detail: { sessionId, prompt: unfinishedPrompt },
+      }),
+    );
   }
 
   stopAllAgents = () => {
