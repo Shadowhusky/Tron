@@ -12,6 +12,7 @@ import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelec
 import { startBlock, endBlock, appendBlockOutput, clearBlocks } from "../../../services/blocks";
 import { isElectronApp, isMacOS, isTouchDevice, normalizePath } from "../../../utils/platform";
 import { isRemoteSession } from "../../../services/remote-bridge";
+import { smartUnwrapSelection, joinHardWrappedUrl } from "../../../utils/textUnwrap";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -201,7 +202,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     const unicodeAddon = new Unicode11Addon();
     const serializeAddon = new SerializeAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
+    // NOTE: webLinksAddon is loaded AFTER the custom link provider below —
+    // xterm drops later-registered providers' links when ranges intersect, and
+    // our wrapped-URL span links must beat the addon's truncated fragments.
     term.loadAddon(searchAddon);
     term.loadAddon(unicodeAddon);
     term.loadAddon(serializeAddon);
@@ -467,8 +470,61 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           }
         }
 
+        // Drop file-path candidates that sit INSIDE a URL (e.g. the /path
+        // part of https://host/path). This provider now outranks
+        // WebLinksAddon (registered first — see addon load note), so a bogus
+        // path link here would evict the addon's URL link entirely.
+        const urlSpans: Array<[number, number]> = [];
+        const urlRe = /https?:\/\/[^\s"'`<>{}|\\^]+/gi;
+        let um: RegExpExecArray | null;
+        while ((um = urlRe.exec(fullText)) !== null) {
+          urlSpans.push([um.index, um.index + um[0].length]);
+        }
+        const fileMatches = deduped.filter(
+          (m) => !urlSpans.some(([s, e]) => m.start < e && m.end > s),
+        );
+
         const links: import("@xterm/xterm").ILink[] = [];
-        for (const { start: matchStart, end: matchEnd, text: matched } of deduped) {
+
+        // ── Hard-wrapped URLs ────────────────────────────────────────────
+        // WebLinksAddon only re-joins rows xterm soft-wrapped (isWrapped), so
+        // a URL that a TUI hard-wrapped (Claude Code's ink renderer) is seen
+        // as two dead fragments. Scan a small window of physical rows around
+        // the queried line; for any row containing a scheme, try to re-join
+        // the URL across forced breaks (word-wrap invariant / flush cut).
+        // Single-row URLs stay with WebLinksAddon (no duplicate links).
+        {
+          const queried = lineNumber - 1;
+          const winStart = Math.max(0, queried - 5);
+          const rowText = (r: number) => buf.getLine(r)?.translateToString(true) ?? "";
+          for (let o = winStart; o <= queried; o++) {
+            const t = rowText(o);
+            if (!/https?:\/\//i.test(t)) continue;
+            const windowRows: string[] = [];
+            for (let r = o; r < Math.min(buf.length, o + 6); r++) windowRows.push(rowText(r));
+            const joined = joinHardWrappedUrl(windowRows, cols);
+            if (!joined || joined.rowSpan < 2) continue;
+            const endRow = o + joined.rowSpan - 1;
+            if (queried < o || queried > endRow) continue;
+            const url = joined.url;
+            try { new URL(url); } catch { continue; }
+            links.push({
+              range: {
+                start: { x: joined.startCol + 1, y: o + 1 },
+                end: { x: joined.endColLast, y: endRow + 1 },
+              },
+              text: url,
+              activate(event) {
+                const me = event as MouseEvent;
+                window.dispatchEvent(new CustomEvent("tron:linkClicked", {
+                  detail: { url, x: me.clientX, y: me.clientY, sessionId },
+                }));
+              },
+            });
+          }
+        }
+
+        for (const { start: matchStart, end: matchEnd, text: matched } of fileMatches) {
           if (totalRows === 1) {
             links.push({
               range: { start: { x: matchStart + 1, y: lineNumber }, end: { x: matchEnd, y: lineNumber } },
@@ -492,6 +548,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         callback(links.length > 0 ? links : undefined);
       },
     });
+
+    // Load AFTER the custom provider so wrapped-URL span links take priority
+    // over the addon's single-row fragments (see note at addon creation).
+    term.loadAddon(webLinksAddon);
 
     term.open(el);
 
@@ -564,7 +624,28 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     });
 
     // Register selection reader so context menu can read selected text
-    registerSelectionReader(sessionId, () => term.getSelection());
+    // Selection consumers (context-menu Copy, Ask Agent, Add to Input) get the
+    // UNWRAPPED logical text — hard-wrapped TUI output (Claude Code etc.)
+    // otherwise copies with mid-sentence newlines and padding spaces.
+    registerSelectionReader(sessionId, () =>
+      smartUnwrapSelection(term.getSelection(), term.cols),
+    );
+
+    // Smart copy — capture-phase listener runs BEFORE xterm's own copy handler
+    // (its textarea is a descendant), replacing the raw-grid clipboard payload
+    // with the unwrapped logical text. The copy event is the one choke point
+    // hit by every trigger: Cmd+C, the Electron editMenu accelerator
+    // (webContents.copy()), and the browser's Edit menu in web mode.
+    const onCopy = (e: ClipboardEvent) => {
+      if (!term.hasSelection() || !e.clipboardData) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.clipboardData.setData(
+        "text/plain",
+        smartUnwrapSelection(term.getSelection(), term.cols),
+      );
+    };
+    el.addEventListener("copy", onCopy, true);
 
     // Register alternate buffer reader for TUI detection
     registerAlternateBufferReader(sessionId, () => term.buffer.active.type === "alternate");
@@ -1504,6 +1585,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       el.removeEventListener("paste", onPaste, true);
+      el.removeEventListener("copy", onCopy, true);
       flushPendingOutputRef.current = () => {};
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();

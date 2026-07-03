@@ -31,6 +31,7 @@ import { useAllConfiguredModels } from "../../hooks/useModels";
 import { readScreenBuffer, getTerminalSelection, readViewportText } from "../../services/terminalBuffer";
 import { aiService } from "../../services/ai";
 import { stripAnsi } from "../../utils/contextCleaner";
+import { writeClipboardText } from "../../utils/clipboard";
 
 interface TerminalPaneProps {
   sessionId: string;
@@ -669,23 +670,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const isTouch = isTouchDevice();
 
   // Copy helper — works on both desktop and mobile (fallback to execCommand)
-  const copyToClipboard = (text: string) => {
-    const deviceCopy = (t: string) => {
-      const ta = document.createElement("textarea");
-      ta.value = t;
-      ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-      document.body.appendChild(ta);
-      ta.focus({ preventScroll: true });
-      ta.select();
-      try { document.execCommand("copy"); } catch { /* ignored */ }
-      ta.remove();
-    };
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).catch(() => deviceCopy(text));
-    } else {
-      deviceCopy(text);
-    }
-  };
+  const copyToClipboard = writeClipboardText;
 
   const contextMenuItems = [
     // Copy, Paste, Select Text — shown on all devices
