@@ -67,6 +67,8 @@ interface LayoutContextType {
   openSettingsTab: (section?: string) => void;
   openBrowserTab: (url: string, title?: string) => void;
   openEditorTab: (filePath: string, sourceSessionId?: string) => void;
+  /** Open the file editor in a split beside the active pane (side-by-side). */
+  openEditorSplit: (filePath: string, sourceSessionId?: string) => void;
   createRemoteTab: (url: string) => Promise<void>;
   /** Which settings section to show when settings tab opens. */
   pendingSettingsSection: string | null;
@@ -810,6 +812,68 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       activeSessionId: sessionId,
     };
     insertTabAfterActive(newTab);
+  };
+
+  /** Open the file editor in a split BESIDE the active pane (side-by-side).
+   *  If an editor for this file is already open in the active tab, focus it
+   *  instead of opening a duplicate. */
+  const openEditorSplit = (filePath: string, sourceSessionId?: string) => {
+    // Read from refs (not the render closure) so rapid repeat calls still see
+    // the freshly-updated tree and dedup correctly.
+    const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+    if (!tab || !tab.activeSessionId) return;
+
+    // Reuse an existing editor pane for this file in the current tab.
+    let existingEditorId: string | null = null;
+    const findEditor = (node: LayoutNode) => {
+      if (node.type === "leaf") {
+        if (node.contentType === "editor" && node.editorPath === filePath) {
+          existingEditorId = node.sessionId;
+        }
+        return;
+      }
+      node.children.forEach(findEditor);
+    };
+    findEditor(tab.root);
+    if (existingEditorId) {
+      focusSession(existingEditorId);
+      return;
+    }
+
+    const editorSessionId = `editor-${uuid()}`;
+    const targetId = tab.activeSessionId;
+    // "beside" = a side-by-side column split — Tron's "horizontal" direction
+    // renders flex-row (see SplitPane isHorizontal).
+    const splitNode = (node: LayoutNode): LayoutNode => {
+      if (node.type === "leaf") {
+        if (node.sessionId === targetId) {
+          return {
+            type: "split",
+            direction: "horizontal",
+            children: [
+              node,
+              {
+                type: "leaf",
+                sessionId: editorSessionId,
+                contentType: "editor",
+                editorPath: filePath,
+                sourceSessionId,
+              },
+            ],
+            sizes: [50, 50],
+          };
+        }
+        return node;
+      }
+      return { ...node, children: node.children.map(splitNode) };
+    };
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === tab.id
+          ? { ...t, root: splitNode(t.root), activeSessionId: editorSessionId }
+          : t,
+      ),
+    );
   };
 
   const openBrowserTab = (url: string, title?: string) => {
@@ -1931,6 +1995,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         openSettingsTab,
         openBrowserTab,
         openEditorTab,
+        openEditorSplit,
         createRemoteTab,
         pendingSettingsSection,
         clearPendingSettingsSection,

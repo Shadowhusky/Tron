@@ -15,6 +15,7 @@ import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
 import { fadeIn } from "./utils/motion";
 import { useHotkey } from "./hooks/useHotkey";
+import { nearestPaneInDirection } from "./utils/paneNav";
 import { useInvalidateModels } from "./hooks/useModels";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
@@ -27,7 +28,7 @@ import { Markdown } from "./components/ui/Markdown";
 import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
 import { isTouchDevice } from "./utils/platform";
-import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye } from "lucide-react";
+import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye, Columns2 } from "lucide-react";
 import AgentStatusBar from "./pixel-agents/components/AgentStatusBar";
 
 /**
@@ -98,6 +99,7 @@ const AppContent = () => {
     openSettingsTab,
     openBrowserTab,
     openEditorTab,
+    openEditorSplit,
     createRemoteTab,
     reorderTabs,
     updateSessionConfig,
@@ -111,6 +113,8 @@ const AppContent = () => {
     saveTab,
     loadSavedTab,
     setConfirmHandler,
+    activeSessionId,
+    focusSession,
   } = useLayout();
   const { resolvedTheme } = useTheme();
   const { config, updateConfig, isLoaded: configLoaded } = useConfig();
@@ -401,6 +405,42 @@ const AppContent = () => {
 
   // Global Shortcuts
   useHotkey("openSettings", openSettingsTab, [openSettingsTab]);
+
+  // Directional pane focus (Cmd+Alt+Arrows) — geometry-based, like iTerm2/tmux.
+  // Reads the VISIBLE panes (active tab), picks the nearest in the pressed
+  // direction, focuses it, and moves keyboard focus to its input.
+  const focusPane = useCallback(
+    (direction: "left" | "right" | "up" | "down") => {
+      if (!activeSessionId) return;
+      const els = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-pane-session]"),
+      ).filter((el) => {
+        if (!el.getAttribute("data-pane-session")) return false;
+        const cv = (el as HTMLElement & { checkVisibility?: (o?: unknown) => boolean }).checkVisibility;
+        return typeof cv === "function"
+          ? cv.call(el, { visibilityProperty: true })
+          : el.offsetWidth > 0 && el.offsetHeight > 0;
+      });
+      if (els.length < 2) return;
+      const panes = els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return {
+          sessionId: el.getAttribute("data-pane-session")!,
+          left: r.left, top: r.top, right: r.right, bottom: r.bottom,
+        };
+      });
+      const target = nearestPaneInDirection(activeSessionId, panes, direction);
+      if (!target) return;
+      focusSession(target);
+      const el = els.find((e) => e.getAttribute("data-pane-session") === target);
+      (el?.querySelector(".xterm-helper-textarea") as HTMLElement | null)?.focus();
+    },
+    [activeSessionId, focusSession],
+  );
+  useHotkey("focusPaneLeft", () => focusPane("left"), [focusPane]);
+  useHotkey("focusPaneRight", () => focusPane("right"), [focusPane]);
+  useHotkey("focusPaneUp", () => focusPane("up"), [focusPane]);
+  useHotkey("focusPaneDown", () => focusPane("down"), [focusPane]);
 
   // Check if any session in a tab's tree is dirty
   const isTabDirty = useCallback(
@@ -837,6 +877,23 @@ const AppContent = () => {
               >
                 <FileText className="h-3.5 w-3.5" />
                 Open in Editor
+              </button>
+            )}
+            {/* Open in Split — editor beside the terminal (side-by-side) */}
+            {filePopover?.canEdit && filePopover?.isFile && (
+              <button
+                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                  resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
+                }`}
+                onClick={() => {
+                  if (filePopover) {
+                    openEditorSplit(filePopover.filePath, filePopover.sourceSessionId);
+                  }
+                  setFilePopover(null);
+                }}
+              >
+                <Columns2 className="h-3.5 w-3.5" />
+                Open in Split
               </button>
             )}
             {/* Open Folder / Reveal in Finder */}

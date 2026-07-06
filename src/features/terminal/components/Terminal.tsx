@@ -13,6 +13,8 @@ import { startBlock, endBlock, appendBlockOutput, clearBlocks } from "../../../s
 import { isElectronApp, isMacOS, isTouchDevice, normalizePath } from "../../../utils/platform";
 import { isRemoteSession } from "../../../services/remote-bridge";
 import { smartUnwrapSelection, joinHardWrappedUrl } from "../../../utils/textUnwrap";
+import { INPUT_REPORT_RESET, stripInputReportEnables } from "../../../utils/terminalModes";
+import { writeClipboardText } from "../../../utils/clipboard";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -555,6 +557,19 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     term.open(el);
 
+    // Mouse/focus report-mode hygiene. A full-screen TUI (vim, htop, lazygit,
+    // fullscreen agent CLIs) runs in the alternate buffer and enables mouse
+    // tracking there; if it exits or is killed without disabling it, the mode
+    // lingers and every mouse move over the now-shell terminal injects an SGR
+    // report (`<35;78;35M`) onto the command line. When xterm switches back to
+    // the normal buffer (TUI exit) we force those modes off. This is written to
+    // xterm only (updates its mode state so it stops emitting) — nothing is
+    // sent to the PTY. Universal: works local, SSH, and web/remote (unlike the
+    // shell-integration block markers, which are local-zsh only).
+    const disposableBufferChange = term.buffer.onBufferChange((buf) => {
+      if (buf.type === "normal") term.write(INPUT_REPORT_RESET);
+    });
+
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
@@ -598,6 +613,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             const cwd = decodeURIComponent(parts.slice(4).join(";"));
             endBlock(sessionId, blockId, isNaN(exitCode) ? -1 : exitCode, cwd);
           }
+          // A command just finished and the shell prompt is back — clear any
+          // mouse/focus report modes the command left enabled (covers
+          // normal-buffer TUIs that never triggered onBufferChange). Only in
+          // the normal buffer; never interrupt a still-running alt-buffer TUI.
+          if (term.buffer.active.type === "normal") term.write(INPUT_REPORT_RESET);
           return true;
         }
       } catch {
@@ -921,6 +941,21 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           }
           return false;
         }
+      }
+      // Explicit copy: Cmd+C (mac) / Ctrl+Shift+C (win/linux). REQUIRED for
+      // web/remote mode — an xterm selection is not a DOM selection, so the
+      // browser fires NO `copy` event on Cmd+C and there is nothing for the
+      // copy-event handler to intercept (in Electron the Edit-menu accelerator
+      // calls webContents.copy() which does fire one, masking the gap locally).
+      // Copying here, inside the real keydown gesture, makes the execCommand
+      // fallback work even in insecure contexts (http://<lan-ip>) where
+      // navigator.clipboard is undefined. Plain Ctrl+C (no shift) stays SIGINT.
+      const copyCombo = isMacOS()
+        ? e.metaKey && !e.ctrlKey && !e.altKey
+        : e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey;
+      if (e.type === "keydown" && (e.key === "c" || e.key === "C") && copyCombo && term.hasSelection()) {
+        writeClipboardText(smartUnwrapSelection(term.getSelection(), term.cols));
+        return false;
       }
       // Block Ctrl+V / Cmd+V from being sent to PTY as raw \x16 (^V).
       // Return false lets browser fire native paste event for our handler.
@@ -1284,9 +1319,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           } catch { /* ignore */ }
 
           // Use snapshot for true reconnects (page reload with live PTY).
+          // Strip mouse/focus report ENABLE sequences from the serialized
+          // snapshot — SerializeAddon re-emits `?1003h`/`?1004h` for fidelity,
+          // but replaying them into a shell view silently re-arms mouse/focus
+          // reporting with no program to own it (a live TUI re-enables via its
+          // own output). Left unfixed, mouse moves leak `<..M` onto the prompt.
           if (knownReconnect && snapshotData) {
             term.resize(snapshotData.cols, snapshotData.rows);
-            term.write(snapshotData.data);
+            term.write(stripInputReportEnables(snapshotData.data));
             usedSnapshot = true;
           }
 
@@ -1301,7 +1341,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
               // This handles app restart after running a TUI.
               if (snapshotData) {
                 term.resize(snapshotData.cols, snapshotData.rows);
-                term.write(snapshotData.data);
+                term.write(stripInputReportEnables(snapshotData.data));
                 usedSnapshot = true;
               } else {
                 // No snapshot available — strip ALL escape sequences and show
@@ -1314,9 +1354,13 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
                 if (tail.trim()) term.write(tail + "\r\n");
               }
             } else {
-              // No TUI — safe to replay with just DA/DSR query stripping
+              // No TUI — safe to replay with just DA/DSR query stripping.
+              // Also drop mouse/focus enables so replayed scrollback can't
+              // re-arm reporting at the restored shell prompt.
               // eslint-disable-next-line no-control-regex
-              const safeHistory = cleanHistory.replace(/\x1b\[[\?>]?[\d;]*[cn]/g, "");
+              const safeHistory = stripInputReportEnables(
+                cleanHistory.replace(/\x1b\[[\?>]?[\d;]*[cn]/g, ""),
+              );
               if (safeHistory) term.write(safeHistory);
             }
           }
@@ -1586,6 +1630,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       el.removeEventListener("drop", onDrop);
       el.removeEventListener("paste", onPaste, true);
       el.removeEventListener("copy", onCopy, true);
+      disposableBufferChange.dispose();
       flushPendingOutputRef.current = () => {};
       if (removeIncomingListener) removeIncomingListener();
       if (removeEchoListener) removeEchoListener();

@@ -74,6 +74,10 @@ export interface HotkeyMap {
   closeTab: string;
   splitHorizontal: string;
   splitVertical: string;
+  focusPaneLeft: string;
+  focusPaneRight: string;
+  focusPaneUp: string;
+  focusPaneDown: string;
   switchTab1: string;
   switchTab2: string;
   switchTab3: string;

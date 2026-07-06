@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react"
 import type { LayoutNode } from "../../types";
 import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
+import { snapDividerPosition } from "../../utils/paneNav";
 import SettingsPane from "../../features/settings/components/SettingsPane";
 import TerminalPane from "./TerminalPane";
 import BrowserPane from "./BrowserPane";
@@ -13,9 +14,12 @@ interface SplitPaneProps {
 }
 
 const MIN_SIZE_PERCENT = 10; // Minimum panel size as percentage of total
+/** Divider magnet-snap distance (px): when a dragged divider comes within this
+ *  of another divider on the same axis, it snaps into alignment. */
+const SNAP_PX = 7;
 
 const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
-  const { updateSplitSizes } = useLayout();
+  const { updateSplitSizes, activeSessionId } = useLayout();
   const { resolvedTheme } = useTheme();
   const isLight = resolvedTheme === "light";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -27,6 +31,7 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
     sizes: number[];
     index: number;
   } | null>(null);
+  const snapCandidatesRef = useRef<number[]>([]);
   const [liveSizes, setLiveSizes] = useState<number[] | null>(null);
 
   // SSH connect leaf — renders through TerminalPane with connect placeholder
@@ -57,14 +62,7 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
   // Settings leaf
   if (node.type === "leaf" && node.contentType === "settings") {
     return (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          overflow: "hidden",
-          position: "relative",
-        }}
-      >
+      <div style={{ width: "100%", height: "100%", overflow: "hidden", position: "relative" }}>
         <SettingsPane />
       </div>
     );
@@ -85,8 +83,27 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
   const handleMouseDown = (e: React.MouseEvent, index: number) => {
     e.preventDefault();
     const pos = isHorizontal ? e.clientX : e.clientY;
+    // Gather the screen positions of every OTHER divider on the same axis so
+    // the drag can magnet-snap to align with them (nested-split alignment).
+    const axis = isHorizontal ? "col" : "row";
+    const draggedEl = e.currentTarget as HTMLElement;
+    const candidates: number[] = [];
+    document.querySelectorAll(`[data-divider-axis="${axis}"]`).forEach((el) => {
+      if (el === draggedEl) return;
+      const r = el.getBoundingClientRect();
+      candidates.push(isHorizontal ? (r.left + r.right) / 2 : (r.top + r.bottom) / 2);
+    });
+    snapCandidatesRef.current = candidates;
     dragStartRef.current = { pos, sizes: [...sizes], index };
     setDraggingIndex(index);
+  };
+
+  // Double-click a divider → equalize all children of this split (VS Code /
+  // iTerm2 behavior).
+  const handleEqualize = () => {
+    const equal = node.children.map(() => 100 / node.children.length);
+    updateSplitSizes(path, equal);
+    setLiveSizes(null);
   };
 
   // Split node — recurse with resize handles
@@ -108,7 +125,9 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
           isDragging={draggingIndex !== null}
           path={path}
           onMouseDown={handleMouseDown}
+          onEqualize={handleEqualize}
           isLight={isLight}
+          activeSessionId={activeSessionId}
         />
       ))}
 
@@ -119,6 +138,7 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
           containerRef={containerRef}
           dragStartRef={dragStartRef}
           totalSize={totalSize}
+          snapCandidatesRef={snapCandidatesRef}
           onSizeUpdate={setLiveSizes}
           onDragEnd={(finalSizes) => {
             setDraggingIndex(null);
@@ -144,7 +164,9 @@ const SplitChild: React.FC<{
   isDragging: boolean;
   path: number[];
   onMouseDown: (e: React.MouseEvent, index: number) => void;
+  onEqualize: () => void;
   isLight: boolean;
+  activeSessionId: string | null;
 }> = ({
   child,
   index,
@@ -155,41 +177,63 @@ const SplitChild: React.FC<{
   isDragging,
   path,
   onMouseDown,
+  onEqualize,
   isLight,
+  activeSessionId,
 }) => {
+  const isLeaf = child.type === "leaf";
+  const paneSessionId = isLeaf ? child.sessionId : undefined;
+  // Focused-pane highlight: only meaningful when the tab actually has >1 pane.
+  const isFocused = isLeaf && paneSessionId === activeSessionId;
   return (
     <>
       <div
         style={{ flex: size / totalSize }}
         className="relative overflow-hidden min-w-0 min-h-0"
+        data-pane-session={paneSessionId}
       >
         <SplitPane node={child} path={[...path, index]} />
+        {/* Subtle ring on the focused pane so it's clear which receives input */}
+        {isFocused && (
+          <div
+            className="pointer-events-none absolute inset-0 z-30 rounded-[1px] ring-1 ring-inset ring-purple-500/40"
+          />
+        )}
       </div>
-      {/* Resize handle between this child and the next */}
+      {/* Resize handle between this child and the next. A 1px visual line with
+          a wider invisible hit area (overflows into neighbors) for easy grab. */}
       {index < totalChildren - 1 && (
         <div
-          onMouseDown={(e) => onMouseDown(e, index)}
-          className={`shrink-0 z-20 relative group transition-colors ${
-            isHorizontal ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
-          } ${
-            isDragging
-              ? "bg-purple-500/40"
-              : isLight
-                ? "bg-gray-200 hover:bg-purple-500/40"
-                : "bg-white/5 hover:bg-purple-500/30"
-          }`}
-          style={{
-            [isHorizontal ? "width" : "height"]: "4px",
-          }}
+          className={`shrink-0 z-20 relative ${isHorizontal ? "w-px cursor-col-resize" : "h-px cursor-row-resize"}`}
         >
-          {/* Visual indicator on hover */}
+          {/* Visual line */}
           <div
-            className={`absolute opacity-0 group-hover:opacity-100 transition-opacity bg-purple-500 rounded-full ${
-              isHorizontal
-                ? "w-0.5 h-8 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-                : "h-0.5 w-8 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+            className={`absolute inset-0 transition-colors ${
+              isDragging
+                ? "bg-purple-500/50"
+                : isLight
+                  ? "bg-gray-200"
+                  : "bg-white/10"
             }`}
           />
+          {/* Wide invisible hit area (centered, ~15px) — carries the events */}
+          <div
+            data-divider-axis={isHorizontal ? "col" : "row"}
+            onMouseDown={(e) => onMouseDown(e, index)}
+            onDoubleClick={onEqualize}
+            className={`group absolute z-10 ${
+              isHorizontal
+                ? "top-0 bottom-0 -left-[5px] -right-[5px] cursor-col-resize"
+                : "left-0 right-0 -top-[5px] -bottom-[5px] cursor-row-resize"
+            }`}
+          >
+            {/* Hover accent on the 1px line */}
+            <div
+              className={`absolute bg-purple-500/40 opacity-0 group-hover:opacity-100 transition-opacity ${
+                isHorizontal ? "top-0 bottom-0 left-[5px] w-px" : "left-0 right-0 top-[5px] h-px"
+              }`}
+            />
+          </div>
         </div>
       )}
     </>
@@ -206,6 +250,7 @@ const DragOverlay: React.FC<{
     index: number;
   } | null>;
   totalSize: number;
+  snapCandidatesRef: React.RefObject<number[]>;
   onSizeUpdate: (sizes: number[]) => void;
   onDragEnd: (finalSizes: number[] | null) => void;
 }> = ({
@@ -213,6 +258,7 @@ const DragOverlay: React.FC<{
   containerRef,
   dragStartRef,
   totalSize,
+  snapCandidatesRef,
   onSizeUpdate,
   onDragEnd,
 }) => {
@@ -232,26 +278,40 @@ const DragOverlay: React.FC<{
       const { pos, sizes, index } = dragStartRef.current;
 
       const containerRect = containerRef.current.getBoundingClientRect();
-      const containerSize = isHorizontal
-        ? containerRect.width
-        : containerRect.height;
+      const containerStart = isHorizontal ? containerRect.left : containerRect.top;
+      const containerSize = isHorizontal ? containerRect.width : containerRect.height;
       const currentPos = isHorizontal ? e.clientX : e.clientY;
       const deltaPx = currentPos - pos;
       const deltaPercent = (deltaPx / containerSize) * totalSize;
 
       const newSizes = [...sizes];
-      const leftNew = sizes[index] + deltaPercent;
-      const rightNew = sizes[index + 1] - deltaPercent;
       const minSize = (MIN_SIZE_PERCENT / 100) * totalSize;
+      let leftNew = sizes[index] + deltaPercent;
+      let rightNew = sizes[index + 1] - deltaPercent;
 
       if (leftNew >= minSize && rightNew >= minSize) {
+        // Magnet-snap: if the divider's resulting screen position is within
+        // SNAP_PX of another divider on this axis, align exactly to it.
+        const boundaryFraction =
+          (newSizes.slice(0, index).reduce((a, b) => a + b, 0) + leftNew) / totalSize;
+        const dividerScreen = containerStart + boundaryFraction * containerSize;
+        const snapped = snapDividerPosition(dividerScreen, snapCandidatesRef.current || [], SNAP_PX);
+        if (snapped !== dividerScreen && containerSize > 0) {
+          const adjust = ((snapped - dividerScreen) / containerSize) * totalSize;
+          const sl = leftNew + adjust;
+          const sr = rightNew - adjust;
+          if (sl >= minSize && sr >= minSize) {
+            leftNew = sl;
+            rightNew = sr;
+          }
+        }
         newSizes[index] = leftNew;
         newSizes[index + 1] = rightNew;
         finalSizesRef.current = newSizes;
         onSizeUpdate(newSizes);
       }
     },
-    [isHorizontal, containerRef, dragStartRef, totalSize, onSizeUpdate],
+    [isHorizontal, containerRef, dragStartRef, totalSize, snapCandidatesRef, onSizeUpdate],
   );
 
   const handleMouseUp = useCallback(() => {
