@@ -96,6 +96,10 @@ export function appendBlockOutput(sessionId: string, chunk: string): void {
   }
 }
 
+/** Commands running at least this long announce their completion (iTerm2's
+ *  "alert on long-running job" behavior). Listeners decide visibility. */
+const LONG_COMMAND_MS = 15_000;
+
 export function endBlock(
   sessionId: string,
   blockId: string,
@@ -110,6 +114,14 @@ export function endBlock(
   block.finishedAt = Date.now();
   openBlock.delete(sessionId);
   notify(sessionId);
+  const durationMs = block.finishedAt - block.startedAt;
+  if (durationMs >= LONG_COMMAND_MS && typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("tron:commandFinished", {
+        detail: { sessionId, command: block.command, exitCode, durationMs },
+      }),
+    );
+  }
   return block;
 }
 

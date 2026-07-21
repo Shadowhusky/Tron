@@ -344,9 +344,20 @@ class AIService {
   }
 
   private loadConfig() {
-    const stored = localStorage.getItem(STORAGE_KEYS.AI_CONFIG);
-    if (stored) {
-      this.config = { ...this.config, ...JSON.parse(stored) };
+    // Guarded: this runs in the module-scope singleton constructor, so a
+    // corrupt/old-format value would otherwise abort the ENTIRE bundle at
+    // import time — a blank white screen with no recovery (observed on stale
+    // web sessions). Fall back to defaults instead.
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.AI_CONFIG);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          this.config = { ...this.config, ...parsed };
+        }
+      }
+    } catch (e) {
+      console.warn("Corrupt AI config in storage — using defaults:", e);
     }
     // Non-baseUrl providers must never use a baseUrl (Ollama's localhost leaks via
     // JSON.stringify stripping undefined values — on reload the default

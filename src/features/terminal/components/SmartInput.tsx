@@ -22,10 +22,12 @@ import {
 } from "../../../utils/commandClassifier";
 import { aiService } from "../../../services/ai";
 import { useHistory } from "../../../contexts/HistoryContext";
+import { fuzzyFilter } from "../../../utils/fuzzy";
 import {
   Terminal,
   Bot,
   ChevronRight,
+  ChevronDown,
   Lightbulb,
   Zap,
   ImagePlus,
@@ -415,6 +417,22 @@ const SmartInput: React.FC<SmartInputProps> = ({
   };
   const [completions, setCompletions] = useState<CompletionItem[]>([]);
   const [showCompletions, setShowCompletions] = useState(false);
+
+  // Ctrl+R fuzzy history search overlay
+  const [historySearchOpen, setHistorySearchOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historySearchIndex, setHistorySearchIndex] = useState(0);
+  const historyMatches = useMemo(() => {
+    if (!historySearchOpen) return [];
+    // Newest first, deduped
+    const seen = new Set<string>();
+    const items: string[] = [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const h = history[i];
+      if (h && !seen.has(h)) { seen.add(h); items.push(h); }
+    }
+    return fuzzyFilter(historyQuery, items, (s) => s).slice(0, 50);
+  }, [historySearchOpen, historyQuery, history]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState("");
@@ -1032,6 +1050,53 @@ const SmartInput: React.FC<SmartInputProps> = ({
   };
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ctrl+R: fuzzy history search (readline muscle memory — only while the
+    // INPUT is focused; Ctrl+R in the terminal still reaches the shell's own).
+    if (e.key === "r" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      setHistorySearchOpen((v) => !v);
+      setHistoryQuery("");
+      setHistorySearchIndex(0);
+      return;
+    }
+    if (historySearchOpen) {
+      const matches = historyMatches;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setHistorySearchOpen(false);
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHistorySearchIndex((i) => Math.min(matches.length - 1, i + 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHistorySearchIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const pick = matches[historySearchIndex];
+        if (pick) setValue(pick);
+        setHistorySearchOpen(false);
+        return;
+      }
+      // Printable keys / backspace edit the SEARCH query, not the input
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        setHistoryQuery((q) => q.slice(0, -1));
+        setHistorySearchIndex(0);
+        return;
+      }
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        setHistoryQuery((q) => q + e.key);
+        setHistorySearchIndex(0);
+        return;
+      }
+    }
     // Ctrl+C: Stop agent if running
     if (e.key === "c" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (isLoading || isAgentRunning)) {
       e.preventDefault();
@@ -1621,7 +1686,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
           if (!supportsVision || !e.dataTransfer.files.length) return;
           handleImageFiles(e.dataTransfer.files);
         }}
-        className={`relative z-10 flex w-full flex-col gap-1 rounded-lg border px-3 py-2 transition-all duration-300 ${
+        className={`group/inputcard relative z-10 flex w-full flex-col gap-1 rounded-lg border px-3 py-2 transition-all duration-300 ${
           isDragOver
             ? theme === "light"
               ? "border-dashed border-purple-400 bg-purple-50 shadow-sm ring-2 ring-purple-300/50"
@@ -1641,6 +1706,58 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     : "border-white/10 bg-[#0e0e0e] text-gray-200 shadow-xl"
         }`}
       >
+        {/* Ctrl+R fuzzy history search overlay */}
+        {historySearchOpen && (
+          <div
+            className={`absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-lg border shadow-xl ${
+              theme === "light"
+                ? "border-gray-200 bg-white text-gray-800"
+                : "border-white/10 bg-[#161616] text-gray-200"
+            }`}
+          >
+            <div className={`flex items-center gap-2 border-b px-3 py-1.5 text-xs ${
+              theme === "light" ? "border-gray-100 text-gray-500" : "border-white/[0.06] text-gray-400"
+            }`}>
+              <Clock className="h-3 w-3 opacity-60" />
+              <span>History search:</span>
+              <span className="font-mono">{historyQuery || "type to filter…"}</span>
+            </div>
+            <div className="max-h-48 overflow-y-auto py-1">
+              {historyMatches.length === 0 && (
+                <div className="px-3 py-3 text-center text-xs opacity-40">No matching history</div>
+              )}
+              {historyMatches.map((h, i) => (
+                <button
+                  key={`${h}-${i}`}
+                  onMouseEnter={() => setHistorySearchIndex(i)}
+                  onClick={() => { setValue(h); setHistorySearchOpen(false); inputRef.current?.focus(); }}
+                  className={`block w-full truncate px-3 py-1 text-left font-mono text-xs ${
+                    i === historySearchIndex
+                      ? theme === "light" ? "bg-gray-100" : "bg-white/[0.08]"
+                      : ""
+                  }`}
+                >
+                  {h}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Hover-reveal hide control — the hints bar's hide buttons disappear
+            with the hints bar, so the input card needs its own affordance. */}
+        {onToggleRegion && (
+          <button
+            onClick={() => onToggleRegion("input")}
+            title="Hide input box"
+            className={`absolute -top-1.5 -right-1.5 z-20 hidden h-5 w-5 items-center justify-center rounded-full border opacity-0 transition-opacity duration-150 hover:!opacity-100 group-hover/inputcard:flex group-hover/inputcard:opacity-60 ${
+              theme === "light"
+                ? "border-gray-200 bg-white text-gray-500 shadow-sm"
+                : "border-white/15 bg-[#1a1a1a] text-gray-400"
+            }`}
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+        )}
         {/* Drop zone hint */}
         {isDragOver && (
           <div

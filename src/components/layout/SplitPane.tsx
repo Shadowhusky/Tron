@@ -183,8 +183,10 @@ const SplitChild: React.FC<{
 }) => {
   const isLeaf = child.type === "leaf";
   const paneSessionId = isLeaf ? child.sessionId : undefined;
-  // Focused-pane highlight: only meaningful when the tab actually has >1 pane.
-  const isFocused = isLeaf && paneSessionId === activeSessionId;
+  // Focus via dimming (Apple/iTerm2: "dim to focus") — the focused pane stays
+  // clean and full-contrast; INACTIVE panes recede behind a gentle scrim.
+  // No accent borders. Split (non-leaf) children handle focus in recursion.
+  const isInactiveLeaf = isLeaf && paneSessionId !== activeSessionId;
   return (
     <>
       <div
@@ -193,12 +195,11 @@ const SplitChild: React.FC<{
         data-pane-session={paneSessionId}
       >
         <SplitPane node={child} path={[...path, index]} />
-        {/* Subtle ring on the focused pane so it's clear which receives input */}
-        {isFocused && (
-          <div
-            className="pointer-events-none absolute inset-0 z-30 rounded-[1px] ring-1 ring-inset ring-purple-500/40"
-          />
-        )}
+        <div
+          className={`pointer-events-none absolute inset-0 z-30 transition-opacity duration-300 ${
+            isLight ? "bg-black/[0.05]" : "bg-black/[0.14]"
+          } ${isInactiveLeaf ? "opacity-100" : "opacity-0"}`}
+        />
       </div>
       {/* Resize handle between this child and the next. A 1px visual line with
           a wider invisible hit area (overflows into neighbors) for easy grab. */}
@@ -206,17 +207,17 @@ const SplitChild: React.FC<{
         <div
           className={`shrink-0 z-20 relative ${isHorizontal ? "w-px cursor-col-resize" : "h-px cursor-row-resize"}`}
         >
-          {/* Visual line */}
+          {/* Visual line — neutral material weights, no accent color */}
           <div
             className={`absolute inset-0 transition-colors ${
               isDragging
-                ? "bg-purple-500/50"
+                ? isLight ? "bg-black/25" : "bg-white/30"
                 : isLight
                   ? "bg-gray-200"
                   : "bg-white/10"
             }`}
           />
-          {/* Wide invisible hit area (centered, ~15px) — carries the events */}
+          {/* Wide invisible hit area (centered, ~11px) — carries the events */}
           <div
             data-divider-axis={isHorizontal ? "col" : "row"}
             onMouseDown={(e) => onMouseDown(e, index)}
@@ -229,7 +230,9 @@ const SplitChild: React.FC<{
           >
             {/* Hover accent on the 1px line */}
             <div
-              className={`absolute bg-purple-500/40 opacity-0 group-hover:opacity-100 transition-opacity ${
+              className={`absolute opacity-0 group-hover:opacity-100 transition-opacity ${
+                isLight ? "bg-black/20" : "bg-white/25"
+              } ${
                 isHorizontal ? "top-0 bottom-0 left-[5px] w-px" : "left-0 right-0 top-[5px] h-px"
               }`}
             />

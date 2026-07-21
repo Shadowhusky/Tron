@@ -5,9 +5,12 @@
 import type { Variants, Transition } from "framer-motion";
 
 // ── Timing presets ──────────────────────────────────────────────
-export const spring: Transition = { type: "spring", stiffness: 400, damping: 30 };
-export const springGentle: Transition = { type: "spring", stiffness: 300, damping: 25 };
-export const springBouncy: Transition = { type: "spring", stiffness: 500, damping: 20 };
+// House motion style (Apple-derived): critically damped springs for UI —
+// no overshoot unless the gesture itself carried momentum. `bounce: 0` +
+// `duration` maps to Apple's damping 1.0 + response.
+export const spring: Transition = { type: "spring", bounce: 0, duration: 0.35 };
+export const springGentle: Transition = { type: "spring", bounce: 0, duration: 0.45 };
+export const springBouncy: Transition = { type: "spring", bounce: 0.2, duration: 0.4 };
 export const ease: Transition = { duration: 0.2, ease: "easeOut" };
 export const easeSlow: Transition = { duration: 0.35, ease: "easeOut" };
 
@@ -19,23 +22,24 @@ export const fadeIn: Variants = {
 };
 
 // ── Fade + Scale (for modals, popovers, badges) ────────────────
+// Spring entrance from 0.96 (subtle, material-like); quick mirrored exit.
 export const fadeScale: Variants = {
-  hidden: { opacity: 0, scale: 0.95 },
-  visible: { opacity: 1, scale: 1, transition: { duration: 0.2, ease: "easeOut" } },
-  exit: { opacity: 0, scale: 0.95, transition: { duration: 0.15, ease: "easeIn" } },
+  hidden: { opacity: 0, scale: 0.96 },
+  visible: { opacity: 1, scale: 1, transition: { type: "spring", bounce: 0, duration: 0.3 } },
+  exit: { opacity: 0, scale: 0.97, transition: { duration: 0.15, ease: "easeIn" } },
 };
 
 // ── Slide up (for panels, overlays, dropdowns) ─────────────────
 export const slideUp: Variants = {
   hidden: { opacity: 0, y: 12 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.25, ease: "easeOut" } },
+  visible: { opacity: 1, y: 0, transition: { type: "spring", bounce: 0, duration: 0.35 } },
   exit: { opacity: 0, y: 12, transition: { duration: 0.15, ease: "easeIn" } },
 };
 
 // ── Slide down (for dropdowns above) ────────────────────────────
 export const slideDown: Variants = {
   hidden: { opacity: 0, y: -8 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.2, ease: "easeOut" } },
+  visible: { opacity: 1, y: 0, transition: { type: "spring", bounce: 0, duration: 0.3 } },
   exit: { opacity: 0, y: -8, transition: { duration: 0.12, ease: "easeIn" } },
 };
 
@@ -98,14 +102,16 @@ export const staggerItemX: Variants = {
 };
 
 // ── Scale pop (for buttons, icons, badges) ──────────────────────
+// The one deliberately bouncy entrance — reserve for small momentum-y
+// elements (badges, toasts), never structural surfaces.
 export const scalePop: Variants = {
   hidden: { opacity: 0, scale: 0.8 },
   visible: {
     opacity: 1,
     scale: 1,
-    transition: { type: "spring", stiffness: 500, damping: 25 },
+    transition: { type: "spring", bounce: 0.25, duration: 0.35 },
   },
-  exit: { opacity: 0, scale: 0.8, transition: { duration: 0.1 } },
+  exit: { opacity: 0, scale: 0.85, transition: { duration: 0.1 } },
 };
 
 // ── Tab content swap ────────────────────────────────────────────

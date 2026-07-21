@@ -63,6 +63,34 @@ class AgentStore {
   // Unique ID for identity checks across lazy-loaded chunks
   readonly storeId = Math.random().toString(36).slice(2, 8);
 
+  constructor() {
+    // Long-command completion toasts (iTerm2-style): the blocks store fires
+    // this for any shell command that ran ≥15s. Only surface it when the user
+    // couldn't see it finish — session hidden (other tab) or app unfocused.
+    if (typeof window !== "undefined") {
+      window.addEventListener("tron:commandFinished", (e: Event) => {
+        const d = (e as CustomEvent).detail as
+          | { sessionId: string; command: string; exitCode: number; durationMs: number }
+          | undefined;
+        if (!d) return;
+        const hiddenSession = !this.activeSessionIdsForNotifs.has(d.sessionId);
+        if (!hiddenSession && !document.hidden) return;
+        const secs = Math.round(d.durationMs / 1000);
+        const dur = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+        const mark = d.exitCode === 0 ? "✓" : `✗ (exit ${d.exitCode})`;
+        this.pushNotification(d.sessionId, `${mark} ${d.command.slice(0, 60)} — ${dur}`);
+      });
+    }
+  }
+
+  /** Add a cross-tab toast notification (auto-dismisses). */
+  pushNotification = (sessionId: string, message: string) => {
+    const id = ++this.notifId;
+    this.notifications = [...this.notifications, { id, sessionId, message, timestamp: Date.now() }];
+    this.notifyNotifications();
+    setTimeout(() => this.dismissNotification(id), 8000);
+  };
+
   getSnapshot = () => this.states;
 
   getListenerCount = () => this.listeners.size;
@@ -134,13 +162,7 @@ class AgentStore {
               : "Agent finished"
         : "Agent finished";
 
-      const id = ++this.notifId;
-      this.notifications = [...this.notifications, { id, sessionId, message: msg, timestamp: Date.now() }];
-      this.notifyNotifications();
-
-      setTimeout(() => {
-        this.dismissNotification(id);
-      }, 8000);
+      this.pushNotification(sessionId, msg);
     }
     this.prevRunning.set(sessionId, isRunning);
 

@@ -4,6 +4,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { exec, ChildProcess } from "child_process";
 import { sshSessionIds, sshSessions } from "./ssh.js";
+import { applyShellIntegrationEnv } from "./shellIntegration.js";
 
 // =============================================================================
 // fileEdit — tolerant search-and-replace
@@ -442,15 +443,19 @@ export function createSession(
     safeCwd = os.homedir();
   }
 
+  // Shell-integration env (ZDOTDIR → block markers) — same injection the
+  // Electron path does; enables blocks, long-command notifications, and
+  // block-based context for web-mode sessions.
+  const baseEnv = {
+    ...process.env,
+    ...(os.platform() !== "win32" ? { PROMPT_EOL_MARK: "" } : {}),
+  } as Record<string, string>;
   const ptyProcess = pty.spawn(shell, shellArgs, {
     name: "xterm-256color",
     cols: cols || 80,
     rows: rows || 30,
     cwd: safeCwd,
-    env: {
-      ...process.env,
-      ...(os.platform() !== "win32" ? { PROMPT_EOL_MARK: "" } : {}),
-    } as Record<string, string>,
+    env: applyShellIntegrationEnv(baseEnv, shell),
   });
 
   // Preserve persisted history (loaded above) or start fresh

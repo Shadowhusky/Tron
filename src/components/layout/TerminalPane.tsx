@@ -1379,7 +1379,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             align="start"
             sideOffset={4}
             collisionPadding={8}
-            className={`z-[100] min-w-[160px] overflow-hidden rounded-lg py-1 shadow-xl ${themeClass(
+            className={`tron-pop z-[100] min-w-[160px] overflow-hidden rounded-lg py-1 shadow-xl ${themeClass(
               resolvedTheme,
               {
                 dark: "border border-white/10 bg-[#1e1e1e] text-gray-200",

@@ -1,8 +1,10 @@
 /**
  * Pure geometry helpers for split-pane behaviors — directional focus
- * navigation and divider magnet-snap. Kept free of DOM/React so they're
- * unit-tested; callers pass in measured rectangles / positions.
+ * navigation, divider magnet-snap, and close-pane size redistribution.
+ * Kept free of DOM/React so they're unit-tested; callers pass in measured
+ * rectangles / positions / layout nodes.
  */
+import type { LayoutNode } from "../types";
 
 export interface PaneRect {
   sessionId: string;
@@ -77,4 +79,57 @@ export function snapDividerPosition(
     }
   }
   return bestPos;
+}
+
+// ── Close-pane size redistribution ─────────────────────────────────────────
+
+/**
+ * Sizes after closing the pane at `removedIndex`: the freed share goes to the
+ * ADJACENT sibling (previous, else next) so every other pane keeps its exact
+ * size — the minimal-layout-shift strategy used by tmux/iTerm2. Equal
+ * redistribution would resize (and shift) every remaining pane.
+ */
+export function redistributeAfterClose(sizes: number[], removedIndex: number): number[] {
+  const freed = sizes[removedIndex] ?? 0;
+  const out = sizes.filter((_, i) => i !== removedIndex);
+  if (out.length === 0) return out;
+  const absorb = removedIndex > 0 ? removedIndex - 1 : 0;
+  out[absorb] += freed;
+  return out;
+}
+
+/**
+ * Remove the leaf with `sessionId` from a layout tree, preserving the sizes of
+ * every untouched sibling (see redistributeAfterClose). A split reduced to one
+ * child collapses into that child; the collapsed child keeps the OUTER slot's
+ * size, so panes outside the collapsed split don't move at all. Returns null
+ * when the last pane was removed.
+ */
+export function removePaneFromTree(node: LayoutNode, sessionId: string): LayoutNode | null {
+  if (node.type === "leaf") {
+    return node.sessionId === sessionId ? null : node;
+  }
+  const oldSizes = node.sizes && node.sizes.length === node.children.length
+    ? node.sizes
+    : node.children.map(() => 100 / node.children.length);
+
+  const kept: LayoutNode[] = [];
+  const orderedSizes: number[] = []; // one entry per original child, in order
+  let removedAt = -1;
+  node.children.forEach((child, i) => {
+    const next = removePaneFromTree(child, sessionId);
+    orderedSizes.push(oldSizes[i]);
+    if (next === null) {
+      removedAt = i;
+      return;
+    }
+    kept.push(next);
+  });
+
+  if (kept.length === 0) return null;
+  if (kept.length === 1) return kept[0]; // collapse — parent slot keeps its size
+  const sizes = removedAt >= 0
+    ? redistributeAfterClose(orderedSizes, removedAt)
+    : orderedSizes;
+  return { ...node, children: kept, sizes };
 }

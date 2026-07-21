@@ -16,6 +16,7 @@ import { isSshOnly } from "../services/mode";
 import { onServerReconnect } from "../services/ws-bridge";
 import { matchesHotkey } from "../hooks/useHotkey";
 import { selectTabByIndex } from "../utils/tabSwitcher";
+import { removePaneFromTree } from "../utils/paneNav";
 import { useConfig } from "./ConfigContext";
 import { isElectronApp } from "../utils/platform";
 import { connectRemote, createRemotePTY, getRemoteConnectionId, reviveRemoteSession, unregisterRemoteSession } from "../services/remote-bridge";
@@ -43,6 +44,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+/** Pane-kind override for splits: default clones the current session kind;
+ *  "local" forces a local PTY; an sshProfileId forces an SSH pane. */
+export type SplitOptions = { kind?: "local" | { sshProfileId: string } };
+
 interface LayoutContextType {
   tabs: Tab[];
   activeTabId: string;
@@ -51,7 +56,7 @@ interface LayoutContextType {
   createTab: () => Promise<void>;
   closeTab: (tabId: string) => void;
   selectTab: (tabId: string) => void;
-  splitUserAction: (direction: SplitDirection) => Promise<void>;
+  splitUserAction: (direction: SplitDirection, opts?: SplitOptions) => Promise<void>;
   closeSession: (sessionId: string) => void;
   /** Remove a specific pane from the layout tree and kill its PTY session. */
   closePane: (sessionId: string) => void;
@@ -1019,7 +1024,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const getActiveTab = () => tabs.find((t) => t.id === activeTabId);
 
   // Split Logic
-  const splitUserAction = async (direction: SplitDirection) => {
+  const splitUserAction = async (direction: SplitDirection, opts?: SplitOptions) => {
     const tab = getActiveTab();
     if (!tab || !tab.activeSessionId) return;
 
@@ -1028,6 +1033,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const currentSession = sessions.get(tab.activeSessionId);
     const sessionConfig = currentSession?.aiConfig || aiService.getConfig();
+    // Pane kind override — mixed pane types in one tab: a "local" pane beside
+    // an SSH/remote one, or an SSH-profile pane beside a local one. Default
+    // (no opts) keeps the existing behavior: clone the current session kind.
+    const kind = opts?.kind;
 
     // Current session CWD — fetch fresh from server to avoid stale/truncated paths
     let cwd = currentSession?.cwd;
@@ -1036,42 +1045,63 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       if (freshCwd) cwd = freshCwd;
     } catch { /* fall back to cached cwd */ }
 
-    let newSessionId: string;
+    let newSessionId = "";
     let newTitle = "Terminal";
+    // Session-kind metadata for the NEW pane (may differ from the current
+    // session when opts.kind overrides — mixed pane types in one tab).
+    let newRemoteUrl: string | undefined;
+    let newSshProfileId: string | undefined;
 
-    if (currentSession?.remoteUrl) {
+    const connectSshProfile = async (profileId: string): Promise<boolean> => {
+      const ipc = window.electron?.ipcRenderer;
+      if (!ipc) return false;
+      const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
+      const profiles: SSHConnectionConfig[] = await readFn() || [];
+      const profile = profiles.find((p) => p.id === profileId);
+      if (!profile) return false; // Profile deleted
+      const connectFn = (ipc as any).connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
+      const result = await connectFn({ ...profile, cols: 80, rows: 30 });
+      newSessionId = result.sessionId;
+      newTitle = profile.name || `${profile.username}@${profile.host}`;
+      newSshProfileId = profile.id;
+      return true;
+    };
+
+    if (kind && typeof kind === "object" && kind.sshProfileId) {
+      // Explicit SSH pane (from the command palette) — regardless of the
+      // current pane's kind.
+      if (!(await connectSshProfile(kind.sshProfileId))) return;
+    } else if (kind === "local") {
+      // Explicit local pane — e.g. a local terminal beside an SSH session.
+      if (isSshOnly()) return; // Gateway mode: no local PTY
+      newSessionId = await createPTY(undefined);
+      newTitle = "Terminal";
+    } else if (currentSession?.remoteUrl) {
       // Remote server session — create a new PTY on the same remote server
       const connId = getRemoteConnectionId(tab.activeSessionId);
       if (!connId) return; // Connection lost
       const remoteResult = await createRemotePTY(connId, 80, 30, cwd);
       newSessionId = remoteResult.sessionId;
       newTitle = currentSession.title || "Remote";
+      newRemoteUrl = currentSession.remoteUrl;
     } else if (currentSession?.sshProfileId) {
-      // SSH session — create a new SSH connection to the same host
-      const ipc = window.electron?.ipcRenderer;
-      if (!ipc) return;
-      const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
-      const profiles: SSHConnectionConfig[] = await readFn() || [];
-      const profile = profiles.find((p) => p.id === currentSession.sshProfileId);
-      if (!profile) return; // Profile deleted
-      const connectFn = (ipc as any).connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
-      const result = await connectFn({ ...profile, cols: 80, rows: 30 });
-      newSessionId = result.sessionId;
-      newTitle = profile.name || `${profile.username}@${profile.host}`;
+      // SSH session — clone: a new SSH connection to the same host
+      if (!(await connectSshProfile(currentSession.sshProfileId))) return;
     } else {
       // Local session
       if (isSshOnly()) return; // Gateway mode: no local PTY
       newSessionId = await createPTY(cwd);
     }
+    if (!newSessionId) return;
 
     setSessions((prev) =>
       new Map(prev).set(newSessionId, {
         id: newSessionId,
         title: newTitle,
-        cwd,
+        cwd: kind ? undefined : cwd,
         aiConfig: sessionConfig,
-        ...(currentSession?.remoteUrl ? { remoteUrl: currentSession.remoteUrl } : {}),
-        ...(currentSession?.sshProfileId ? { sshProfileId: currentSession.sshProfileId } : {}),
+        ...(newRemoteUrl ? { remoteUrl: newRemoteUrl } : {}),
+        ...(newSshProfileId ? { sshProfileId: newSshProfileId } : {}),
       }),
     );
 
@@ -1119,29 +1149,9 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const targetId = tab.activeSessionId;
 
-    // Recursive removal
-    // Returns null if node should be removed
-    const removeNode = (node: LayoutNode): LayoutNode | null => {
-      if (node.type === "leaf") {
-        return node.sessionId === targetId ? null : node;
-      }
-      // Split
-      const newChildren = node.children
-        .map(removeNode)
-        .filter((c): c is LayoutNode => c !== null);
-
-      if (newChildren.length === 0) return null;
-      if (newChildren.length === 1) return newChildren[0]; // Collapse split
-
-      // Recalculate sizes (simple equal distribution for now)
-      return {
-        ...node,
-        children: newChildren,
-        sizes: newChildren.map(() => 100 / newChildren.length),
-      };
-    };
-
-    const newRoot = removeNode(tab.root);
+    // Remove with minimal layout shift: the adjacent sibling absorbs the
+    // freed space; all other panes keep their exact sizes (see paneNav).
+    const newRoot = removePaneFromTree(tab.root, targetId);
 
     // Kill the session process
     closeSession(targetId);
@@ -1179,15 +1189,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     });
     if (!tab) return;
 
-    const removeNode = (node: LayoutNode): LayoutNode | null => {
-      if (node.type === "leaf") return node.sessionId === targetId ? null : node;
-      const newChildren = node.children.map(removeNode).filter((c): c is LayoutNode => c !== null);
-      if (newChildren.length === 0) return null;
-      if (newChildren.length === 1) return newChildren[0];
-      return { ...node, children: newChildren, sizes: newChildren.map(() => 100 / newChildren.length) };
-    };
-
-    const newRoot = removeNode(tab.root);
+    const newRoot = removePaneFromTree(tab.root, targetId);
     closeSession(targetId);
 
     if (!newRoot) {

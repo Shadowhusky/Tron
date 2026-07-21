@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { nearestPaneInDirection, snapDividerPosition, type PaneRect } from "../utils/paneNav";
+import {
+  nearestPaneInDirection,
+  snapDividerPosition,
+  redistributeAfterClose,
+  removePaneFromTree,
+  type PaneRect,
+} from "../utils/paneNav";
+import type { LayoutNode } from "../types";
 
 const rect = (sessionId: string, left: number, top: number, right: number, bottom: number): PaneRect =>
   ({ sessionId, left, top, right, bottom });
@@ -53,5 +60,81 @@ describe("snapDividerPosition", () => {
   it("snaps at exactly the threshold boundary", () => {
     expect(snapDividerPosition(408, [400], 8)).toBe(400);
     expect(snapDividerPosition(409, [400], 8)).toBe(409);
+  });
+});
+
+describe("redistributeAfterClose (minimal layout shift)", () => {
+  it("gives the freed space to the PREVIOUS sibling; others unchanged", () => {
+    // [20, 30, 50] close index 1 -> previous absorbs: [50, 50]
+    expect(redistributeAfterClose([20, 30, 50], 1)).toEqual([50, 50]);
+  });
+  it("gives space to the next sibling when the first pane closes", () => {
+    expect(redistributeAfterClose([20, 30, 50], 0)).toEqual([50, 50]);
+  });
+  it("keeps custom proportions of untouched panes intact", () => {
+    // [10, 20, 30, 40] close last -> [10, 20, 70]
+    expect(redistributeAfterClose([10, 20, 30, 40], 3)).toEqual([10, 20, 70]);
+  });
+  it("handles the two-pane case (remaining takes all)", () => {
+    expect(redistributeAfterClose([35, 65], 1)).toEqual([100]);
+  });
+});
+
+describe("removePaneFromTree (preserves sibling sizes)", () => {
+  const leaf = (id: string): LayoutNode => ({ type: "leaf", sessionId: id });
+
+  it("removes a leaf and lets the neighbor absorb its share", () => {
+    const root: LayoutNode = {
+      type: "split", direction: "horizontal",
+      children: [leaf("a"), leaf("b"), leaf("c")],
+      sizes: [25, 25, 50],
+    };
+    const out = removePaneFromTree(root, "b");
+    expect(out).not.toBeNull();
+    if (out && out.type === "split") {
+      expect(out.children.map((c) => c.type === "leaf" ? c.sessionId : "")).toEqual(["a", "c"]);
+      expect(out.sizes).toEqual([50, 50]); // a absorbed b's 25; c untouched
+    }
+  });
+
+  it("collapses a 2-child split into the surviving child", () => {
+    const root: LayoutNode = {
+      type: "split", direction: "horizontal",
+      children: [leaf("a"), leaf("b")], sizes: [30, 70],
+    };
+    const out = removePaneFromTree(root, "a");
+    expect(out).toEqual(leaf("b"));
+  });
+
+  it("keeps the OUTER split sizes when an inner split collapses", () => {
+    // [a | (b/c)] sized [40, 60]; closing c collapses inner split to b,
+    // but the outer 40/60 stays — no layout shift for a.
+    const root: LayoutNode = {
+      type: "split", direction: "horizontal",
+      children: [
+        leaf("a"),
+        { type: "split", direction: "vertical", children: [leaf("b"), leaf("c")], sizes: [50, 50] },
+      ],
+      sizes: [40, 60],
+    };
+    const out = removePaneFromTree(root, "c");
+    expect(out && out.type === "split" && out.sizes).toEqual([40, 60]);
+    if (out && out.type === "split") expect(out.children[1]).toEqual(leaf("b"));
+  });
+
+  it("returns null when the last pane is removed", () => {
+    expect(removePaneFromTree(leaf("only"), "only")).toBeNull();
+  });
+
+  it("defaults missing sizes to equal before redistributing (old persisted layouts)", () => {
+    const root = {
+      type: "split", direction: "horizontal",
+      children: [leaf("a"), leaf("b"), leaf("c")], // no sizes -> 33.3 each
+    } as unknown as LayoutNode;
+    const out = removePaneFromTree(root, "c");
+    if (out && out.type === "split") {
+      expect(out.sizes![0]).toBeCloseTo(100 / 3, 3);
+      expect(out.sizes![1]).toBeCloseTo(200 / 3, 3);
+    }
   });
 });

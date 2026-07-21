@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useLayoutEffect, useRef } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useState, useEffect, useCallback, useLayoutEffect, useRef, useMemo } from "react";
+import { AnimatePresence, motion, MotionConfig } from "framer-motion";
 import { LayoutProvider, useLayout } from "./contexts/LayoutContext";
-import type { LayoutNode } from "./types";
+import type { LayoutNode, SSHConnectionConfig } from "./types";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { HistoryProvider } from "./contexts/HistoryContext";
 import { AgentProvider, useAgentContext } from "./contexts/AgentContext";
@@ -14,12 +14,13 @@ import { IPC } from "./constants/ipc";
 import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
 import { fadeIn } from "./utils/motion";
-import { useHotkey } from "./hooks/useHotkey";
+import { useHotkey, formatHotkey } from "./hooks/useHotkey";
 import { nearestPaneInDirection } from "./utils/paneNav";
 import { useInvalidateModels } from "./hooks/useModels";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
 import NotificationOverlay from "./components/layout/NotificationOverlay";
 import TabSearchPalette from "./components/layout/TabSearchPalette";
+import CommandPalette, { type PaletteAction } from "./components/ui/CommandPalette";
 import SSHConnectModal from "./features/ssh/components/SSHConnectModal";
 import SavedTabsModal from "./components/layout/SavedTabsModal";
 import RemoteConnectionModal from "./components/layout/RemoteConnectionModal";
@@ -115,9 +116,11 @@ const AppContent = () => {
     setConfirmHandler,
     activeSessionId,
     focusSession,
+    splitUserAction,
+    closePane,
   } = useLayout();
-  const { resolvedTheme } = useTheme();
-  const { config, updateConfig, isLoaded: configLoaded } = useConfig();
+  const { resolvedTheme, setTheme } = useTheme();
+  const { config, updateConfig, hotkeys, isLoaded: configLoaded } = useConfig();
   const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, getSessionPersistable, restoreAgentSession } = useAgentContext();
   const invalidateModels = useInvalidateModels();
   useVisualViewportHeight();
@@ -442,6 +445,44 @@ const AppContent = () => {
   useHotkey("focusPaneUp", () => focusPane("up"), [focusPane]);
   useHotkey("focusPaneDown", () => focusPane("down"), [focusPane]);
 
+  // ── Command palette (⌘P) ────────────────────────────────────────────────
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sshProfilesForPalette, setSshProfilesForPalette] = useState<SSHConnectionConfig[]>([]);
+  useHotkey("commandPalette", () => setPaletteOpen((v) => !v), []);
+  useEffect(() => {
+    if (!paletteOpen) return;
+    // Refresh saved SSH profiles each open so "Split with SSH" stays current.
+    const ipc = window.electron?.ipcRenderer as any;
+    const read = ipc?.readSSHProfiles || (() => ipc?.invoke?.("ssh.profiles.read"));
+    Promise.resolve(read?.()).then((p) => setSshProfilesForPalette(Array.isArray(p) ? p : [])).catch(() => {});
+  }, [paletteOpen]);
+
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const fmt = (action: string) => formatHotkey(hotkeys[action] || "");
+    const acts: PaletteAction[] = [
+      { id: "new-tab", label: "New Tab", hint: fmt("newTab"), section: "Tabs", run: () => createTab() },
+      { id: "close-tab", label: "Close Tab", hint: fmt("closeTab"), section: "Tabs", run: () => closeTab(activeTabId) },
+      { id: "new-ssh", label: "New SSH Connection…", section: "Tabs", run: () => window.dispatchEvent(new CustomEvent("tron:open-ssh-modal")) },
+      { id: "split-h", label: "Split Horizontal", hint: fmt("splitHorizontal"), section: "Panes", run: () => splitUserAction("horizontal") },
+      { id: "split-v", label: "Split Vertical", hint: fmt("splitVertical"), section: "Panes", run: () => splitUserAction("vertical") },
+      { id: "split-local", label: "Split with Local Terminal", section: "Panes", run: () => splitUserAction("horizontal", { kind: "local" }) },
+      ...sshProfilesForPalette.map((p) => ({
+        id: `split-ssh-${p.id}`,
+        label: `Split with SSH: ${p.name || `${p.username}@${p.host}`}`,
+        section: "Panes",
+        run: () => splitUserAction("horizontal", { kind: { sshProfileId: p.id } }),
+      })),
+      ...(activeSessionId ? [{ id: "close-pane", label: "Close Pane", section: "Panes", run: () => closePane(activeSessionId) }] : []),
+      { id: "theme-dark", label: "Theme: Dark", section: "Appearance", run: () => setTheme("dark") },
+      { id: "theme-light", label: "Theme: Light", section: "Appearance", run: () => setTheme("light") },
+      { id: "theme-modern", label: "Theme: Modern", section: "Appearance", run: () => setTheme("modern") },
+      { id: "theme-auto", label: "Theme: Auto (System)", section: "Appearance", run: () => setTheme("system") },
+      { id: "settings", label: "Open Settings", hint: fmt("openSettings"), section: "App", run: () => openSettingsTab() },
+      { id: "settings-shortcuts", label: "Keyboard Shortcuts…", section: "App", run: () => openSettingsTab("shortcuts") },
+    ];
+    return acts;
+  }, [hotkeys, createTab, closeTab, activeTabId, splitUserAction, sshProfilesForPalette, activeSessionId, closePane, setTheme, openSettingsTab]);
+
   // Check if any session in a tab's tree is dirty
   const isTabDirty = useCallback(
     (tabId: string) => {
@@ -563,6 +604,7 @@ const AppContent = () => {
           onDismiss={dismissNotification}
         />
         <TabSearchPalette />
+        <CommandPalette key={String(paletteOpen)} open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
         {/* Render tabs in a STABLE DOM order (first-seen ascending) so a
             TabBar reorder never causes React to move existing tab DOM
             nodes via insertBefore — moving an xterm canvas mid-render
@@ -959,17 +1001,21 @@ const AppContent = () => {
 
 const App = () => {
   return (
-    <ConfigProvider>
-      <ThemeProvider>
-        <HistoryProvider>
-          <AgentProvider>
-            <LayoutProvider>
-              <AppContent />
-            </LayoutProvider>
-          </AgentProvider>
-        </HistoryProvider>
-      </ThemeProvider>
-    </ConfigProvider>
+    /* reducedMotion="user" honors the OS accessibility setting app-wide:
+       framer drops transform animations and keeps opacity cross-fades. */
+    <MotionConfig reducedMotion="user">
+      <ConfigProvider>
+        <ThemeProvider>
+          <HistoryProvider>
+            <AgentProvider>
+              <LayoutProvider>
+                <AppContent />
+              </LayoutProvider>
+            </AgentProvider>
+          </HistoryProvider>
+        </ThemeProvider>
+      </ConfigProvider>
+    </MotionConfig>
   );
 };
 

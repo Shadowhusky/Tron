@@ -5,6 +5,7 @@ import { initWebSocketBridge, modeReady } from './services/ws-bridge'
 import { installRemoteRouting } from './services/remote-bridge'
 import './index.css'
 import App from './App.tsx'
+import { ErrorBoundary } from './components/ui/ErrorBoundary'
 
 const queryClient = new QueryClient()
 
@@ -50,9 +51,11 @@ async function boot() {
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
+      <ErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </ErrorBoundary>
     </StrictMode>,
   )
 }

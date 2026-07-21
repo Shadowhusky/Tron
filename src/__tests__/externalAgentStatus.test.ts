@@ -320,3 +320,86 @@ describe("permission staleness (root-cause regression guards)", () => {
     expect(out.permission).toBe(true);
   });
 });
+
+// ── Claude Code ≥2.1 (verified against a live 2.1.216 PTY capture) ─────────
+describe("Claude Code 2.1+ UI (no 'esc to interrupt')", () => {
+  it("detects the gerund spinner as working", () => {
+    const sig = detectExternalAgentSignal("✢ Contemplating… ");
+    expect(sig.working).toBe(true);
+    expect(sig.agentPresent).toBe(true);
+  });
+
+  it("does NOT treat the past-tense completion line as working", () => {
+    const sig = detectExternalAgentSignal("✻ Crunched for 2s");
+    expect(sig.working).toBeUndefined();
+  });
+
+  it("detects the ❯ prompt frame with footer as idle", () => {
+    const frame = [
+      "────────────────────────────────────────────",
+      "❯ ",
+      "────────────────────────────────────────────",
+      "⏵⏵ bypass permissions on (shift+tab to cycle)",
+    ].join("\n");
+    const sig = detectExternalAgentSignal(frame);
+    expect(sig.idle).toBe(true);
+    expect(sig.agentPresent).toBe(true);
+  });
+
+  it("does NOT read a permission select (❯ 1. Yes) as idle", () => {
+    const frame = [
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. No",
+      "Esc to cancel",
+    ].join("\n");
+    const sig = detectExternalAgentSignal(frame);
+    expect(sig.idle).toBeUndefined();
+    expect(sig.permission).toBe(true);
+  });
+
+  it("treats ⎿ Interrupted as idle", () => {
+    const sig = detectExternalAgentSignal("⎿  Interrupted · What should Claude do instead?");
+    expect(sig.idle).toBe(true);
+  });
+
+  it("working overrides the idle frame in the same buffer", () => {
+    const frame = [
+      "✻ Simmering…",
+      "────────────────────────────────",
+      "❯ ",
+      "⏵⏵ bypass permissions on (shift+tab to cycle)",
+    ].join("\n");
+    const sig = detectExternalAgentSignal(frame);
+    expect(sig.working).toBe(true);
+    expect(sig.idle).toBeUndefined();
+  });
+
+  it("recognizes the new footer as an agent marker", () => {
+    const sig = detectExternalAgentSignal("Fable5 │ 5h ◔ 16% │ ses $0.35\n⏵⏵ bypass permissions on (shift+tab to cycle)");
+    expect(sig.agentPresent).toBe(true);
+  });
+});
+
+// ── Codex CLI ≥0.14x ───────────────────────────────────────────────────────
+describe("Codex CLI status detection", () => {
+  it("detects Working state when a codex marker is present", () => {
+    const sig = detectExternalAgentSignal("OpenAI Codex v0.144\n• Working");
+    expect(sig.working).toBe(true);
+  });
+
+  it("ignores bare 'Working' with no agent marker (generic shell output)", () => {
+    const sig = detectExternalAgentSignal("Working\non something");
+    expect(sig.working).toBeUndefined();
+  });
+
+  it("detects Working via option flag when session is known-agent", () => {
+    const sig = detectExternalAgentSignal("▌ Thinking", { allowTersePermission: true });
+    expect(sig.working).toBe(true);
+  });
+
+  it("detects the › composer as idle for a known codex session", () => {
+    const sig = detectExternalAgentSignal("chatgpt.com/codex\n› ", {});
+    expect(sig.idle).toBe(true);
+  });
+});

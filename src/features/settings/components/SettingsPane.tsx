@@ -49,6 +49,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   closeTab: "Close Tab",
   splitHorizontal: "Split Horizontal",
   splitVertical: "Split Vertical",
+  commandPalette: "Command Palette",
   focusPaneLeft: "Focus Pane Left",
   focusPaneRight: "Focus Pane Right",
   focusPaneUp: "Focus Pane Up",

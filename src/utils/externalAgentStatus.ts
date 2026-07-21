@@ -43,6 +43,17 @@ function stripAnsi(s: string): string {
  *   `(<Ns> · ↑ <X[k]> tokens · esc`
  *   ` to interrupt)`
  */
+/**
+ * Claude Code ≥2.1 spinner (verified against a live 2.1.216 capture): the
+ * suffix "(… esc to interrupt)" is GONE. The working state renders as
+ * `<glyph> <Gerund>… ` with a whimsical gerund verb — e.g. `✢ Contemplating… `.
+ * Completion renders past-tense (`✻ Crunched for 2s`), which must NOT match,
+ * hence the required `ing` + ellipsis. Glyph set excludes `*` here to avoid
+ * matching generic shell spinners; legacy versions still match via the
+ * "esc to interrupt" phrase below.
+ */
+const GERUND_SPINNER_RE = /(?:^|\n)\s*[✢✳✶✻✽·]\s*[A-Z][a-zA-Z]*ing(?:…|\.\.\.)/;
+
 export function parseSpinnerLine(input: string): {
   working: true;
   elapsedSeconds?: number;
@@ -50,10 +61,11 @@ export function parseSpinnerLine(input: string): {
 } | null {
   const stripped = stripAnsi(input);
   if (!stripped) return null;
-  // The phrase "esc to interrupt" is unique to Claude Code's spinner —
-  // shells, TUIs (vim/htop/man), and other agent CLIs don't print it.
-  // Allow the phrase to span a wrap point (e.g. "esc\nto interrupt").
-  if (!/esc\s+to\s+interrupt/i.test(stripped)) return null;
+  // Legacy (<2.1): the phrase "esc to interrupt" is unique to Claude Code's
+  // spinner. Current (≥2.1): the gerund spinner shape. Either counts.
+  // Allow the legacy phrase to span a wrap point (e.g. "esc\nto interrupt").
+  const legacy = /esc\s+to\s+interrupt/i.test(stripped);
+  if (!legacy && !GERUND_SPINNER_RE.test(stripped)) return null;
 
   // Extract elapsed time. Tolerant of seconds (`5s`), minutes+seconds
   // (`1m20s`), and hours (`2h5m10s`). Always returned as total seconds.
@@ -193,11 +205,26 @@ function bottomLines(s: string, n: number): string {
 }
 
 /**
- * The Claude Code idle prompt frame uses these distinct box-drawing
- * characters together with the input cursor. Seeing them strongly suggests
- * Claude is showing its input box — i.e. it's idle, waiting for the user.
+ * The Claude Code idle prompt frame. Legacy (<2.1): a `╭───` box with a
+ * `│ >` input cursor. Current (≥2.1, verified live): a bare `❯` prompt line
+ * between full-width `────` rules with a shortcut footer. The `❯` alone is
+ * ambiguous (permission selects render `❯ 1. Yes`), so idle requires the ❯
+ * NOT followed by a numbered option, plus a frame corroborator nearby.
  */
 const IDLE_PROMPT_FRAME_RE = /╭─{3,}.*\n[\s\S]{0,300}?[│|][\s\S]{0,80}?[>›]\s*_?/;
+const NEW_IDLE_PROMPT_RE = /(?:^|\n)\s*❯(?!\s*\d+\.)/;
+// Deliberately does NOT accept a bare `────` rule: starship-style `❯` shells
+// plus any long dash line in scrollback would false-positive. Only Claude
+// Code's own footer hints corroborate the ❯ as ITS input frame.
+const IDLE_FRAME_CORROBORATOR_RE =
+  /shift\+tab to cycle|\?\s*for shortcuts|bypass\s?permissions|plan mode|accept edits/i;
+/** Turn was stopped by the user — Claude renders `⎿ Interrupted …`. */
+const INTERRUPTED_RE = /⎿\s*Interrupted\b/;
+/** Codex ≥0.14x: ratatui status header states + `›` composer prompt. Only
+ *  trusted when a Codex/agent marker is present (the words are too generic
+ *  on their own). */
+const CODEX_STATE_RE = /(?:^|\n)\s*[•▌]?\s*(?:Working|Thinking|Reviewing)\b[^\n]{0,60}$/m;
+const CODEX_IDLE_PROMPT_RE = /(?:^|\n)\s*›\s/;
 
 /**
  * Banners / brand markers that mean an agent CLI is running in this session.
@@ -216,10 +243,10 @@ const AGENT_BANNER_RE =
 /** Brand-specific lines that show up *outside* the welcome banner —
  *  e.g. between turns, on auth flows, on /help, on `claude --version`. */
 const AGENT_SECONDARY_RE =
-  /\bcwd:\s+\/[\w/.-]+|\b(?:claude-)?(?:sonnet|opus|haiku)-?\d|\bClaude\s+Code\b.*\bv\d/i;
+  /\bcwd:\s+\/[\w/.-]+|\b(?:claude-)?(?:sonnet|opus|haiku|fable)\s?-?\d|\bClaude\s+Code\b.*\bv\d|\bClaude\s+Max\b|shift\+tab to cycle|bypass\s?permissions\s?on/i;
 const AIDER_BANNER_RE = /\baider\b\s*v?\d|^Aider\s/im;
 const CODEX_BANNER_RE =
-  /\bOpenAI\s+Codex(?:\s+(?:CLI|v?\d[\w.-]*))?\b|\bCodex\s+(?:CLI|v?\d[\w.-]*|agent|chat|repl)\b/i;
+  /\bOpenAI\s+Codex(?:\s+(?:CLI|v?\d[\w.-]*))?\b|\bCodex\s+(?:CLI|v?\d[\w.-]*|agent|chat|repl)\b|chatgpt\.com\/codex|openai\/codex|\bcodex resume\b/i;
 const CURSOR_BANNER_RE = /\bcursor\s+(?:cli|agent)\b/i;
 
 // =============================================================================
@@ -276,6 +303,18 @@ export function detectExternalAgentSignal(
     if (!result.tool) result.tool = "thinking";
   }
 
+  // Codex status header ("Working"/"Thinking"/"Reviewing") — the words are
+  // too generic to trust alone, so require a Codex/agent marker in the same
+  // text (or a caller that already knows this session runs an agent).
+  if (
+    !result.working &&
+    (hasAgentMarker || options.allowTersePermission) &&
+    CODEX_STATE_RE.test(bottomLines(stripped, PERMISSION_SCAN_LINES))
+  ) {
+    result.working = true;
+    if (!result.tool) result.tool = "thinking";
+  }
+
   // Tool-call lines (⏺ Read, ⏺ Bash, ⏺ Editing 3 files…)
   if (!result.tool || result.tool === "thinking") {
     for (const [re, cat] of TOOL_CALL_RE) {
@@ -313,9 +352,21 @@ export function detectExternalAgentSignal(
     }
   }
 
-  // Idle prompt frame — Claude is waiting for input.
-  if (IDLE_PROMPT_FRAME_RE.test(stripped)) {
-    result.idle = true;
+  // Idle prompt frame — the agent is waiting for input. Legacy box frame,
+  // or the current `❯` prompt (with a frame corroborator so a stray ❯ in
+  // shell output doesn't false-positive), or Codex's `›` composer, or an
+  // explicit interrupted marker. A live working spinner overrides idle —
+  // both can appear in one buffer while the transcript scrolls.
+  if (!result.working) {
+    const bottom = bottomLines(stripped, PERMISSION_SCAN_LINES);
+    if (
+      IDLE_PROMPT_FRAME_RE.test(stripped) ||
+      (NEW_IDLE_PROMPT_RE.test(bottom) && IDLE_FRAME_CORROBORATOR_RE.test(bottom)) ||
+      ((hasAgentMarker || options.allowTersePermission) && CODEX_IDLE_PROMPT_RE.test(bottom)) ||
+      INTERRUPTED_RE.test(bottom)
+    ) {
+      result.idle = true;
+    }
   }
 
   // Agent banner / brand marker — mark presence even when the chunk has no

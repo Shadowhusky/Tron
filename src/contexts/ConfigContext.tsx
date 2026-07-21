@@ -16,6 +16,7 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   closeTab: "meta+w",
   splitHorizontal: "meta+d",
   splitVertical: "meta+shift+d",
+  commandPalette: "meta+p",
   focusPaneLeft: "meta+alt+arrowleft",
   focusPaneRight: "meta+alt+arrowright",
   focusPaneUp: "meta+alt+arrowup",
