@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search } from "lucide-react";
+import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, SquareSplitHorizontal, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -156,6 +156,17 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   useHotkey("togglePanelInput", () => toggleRegionIfFocused("input"), [toggleRegionIfFocused]);
   useHotkey("togglePanelHints", () => toggleRegionIfFocused("hints"), [toggleRegionIfFocused]);
   useHotkey("togglePanelFooter", () => toggleRegionIfFocused("footer"), [toggleRegionIfFocused]);
+
+  // Command-palette entry point: toggle a chrome region on a SPECIFIC pane
+  // (the palette targets the active session; hotkeys target the focused one).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as { sessionId?: string; region?: PanelChromeRegion };
+      if (d?.sessionId === sessionId && d.region) stableToggleChrome(d.region);
+    };
+    window.addEventListener("tron:togglePanelRegion", handler);
+    return () => window.removeEventListener("tron:togglePanelRegion", handler);
+  }, [sessionId, stableToggleChrome]);
 
   // Stable callback refs for SmartInput memo (assigned after functions are defined below)
   const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => {});
@@ -676,13 +687,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     // Copy, Paste, Select Text — shown on all devices
     {
       label: "Copy",
-      icon: <Copy className="h-3.5 w-3.5" />,
+      icon: <Copy className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: () => { if (hasSelection) copyToClipboard(selection); },
       disabled: !hasSelection,
     },
     {
       label: "Paste",
-      icon: <ClipboardPaste className="h-3.5 w-3.5" />,
+      icon: <ClipboardPaste className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: async () => {
           const sendToTerminal = (text: string) => {
             if (text && window.electron) {
@@ -787,7 +798,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       },
       {
         label: "Find",
-        icon: <Search className="h-3.5 w-3.5" />,
+        icon: <Search className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
         action: () => {
           window.dispatchEvent(new CustomEvent("tron:terminalSearch", { detail: { sessionId } }));
         },
@@ -795,13 +806,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       { separator: true as const },
       {
         label: "Ask Agent",
-        icon: <Bot className="h-3.5 w-3.5" />,
+        icon: <Bot className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
         action: () => { if (hasSelection) stableOnRunAgent(selection); },
         disabled: !hasSelection,
       },
       {
         label: "Add to Input",
-        icon: <TextCursorInput className="h-3.5 w-3.5" />,
+        icon: <TextCursorInput className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
         action: () => {
           if (hasSelection) {
             window.dispatchEvent(new CustomEvent("tron:addToInput", { detail: { sessionId, text: selection } }));
@@ -814,7 +825,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         { separator: true as const },
         {
           label: "Copy Screen",
-          icon: <Copy className="h-3.5 w-3.5" />,
+          icon: <Copy className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
           action: () => {
             const content = readScreenBuffer(sessionId, 200);
             if (content) copyToClipboard(content);
@@ -822,25 +833,33 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         },
         {
           label: "Select Text",
-          icon: <TextSelect className="h-3.5 w-3.5" />,
+          icon: <TextSelect className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
           action: () => setSelectionMode(true),
         },
       ] : []),
       { separator: true as const },
     {
       label: "Split Horizontal",
-      icon: <Columns2 className="h-3.5 w-3.5" />,
+      icon: <Columns2 className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: () => { focusSession(sessionId); splitUserAction("horizontal"); },
     },
     {
       label: "Split Vertical",
-      icon: <Rows2 className="h-3.5 w-3.5" />,
+      icon: <Rows2 className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: () => { focusSession(sessionId); splitUserAction("vertical"); },
+    },
+    {
+      label: "Split With…",
+      icon: <SquareSplitHorizontal className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
+      action: () => {
+        focusSession(sessionId);
+        window.dispatchEvent(new CustomEvent("tron:openCommandPalette", { detail: { query: "split with" } }));
+      },
     },
     { separator: true as const },
     {
       label: "Close Pane",
-      icon: <X className="h-3.5 w-3.5" />,
+      icon: <X className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: () => closePane(sessionId),
       danger: true,
     },
@@ -851,14 +870,14 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       ref={paneRootRef}
       onMouseDown={handlePaneFocus}
       onFocusCapture={() => setFocusedSession(sessionId)}
-      className={`relative flex h-full w-full flex-col border border-transparent ${isActive ? "z-10 ring-1 ring-purple-500/50" : "opacity-80 hover:opacity-100"}`}
+      className={`relative flex h-full w-full flex-col border border-transparent ${isActive ? "z-10" : "opacity-80 hover:opacity-100"}`}
     >
       {/* Server disconnected overlay — shown when tabs are restored offline */}
       {serverDisconnected && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70">
           <div className={`flex flex-col items-center gap-3 rounded-xl px-8 py-6 ${themeClass(resolvedTheme, {
             dark: "bg-gray-900/90 border border-white/10",
-            modern: "bg-gray-900/80 border border-white/10 backdrop-blur-sm",
+            modern: "bg-gray-900/90 border border-white/10",
             light: "bg-white/95 border border-gray-200 shadow-lg",
           })}`}>
             <div className={`text-sm font-medium ${resolvedTheme === "light" ? "text-gray-700" : "text-gray-200"}`}>
@@ -871,7 +890,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               {[0, 150, 300].map((d) => (
                 <div
                   key={d}
-                  className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse"
+                  className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse"
                   style={{ animationDelay: `${d}ms` }}
                 />
               ))}
@@ -887,7 +906,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               resolvedTheme,
               {
                 dark: "border-white/5 bg-[#0a0a0a]",
-                modern: "border-white/6 bg-white/[0.02] backdrop-blur-2xl",
+                modern: "border-white/[0.08] bg-white/[0.04] backdrop-blur-2xl backdrop-saturate-150",
                 light: "border-gray-200 bg-gray-50",
               },
             )}`}
@@ -901,10 +920,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               />
             )}
             {!isSSH && session?.remoteUrl && (
-              <span className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider ${themeClass(resolvedTheme, {
-                dark: "bg-purple-500/15 text-purple-300",
-                modern: "bg-purple-500/20 text-purple-200",
-                light: "bg-purple-100 text-purple-600",
+              <span className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${themeClass(resolvedTheme, {
+                dark: "bg-blue-500/15 text-blue-300",
+                modern: "bg-blue-500/20 text-blue-300",
+                light: "bg-blue-100 text-blue-600",
               })}`}>
                 <Monitor className="h-2.5 w-2.5" />
                 Remote
@@ -912,11 +931,19 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             )}
             {!isSSH && !session?.remoteUrl && (
               <Folder
-                className={`h-3 w-3 shrink-0 ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`}
+                className={`h-3 w-3 shrink-0 ${themeClass(resolvedTheme, {
+                  dark: "text-gray-500",
+                  modern: "text-gray-400",
+                  light: "text-gray-400",
+                })}`}
               />
             )}
             <span
-              className={`truncate font-mono text-[11px] ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}
+              className={`truncate font-mono text-[11px] ${themeClass(resolvedTheme, {
+                dark: "text-gray-400",
+                modern: "text-gray-300",
+                light: "text-gray-500",
+              })}`}
             >
               {isSSH
                 ? session?.cwd || "~"
@@ -1032,7 +1059,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   resolvedTheme,
                   {
                     dark: "bg-[#0d0d0d]",
-                    modern: "bg-[#08081a]",
+                    modern: "bg-[#0a0e18]/70 backdrop-blur-xl backdrop-saturate-150",
                     light: "bg-white",
                   },
                 )}`}
@@ -1047,9 +1074,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   className={`cursor-pointer rounded-lg px-5 py-2.5 text-sm font-medium transition-colors ${themeClass(
                     resolvedTheme,
                     {
-                      dark: "bg-purple-600/80 text-white hover:bg-purple-600",
-                      modern: "bg-purple-500/70 text-white hover:bg-purple-500",
-                      light: "bg-purple-600 text-white hover:bg-purple-500",
+                      dark: "bg-blue-500 text-white hover:bg-blue-600",
+                      modern: "bg-blue-500 text-white hover:bg-blue-600",
+                      light: "bg-blue-600 text-white hover:bg-blue-700",
                     },
                   )}`}
                 >
@@ -1097,7 +1124,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 <pre
                   className={`absolute inset-0 z-20 overflow-hidden whitespace-pre font-mono text-[14px] leading-[16.8px] p-0 m-0 ${themeClass(resolvedTheme, {
                     dark: "bg-[#0a0a0a] text-gray-200",
-                    modern: "bg-[#040414] text-gray-200",
+                    modern: "bg-[#05080f] text-gray-200",
                     light: "bg-[#f9fafb] text-gray-800",
                   })}`}
                   style={{ userSelect: "text", WebkitUserSelect: "text", touchAction: "auto" }}
@@ -1111,7 +1138,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                       resolvedTheme,
                       {
                         dark: "bg-gray-800/90 hover:bg-gray-700/90 text-gray-200 border border-gray-600/50",
-                        modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border border-purple-500/30",
+                        modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border border-white/10",
                         light: "bg-white/90 hover:bg-gray-100/90 text-gray-700 border border-gray-300",
                       },
                     )}`}
@@ -1125,11 +1152,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             {termScrolledUp && !selectionMode && (
               <button
                 onClick={scrollTermToBottom}
-                className={`absolute bottom-2 left-1/2 -translate-x-1/2 z-20 px-4 py-1 rounded-full text-[10px] font-medium shadow-lg transition-opacity ${themeClass(
+                className={`absolute bottom-2 left-1/2 -translate-x-1/2 z-20 px-4 py-1 rounded-full text-[11px] font-medium shadow-lg transition-opacity ${themeClass(
                   resolvedTheme,
                   {
                     dark: "bg-gray-800/90 hover:bg-gray-700/90 text-gray-200 border border-gray-600/50",
-                    modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border border-purple-500/30",
+                    modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border border-white/10",
                     light: "bg-white/90 hover:bg-gray-100/90 text-gray-700 border border-gray-300",
                   },
                 )}`}
@@ -1189,11 +1216,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           >
             <div className={`flex flex-wrap items-center gap-1.5 px-3 py-1 ${themeClass(resolvedTheme, {
               dark: "bg-[#0a0a0a]",
-              modern: "bg-[#060618]",
+              modern: "bg-[#070b14]/70 backdrop-blur-xl backdrop-saturate-150",
               light: "bg-gray-50",
             })}`}>
               <span
-                className={`shrink-0 text-[10px] font-medium opacity-40`}
+                className={`shrink-0 text-[11px] font-medium uppercase tracking-wide opacity-40`}
               >
                 queued
               </span>
@@ -1205,10 +1232,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                     {
                       dark: "bg-white/[0.04] text-gray-400",
                       modern: item.type === "agent"
-                        ? "bg-purple-500/8 text-purple-300/80"
-                        : "bg-white/[0.04] text-gray-400",
+                        ? "bg-blue-400/[0.08] text-blue-300/80"
+                        : "bg-white/[0.04] text-gray-300",
                       light: item.type === "agent"
-                        ? "bg-purple-50 text-purple-600"
+                        ? "bg-blue-50 text-blue-600"
                         : "bg-gray-100 text-gray-500",
                     },
                   )}`}
@@ -1260,7 +1287,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           resolvedTheme,
           {
             dark: "border-white/5 bg-[#0a0a0a]",
-            modern: "border-white/6 bg-[#060618]",
+            modern: "border-white/[0.08] bg-[#070b14]/70 backdrop-blur-xl backdrop-saturate-150",
             light: "border-gray-200 bg-gray-50",
           },
         )}`}
@@ -1313,12 +1340,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             resolvedTheme,
             {
               dark: "bg-white/[0.03] hover:bg-white/[0.06] text-gray-500",
-              modern: "bg-white/[0.03] hover:bg-white/[0.07] text-gray-400",
+              modern: "bg-white/[0.03] hover:bg-white/[0.07] backdrop-blur-xl text-gray-400",
               light: "bg-gray-100 hover:bg-gray-200 text-gray-500",
             },
           )}`}
         >
-          <span className="flex items-center gap-1 text-[9px] opacity-0 transition-opacity duration-200 group-hover/restore:opacity-100">
+          <span className="flex items-center gap-1 text-[11px] opacity-0 transition-opacity duration-200 group-hover/restore:opacity-100">
             <ChevronUp className="h-2.5 w-2.5" />
             show panel
           </span>
@@ -1347,8 +1374,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             className={`absolute bottom-16 left-1/2 z-50 -translate-x-1/2 rounded-lg px-4 py-2 text-xs font-medium shadow-lg ${themeClass(
               resolvedTheme,
               {
-                dark: "border border-gray-600 bg-gray-800/95 text-gray-200",
-                modern: "border border-white/10 bg-[#1a1a3e]/95 text-gray-200",
+                dark: "border border-white/10 bg-[#1e1e1e]/95 text-gray-200",
+                modern: "border border-white/10 bg-[#172033] text-gray-200",
                 light: "border border-gray-200 bg-white/95 text-gray-700",
               },
             )}`}
@@ -1379,12 +1406,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             align="start"
             sideOffset={4}
             collisionPadding={8}
-            className={`tron-pop z-[100] min-w-[160px] overflow-hidden rounded-lg py-1 shadow-xl ${themeClass(
+            className={`tron-pop z-[100] min-w-[160px] overflow-hidden rounded-xl p-1 shadow-xl ${themeClass(
               resolvedTheme,
               {
                 dark: "border border-white/10 bg-[#1e1e1e] text-gray-200",
-                modern: "border border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-                light: "border border-gray-200 bg-white text-gray-800 shadow-xl",
+                modern: "border border-white/[0.12] bg-[#172033] text-white",
+                light: "border border-black/[0.08] bg-white text-gray-800",
               },
             )}`}
             onContextMenu={(e) => e.preventDefault()}
@@ -1394,20 +1421,20 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               "separator" in item ? (
                 <div
                   key={i}
-                  className={`my-1 h-px ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}
+                  className={`my-1 h-px ${resolvedTheme === "light" ? "bg-black/[0.06]" : "bg-white/[0.08]"}`}
                 />
               ) : (
                 <button
                   key={i}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                  className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${
                     item.disabled
                       ? "opacity-40 cursor-default pointer-events-none"
                       : item.danger
                         ? resolvedTheme === "light"
-                          ? "cursor-pointer text-red-600 hover:bg-red-50"
+                          ? "cursor-pointer text-red-500 hover:bg-red-500/10"
                           : "cursor-pointer text-red-400 hover:bg-red-500/10"
                         : resolvedTheme === "light"
-                          ? "cursor-pointer hover:bg-gray-100"
+                          ? "cursor-pointer hover:bg-black/[0.05]"
                           : "cursor-pointer hover:bg-white/10"
                   }`}
                   onClick={() => {

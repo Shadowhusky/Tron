@@ -55,12 +55,12 @@ const darkTheme: ThemeTokens = {
   surfaceHover: "hover:bg-white/5",
   surfaceActive: "bg-white/10 border-white/10",
   surfaceInput:
-    "bg-black/20 border-white/10 text-white focus:bg-black/40 focus:border-purple-500/50",
+    "bg-black/20 border-white/10 text-white focus:bg-black/40 focus:border-blue-500/50",
   surfaceOverlay: "bg-[#0a0a0a]/95 border-white/10 text-white",
 
   border: "border-white/10",
   borderSubtle: "border-white/5",
-  borderFocus: "border-purple-500/50",
+  borderFocus: "border-blue-500/50",
 
   text: "text-white",
   textMuted: "text-gray-400",
@@ -71,9 +71,9 @@ const darkTheme: ThemeTokens = {
 
   glass: "",
 
-  accent: "text-purple-400",
-  accentMuted: "text-purple-500",
-  accentBg: "bg-purple-500/10",
+  accent: "text-blue-400",
+  accentMuted: "text-blue-500",
+  accentBg: "bg-blue-500/10",
   accentGlow: "",
 };
 
@@ -85,12 +85,12 @@ const lightTheme: ThemeTokens = {
   surfaceHover: "hover:bg-gray-100",
   surfaceActive: "bg-gray-100 border-gray-300",
   surfaceInput:
-    "bg-white border-gray-200 text-gray-900 focus:border-purple-500",
+    "bg-white border-gray-200 text-gray-900 focus:border-blue-500",
   surfaceOverlay: "bg-white/95 border-gray-200 text-gray-900",
 
   border: "border-gray-200",
   borderSubtle: "border-gray-200/60",
-  borderFocus: "border-purple-500",
+  borderFocus: "border-blue-500",
 
   text: "text-gray-900",
   textMuted: "text-gray-500",
@@ -101,41 +101,45 @@ const lightTheme: ThemeTokens = {
 
   glass: "",
 
-  accent: "text-purple-600",
-  accentMuted: "text-purple-400",
-  accentBg: "bg-purple-50",
+  accent: "text-blue-600",
+  accentMuted: "text-blue-400",
+  accentBg: "bg-blue-50",
   accentGlow: "",
 };
 
+// Modern = Apple-material theme: translucent chrome (backdrop-blur on
+// PERSISTENT surfaces only) over a luminous backdrop (see App.tsx modern
+// backdrop layers) so the glass has something to refract. Transient
+// overlays stay near-opaque per the no-blur-on-overlays rule.
 const modernTheme: ThemeTokens = {
   isLight: false,
   appBg:
-    "bg-gradient-to-br from-[#020010] via-[#050520] to-[#0a0a2e] text-white",
+    "bg-gradient-to-br from-[#06080f] via-[#0a0e1a] to-[#101827] text-white",
 
-  surface: "bg-white/[0.03] border border-white/[0.06]",
-  surfaceHover: "hover:bg-white/[0.06]",
-  surfaceActive: "bg-white/[0.08] border-white/[0.1]",
+  surface: "bg-white/[0.05] border border-white/[0.08]",
+  surfaceHover: "hover:bg-white/[0.08]",
+  surfaceActive: "bg-white/[0.1] border-white/[0.12]",
   surfaceInput:
-    "bg-white/[0.03] border-white/[0.08] text-white focus:border-purple-400/30 focus:bg-white/[0.05]",
-  surfaceOverlay: "bg-[#0c0c1e]/90 border-white/[0.06] text-white",
+    "bg-white/[0.04] border-white/[0.1] text-white focus:border-blue-400/40 focus:bg-white/[0.06]",
+  surfaceOverlay: "bg-[#0d1220]/95 border-white/[0.08] text-white",
 
   border: "border-white/[0.08]",
-  borderSubtle: "border-white/[0.04]",
-  borderFocus: "border-purple-400/30",
+  borderSubtle: "border-white/[0.05]",
+  borderFocus: "border-blue-400/40",
 
   text: "text-white",
-  textMuted: "text-gray-400",
+  textMuted: "text-gray-300",
   textFaint: "text-gray-500",
 
-  bar: "bg-white/[0.02]",
-  barBorder: "border-white/[0.06]",
+  bar: "bg-white/[0.03]",
+  barBorder: "border-white/[0.08]",
 
-  glass: "",
+  glass: "backdrop-blur-xl backdrop-saturate-150",
 
-  accent: "text-purple-300",
-  accentMuted: "text-purple-400/60",
-  accentBg: "bg-purple-500/[0.08]",
-  accentGlow: "shadow-[0_0_20px_rgba(168,85,247,0.08)]",
+  accent: "text-blue-300",
+  accentMuted: "text-blue-400/60",
+  accentBg: "bg-blue-400/[0.08]",
+  accentGlow: "",
 };
 
 // ---------------------------------------------------------------------------

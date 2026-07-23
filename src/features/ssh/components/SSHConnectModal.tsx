@@ -214,11 +214,11 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
 
   const inputCls = `w-full px-2.5 py-1.5 text-[13px] rounded-md border outline-none transition-colors ${themeClass(resolvedTheme, {
     dark: "bg-white/[0.04] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-white/20",
-    modern: "bg-white/[0.04] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-purple-400/40",
+    modern: "bg-white/[0.04] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-white/20",
     light: "bg-gray-50/80 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-gray-400",
   })}`;
 
-  const labelCls = `block text-[11px] font-medium mb-0.5 uppercase tracking-wider ${themeClass(resolvedTheme, {
+  const labelCls = `block text-[11px] font-medium mb-0.5 uppercase tracking-wide ${themeClass(resolvedTheme, {
     dark: "text-gray-500",
     modern: "text-gray-500",
     light: "text-gray-400",
@@ -249,11 +249,11 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
             animate="visible"
             exit="exit"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-md mx-3 rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${themeClass(
+            className={`w-full max-w-md mx-3 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${themeClass(
               resolvedTheme,
               {
-                dark: "bg-[#141414] text-gray-200 border border-white/[0.06]",
-                modern: "bg-[#12121a]/95 backdrop-blur-2xl text-gray-200 border border-white/[0.08] shadow-[0_0_40px_rgba(0,0,0,0.5)]",
+                dark: "bg-[#141414] text-gray-200 border border-white/10",
+                modern: "bg-[#10141e] text-gray-200 border border-white/[0.12] shadow-[0_0_40px_rgba(0,0,0,0.5)]",
                 light: "bg-white text-gray-900 border border-gray-200/80 shadow-xl",
               },
             )}`}
@@ -267,12 +267,12 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
               <div className="flex items-center gap-2">
                 <svg className={`w-4 h-4 ${themeClass(resolvedTheme, {
                   dark: "text-gray-500",
-                  modern: "text-purple-400/60",
+                  modern: "text-gray-500",
                   light: "text-gray-400",
                 })}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
                 </svg>
-                <h3 className="text-sm font-medium">SSH Connection</h3>
+                <h3 className="text-[15px] font-medium tracking-tight">SSH Connection</h3>
               </div>
               {!preventClose && (
                 <button
@@ -284,7 +284,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                   })}`}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               )}
@@ -311,7 +311,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                           selectedProfileId === profile.id
                             ? themeClass(resolvedTheme, {
                                 dark: "bg-white/[0.06] border-white/[0.12] text-gray-200",
-                                modern: "bg-purple-500/10 border-purple-500/20 text-purple-300",
+                                modern: "bg-blue-400/[0.08] border-blue-400/20 text-blue-300",
                                 light: "bg-gray-100 border-gray-300 text-gray-800",
                               })
                             : themeClass(resolvedTheme, {
@@ -323,7 +323,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                         title={`${profile.name} — ${profile.username}@${profile.host}`}
                       >
                         <span className="font-medium">{profile.name}</span>
-                        <span className="ml-1 opacity-50">
+                        <span className="ml-1 opacity-50 font-mono">
                           {profile.username}@{profile.host}
                         </span>
                       </button>
@@ -353,7 +353,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                       value={host}
                       onChange={(e) => setHost(e.target.value)}
                       placeholder="192.168.1.100"
-                      className={inputCls}
+                      className={`${inputCls} font-mono`}
                     />
                   </div>
                   <div className="w-16 shrink-0">
@@ -362,7 +362,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                       value={port}
                       onChange={(e) => setPort(e.target.value)}
                       placeholder="22"
-                      className={inputCls}
+                      className={`${inputCls} font-mono`}
                     />
                   </div>
                 </div>
@@ -416,7 +416,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                           value={privateKeyPath}
                           onChange={(e) => setPrivateKeyPath(e.target.value)}
                           placeholder="~/.ssh/id_rsa"
-                          className={`flex-1 min-w-0 ${inputCls}`}
+                          className={`flex-1 min-w-0 font-mono ${inputCls}`}
                         />
                         <button onClick={handleBrowseKey} className={btnSecondary}>
                           Browse
@@ -488,7 +488,7 @@ const SSHConnectModal: React.FC<SSHConnectModalProps> = ({
                   disabled={connecting || !host || !username}
                   className={`px-3.5 py-1.5 text-[13px] font-medium rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${themeClass(resolvedTheme, {
                     dark: "bg-white/[0.1] hover:bg-white/[0.15] text-gray-200",
-                    modern: "bg-purple-500/20 hover:bg-purple-500/30 text-purple-200",
+                    modern: "bg-blue-500/20 hover:bg-blue-500/30 text-blue-200",
                     light: "bg-gray-900 hover:bg-gray-800 text-white",
                   })}`}
                 >

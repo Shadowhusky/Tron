@@ -213,7 +213,7 @@ const TabSearchPalette: React.FC = () => {
                           if (highlight !== i) setHighlight(i);
                         }}
                         onClick={() => confirm(tab.id)}
-                        className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
+                        className={`flex items-start gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${
                           isActive
                             ? `${t.surfaceActive} ${t.text}`
                             : `${t.textMuted} ${t.surfaceHover}`
@@ -234,7 +234,7 @@ const TabSearchPalette: React.FC = () => {
                             </span>
                             {matchSource === "context" && (
                               <span
-                                className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${t.borderSubtle} border ${t.textFaint} shrink-0`}
+                                className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${t.borderSubtle} border ${t.textFaint} shrink-0`}
                                 title="Match from terminal / agent context"
                               >
                                 ctx
@@ -251,7 +251,7 @@ const TabSearchPalette: React.FC = () => {
                               {renderHighlighted(snippet.prefix, query)}
                               <span
                                 className="font-semibold"
-                                style={{ color: "var(--brand-accent, #a855f7)" }}
+                                style={{ color: "var(--brand-accent, #3b82f6)" }}
                               >
                                 {snippet.match}
                               </span>
@@ -266,7 +266,7 @@ const TabSearchPalette: React.FC = () => {
               )}
             </div>
             <div
-              className={`px-3 py-1.5 border-t ${t.borderSubtle} flex items-center justify-between text-[10px] ${t.textFaint}`}
+              className={`px-3 py-1.5 border-t ${t.borderSubtle} flex items-center justify-between text-[11px] ${t.textFaint}`}
             >
               <span>← → move · Enter open · Esc close</span>
               <span>{filtered.length} / {tabs.length}</span>
@@ -298,7 +298,7 @@ function renderHighlighted(text: string, query: string): React.ReactNode {
       <span
         key={`m${key++}`}
         className="font-semibold"
-        style={{ color: "var(--brand-accent, #a855f7)" }}
+        style={{ color: "var(--brand-accent, #3b82f6)" }}
       >
         {text.slice(idx, idx + q.length)}
       </span>,

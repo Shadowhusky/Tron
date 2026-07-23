@@ -28,7 +28,8 @@ import Modal from "./components/ui/Modal";
 import { Markdown } from "./components/ui/Markdown";
 import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
-import { isTouchDevice } from "./utils/platform";
+import { getActiveRemoteConnections, disconnectRemote } from "./services/remote-bridge";
+import { isTouchDevice, isElectronApp } from "./utils/platform";
 import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye, Columns2 } from "lucide-react";
 import AgentStatusBar from "./pixel-agents/components/AgentStatusBar";
 
@@ -121,7 +122,7 @@ const AppContent = () => {
   } = useLayout();
   const { resolvedTheme, setTheme } = useTheme();
   const { config, updateConfig, hotkeys, isLoaded: configLoaded } = useConfig();
-  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, getSessionPersistable, restoreAgentSession } = useAgentContext();
+  const { crossTabNotifications, dismissNotification, setActiveSessionForNotifications, getSessionPersistable, restoreAgentSession, stopAgentForSession } = useAgentContext();
   const invalidateModels = useInvalidateModels();
   useVisualViewportHeight();
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -447,41 +448,111 @@ const AppContent = () => {
 
   // ── Command palette (⌘P) ────────────────────────────────────────────────
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
   const [sshProfilesForPalette, setSshProfilesForPalette] = useState<SSHConnectionConfig[]>([]);
-  useHotkey("commandPalette", () => setPaletteOpen((v) => !v), []);
+  useHotkey("commandPalette", () => { setPaletteQuery(""); setPaletteOpen((v) => !v); }, []);
+  // "Split With…" — the palette pre-filtered to split targets (local / SSH profiles / remote).
+  useHotkey("splitWith", () => { setPaletteQuery("split with"); setPaletteOpen(true); }, []);
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const q = (e as CustomEvent).detail?.query;
+      setPaletteQuery(typeof q === "string" ? q : "");
+      setPaletteOpen(true);
+    };
+    window.addEventListener("tron:openCommandPalette", onOpen);
+    return () => window.removeEventListener("tron:openCommandPalette", onOpen);
+  }, []);
   useEffect(() => {
     if (!paletteOpen) return;
     // Refresh saved SSH profiles each open so "Split with SSH" stays current.
-    const ipc = window.electron?.ipcRenderer as any;
+    const ipc = window.electron?.ipcRenderer as
+      | { readSSHProfiles?: () => Promise<SSHConnectionConfig[]>; invoke?: (ch: string) => Promise<SSHConnectionConfig[]> }
+      | undefined;
     const read = ipc?.readSSHProfiles || (() => ipc?.invoke?.("ssh.profiles.read"));
     Promise.resolve(read?.()).then((p) => setSshProfilesForPalette(Array.isArray(p) ? p : [])).catch(() => {});
   }, [paletteOpen]);
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
     const fmt = (action: string) => formatHotkey(hotkeys[action] || "");
+    const evt = (name: string, detail?: unknown) => () =>
+      window.dispatchEvent(new CustomEvent(name, detail !== undefined ? { detail } : undefined));
+    const remoteConns = getActiveRemoteConnections();
+    const activeSess = activeSessionId ? sessions.get(activeSessionId) : undefined;
+    const activeCwd = activeSess?.cwd;
     const acts: PaletteAction[] = [
+      // ── Tabs ──
       { id: "new-tab", label: "New Tab", hint: fmt("newTab"), section: "Tabs", run: () => createTab() },
       { id: "close-tab", label: "Close Tab", hint: fmt("closeTab"), section: "Tabs", run: () => closeTab(activeTabId) },
-      { id: "new-ssh", label: "New SSH Connection…", section: "Tabs", run: () => window.dispatchEvent(new CustomEvent("tron:open-ssh-modal")) },
+      { id: "rename-tab", label: "Rename Tab", section: "Tabs", run: evt("tron:renameActiveTab") },
+      { id: "duplicate-tab", label: "Duplicate Tab", section: "Tabs", run: () => duplicateTab(activeTabId) },
+      { id: "save-tab", label: "Save Tab to Remote", section: "Tabs", run: () => { saveTab(activeTabId, getSessionPersistable); } },
+      { id: "load-saved-tab", label: "Load Saved Tab…", section: "Tabs", run: () => setShowSavedTabs(true) },
+      { id: "tab-search", label: "Search Tabs…", hint: fmt("tabSearch"), section: "Tabs", run: evt("tron:openTabSearch") },
+      // ── Connections ──
+      { id: "new-ssh", label: "New SSH Connection…", section: "Connections", run: evt("tron:open-ssh-modal") },
+      { id: "new-remote", label: "Connect to Remote Server…", section: "Connections", run: () => setShowRemoteModal(true) },
+      ...remoteConns.map((c) => ({
+        id: `disconnect-remote-${c.id}`,
+        label: `Disconnect Remote: ${new URL(c.url).host}`,
+        section: "Connections",
+        run: () => disconnectRemote(c.id),
+      })),
+      // ── Panes ──
       { id: "split-h", label: "Split Horizontal", hint: fmt("splitHorizontal"), section: "Panes", run: () => splitUserAction("horizontal") },
       { id: "split-v", label: "Split Vertical", hint: fmt("splitVertical"), section: "Panes", run: () => splitUserAction("vertical") },
-      { id: "split-local", label: "Split with Local Terminal", section: "Panes", run: () => splitUserAction("horizontal", { kind: "local" }) },
-      ...sshProfilesForPalette.map((p) => ({
-        id: `split-ssh-${p.id}`,
-        label: `Split with SSH: ${p.name || `${p.username}@${p.host}`}`,
+      ...[
+        { key: "local", name: "Local Terminal", kind: { kind: "local" as const } },
+        ...sshProfilesForPalette.map((p) => ({
+          key: `ssh-${p.id}`,
+          name: `SSH: ${p.name || `${p.username}@${p.host}`}`,
+          kind: { kind: { sshProfileId: p.id } },
+        })),
+        ...remoteConns.map((c) => ({
+          key: `remote-${c.id}`,
+          name: `Remote: ${new URL(c.url).host}`,
+          kind: { kind: { remoteConnectionId: c.id } },
+        })),
+      ].flatMap((t) => (["horizontal", "vertical"] as const).map((dir) => ({
+        id: `split-${t.key}-${dir}`,
+        label: `Split with ${t.name} (${dir === "horizontal" ? "Horizontal" : "Vertical"})`,
         section: "Panes",
-        run: () => splitUserAction("horizontal", { kind: { sshProfileId: p.id } }),
-      })),
-      ...(activeSessionId ? [{ id: "close-pane", label: "Close Pane", section: "Panes", run: () => closePane(activeSessionId) }] : []),
+        run: () => splitUserAction(dir, t.kind),
+      }))),
+      ...(activeSessionId ? [
+        { id: "close-pane", label: "Close Pane", section: "Panes", run: () => closePane(activeSessionId) },
+        { id: "focus-left", label: "Focus Pane Left", hint: fmt("focusPaneLeft"), section: "Panes", run: () => focusPane("left") },
+        { id: "focus-right", label: "Focus Pane Right", hint: fmt("focusPaneRight"), section: "Panes", run: () => focusPane("right") },
+        { id: "focus-up", label: "Focus Pane Up", hint: fmt("focusPaneUp"), section: "Panes", run: () => focusPane("up") },
+        { id: "focus-down", label: "Focus Pane Down", hint: fmt("focusPaneDown"), section: "Panes", run: () => focusPane("down") },
+      ] : []),
+      // ── Terminal ──
+      ...(activeSessionId ? [
+        { id: "clear-term", label: "Clear Terminal", hint: fmt("clearTerminal"), section: "Terminal", run: evt("tron:clearTerminal", { sessionId: activeSessionId }) },
+        { id: "stop-agent", label: "Stop Agent", section: "Terminal", run: () => stopAgentForSession(activeSessionId) },
+        { id: "toggle-input", label: "Toggle Input Box", hint: fmt("togglePanelInput"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "input" }) },
+        { id: "toggle-hints", label: "Toggle Hints Bar", hint: fmt("togglePanelHints"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "hints" }) },
+        { id: "toggle-footer", label: "Toggle Footer Bar", hint: fmt("togglePanelFooter"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "footer" }) },
+      ] : []),
+      ...(activeCwd && isElectronApp() && activeSess && !activeSess.sshProfileId && !activeSess.remoteUrl ? [
+        // Local sessions in the desktop app only: an SSH/remote cwd is a path
+        // on another machine, and web mode can't open local folders.
+        { id: "open-cwd", label: `Reveal Current Folder (${activeCwd.split("/").pop() || activeCwd})`, section: "Terminal", run: () => { window.electron?.ipcRenderer?.invoke("shell.openPath", activeCwd)?.catch(() => {}); } },
+      ] : []),
+      // ── Appearance ──
       { id: "theme-dark", label: "Theme: Dark", section: "Appearance", run: () => setTheme("dark") },
       { id: "theme-light", label: "Theme: Light", section: "Appearance", run: () => setTheme("light") },
       { id: "theme-modern", label: "Theme: Modern", section: "Appearance", run: () => setTheme("modern") },
       { id: "theme-auto", label: "Theme: Auto (System)", section: "Appearance", run: () => setTheme("system") },
+      // ── App ──
+      { id: "new-browser", label: "New Browser Tab", section: "App", run: () => openBrowserTab("https://www.google.com") },
       { id: "settings", label: "Open Settings", hint: fmt("openSettings"), section: "App", run: () => openSettingsTab() },
       { id: "settings-shortcuts", label: "Keyboard Shortcuts…", section: "App", run: () => openSettingsTab("shortcuts") },
+      // Same pair as SettingsPane's handleCheck: the event un-dismisses the
+      // update modal; the IPC call actually runs the updater check.
+      { id: "check-updates", label: "Check for Updates", section: "App", run: () => { window.dispatchEvent(new Event("tron:manual-update-check")); window.electron?.ipcRenderer?.checkForUpdates?.()?.catch?.(() => {}); } },
     ];
     return acts;
-  }, [hotkeys, createTab, closeTab, activeTabId, splitUserAction, sshProfilesForPalette, activeSessionId, closePane, setTheme, openSettingsTab]);
+  }, [hotkeys, createTab, closeTab, activeTabId, duplicateTab, saveTab, getSessionPersistable, splitUserAction, sshProfilesForPalette, activeSessionId, sessions, closePane, focusPane, stopAgentForSession, setTheme, openSettingsTab, openBrowserTab]);
 
   // Check if any session in a tab's tree is dirty
   const isTabDirty = useCallback(
@@ -569,6 +640,15 @@ const AppContent = () => {
       transition={{ duration: 0.4 }}
       className={`flex flex-col h-full w-full overflow-hidden ${getTheme(resolvedTheme).appBg}`}
     >
+      {/* Modern theme: luminous backdrop the glass chrome refracts. Static
+          gradients only — rendered once, no animation, GPU-cheap. */}
+      {resolvedTheme === "modern" && (
+        <div aria-hidden className="pointer-events-none fixed inset-0 overflow-hidden">
+          <div className="absolute -top-[15%] -left-[10%] h-[70vh] w-[70vw] rounded-full bg-blue-600/[0.30] blur-[110px]" />
+          <div className="absolute -bottom-[20%] -right-[10%] h-[80vh] w-[75vw] rounded-full bg-cyan-500/[0.20] blur-[130px]" />
+          <div className="absolute top-[25%] left-[45%] h-[55vh] w-[55vw] rounded-full bg-sky-500/[0.13] blur-[110px]" />
+        </div>
+      )}
       <TabBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -604,7 +684,7 @@ const AppContent = () => {
           onDismiss={dismissNotification}
         />
         <TabSearchPalette />
-        <CommandPalette key={String(paletteOpen)} open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
+        <CommandPalette key={paletteOpen ? `open:${paletteQuery}` : "closed"} open={paletteOpen} initialQuery={paletteQuery} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
         {/* Render tabs in a STABLE DOM order (first-seen ascending) so a
             TabBar reorder never causes React to move existing tab DOM
             nodes via insertBefore — moving an xterm canvas mid-render
@@ -745,7 +825,7 @@ const AppContent = () => {
             </p>
             <div className={`w-full h-1.5 rounded-full overflow-hidden ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}>
               <div
-                className="h-full rounded-full bg-purple-500 animate-[indeterminate_1.5s_ease-in-out_infinite]"
+                className="h-full rounded-full bg-blue-500 animate-[indeterminate_1.5s_ease-in-out_infinite]"
                 style={{ width: "40%" }}
               />
             </div>
@@ -775,7 +855,7 @@ const AppContent = () => {
           </p>
           <div className={`w-full h-2 rounded-full overflow-hidden ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}>
             <div
-              className="h-full rounded-full bg-purple-500 transition-all duration-300"
+              className="h-full rounded-full bg-blue-500 transition-all duration-300"
               style={{ width: `${downloadProgress?.percent ?? 0}%` }}
             />
           </div>
@@ -828,7 +908,7 @@ const AppContent = () => {
               resolvedTheme === "light"
                 ? "border border-gray-200 bg-white text-gray-800 shadow-xl"
                 : resolvedTheme === "modern"
-                  ? "border border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+                  ? "border border-white/[0.15] bg-[#172033]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
                   : "border border-white/10 bg-[#1e1e1e] text-gray-200"
             }`}
             onOpenAutoFocus={(e) => e.preventDefault()}
@@ -890,7 +970,7 @@ const AppContent = () => {
               resolvedTheme === "light"
                 ? "border border-gray-200 bg-white text-gray-800 shadow-xl"
                 : resolvedTheme === "modern"
-                  ? "border border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+                  ? "border border-white/[0.15] bg-[#172033]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
                   : "border border-white/10 bg-[#1e1e1e] text-gray-200"
             }`}
             onOpenAutoFocus={(e) => e.preventDefault()}

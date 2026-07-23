@@ -29,7 +29,7 @@ const SSHStatusBadge: React.FC<SSHStatusBadgeProps> = ({
   return (
     <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs ${themeClass(resolvedTheme, {
       dark: "bg-white/5 text-gray-300",
-      modern: "bg-white/5 text-gray-300",
+      modern: "bg-white/[0.06] backdrop-blur-xl backdrop-saturate-150 ring-1 ring-inset ring-white/[0.08] text-gray-300",
       light: "bg-gray-100 text-gray-600",
     })}`}>
       <div className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
@@ -38,9 +38,9 @@ const SSHStatusBadge: React.FC<SSHStatusBadgeProps> = ({
         <button
           onClick={onReconnect}
           className={`ml-1 px-1.5 py-0.5 rounded text-xs transition-colors ${themeClass(resolvedTheme, {
-            dark: "hover:bg-white/10 text-purple-400",
-            modern: "hover:bg-white/10 text-purple-400",
-            light: "hover:bg-gray-200 text-purple-600",
+            dark: "hover:bg-white/10 text-blue-400",
+            modern: "hover:bg-white/10 text-blue-400",
+            light: "hover:bg-gray-200 text-blue-600",
           })}`}
         >
           Reconnect

@@ -20,15 +20,17 @@ interface CommandPaletteProps {
   open: boolean;
   actions: PaletteAction[];
   onClose: () => void;
+  /** Pre-filled filter query (e.g. "split with" for the Split With… picker). */
+  initialQuery?: string;
 }
 
 /**
  * Cmd-P command palette: fuzzy action launcher (Warp / VS Code pattern).
  * Keyboard-first: type to filter, ↑↓ to move, ⏎ to run, Esc to close.
  */
-const CommandPalette: React.FC<CommandPaletteProps> = ({ open, actions, onClose }) => {
+const CommandPalette: React.FC<CommandPaletteProps> = ({ open, actions, onClose, initialQuery }) => {
   const { resolvedTheme } = useTheme();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery ?? "");
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -43,7 +45,11 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, actions, onClose 
   useEffect(() => {
     if (open) {
       // Focus after the entrance frame so the browser doesn't scroll-jump.
-      requestAnimationFrame(() => inputRef.current?.focus());
+      // Select any pre-filled query so typing replaces it.
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
     }
   }, [open]);
 
@@ -99,7 +105,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, actions, onClose 
               resolvedTheme,
               {
                 dark: "border-white/10 bg-[#1c1c1e] text-gray-100",
-                modern: "border-white/[0.15] bg-[#191937] text-white",
+                modern: "border-white/[0.15] bg-[#141a2a] text-white",
                 light: "border-gray-200 bg-white text-gray-900",
               },
             )}`}

@@ -43,9 +43,9 @@ const NotificationOverlay: React.FC<NotificationOverlayProps> = ({
                         initial={{ opacity: 0, x: 40 }}
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: 40 }}
-                        className={`rounded-lg px-3 py-2 text-xs shadow-lg cursor-pointer border backdrop-blur-md ${resolvedTheme === "light"
-                            ? "bg-white/90 border-gray-200 text-gray-700"
-                            : "bg-gray-800/90 border-gray-600 text-gray-200"
+                        className={`rounded-xl px-3 py-2 text-xs shadow-xl cursor-pointer border ${resolvedTheme === "light"
+                            ? "bg-white/95 border-black/[0.08] text-gray-700"
+                            : "bg-gray-800/95 border-white/10 text-gray-200"
                             }`}
                         onClick={() => {
                             if (targetTabId) onSelectTab(targetTabId);
@@ -64,10 +64,10 @@ const NotificationOverlay: React.FC<NotificationOverlayProps> = ({
                                 ✕
                             </button>
                         </div>
-                        <div className="mt-0.5 truncate opacity-75">{n.message}</div>
+                        <div className="mt-0.5 truncate opacity-75 font-mono text-[11px]">{n.message}</div>
                         {targetTabId && (
                             <button
-                                className={`mt-1 text-[10px] font-medium ${resolvedTheme === "light" ? "text-blue-600 hover:text-blue-800" : "text-blue-400 hover:text-blue-300"}`}
+                                className={`mt-1 text-[11px] font-medium ${resolvedTheme === "light" ? "text-blue-600 hover:text-blue-800" : "text-blue-400 hover:text-blue-300"}`}
                                 onClick={(e) => { e.stopPropagation(); onSelectTab(targetTabId); onDismiss(n.id); }}
                             >
                                 Go to tab

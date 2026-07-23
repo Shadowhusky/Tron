@@ -176,13 +176,13 @@ const SavedTabsModal: React.FC<SavedTabsModalProps> = ({
                     </div>
                   )}
                   <div
-                    className={`text-[10px] flex items-center gap-1.5 ${isLight ? "text-gray-400" : "text-gray-600"}`}
+                    className={`text-[11px] flex items-center gap-1.5 ${isLight ? "text-gray-400" : "text-gray-600"}`}
                   >
                     <span>{timeAgo(tab.savedAt, openedAt)}</span>
                     <span>·</span>
                     <span>{sessionCount(tab)} pane{sessionCount(tab) === 1 ? "" : "s"}</span>
                     {hasAgent(tab) && (
-                      <span className="text-purple-400/60">agent</span>
+                      <span className="text-blue-400/60">agent</span>
                     )}
                   </div>
                 </div>
@@ -190,7 +190,7 @@ const SavedTabsModal: React.FC<SavedTabsModalProps> = ({
                   <button
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={commitRename}
-                    className={`px-2 py-1 text-[11px] font-medium transition-colors ${
+                    className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
                       isLight
                         ? "bg-white text-gray-900 hover:bg-gray-50 border border-black/[0.08]"
                         : "bg-white/[0.06] text-gray-200 hover:bg-white/[0.1] border border-white/[0.06]"
@@ -213,7 +213,7 @@ const SavedTabsModal: React.FC<SavedTabsModalProps> = ({
                     <button
                       data-testid={`saved-tab-load-${tab.id}`}
                       onClick={() => onLoad(tab)}
-                      className={`px-2 py-1 text-[11px] font-medium transition-colors ${
+                      className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
                         isLight
                           ? "bg-white text-gray-900 hover:bg-gray-50 border border-black/[0.08]"
                           : "bg-white/[0.06] text-gray-200 hover:bg-white/[0.1] border border-white/[0.06]"
@@ -229,11 +229,11 @@ const SavedTabsModal: React.FC<SavedTabsModalProps> = ({
                   title="Delete"
                 >
                   <svg
-                    className="w-3 h-3"
+                    className="w-3.5 h-3.5"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
-                    strokeWidth={2}
+                    strokeWidth={1.5}
                   >
                     <path
                       strokeLinecap="round"
@@ -278,10 +278,10 @@ const SavedTabsModal: React.FC<SavedTabsModalProps> = ({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-[70] px-4 py-2 text-xs font-medium shadow-lg ${
+            className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-[70] px-4 py-2 text-xs font-medium rounded-lg shadow-lg ${
               isLight
                 ? "bg-white/95 text-gray-700 border border-gray-200"
-                : "bg-gray-800/95 text-gray-200 border border-gray-600"
+                : "bg-gray-800/95 text-gray-200 border border-white/10"
             }`}
           >
             {toast}

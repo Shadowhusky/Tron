@@ -184,6 +184,11 @@ class AgentStore {
   }
 
   stopAgent = (sessionId: string) => {
+    // Nothing running → nothing to stop. Without this, a stray call (e.g. the
+    // command palette's Stop Agent on an idle session) would append a spurious
+    // "Stopped" step, force the overlay open, and broadcast the PREVIOUS
+    // task's prompt back into the input box.
+    if (!this.states.get(sessionId)?.isAgentRunning) return;
     const controller = this.abortControllers.get(sessionId);
     if (controller) {
       controller.abort();
@@ -514,6 +519,7 @@ export const useAgentContext = () => {
     duplicateAgentSession: store.duplicateSession,
     getSessionPersistable: store.getSessionPersistable,
     restoreAgentSession: store.restoreSession,
+    stopAgentForSession: store.stopAgent,
   };
 };
 

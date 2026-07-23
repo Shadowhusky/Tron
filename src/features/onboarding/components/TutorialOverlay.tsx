@@ -112,10 +112,10 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
         <div
           className={`flex h-8 w-8 items-center justify-center rounded-lg ${
             isLast
-              ? "bg-linear-to-br from-purple-500 to-pink-500"
+              ? "bg-linear-to-br from-blue-500 to-cyan-500"
               : isFirst
-                ? "bg-linear-to-br from-purple-500 to-blue-500"
-                : "bg-purple-500/20"
+                ? "bg-linear-to-br from-blue-500 to-cyan-500"
+                : "bg-blue-500/20"
           }`}
         >
           {isLast ? (
@@ -123,7 +123,7 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
           ) : isFirst ? (
             <Sparkles className="h-4 w-4 text-white" />
           ) : (
-            <span className="text-sm font-bold text-purple-400">
+            <span className="text-sm font-bold text-blue-400">
               {currentStep}
             </span>
           )}
@@ -155,9 +155,9 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
                 key={i}
                 className={`h-1.5 rounded-full transition-all duration-300 ${
                   i === currentStep
-                    ? "w-4 bg-purple-400"
+                    ? "w-4 bg-blue-400"
                     : i < currentStep
-                      ? "w-1.5 bg-purple-400/40"
+                      ? "w-1.5 bg-blue-400/40"
                       : isLight
                         ? "w-1.5 bg-gray-300"
                         : "w-1.5 bg-white/15"
@@ -194,7 +194,7 @@ const TutorialOverlay: React.FC<TutorialOverlayProps> = ({
           )}
           <button
             onClick={handleNext}
-            className="flex items-center gap-1 rounded-lg bg-purple-600 px-4 py-1.5 text-xs font-semibold text-white shadow-lg shadow-purple-900/20 transition-colors hover:bg-purple-500"
+            className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white shadow-lg shadow-black/20 transition-colors hover:bg-blue-500"
           >
             {isLast ? (
               <>

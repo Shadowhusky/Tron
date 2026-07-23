@@ -45,17 +45,17 @@ const TuiKeyToolbar: React.FC<TuiKeyToolbarProps> = memo(({ sessionId }) => {
   const btnBase = "h-7 min-w-[2rem] px-1.5 rounded text-[11px] font-medium select-none active:scale-95 transition-all duration-75";
   const btnClass = themeClass(resolvedTheme, {
     dark: "text-gray-400 active:bg-white/10 active:text-gray-200",
-    modern: "text-gray-400 active:bg-white/8 active:text-gray-200",
+    modern: "text-gray-300 active:bg-white/8 active:text-gray-100",
     light: "text-gray-500 active:bg-gray-200 active:text-gray-800",
   });
   const accentClass = themeClass(resolvedTheme, {
-    dark: "text-purple-400 active:bg-purple-500/20 active:text-purple-300",
-    modern: "text-purple-400 active:bg-purple-500/15 active:text-purple-300",
-    light: "text-purple-600 active:bg-purple-100 active:text-purple-700",
+    dark: "text-blue-400 active:bg-blue-500/20 active:text-blue-300",
+    modern: "text-blue-400 active:bg-blue-500/15 active:text-blue-300",
+    light: "text-blue-600 active:bg-blue-100 active:text-blue-700",
   });
   const dividerClass = themeClass(resolvedTheme, {
     dark: "bg-white/6",
-    modern: "bg-white/5",
+    modern: "bg-white/10",
     light: "bg-gray-200",
   });
 
@@ -67,7 +67,7 @@ const TuiKeyToolbar: React.FC<TuiKeyToolbarProps> = memo(({ sessionId }) => {
       exit="exit"
       className={`shrink-0 flex items-center justify-center gap-1 px-2 h-8 ${themeClass(resolvedTheme, {
         dark: "bg-[#0a0a0a]",
-        modern: "bg-transparent",
+        modern: "bg-white/[0.04] backdrop-blur-xl backdrop-saturate-150 border-t border-white/[0.08]",
         light: "bg-gray-50",
       })}`}
     >

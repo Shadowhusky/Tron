@@ -18,12 +18,13 @@ const FeatureIcon: React.FC<FeatureIconProps> = ({
   const isDark = resolvedTheme !== "light";
 
   const colorMap = {
+    // "purple" kept as a prop alias for callers; renders the blue accent now
     purple: {
-      bg: isDark ? "bg-purple-500/10" : "bg-purple-100",
-      border: isDark ? "border-purple-500/20" : "border-purple-200",
-      text: isDark ? "text-purple-400" : "text-purple-600",
-      glow: isDark ? "shadow-[0_0_15px_rgba(168,85,247,0.3)]" : "shadow-none",
-      ring: isDark ? "ring-purple-500/20" : "ring-purple-200",
+      bg: isDark ? "bg-blue-500/10" : "bg-blue-100",
+      border: isDark ? "border-blue-500/20" : "border-blue-200",
+      text: isDark ? "text-blue-400" : "text-blue-600",
+      glow: isDark ? "shadow-[0_0_15px_rgba(59,130,246,0.3)]" : "shadow-none",
+      ring: isDark ? "ring-blue-500/20" : "ring-blue-200",
     },
     blue: {
       bg: isDark ? "bg-blue-500/10" : "bg-blue-100",

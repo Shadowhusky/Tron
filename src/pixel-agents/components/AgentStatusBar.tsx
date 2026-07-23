@@ -59,7 +59,7 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
           : themeClass(resolvedTheme, {
               dark: agent.active ? "text-green-400/80" : "text-white/20",
               light: agent.active ? "text-green-700" : "text-gray-400",
-              modern: agent.active ? "text-green-300/80" : "text-white/15",
+              modern: agent.active ? "text-green-300/80" : "text-white/25",
             })
       }`}
       title={tooltip}
@@ -69,12 +69,12 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
         ? "bg-yellow-400 animate-pulse"
         : agent.active
           ? `${themeClass(resolvedTheme, { dark: "bg-green-400", light: "bg-green-500", modern: "bg-green-300" })} animate-pulse`
-          : themeClass(resolvedTheme, { dark: "bg-white/20", light: "bg-gray-300", modern: "bg-white/15" })
+          : themeClass(resolvedTheme, { dark: "bg-white/20", light: "bg-gray-300", modern: "bg-white/25" })
       }`} />
       <span className={`max-w-[150px] truncate ${agent.permission ? "text-yellow-300" : themeClass(resolvedTheme, {
         dark: "text-white/30",
         light: "text-gray-500",
-        modern: "text-white/20",
+        modern: "text-white/30",
       })}`}>
         {agent.label}
       </span>
@@ -83,7 +83,7 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
         <span className={themeClass(resolvedTheme, {
           dark: "text-white/25",
           light: "text-gray-400",
-          modern: "text-white/20",
+          modern: "text-white/30",
         })}>
           {metaText}
         </span>
@@ -120,7 +120,7 @@ export default function AgentStatusBar() {
         {
           dark: "border-white/5 bg-[#0a0a0a]",
           light: "border-gray-100 bg-gray-50",
-          modern: "border-white/4 bg-[#060610]",
+          modern: "border-white/[0.08] bg-[#0b0e16]/70 backdrop-blur-xl backdrop-saturate-150",
         },
       )}`}
     >

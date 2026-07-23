@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import type {
   LayoutNode,
   Tab,
@@ -19,7 +19,7 @@ import { selectTabByIndex } from "../utils/tabSwitcher";
 import { removePaneFromTree } from "../utils/paneNav";
 import { useConfig } from "./ConfigContext";
 import { isElectronApp } from "../utils/platform";
-import { connectRemote, createRemotePTY, getRemoteConnectionId, reviveRemoteSession, unregisterRemoteSession } from "../services/remote-bridge";
+import { connectRemote, createRemotePTY, getRemoteConnectionId, getActiveRemoteConnections, reviveRemoteSession, unregisterRemoteSession } from "../services/remote-bridge";
 
 // --- Mock UUID if crypto not avail in browser (though we use electron) ---
 function uuid() {
@@ -45,8 +45,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 /** Pane-kind override for splits: default clones the current session kind;
- *  "local" forces a local PTY; an sshProfileId forces an SSH pane. */
-export type SplitOptions = { kind?: "local" | { sshProfileId: string } };
+ *  "local" forces a local PTY; sshProfileId forces an SSH pane; and
+ *  remoteConnectionId forces a PTY on a connected remote Tron server. */
+export type SplitOptions = {
+  kind?: "local" | { sshProfileId: string } | { remoteConnectionId: string };
+};
 
 interface LayoutContextType {
   tabs: Tab[];
@@ -289,6 +292,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       const state = {
         tabs: persistableTabs,
         activeTabId,
+        tabHistory: tabHistoryRef.current.slice(-50),
         sessionCwds: Array.from(sessions.entries()).reduce(
           (acc, [id, session]) => ({
             ...acc,
@@ -381,6 +385,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       const state = {
         tabs: t.map((tab) => ({ ...tab })),
         activeTabId: aId,
+        tabHistory: tabHistoryRef.current.slice(-50),
         sessionCwds: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.cwd || "" }), {} as Record<string, string>),
         sessionConfigs: Array.from(s.entries()).reduce((acc, [sid, sess]) => ({ ...acc, [sid]: sess.aiConfig }), {} as Record<string, any>),
         sessionInteractions: Object.fromEntries(Array.from(s.entries()).map(([sid, sess]) => [sid, sess.interactions])),
@@ -587,6 +592,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           if (regeneratedTabs.length > 0) {
             setSessions(newSessions);
             setTabs(regeneratedTabs);
+            const liveIds = new Set(regeneratedTabs.map((t) => t.id));
+            tabHistoryRef.current = (Array.isArray(parsed.tabHistory) ? parsed.tabHistory : []).filter((id: string) => liveIds.has(id));
             setActiveTabId(parsed.activeTabId || regeneratedTabs[0].id);
             return;
           }
@@ -596,6 +603,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             if (offlineTabs) {
               setSessions(offlineTabs.sessions);
               setTabs(offlineTabs.tabs);
+              const offlineIds = new Set(offlineTabs.tabs.map((t) => t.id));
+              tabHistoryRef.current = (Array.isArray(parsed.tabHistory) ? parsed.tabHistory : []).filter((id: string) => offlineIds.has(id));
               setActiveTabId(parsed.activeTabId || offlineTabs.tabs[0].id);
               setServerDisconnected(true);
               return;
@@ -947,11 +956,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     // Synchronously update tabsRef so checkAllTabs doesn't see ghost tabs
+    const closedIdx = tabsRef.current.findIndex(t => t.id === tabId);
     tabsRef.current = tabsRef.current.filter(t => t.id !== tabId);
 
     // Determine next tab BEFORE updating state, using refs for latest values
-    const currentTabs = tabsRef.current;
-    const remainingTabs = currentTabs.filter(t => t.id !== tabId);
+    const remainingTabs = tabsRef.current;
     const isClosingActive = tabId === activeTabIdRef.current;
 
     if (isClosingActive && remainingTabs.length > 0) {
@@ -966,7 +975,15 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
           break;
         }
       }
-      if (!nextTab) nextTab = remainingTabs[remainingTabs.length - 1].id;
+      // No usable history (e.g. first close after app restart): fall back to the
+      // adjacent tab — the one that slides into the closed slot — like Chrome/Safari.
+      if (!nextTab) {
+        const idx = Math.min(Math.max(closedIdx, 0), remainingTabs.length - 1);
+        nextTab = remainingTabs[idx].id;
+      }
+      // Sync the ref immediately so a rapid second close (before React re-renders)
+      // still sees the correct active tab.
+      activeTabIdRef.current = nextTab;
       setActiveTabId(nextTab);
     }
 
@@ -998,19 +1015,30 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const selectTab = (tabId: string) => {
-    setActiveTabId((prev) => {
-      if (prev && prev !== tabId) {
-        // Push previous tab to history stack (dedup: remove if already present)
-        const h = tabHistoryRef.current;
-        const idx = h.indexOf(prev);
-        if (idx !== -1) h.splice(idx, 1);
-        h.push(prev);
-        // Cap history length
-        if (h.length > 50) h.shift();
-      }
-      return tabId;
-    });
+    setActiveTabId(tabId);
   };
+
+  // Record tab-visit history from ACTIVATION CHANGES, not from selectTab —
+  // settings/editor/new-tab/palette paths all set the active tab directly and
+  // previously bypassed history, so "close settings" returned to a stale tab
+  // (observed: tab 1 → settings → close → tab 5). One choke point catches
+  // every path. The existence guard keeps just-closed tabs out of history.
+  const prevActiveTabRef = useRef<string>("");
+  // useLayoutEffect, not useEffect: the layout-persistence effect (defined
+  // earlier in this component) snapshots tabHistoryRef in the SAME commit —
+  // a passive effect here would record the visit after it was persisted,
+  // leaving the saved history one switch stale across restarts.
+  useLayoutEffect(() => {
+    const prev = prevActiveTabRef.current;
+    prevActiveTabRef.current = activeTabId;
+    if (!prev || prev === activeTabId) return;
+    if (!tabsRef.current.some((t) => t.id === prev)) return; // tab was closed
+    const h = tabHistoryRef.current;
+    const idx = h.indexOf(prev);
+    if (idx !== -1) h.splice(idx, 1);
+    h.push(prev);
+    if (h.length > 50) h.shift();
+  }, [activeTabId]);
 
   const reorderTabs = (fromIndex: number, toIndex: number) => {
     setTabs((prev) => {
@@ -1052,25 +1080,67 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     let newRemoteUrl: string | undefined;
     let newSshProfileId: string | undefined;
 
+    const toast = (message: string) =>
+      window.dispatchEvent(new CustomEvent("tron:toast", { detail: { message } }));
     const connectSshProfile = async (profileId: string): Promise<boolean> => {
       const ipc = window.electron?.ipcRenderer;
       if (!ipc) return false;
       const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
       const profiles: SSHConnectionConfig[] = await readFn() || [];
-      const profile = profiles.find((p) => p.id === profileId);
-      if (!profile) return false; // Profile deleted
+      const profile = profiles.find((p) => p.id === profileId) as
+        | (SSHConnectionConfig & { savedPassword?: string; savedPassphrase?: string })
+        | undefined;
+      if (!profile) {
+        toast("SSH profile not found — it may have been deleted");
+        return false;
+      }
+      // Saved profiles store credentials under savedPassword/savedPassphrase
+      // (never `password` — that field is transient). Without this mapping the
+      // connect silently fails auth (the original "nothing happens" bug).
+      if (profile.authMethod === "password" && !profile.savedPassword) {
+        toast(`"${profile.name}" has no saved password — connect once from the SSH dialog with "save credentials" enabled`);
+        return false;
+      }
       const connectFn = (ipc as any).connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
-      const result = await connectFn({ ...profile, cols: 80, rows: 30 });
-      newSessionId = result.sessionId;
-      newTitle = profile.name || `${profile.username}@${profile.host}`;
-      newSshProfileId = profile.id;
-      return true;
+      try {
+        const result = await connectFn({
+          ...profile,
+          password: profile.savedPassword ?? profile.password,
+          passphrase: profile.savedPassphrase ?? profile.passphrase,
+          cols: 80,
+          rows: 30,
+        });
+        newSessionId = result.sessionId;
+        newTitle = profile.name || `${profile.username}@${profile.host}`;
+        newSshProfileId = profile.id;
+        return true;
+      } catch (e) {
+        toast(`SSH connection failed: ${e instanceof Error ? e.message : String(e)}`);
+        return false;
+      }
     };
 
-    if (kind && typeof kind === "object" && kind.sshProfileId) {
+    if (kind && typeof kind === "object" && "sshProfileId" in kind) {
       // Explicit SSH pane (from the command palette) — regardless of the
       // current pane's kind.
       if (!(await connectSshProfile(kind.sshProfileId))) return;
+    } else if (kind && typeof kind === "object" && "remoteConnectionId" in kind) {
+      // Explicit remote-server pane on an already-connected remote.
+      const conns = getActiveRemoteConnections();
+      const conn = conns.find((c) => c.id === kind.remoteConnectionId);
+      if (!conn) {
+        toast("Remote server is no longer connected");
+        return;
+      }
+      try {
+        const remoteResult = await createRemotePTY(kind.remoteConnectionId, 80, 30, undefined);
+        newSessionId = remoteResult.sessionId;
+        newTitle = new URL(conn.url).host || "Remote";
+        newRemoteUrl = conn.url;
+      } catch (e) {
+        toast(`Remote split failed: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
     } else if (kind === "local") {
       // Explicit local pane — e.g. a local terminal beside an SSH session.
       if (isSshOnly()) return; // Gateway mode: no local PTY

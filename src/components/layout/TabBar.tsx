@@ -110,6 +110,18 @@ const TabBar: React.FC<TabBarProps> = ({
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
+  // Command-palette entry point: start renaming the active tab inline.
+  useEffect(() => {
+    const handler = () => {
+      const tab = tabs.find((t) => t.id === activeTabId);
+      if (!tab) return;
+      setRenamingTabId(tab.id);
+      setRenameValue(tab.title);
+    };
+    window.addEventListener("tron:renameActiveTab", handler);
+    return () => window.removeEventListener("tron:renameActiveTab", handler);
+  }, [tabs, activeTabId]);
+
   // Check if a tab is the sole connect placeholder (no close, no context menu)
   const isOnlyConnectTab = (tab: Tab) =>
     tab.root.type === "leaf" &&
@@ -223,7 +235,7 @@ const TabBar: React.FC<TabBarProps> = ({
         resolvedTheme,
         {
           dark: "bg-[#0e0e0e]",
-          modern: "bg-white/[0.015] backdrop-blur-2xl",
+          modern: "bg-white/[0.03] backdrop-blur-2xl backdrop-saturate-150",
           light: "bg-gray-100/80",
         },
       )}`}
@@ -311,7 +323,7 @@ const TabBar: React.FC<TabBarProps> = ({
                   draggingTabId === tab.id
                     ? themeClass(resolvedTheme, {
                         dark: "!bg-[#151515]",
-                        modern: "!bg-[#12121a]",
+                        modern: "!bg-[#10141e]",
                         light: "!bg-white",
                       })
                     : ""
@@ -320,7 +332,7 @@ const TabBar: React.FC<TabBarProps> = ({
                     ? themeClass(resolvedTheme, {
                         dark: "bg-[#151515] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_3px_10px_-2px_rgba(255,255,255,0.15)]",
                         modern:
-                          "bg-white/[0.04] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_3px_10px_-2px_rgba(168,85,247,0.2)] backdrop-blur-xl",
+                          "bg-white/[0.04] text-gray-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_3px_10px_-2px_rgba(255,255,255,0.15)] backdrop-blur-xl",
                         light:
                           "bg-white text-gray-900 shadow-[inset_0_0_6px_rgba(0,0,0,0.03),0_3px_10px_-2px_rgba(0,0,0,0.1)]",
                       })
@@ -394,7 +406,7 @@ const TabBar: React.FC<TabBarProps> = ({
                     }}
                     onClick={(e) => e.stopPropagation()}
                     onContextMenu={(e) => e.stopPropagation()}
-                    className={`-mx-1 min-w-[50px] flex-1 rounded-sm bg-transparent px-1 ring-1 ring-blue-500/50 outline-none ${themeClass(
+                    className={`-mx-1 min-w-[50px] flex-1 rounded-md bg-transparent px-1 ring-1 ring-gray-400/60 outline-none ${themeClass(
                       resolvedTheme,
                       {
                         dark: "text-white",
@@ -428,11 +440,11 @@ const TabBar: React.FC<TabBarProps> = ({
                         onClose(tab.id);
                       }
                     }}
-                    className={`-mr-1 rounded p-1.5 opacity-0 transition-opacity group-hover:opacity-100 ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
+                    className={`-mr-1 rounded-md p-1.5 opacity-0 transition-opacity group-hover:opacity-100 ${tab.id === activeTabId ? "opacity-100" : `${isTouchDevice() ? "pointer-events-none" : ""}`} ${themeClass(
                       resolvedTheme,
                       {
-                        dark: "hover:bg-white/20",
-                        modern: "hover:bg-white/20",
+                        dark: "hover:bg-white/10",
+                        modern: "hover:bg-white/10",
                         light: "hover:bg-black/10",
                       },
                     )}`}
@@ -464,7 +476,7 @@ const TabBar: React.FC<TabBarProps> = ({
             resolvedTheme,
             {
               dark: "bg-[#0e0e0e]",
-              modern: "bg-[#0c0c14]",
+              modern: "bg-[#0b0e16]/70 backdrop-blur-xl",
               light: "bg-gray-100/80",
             },
           )}`}
@@ -472,8 +484,8 @@ const TabBar: React.FC<TabBarProps> = ({
         >
         <motion.button
           data-testid="tab-create"
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.9 }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
           onClick={isSshOnly() && onCreateSSH ? onCreateSSH : onCreate}
           className={`flex items-center px-2.5 transition-colors ${themeClass(
             resolvedTheme,
@@ -536,13 +548,13 @@ const TabBar: React.FC<TabBarProps> = ({
                 side="bottom"
                 align="start"
                 sideOffset={4}
-                className={`z-[100] w-48 overflow-hidden rounded-md border py-1 shadow-xl ${themeClass(
+                className={`z-[100] w-48 overflow-hidden rounded-xl border p-1 shadow-xl ${themeClass(
                   resolvedTheme,
                   {
                     dark: "border-white/10 bg-[#1e1e1e] text-gray-200",
                     modern:
-                      "border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-                    light: "border-gray-200 bg-white text-gray-800 shadow-xl",
+                      "border-white/[0.12] bg-[#172033] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                    light: "border-black/[0.08] bg-white text-gray-800 shadow-xl",
                   },
                 )}`}
               >
@@ -550,17 +562,17 @@ const TabBar: React.FC<TabBarProps> = ({
                   <button
                     data-testid="tab-create-terminal"
                     onClick={onCreate}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                       resolvedTheme,
                       {
                         dark: "hover:bg-white/10",
-                        modern: "hover:bg-white/20",
-                        light: "hover:bg-gray-100",
+                        modern: "hover:bg-white/10",
+                        light: "hover:bg-black/[0.05]",
                       },
                     )}`}
                   >
                     <svg
-                      className="h-4 w-4"
+                      className="h-3.5 w-3.5 opacity-60"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -568,7 +580,7 @@ const TabBar: React.FC<TabBarProps> = ({
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        strokeWidth={2}
+                        strokeWidth={1.5}
                         d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                       />
                     </svg>
@@ -579,17 +591,17 @@ const TabBar: React.FC<TabBarProps> = ({
                   <button
                     data-testid="tab-create-ssh"
                     onClick={onCreateSSH}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                       resolvedTheme,
                       {
                         dark: "hover:bg-white/10",
-                        modern: "hover:bg-white/20",
-                        light: "hover:bg-gray-100",
+                        modern: "hover:bg-white/10",
+                        light: "hover:bg-black/[0.05]",
                       },
                     )}`}
                   >
                     <svg
-                      className="h-4 w-4"
+                      className="h-3.5 w-3.5 opacity-60"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -597,7 +609,7 @@ const TabBar: React.FC<TabBarProps> = ({
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        strokeWidth={2}
+                        strokeWidth={1.5}
                         d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"
                       />
                     </svg>
@@ -609,17 +621,17 @@ const TabBar: React.FC<TabBarProps> = ({
                     <button
                       data-testid="tab-create-remote"
                       onClick={onCreateRemote}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                         resolvedTheme,
                         {
                           dark: "hover:bg-white/10",
-                          modern: "hover:bg-white/20",
-                          light: "hover:bg-gray-100",
+                          modern: "hover:bg-white/10",
+                          light: "hover:bg-black/[0.05]",
                         },
                       )}`}
                     >
                       <svg
-                        className="h-4 w-4"
+                        className="h-3.5 w-3.5 opacity-60"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -627,7 +639,7 @@ const TabBar: React.FC<TabBarProps> = ({
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
-                          strokeWidth={2}
+                          strokeWidth={1.5}
                           d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
                         />
                       </svg>
@@ -640,16 +652,16 @@ const TabBar: React.FC<TabBarProps> = ({
                     <button
                       data-testid="tab-create-browser"
                       onClick={onCreateBrowser}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                         resolvedTheme,
                         {
                           dark: "hover:bg-white/10",
-                          modern: "hover:bg-white/20",
-                          light: "hover:bg-gray-100",
+                          modern: "hover:bg-white/10",
+                          light: "hover:bg-black/[0.05]",
                         },
                       )}`}
                     >
-                      <Globe className="h-4 w-4" />
+                      <Globe className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />
                       Web Browser
                     </button>
                   </Popover.Close>
@@ -657,27 +669,27 @@ const TabBar: React.FC<TabBarProps> = ({
                 {onLoadSavedTab && (
                   <>
                     <div
-                      className={`my-1 ${themeClass(resolvedTheme, {
-                        dark: "border-t border-white/5",
-                        modern: "border-t border-white/10",
-                        light: "border-t border-gray-100",
+                      className={`my-1 h-px ${themeClass(resolvedTheme, {
+                        dark: "bg-white/[0.08]",
+                        modern: "bg-white/[0.08]",
+                        light: "bg-black/[0.06]",
                       })}`}
                     />
                     <Popover.Close asChild>
                       <button
                         data-testid="tab-load-saved"
                         onClick={onLoadSavedTab}
-                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                           resolvedTheme,
                           {
                             dark: "hover:bg-white/10",
-                            modern: "hover:bg-white/20",
-                            light: "hover:bg-gray-100",
+                            modern: "hover:bg-white/10",
+                            light: "hover:bg-black/[0.05]",
                           },
                         )}`}
                       >
                         <svg
-                          className="h-4 w-4"
+                          className="h-3.5 w-3.5 opacity-60"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
@@ -685,7 +697,7 @@ const TabBar: React.FC<TabBarProps> = ({
                           <path
                             strokeLinecap="round"
                             strokeLinejoin="round"
-                            strokeWidth={2}
+                            strokeWidth={1.5}
                             d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
                           />
                         </svg>
@@ -710,7 +722,7 @@ const TabBar: React.FC<TabBarProps> = ({
           {
             dark: "text-gray-500 hover:bg-white/[0.06]",
             modern:
-              "text-purple-300/60 hover:bg-white/[0.04] hover:text-purple-200",
+              "text-gray-400 hover:bg-white/[0.04] hover:text-gray-200",
             light: "text-gray-400 hover:bg-black/[0.04]",
           },
         )}`}
@@ -754,13 +766,13 @@ const TabBar: React.FC<TabBarProps> = ({
             side="bottom"
             align="start"
             sideOffset={4}
-            className={`z-[100] w-48 overflow-hidden rounded-md border py-1 shadow-xl ${themeClass(
+            className={`z-[100] w-48 overflow-hidden rounded-xl border p-1 shadow-xl ${themeClass(
               resolvedTheme,
               {
                 dark: "border-white/10 bg-[#1e1e1e] text-gray-200",
                 modern:
-                  "border-white/[0.15] bg-[#1a1a3e]/95 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-                light: "border-gray-200 bg-white text-gray-800 shadow-xl",
+                  "border-white/[0.12] bg-[#172033] text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+                light: "border-black/[0.08] bg-white text-gray-800 shadow-xl",
               },
             )}`}
             onContextMenu={(e) => {
@@ -778,12 +790,12 @@ const TabBar: React.FC<TabBarProps> = ({
                 setRenamingTabId(tab.id);
                 setRenameValue(tab.title);
               }}
-              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+              className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
-                  modern: "hover:bg-white/20",
-                  light: "hover:bg-gray-100",
+                  modern: "hover:bg-white/10",
+                  light: "hover:bg-black/[0.05]",
                 },
               )}`}
             >
@@ -793,9 +805,9 @@ const TabBar: React.FC<TabBarProps> = ({
             {/* Colors */}
             <div
               className={`flex gap-1 px-3 py-1.5 ${themeClass(resolvedTheme, {
-                dark: "border-t border-b border-white/5",
-                modern: "border-t border-b border-white/10",
-                light: "border-t border-b border-gray-100",
+                dark: "border-t border-b border-white/[0.08]",
+                modern: "border-t border-b border-white/[0.08]",
+                light: "border-t border-b border-black/[0.06]",
               })}`}
             >
               {[
@@ -834,21 +846,21 @@ const TabBar: React.FC<TabBarProps> = ({
                 const canLeft = idx > 0;
                 const canRight = idx >= 0 && idx < tabs.length - 1;
                 const btnBase =
-                  "px-4 py-2 text-sm transition-colors min-w-[44px] text-center";
+                  "px-4 py-1.5 text-[13px] transition-colors min-w-[44px] text-center";
                 const disabledCls = "opacity-30 cursor-default";
                 const hoverCls = themeClass(resolvedTheme, {
                   dark: "hover:bg-white/10",
-                  modern: "hover:bg-white/20",
-                  light: "hover:bg-gray-100",
+                  modern: "hover:bg-white/10",
+                  light: "hover:bg-black/[0.05]",
                 });
                 return (
                   <div
                     className={`flex items-center px-1 ${themeClass(
                       resolvedTheme,
                       {
-                        dark: "border-t border-white/5",
-                        modern: "border-t border-white/10",
-                        light: "border-t border-gray-100",
+                        dark: "border-t border-white/[0.08]",
+                        modern: "border-t border-white/[0.08]",
+                        light: "border-t border-black/[0.06]",
                       },
                     )}`}
                   >
@@ -860,7 +872,7 @@ const TabBar: React.FC<TabBarProps> = ({
                           setContextMenu(null);
                         }
                       }}
-                      className={`${btnBase} rounded ${!canLeft ? disabledCls : hoverCls}`}
+                      className={`${btnBase} rounded-md ${!canLeft ? disabledCls : hoverCls}`}
                     >
                       ←
                     </button>
@@ -875,7 +887,7 @@ const TabBar: React.FC<TabBarProps> = ({
                           setContextMenu(null);
                         }
                       }}
-                      className={`${btnBase} rounded ${!canRight ? disabledCls : hoverCls}`}
+                      className={`${btnBase} rounded-md ${!canRight ? disabledCls : hoverCls}`}
                     >
                       →
                     </button>
@@ -892,12 +904,12 @@ const TabBar: React.FC<TabBarProps> = ({
                   await onDuplicateTab(tabId);
                 }
               }}
-              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+              className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
-                  modern: "hover:bg-white/20",
-                  light: "hover:bg-gray-100",
+                  modern: "hover:bg-white/10",
+                  light: "hover:bg-black/[0.05]",
                 },
               )}`}
             >
@@ -914,12 +926,12 @@ const TabBar: React.FC<TabBarProps> = ({
                   await onSaveTab(tabId);
                 }
               }}
-              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+              className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
-                  modern: "hover:bg-white/20",
-                  light: "hover:bg-gray-100",
+                  modern: "hover:bg-white/10",
+                  light: "hover:bg-black/[0.05]",
                 },
               )}`}
             >
@@ -943,12 +955,12 @@ const TabBar: React.FC<TabBarProps> = ({
                   onClose(tabId);
                 }
               }}
-              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+              className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                 resolvedTheme,
                 {
                   dark: "hover:bg-white/10",
-                  modern: "hover:bg-white/20",
-                  light: "hover:bg-red-50",
+                  modern: "hover:bg-white/10",
+                  light: "hover:bg-black/[0.05]",
                 },
               )}`}
             >
@@ -967,12 +979,12 @@ const TabBar: React.FC<TabBarProps> = ({
                       for (const t of leftTabs) onClose(t.id);
                     }
                   }}
-                  className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                  className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                     resolvedTheme,
                     {
                       dark: "hover:bg-white/10",
-                      modern: "hover:bg-white/20",
-                      light: "hover:bg-red-50",
+                      modern: "hover:bg-white/10",
+                      light: "hover:bg-black/[0.05]",
                     },
                   )}`}
                 >
@@ -993,12 +1005,12 @@ const TabBar: React.FC<TabBarProps> = ({
                       for (const t of rightTabs) onClose(t.id);
                     }
                   }}
-                  className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${themeClass(
+                  className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${themeClass(
                     resolvedTheme,
                     {
                       dark: "hover:bg-white/10",
-                      modern: "hover:bg-white/20",
-                      light: "hover:bg-red-50",
+                      modern: "hover:bg-white/10",
+                      light: "hover:bg-black/[0.05]",
                     },
                   )}`}
                 >
@@ -1019,12 +1031,12 @@ const TabBar: React.FC<TabBarProps> = ({
                     }
                   }
                 }}
-                className={`w-full px-3 py-1.5 text-left text-sm text-red-500 transition-colors ${themeClass(
+                className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] text-red-500 transition-colors ${themeClass(
                   resolvedTheme,
                   {
-                    dark: "hover:bg-white/10",
-                    modern: "hover:bg-white/20",
-                    light: "hover:bg-red-50",
+                    dark: "hover:bg-red-500/10",
+                    modern: "hover:bg-red-500/10",
+                    light: "hover:bg-red-500/10",
                   },
                 )}`}
               >

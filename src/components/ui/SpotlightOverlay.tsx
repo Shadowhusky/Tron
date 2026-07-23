@@ -186,7 +186,7 @@ const SpotlightOverlay: React.FC<SpotlightOverlayProps> = ({
       {/* Glow ring around target */}
       {clamped && (
         <motion.div
-          className="absolute border-2 border-purple-400/70 shadow-[0_0_24px_rgba(168,85,247,0.4)]"
+          className="absolute border-2 border-white/60 shadow-[0_0_24px_rgba(255,255,255,0.15)]"
           initial={false}
           animate={{
             left: clamped.left,

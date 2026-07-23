@@ -496,7 +496,7 @@ const AgentToast: React.FC<{
               : "bg-green-950/80 border-green-500/20 text-green-300"
             : isLight
               ? "bg-white border-gray-200 text-gray-700"
-              : "bg-[#1a1a2e]/90 border-white/10 text-gray-300"
+              : "bg-[#141a28]/90 border-white/10 text-gray-300"
       }`}
     >
       {type === "error" ? (
@@ -554,21 +554,21 @@ const ThinkingBlock: React.FC<{
 
   return (
     <div
-      className={`mt-1 rounded border p-2 transition-all ${
+      className={`mt-1 rounded-lg border p-2 transition-all ${
         isLight
-          ? "bg-purple-50/50 border-purple-200/50"
-          : "bg-purple-950/20 border-purple-500/10"
+          ? "bg-blue-50/50 border-blue-200/50"
+          : "bg-blue-950/20 border-blue-500/10"
       }`}
     >
       <div className="flex items-center justify-between mb-1">
         <span
-          className={`text-[9px] uppercase tracking-wider font-semibold ${isLight ? "text-purple-400" : "text-purple-500/80"}`}
+          className={`text-[10px] uppercase tracking-wide font-medium ${isLight ? "text-blue-400" : "text-blue-500/80"}`}
         >
           {isStreaming ? "Thinking Process" : "Reasoning"}
         </span>
         <div className="flex items-center gap-2">
           <span
-            className={`text-[9px] font-mono ${isLight ? "text-purple-400" : "text-purple-500/60"}`}
+            className={`text-[9px] font-mono ${isLight ? "text-blue-400" : "text-blue-500/60"}`}
           >
             {tokenCount} tokens
           </span>
@@ -576,7 +576,7 @@ const ThinkingBlock: React.FC<{
             <button
               onClick={() => setExpanded(!expanded)}
               className={`text-[9px] uppercase tracking-wider opacity-60 hover:opacity-100 transition-opacity ${
-                isLight ? "text-purple-600" : "text-purple-400"
+                isLight ? "text-blue-600" : "text-blue-400"
               }`}
             >
               {expanded ? "Collapse" : "Expand"}
@@ -826,7 +826,7 @@ const PermissionRequest: React.FC<{
           className={`px-3 py-1 text-xs rounded-md transition-colors flex items-center gap-1 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 ${
             dangerous
               ? confirmStep === 1
-                ? "bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/30"
+                ? "bg-red-600 hover:bg-red-500 text-white shadow-sm"
                 : isLight
                   ? "bg-red-100 hover:bg-red-200 text-red-700 border border-red-300"
                   : "bg-red-900/40 hover:bg-red-900/60 text-red-200 border border-red-500/30"
@@ -834,7 +834,7 @@ const PermissionRequest: React.FC<{
                 ? isLight
                   ? "bg-amber-100 hover:bg-amber-200 text-amber-700 border border-amber-300"
                   : "bg-amber-900/40 hover:bg-amber-900/60 text-amber-200 border border-amber-500/30"
-                : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20"
+                : "bg-blue-600 hover:bg-blue-500 text-white shadow-sm"
           }`}
         >
           {dangerous ? (
@@ -1476,7 +1476,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
           data-testid="agent-overlay"
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25, ease: "easeOut" }}
+          transition={{ type: "spring", bounce: 0 }}
           style={
             !fullHeight &&
             isExpanded &&
@@ -1496,7 +1496,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
             isLight
               ? "bg-white/95 border-gray-200 text-gray-900"
               : resolvedTheme === "modern"
-                ? "bg-[#0a0a1a]/60 border-white/[0.06] text-white shadow-[0_-4px_24px_rgba(0,0,0,0.3)]"
+                ? "bg-[#0a0a1a]/60 backdrop-blur-xl backdrop-saturate-150 border-white/[0.08] text-white shadow-[0_-4px_24px_rgba(0,0,0,0.3)]"
                 : "bg-[#0a0a0a]/95 border-white/10 text-white"
           }`}
           onClick={!isExpanded ? onExpand : undefined}
@@ -1528,14 +1528,14 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
               <div
                 className={`w-2 h-2 rounded-full ${
                   isAgentRunning || isThinking
-                    ? "bg-purple-400 animate-pulse"
+                    ? "bg-blue-400 animate-pulse"
                     : "bg-gray-500"
                 }`}
               />
               <span
                 data-testid="agent-status"
                 className={`text-xs font-medium ${
-                  isLight ? "text-purple-700" : "text-purple-200"
+                  isLight ? "text-blue-700" : "text-blue-200"
                 }`}
               >
                 {statusText}
@@ -1552,8 +1552,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1 shrink-0 ${
                       thinkingEnabled
                         ? isLight
-                          ? "border-purple-300 text-purple-600 bg-purple-50 hover:bg-purple-100"
-                          : "border-purple-500/30 text-purple-400 bg-purple-500/10 hover:bg-purple-500/20"
+                          ? "border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100"
+                          : "border-blue-500/30 text-blue-400 bg-blue-500/10 hover:bg-blue-500/20"
                         : isLight
                           ? "border-gray-300 text-gray-500 bg-gray-50 hover:bg-gray-100"
                           : "border-white/10 text-gray-500 bg-white/5 hover:bg-white/10"
@@ -1632,7 +1632,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
             {/* Show simple expand hint when collapsed */}
             {!isExpanded && (
-              <span className="text-[10px] opacity-50 uppercase tracking-widest">
+              <span className="text-[11px] opacity-50 uppercase tracking-wide">
                 Click to Expand
               </span>
             )}
@@ -1650,16 +1650,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                   data-testid="agent-active-plan"
                   className={`shrink-0 mx-3 mt-3 mb-1 rounded-lg border ${
                     isLight
-                      ? "border-indigo-200 bg-indigo-50/60"
-                      : "border-indigo-500/30 bg-indigo-500/[0.06]"
+                      ? "border-blue-200 bg-blue-50/60"
+                      : "border-blue-500/30 bg-blue-500/[0.06]"
                   }`}
                 >
                   <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1">
                     <ListOrdered
-                      className={`w-3 h-3 ${isLight ? "text-indigo-500" : "text-indigo-400"}`}
+                      className={`w-3 h-3 ${isLight ? "text-blue-500" : "text-blue-400"}`}
                     />
                     <span
-                      className={`uppercase font-bold text-[10px] tracking-wider ${isLight ? "text-indigo-600" : "text-indigo-300"}`}
+                      className={`uppercase font-medium text-[11px] tracking-wide ${isLight ? "text-blue-600" : "text-blue-300"}`}
                     >
                       Active Plan
                     </span>
@@ -1681,8 +1681,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           : "text-gray-500 line-through"
                         : isActiveItem
                           ? isLight
-                            ? "text-indigo-700 font-medium"
-                            : "text-indigo-200 font-medium"
+                            ? "text-blue-700 font-medium"
+                            : "text-blue-200 font-medium"
                           : isLight
                             ? "text-gray-700"
                             : "text-gray-300";
@@ -1692,8 +1692,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           : "text-green-400"
                         : isActiveItem
                           ? isLight
-                            ? "text-indigo-500"
-                            : "text-indigo-300"
+                            ? "text-blue-500"
+                            : "text-blue-300"
                           : isLight
                             ? "text-gray-400"
                             : "text-gray-600";
@@ -1713,7 +1713,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
               <div
                 ref={scrollRef}
                 onScroll={handleScroll}
-                className="flex-1 overflow-y-auto font-mono text-xs min-h-0"
+                className="flex-1 overflow-y-auto text-xs min-h-0"
               >
                 {(() => {
                   const renderStep = (
@@ -1781,11 +1781,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                         return (
                           <div
                             key={key}
-                            className={`border-l-2 pl-4 py-2 ${isLight ? "border-indigo-300" : "border-indigo-500/30"}`}
+                            className={`border-l-2 pl-4 py-2 ${isLight ? "border-blue-300" : "border-blue-500/30"}`}
                           >
                             <div className="flex items-center gap-1.5 mb-1.5">
-                              <ListOrdered className={`w-3 h-3 ${isLight ? "text-indigo-500" : "text-indigo-400"}`} />
-                              <span className={`uppercase font-bold text-[10px] tracking-wider ${isLight ? "text-indigo-500" : "text-indigo-400"}`}>
+                              <ListOrdered className={`w-3 h-3 ${isLight ? "text-blue-500" : "text-blue-400"}`} />
+                              <span className={`uppercase font-medium text-[11px] tracking-wide ${isLight ? "text-blue-500" : "text-blue-400"}`}>
                                 Plan
                               </span>
                             </div>
@@ -1801,15 +1801,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                       : "text-gray-500 line-through"
                                     : isActive
                                       ? isLight
-                                        ? "text-indigo-700 font-medium"
-                                        : "text-indigo-300 font-medium"
+                                        ? "text-blue-700 font-medium"
+                                        : "text-blue-300 font-medium"
                                       : isLight
                                         ? "text-gray-700"
                                         : "text-gray-300";
                                   const markCls = isDone
                                     ? isLight ? "text-green-600" : "text-green-400"
                                     : isActive
-                                      ? isLight ? "text-indigo-500" : "text-indigo-400"
+                                      ? isLight ? "text-blue-500" : "text-blue-400"
                                       : isLight ? "text-gray-400" : "text-gray-600";
                                   return (
                                     <div key={i} className="flex items-baseline gap-2 text-[11px] leading-relaxed">
@@ -1872,8 +1872,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                 : "border-green-500/30"
                               : isSummarizing || isSummarized
                                 ? isLight
-                                  ? "border-purple-300"
-                                  : "border-purple-500/30"
+                                  ? "border-blue-300"
+                                  : "border-blue-500/30"
                                 : isSystem
                                   ? isLight
                                     ? "border-teal-300"
@@ -1892,8 +1892,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                         : "border-blue-500/30"
                                       : isThinkingStep || isThought
                                         ? isLight
-                                          ? "border-purple-300"
-                                          : "border-purple-500/30"
+                                          ? "border-blue-300"
+                                          : "border-blue-500/30"
                                         : isStreamingStep
                                           ? isLight
                                             ? "border-cyan-300"
@@ -1923,9 +1923,9 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           ) : isDone ? (
                             <Check className="w-3 h-3 text-green-400" />
                           ) : isSummarizing ? (
-                            <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
+                            <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
                           ) : isSummarized ? (
-                            <Check className="w-3 h-3 text-purple-400" />
+                            <Check className="w-3 h-3 text-blue-400" />
                           ) : isSystem ? (
                             <Info className="w-3 h-3 text-teal-400" />
                           ) : isQuestion ? (
@@ -1936,7 +1936,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             <Check className="w-3 h-3 text-blue-400" />
                           ) : isThinkingStep || isThought ? (
                             <Brain
-                              className={`w-3 h-3 text-purple-400 ${isThinkingStep ? "animate-pulse" : ""}`}
+                              className={`w-3 h-3 text-blue-400 ${isThinkingStep ? "animate-pulse" : ""}`}
                             />
                           ) : isStreamingStep ? (
                             <TerminalIcon className="w-3 h-3 text-cyan-400 animate-pulse" />
@@ -1944,7 +1944,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             <TerminalIcon className="w-3 h-3 text-gray-400 opacity-60" />
                           )}
                           <span
-                            className={`uppercase font-bold text-[10px] tracking-wider ${
+                            className={`uppercase font-medium text-[10px] tracking-wider ${
                               isExecuting
                                 ? "text-amber-400"
                                 : isExecuted
@@ -1954,13 +1954,13 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                     : isDone
                                       ? "text-green-400"
                                       : isSummarizing || isSummarized
-                                        ? "text-purple-400"
+                                        ? "text-blue-400"
                                         : isSystem
                                           ? "text-teal-400"
                                           : isQuestion
                                           ? "text-amber-400"
                                           : isThinkingStep || isThought
-                                            ? "text-purple-400"
+                                            ? "text-blue-400"
                                             : isStreamingStep
                                               ? "text-cyan-400"
                                               : "text-gray-500"
@@ -1997,15 +1997,15 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             isExecuting) && (
                             <div className="flex gap-0.5 ml-1">
                               <div
-                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
+                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-blue-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
                                 style={{ animationDelay: "0ms" }}
                               />
                               <div
-                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
+                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-blue-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
                                 style={{ animationDelay: "150ms" }}
                               />
                               <div
-                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-purple-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
+                                className={`w-1 h-1 rounded-full animate-bounce ${isThinkingStep ? "bg-blue-400" : isExecuting ? "bg-amber-400" : "bg-cyan-400"}`}
                                 style={{ animationDelay: "300ms" }}
                               />
                             </div>
@@ -2044,7 +2044,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                 <button
                                   key={ri}
                                   onClick={open}
-                                  className={`text-left rounded px-2 py-1 leading-snug transition-colors ${
+                                  className={`text-left rounded-lg px-2 py-1 leading-snug transition-colors ${
                                     isLight
                                       ? "bg-blue-50 hover:bg-blue-100 border border-blue-100"
                                       : "bg-white/[0.03] hover:bg-white/[0.06] border border-white/5"
@@ -2251,7 +2251,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                 {execOutput.length > 120 ? (
                                   <details className="group">
                                     <summary
-                                      className={`cursor-pointer text-[11px] truncate select-none list-none flex items-center gap-1.5 ${
+                                      className={`cursor-pointer font-mono text-[11px] truncate select-none list-none flex items-center gap-1.5 ${
                                         isLight
                                           ? "text-gray-500 hover:text-gray-900"
                                           : "text-gray-400 hover:text-white"
@@ -2263,7 +2263,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                       {execOutput.slice(0, 80)}...
                                     </summary>
                                     <pre
-                                      className={`mt-1 p-2 rounded border text-[11px] leading-relaxed whitespace-pre-wrap overflow-y-auto max-h-40 ${
+                                      className={`mt-1 p-2 rounded border font-mono text-[11px] leading-relaxed whitespace-pre-wrap overflow-y-auto max-h-40 ${
                                         isLight
                                           ? "bg-gray-50 border-gray-200 text-gray-800"
                                           : "bg-black/40 border-white/5 text-gray-300"
@@ -2274,7 +2274,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                   </details>
                                 ) : (
                                   <code
-                                    className={`block text-[11px] whitespace-pre-wrap ${isLight ? "text-gray-600" : "text-gray-400"}`}
+                                    className={`block font-mono text-[11px] whitespace-pre-wrap ${isLight ? "text-gray-600" : "text-gray-400"}`}
                                   >
                                     {execOutput}
                                   </code>
@@ -2294,7 +2294,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             if (streamInfo?.detail) {
                               return (
                                 <code
-                                  className={`block text-[11px] whitespace-pre-wrap truncate ${isLight ? "text-gray-500" : "text-gray-400"} opacity-70`}
+                                  className={`block font-mono text-[11px] whitespace-pre-wrap truncate ${isLight ? "text-gray-500" : "text-gray-400"} opacity-70`}
                                 >
                                   {streamInfo.detail}
                                 </code>
@@ -2319,7 +2319,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                         ) : step.output.length > 120 ? (
                           <details className="group">
                             <summary
-                              className={`cursor-pointer text-[11px] truncate select-none list-none flex items-center gap-1.5 ${
+                              className={`cursor-pointer font-mono text-[11px] truncate select-none list-none flex items-center gap-1.5 ${
                                 isLight
                                   ? "text-gray-500 hover:text-gray-900"
                                   : "text-gray-400 hover:text-white"
@@ -2331,7 +2331,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                               {step.output.slice(0, 80)}...
                             </summary>
                             <pre
-                              className={`mt-1 p-2 rounded border text-[11px] leading-relaxed whitespace-pre-wrap overflow-y-auto max-h-40 ${
+                              className={`mt-1 p-2 rounded border font-mono text-[11px] leading-relaxed whitespace-pre-wrap overflow-y-auto max-h-40 ${
                                 isLight
                                   ? "bg-gray-50 border-gray-200 text-gray-800"
                                   : "bg-black/40 border-white/5 text-gray-300"
@@ -2342,7 +2342,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           </details>
                         ) : (
                           <code
-                            className={`block text-[11px] whitespace-pre-wrap ${isLight ? "text-gray-600" : "text-gray-400"}`}
+                            className={`block font-mono text-[11px] whitespace-pre-wrap ${isLight ? "text-gray-600" : "text-gray-400"}`}
                           >
                             {step.output}
                           </code>
@@ -2408,7 +2408,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             <span className={`text-[9px] opacity-50 transition-transform ${isCurrentCollapsed ? "" : "rotate-90"}`}>
                               ▶
                             </span>
-                            <Bot className="w-3 h-3 text-purple-400 opacity-60 shrink-0" />
+                            <Bot className="w-3 h-3 text-blue-400 opacity-60 shrink-0" />
                             <span
                               className={`text-[10px] truncate flex-1 min-w-0 ${isLight ? "text-gray-400" : "text-gray-500"}`}
                             >
@@ -2515,16 +2515,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     const useThinkingStyle = isThinking;
                     return (
                       <div
-                        className={`border-l-2 pl-3 py-1 ${useThinkingStyle ? (isLight ? "border-purple-300" : "border-purple-500/30") : isLight ? "border-cyan-300" : "border-cyan-500/30"}`}
+                        className={`border-l-2 pl-3 py-1 ${useThinkingStyle ? (isLight ? "border-blue-300" : "border-blue-500/30") : isLight ? "border-cyan-300" : "border-cyan-500/30"}`}
                       >
                         <div className="flex items-center gap-1.5">
                           {useThinkingStyle ? (
-                            <Brain className="w-3 h-3 text-purple-400 animate-pulse" />
+                            <Brain className="w-3 h-3 text-blue-400 animate-pulse" />
                           ) : (
                             <Bot className="w-3 h-3 text-cyan-400 animate-pulse" />
                           )}
                           <span
-                            className={`uppercase font-bold text-[10px] tracking-wider ${useThinkingStyle ? "text-purple-400" : "text-cyan-400"}`}
+                            className={`uppercase font-medium text-[10px] tracking-wider ${useThinkingStyle ? "text-blue-400" : "text-cyan-400"}`}
                           >
                             {useThinkingStyle ? "Thinking..." : "Working..."}
                           </span>
@@ -2532,7 +2532,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             {[0, 150, 300].map((d) => (
                               <div
                                 key={d}
-                                className={`w-1 h-1 rounded-full animate-bounce ${useThinkingStyle ? "bg-purple-400" : "bg-cyan-400"}`}
+                                className={`w-1 h-1 rounded-full animate-bounce ${useThinkingStyle ? "bg-blue-400" : "bg-cyan-400"}`}
                                 style={{ animationDelay: `${d}ms` }}
                               />
                             ))}

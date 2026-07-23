@@ -463,6 +463,13 @@ export function unregisterRemoteSession(sessionId: string): void {
 }
 
 /** Disconnect a remote connection and clean up all its sessions. */
+/** All live remote-server connections (for the command palette: split-with /
+ *  disconnect actions). Connections in the registry are live or reconnecting;
+ *  fully-disconnected ones are removed by disconnectRemote. */
+export function getActiveRemoteConnections(): Array<{ id: string; url: string }> {
+  return [...connections.entries()].map(([id, conn]) => ({ id, url: conn.url }));
+}
+
 export function disconnectRemote(connectionId: string): void {
   const conn = connections.get(connectionId);
   if (conn) {

@@ -126,26 +126,26 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
           resolvedTheme,
           {
             dark: "bg-[#0a0a0a] border-white/5",
-            modern: "bg-[#040414] border-white/6",
+            modern: "bg-[#0b0e16]/70 backdrop-blur-xl backdrop-saturate-150 border-white/[0.08]",
             light: "bg-gray-50 border-gray-200",
           },
         )}`}
       >
         <button
           onClick={() => { try { iframeRef.current?.contentWindow?.history.back(); } catch { /* cross-origin */ } }}
-          className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
+          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </button>
         <button
           onClick={() => { try { iframeRef.current?.contentWindow?.history.forward(); } catch { /* cross-origin */ } }}
-          className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
+          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
         >
           <ArrowRight className="h-3.5 w-3.5" />
         </button>
         <button
           onClick={doReload}
-          className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
+          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
         >
           <RotateCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </button>
@@ -155,7 +155,7 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
           resolvedTheme,
           {
             dark: "bg-white/5 text-gray-300 border border-white/5",
-            modern: "bg-white/5 text-gray-300 border border-white/5",
+            modern: "bg-white/[0.06] text-gray-300 border border-white/[0.08]",
             light: "bg-white text-gray-700 border border-gray-200",
           },
         )}`}>
@@ -172,7 +172,7 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
 
         <button
           onClick={openExternal}
-          className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
+          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
           title="Open in system browser"
         >
           <ExternalLink className="h-3.5 w-3.5" />
@@ -180,7 +180,7 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
 
         <button
           onClick={() => closePane(sessionId)}
-          className={`p-1 rounded ${resolvedTheme === "light" ? "hover:bg-gray-200 text-gray-600" : "hover:bg-white/10 text-gray-400"}`}
+          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -196,9 +196,14 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
           </div>
         )}
         {blocked && (
-          <div className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 ${
-            resolvedTheme === "light" ? "bg-gray-50 text-gray-600" : "bg-[#0a0a0a] text-gray-400"
-          }`}>
+          <div className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 ${t(
+            resolvedTheme,
+            {
+              dark: "bg-[#0a0a0a] text-gray-400",
+              modern: "bg-[#0b0e16]/70 backdrop-blur-xl backdrop-saturate-150 text-gray-300",
+              light: "bg-gray-50 text-gray-600",
+            },
+          )}`}>
             <Globe className="h-8 w-8 opacity-40" />
             <p className="text-sm">This site cannot be embedded</p>
             <p className="text-xs opacity-60 max-w-[280px] text-center">The site&apos;s security policy prevents it from being displayed in a frame.</p>

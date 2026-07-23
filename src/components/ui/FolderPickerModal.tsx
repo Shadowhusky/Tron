@@ -155,7 +155,7 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
 
   const itemSelected = themeClass(resolvedTheme, {
     dark: "bg-white/[0.06]",
-    modern: "bg-purple-500/10",
+    modern: "bg-blue-400/[0.08]",
     light: "bg-blue-50",
   });
 
@@ -193,11 +193,11 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
             value={inputPath}
             onChange={(e) => setInputPath(e.target.value)}
             onKeyDown={handleInputKeyDown}
-            className={`flex-1 text-xs py-1.5 px-2 rounded-md border outline-none transition-colors font-mono ${themeClass(
+            className={`flex-1 text-xs py-1.5 px-2 rounded-lg border outline-none transition-colors font-mono ${themeClass(
               resolvedTheme,
               {
                 dark: "bg-white/[0.03] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-white/20",
-                modern: "bg-white/[0.03] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-purple-400/40",
+                modern: "bg-white/[0.03] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-white/20",
                 light: "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-gray-400",
               },
             )}`}
@@ -222,7 +222,7 @@ const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
         )}
 
         {error && (
-          <div className={`mx-4 my-3 px-3 py-2 rounded-md text-xs ${themeClass(resolvedTheme, {
+          <div className={`mx-4 my-3 px-3 py-2 rounded-lg text-xs ${themeClass(resolvedTheme, {
             dark: "text-red-400 bg-red-500/10",
             modern: "text-red-400 bg-red-500/10",
             light: "text-red-600 bg-red-50",

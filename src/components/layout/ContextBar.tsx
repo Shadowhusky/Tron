@@ -28,7 +28,7 @@ const ContextRing: React.FC<{ percent: number; size?: number }> = ({
       ? "#ef4444" // red
       : percent > 50
         ? "#eab308" // yellow
-        : "#a855f7"; // purple
+        : "#3b82f6"; // blue
 
   return (
     <svg width={size} height={size} className="shrink-0">
@@ -524,7 +524,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
         theme,
         {
           dark: "bg-[#0a0a0a] border-white/5 text-gray-500",
-          modern: "bg-[#060618] border-white/[0.06] text-gray-400",
+          modern: "bg-[#0a0f1c]/55 backdrop-blur-xl backdrop-saturate-150 border-white/[0.08] text-gray-400",
           light: "bg-gray-50 border-gray-200 text-gray-500",
         },
       )}`}
@@ -548,7 +548,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
           }}
         >
           <Folder className="w-3 h-3 opacity-60 group-hover/path:opacity-100 transition-opacity" />
-          <span className="truncate opacity-80 group-hover/path:opacity-100 group-hover/path:underline transition-opacity text-[10px]" style={{ minWidth: `${Math.min(shortCwd.length, 12)}ch` }}>
+          <span className="font-mono truncate opacity-80 group-hover/path:opacity-100 group-hover/path:underline transition-opacity text-[10px]" style={{ minWidth: `${Math.min(shortCwd.length, 12)}ch` }}>
             {compact ? shortCwd : displayCwd}
           </span>
         </div>
@@ -561,12 +561,12 @@ const ContextBar: React.FC<ContextBarProps> = ({
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              transition={{ duration: 0.2 }}
+              transition={{ type: "spring", bounce: 0 }}
               onClick={onShowOverlay}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors"
               title="Show Agent Panel (Cmd+.)"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
               <span className="text-[10px]">Show Agent</span>
               {!isTouchDevice() && <span className="text-[9px] opacity-50 ml-0.5">&#8984;.</span>}
             </motion.button>
@@ -580,7 +580,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
         <div
           ref={ctxRingRef}
           data-testid="context-ring"
-          className="relative flex items-center gap-1 opacity-70 hover:opacity-100 hover:scale-110 transition-all duration-200 cursor-pointer"
+          className="relative flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-200 cursor-pointer"
           onClick={handleOpenContextModal}
           onMouseEnter={() => setShowCtxTooltip(true)}
           onMouseLeave={() => setShowCtxTooltip(false)}
@@ -606,7 +606,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
               }}
             >
               <div
-                className={`px-2 py-1 rounded text-[10px] whitespace-nowrap shadow-lg ${theme === "light"
+                className={`px-2 py-1 rounded-md text-[11px] whitespace-nowrap shadow-lg ${theme === "light"
                   ? "bg-gray-800 text-white"
                   : "bg-[#1a1a1a] text-gray-200 border border-white/10"
                   }`}
@@ -627,7 +627,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                 initial={{ opacity: 0, y: 0 }}
                 animate={{ opacity: 1, y: -4 }}
                 exit={{ opacity: 0, y: -16 }}
-                transition={{ duration: 0.35, ease: "easeOut" }}
+                transition={{ type: "spring", bounce: 0 }}
                 className="fixed z-[999] pointer-events-none"
                 style={{
                   ...(ctxRingRef.current
@@ -644,8 +644,8 @@ const ContextBar: React.FC<ContextBarProps> = ({
               >
                 <div
                   className={`px-2.5 py-1 rounded-full text-[10px] whitespace-nowrap shadow-lg ${theme === "light"
-                    ? "bg-purple-100 text-purple-700 border border-purple-200"
-                    : "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                    ? "bg-blue-100 text-blue-700 border border-blue-200"
+                    : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
                     }`}
                 >
                   Context auto-summarized
@@ -662,10 +662,10 @@ const ContextBar: React.FC<ContextBarProps> = ({
         <div ref={modelBtnRef} className={`min-w-0 overflow-hidden ${compact ? "max-w-[60px]" : ""}`}>
           <div
             data-testid="model-selector"
-            className="flex items-center gap-1 min-w-0 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-purple-400 text-[10px]"
+            className="flex items-center gap-1 min-w-0 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-blue-400 text-[10px]"
             onClick={() => setShowModelMenu(!showModelMenu)}
           >
-            <span className={`font-semibold truncate ${!activeModel ? "opacity-50 italic" : ""}`}>{activeModel || "No model"}</span>
+            <span className={`font-medium truncate ${!activeModel ? "opacity-50 italic" : ""}`}>{activeModel || "No model"}</span>
           </div>
 
           {/* Model Menu — portal to escape overflow-hidden */}
@@ -680,14 +680,14 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   data-testid="model-menu"
                   initial={{ opacity: 0, scale: 0.95, y: 4 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className={`fixed w-64 pt-0 rounded-lg shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
+                  transition={{ type: "spring", bounce: 0 }}
+                  className={`fixed w-64 pt-0 rounded-xl shadow-xl z-[999] max-h-60 overflow-y-auto ${themeClass(
                     theme,
                     {
                       dark: "bg-[#1a1a1a] border border-white/10",
                       modern:
-                        "bg-[#12122e] border border-white/8 shadow-xl",
-                      light: "bg-white border border-gray-200",
+                        "bg-[#101828] border border-white/[0.12]",
+                      light: "bg-white border border-black/[0.08]",
                     },
                   )}`}
                   style={{
@@ -703,10 +703,10 @@ const ContextBar: React.FC<ContextBarProps> = ({
                       : {}),
                   }}
                 >
-                  <div className={`sticky top-0 z-10 px-2 py-1.5 border-b mb-1 shadow-sm rounded-t-lg ${themeClass(theme, {
-                    dark: "bg-[#1a1a1a] border-white/10",
-                    modern: "bg-[#12122e] border-white/8",
-                    light: "bg-gray-50 border-gray-200",
+                  <div className={`sticky top-0 z-10 px-2 py-1.5 border-b mb-1 shadow-sm rounded-t-xl ${themeClass(theme, {
+                    dark: "bg-[#1a1a1a] border-white/[0.08]",
+                    modern: "bg-[#101828] border-white/[0.08]",
+                    light: "bg-gray-50 border-black/[0.06]",
                   })}`}>
                     <div className="relative flex items-center">
                       <Search className="w-3 h-3 absolute left-2 opacity-50" />
@@ -722,7 +722,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   </div>
                   {Object.entries(displayModels).map(([provider, models]) => (
                     <div key={provider} className="mb-2">
-                      <div className="px-3 py-1 text-[9px] uppercase tracking-wider text-gray-500 font-semibold mb-0.5 opacity-80">
+                      <div className="px-3 py-1 text-[11px] uppercase tracking-wide text-gray-500 font-medium mb-0.5 opacity-60">
                         {provider}
                       </div>
                       {models.map((m) => (
@@ -758,7 +758,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                             setShowModelMenu(false);
                             setSearchQuery("");
                           }}
-                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 flex items-center gap-2 group transition-colors ${activeModel === m.name ? "text-purple-400 bg-purple-500/10" : "text-gray-400"}`}
+                          className={`w-[calc(100%-8px)] mx-1 rounded-md text-left px-2.5 py-1.5 text-[13px] flex items-center gap-2 group transition-colors ${themeClass(theme, { dark: "hover:bg-white/10", modern: "hover:bg-white/10", light: "hover:bg-black/[0.05]" })} ${activeModel === m.name ? "text-blue-400 bg-blue-500/10" : themeClass(theme, { dark: "text-gray-400", modern: "text-gray-400", light: "text-gray-600" })}`}
                         >
                           <span className="flex-1 truncate">{m.name}</span>
                           <div className="flex gap-1 shrink-0">
@@ -766,7 +766,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                               <span
                                 key={cap}
                                 className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
-                                  ? "bg-purple-500/20 text-purple-400"
+                                  ? "bg-blue-500/20 text-blue-400"
                                   : cap === "vision"
                                     ? "bg-blue-500/20 text-blue-400"
                                     : cap === "tools"
@@ -790,12 +790,12 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   {/* Settings shortcut */}
                   <div className={`sticky bottom-0 px-2 py-1.5 border-t ${themeClass(theme, {
                     dark: "bg-[#1a1a1a] border-white/10",
-                    modern: "bg-[#12122e] border-white/8",
+                    modern: "bg-[#101828] border-white/8",
                     light: "bg-gray-50 border-gray-200",
                   })}`}>
                     <button
                       onClick={() => { setShowModelMenu(false); setSearchQuery(""); openSettingsTab("ai"); }}
-                      className="w-full flex justify-center items-center gap-1.5 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors"
+                      className={`w-full flex justify-center items-center gap-1.5 px-2 py-1 rounded-md text-[12px] text-gray-500 transition-colors ${themeClass(theme, { dark: "hover:text-gray-300 hover:bg-white/10", modern: "hover:text-gray-300 hover:bg-white/10", light: "hover:text-gray-700 hover:bg-black/[0.05]" })}`}
                     >
                       <Settings className="w-3 h-3" />
                       Model Settings
@@ -831,7 +831,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                 transition={{ duration: 0.12 }}
                 className={`fixed inset-0 z-[999] ${themeClass(theme, {
                   dark: "bg-black/50",
-                  modern: "bg-[#020010]",
+                  modern: "bg-[#05080f]/70",
                   light: "bg-black/40",
                 })}`}
                 onClick={() => setShowContextModal(false)}
@@ -847,8 +847,8 @@ const ContextBar: React.FC<ContextBarProps> = ({
                   theme,
                   {
                     dark: "bg-[#0e0e0e] border-white/10 text-gray-200 shadow-xl",
-                    modern: "bg-[#0a0a1e] border-white/[0.08] text-gray-200",
-                    light: "bg-white border-gray-200 text-gray-900 shadow-xl",
+                    modern: "bg-[#0d1220] border-white/[0.12] text-gray-200 shadow-xl",
+                    light: "bg-white border-black/[0.08] text-gray-900 shadow-xl",
                   },
                 )}`}
               >
@@ -860,7 +860,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                     }`}
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-semibold">
+                    <span className="text-[15px] font-medium tracking-tight">
                       Session Context
                     </span>
                     <span
@@ -891,7 +891,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                     }`}
                 >
                   <span
-                    className={`text-[10px] uppercase tracking-wider font-semibold mr-1 ${theme === "light" ? "text-gray-400" : "text-gray-500"
+                    className={`text-[11px] uppercase tracking-wide font-medium mr-1 ${theme === "light" ? "text-gray-400" : "text-gray-500"
                       }`}
                   >
                     Summarize:
@@ -912,7 +912,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                     </button>
                   ))}
                   {isSummarizing && (
-                    <Loader2 className="w-3 h-3 animate-spin text-purple-400 ml-1" />
+                    <Loader2 className="w-3 h-3 animate-spin text-blue-400 ml-1" />
                   )}
                   <div className="flex-1" />
                   <button

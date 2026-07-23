@@ -1,7 +1,16 @@
 @import "tailwindcss";
 
+@theme {
+  /* App chrome uses the platform UI font (SF Pro on macOS); terminal and
+     code content opt into mono explicitly via `font-mono` / xterm config. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    "Courier New", monospace;
+}
+
 :root {
-  font-family: "JetBrains Mono", monospace;
+  font-family: var(--font-sans);
   line-height: 1.5;
   font-weight: 400;
 
@@ -13,6 +22,13 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Modern theme: translucent terminal. xterm.css defaults .xterm-viewport to
+   opaque black, which would block the app's luminous backdrop — the tint
+   comes from the theme background on the scrollable element instead. */
+.modern-terminal .xterm-viewport {
+  background-color: transparent !important;
 }
 
 html {
@@ -225,7 +241,7 @@ button:disabled {
   font-size: 1em;
 }
 .markdown-content blockquote {
-  border-left: 2px solid rgba(168, 85, 247, 0.3);
+  border-left: 2px solid rgba(120, 120, 120, 0.35);
   padding-left: 0.75em;
   margin: 0.3em 0;
   opacity: 0.85;

@@ -166,7 +166,7 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
           resolvedTheme,
           {
             dark: "bg-[#0a0a0a] border-white/5",
-            modern: "bg-[#040414] border-white/6",
+            modern: "bg-[#0b0e16]/70 backdrop-blur-xl backdrop-saturate-150 border-white/[0.08]",
             light: "bg-gray-50 border-gray-200",
           },
         )}`}
@@ -187,7 +187,7 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
             <span className={`shrink-0 w-2 h-2 rounded-full ${isLight ? "bg-orange-400" : "bg-orange-500"}`} title="Unsaved changes" />
           )}
           {saveFlash && (
-            <span className={`shrink-0 text-[9px] font-medium ${isLight ? "text-green-600" : "text-green-400"}`}>Saved</span>
+            <span className={`shrink-0 text-[10px] font-medium ${isLight ? "text-green-600" : "text-green-400"}`}>Saved</span>
           )}
         </div>
 

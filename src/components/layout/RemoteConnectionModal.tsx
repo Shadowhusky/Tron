@@ -142,11 +142,11 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
 
   const inputCls = `w-full px-2.5 py-1.5 text-[13px] rounded-md border outline-none transition-colors ${t(resolvedTheme, {
     dark: "bg-white/[0.04] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-white/20",
-    modern: "bg-white/[0.04] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-purple-400/40",
+    modern: "bg-white/[0.04] border-white/[0.08] text-gray-200 placeholder-gray-600 focus:border-white/20",
     light: "bg-gray-50/80 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-gray-400",
   })}`;
 
-  const labelCls = `block text-[11px] font-medium mb-0.5 uppercase tracking-wider ${t(resolvedTheme, {
+  const labelCls = `block text-[11px] font-medium mb-0.5 uppercase tracking-wide ${t(resolvedTheme, {
     dark: "text-gray-500",
     modern: "text-gray-500",
     light: "text-gray-400",
@@ -176,11 +176,11 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
             animate="visible"
             exit="exit"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-md mx-3 rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${t(
+            className={`w-full max-w-md mx-3 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${t(
               resolvedTheme,
               {
-                dark: "bg-[#141414] text-gray-200 border border-white/[0.06]",
-                modern: "bg-[#12121a]/95 backdrop-blur-2xl text-gray-200 border border-white/[0.08] shadow-[0_0_40px_rgba(0,0,0,0.5)]",
+                dark: "bg-[#141414] text-gray-200 border border-white/10",
+                modern: "bg-[#10141e] text-gray-200 border border-white/[0.12] shadow-[0_0_40px_rgba(0,0,0,0.5)]",
                 light: "bg-white text-gray-900 border border-gray-200/80 shadow-xl",
               },
             )}`}
@@ -194,12 +194,12 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
               <div className="flex items-center gap-2">
                 <svg className={`w-4 h-4 ${t(resolvedTheme, {
                   dark: "text-gray-500",
-                  modern: "text-purple-400/60",
+                  modern: "text-gray-500",
                   light: "text-gray-400",
                 })}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
                 </svg>
-                <h3 className="text-sm font-medium">Remote Server</h3>
+                <h3 className="text-[15px] font-medium tracking-tight">Remote Server</h3>
               </div>
               <button
                 onClick={onClose}
@@ -210,7 +210,7 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
                 })}`}
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
@@ -236,7 +236,7 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
                           selectedProfileId === profile.id
                             ? t(resolvedTheme, {
                                 dark: "bg-white/[0.06] border-white/[0.12] text-gray-200",
-                                modern: "bg-purple-500/10 border-purple-500/20 text-purple-300",
+                                modern: "bg-blue-400/[0.08] border-blue-400/20 text-blue-300",
                                 light: "bg-gray-100 border-gray-300 text-gray-800",
                               })
                             : t(resolvedTheme, {
@@ -248,7 +248,7 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
                         title={`${profile.name} — ${profile.url}`}
                       >
                         <span className="font-medium">{profile.name}</span>
-                        <span className="ml-1 opacity-50">{new URL(profile.url).host}</span>
+                        <span className="ml-1 opacity-50 font-mono">{new URL(profile.url).host}</span>
                       </button>
                     ))}
                   </div>
@@ -280,7 +280,7 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
                     }}
                     disabled={connecting}
                     placeholder="http://192.168.1.10:3888"
-                    className={`${inputCls} ${connecting ? "opacity-50" : ""}`}
+                    className={`${inputCls} font-mono ${connecting ? "opacity-50" : ""}`}
                     autoFocus
                   />
                 </div>
@@ -313,7 +313,7 @@ const RemoteConnectionModal: React.FC<RemoteConnectionModalProps> = ({
                   disabled={connecting || !url.trim()}
                   className={`px-3.5 py-1.5 text-[13px] font-medium rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${t(resolvedTheme, {
                     dark: "bg-white/[0.1] hover:bg-white/[0.15] text-gray-200",
-                    modern: "bg-purple-500/20 hover:bg-purple-500/30 text-purple-200",
+                    modern: "bg-blue-500/20 hover:bg-blue-500/30 text-blue-200",
                     light: "bg-gray-900 hover:bg-gray-800 text-white",
                   })}`}
                 >

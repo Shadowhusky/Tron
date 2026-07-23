@@ -228,6 +228,7 @@ All `release:*` scripts use `--publish always` which automatically uploads artif
 - React 19 JSX transform — no `import React` unless using `React.FC`, `React.useRef`, etc.
 - Tailwind CSS for all styling (no CSS modules)
 - Three themes: dark, light, modern (+ system auto-detect). Use `resolvedTheme` (never raw `theme`).
+- **Design language (Apple)**: system UI font for chrome (`--font-sans`), JetBrains Mono only via explicit `font-mono` (commands/paths/output). Neutral surfaces + system-blue accent (never purple); semantic colors for status only. Menus: 13px, near-opaque, rounded-xl, hairline borders. Modern theme = glass: luminous backdrop layers in App.tsx, translucent xterm (`allowTransparency` + rgba bg + `.modern-terminal` viewport override in index.css), `backdrop-blur` on persistent chrome only.
 - `agent.md` is appended to the agent system prompt — keep it compact since it's sent every LLM call.
 - Agent exec uses `execInTerminal` IPC with sentinel-based completion detection.
 - Console output stripped in production builds via Vite esbuild `drop: ['console', 'debugger']`.
@@ -248,6 +249,7 @@ All `release:*` scripts use `--publish always` which automatically uploads artif
 - Test isolation via unique `TRON_TEST_PROFILE` directories
 - 12 spec files: app-launch, tabs, terminal, smart-input, settings, onboarding, context-bar, agent, theme, model-favorites, keyboard, saved-tabs, web-mode
 - Serial execution (`workers: 1`)
+- Unit tests (vitest) are scoped to `src/**` via `test.include` in `vite.config.ts` — keeps Playwright specs and `.claude/worktrees` checkouts out of the glob.
 
 ## Workflow
 

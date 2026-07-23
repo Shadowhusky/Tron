@@ -110,27 +110,27 @@ const AdviceThinkingBlock: React.FC<{
     <div
       className={`mb-1 rounded border p-1.5 transition-all ${
         isLight
-          ? "border-purple-200/50 bg-purple-50/50"
-          : "border-purple-500/10 bg-purple-950/20"
+          ? "border-black/10 bg-gray-100"
+          : "border-white/10 bg-white/5"
       }`}
     >
       <div className="mb-0.5 flex items-center justify-between">
         <span
-          className={`text-[9px] font-semibold tracking-wider uppercase ${isLight ? "text-purple-400" : "text-purple-500/80"}`}
+          className={`text-[10px] font-medium tracking-wide uppercase ${isLight ? "text-blue-600" : "text-blue-400"}`}
         >
           {isStreaming ? "Thinking..." : "Reasoning"}
           {isStreaming && (
             <span className="ml-1 inline-flex gap-0.5 align-middle">
               <span
-                className="h-1 w-1 animate-bounce rounded-full bg-purple-400"
+                className="h-1 w-1 animate-bounce rounded-full bg-blue-400"
                 style={{ animationDelay: "0ms" }}
               />
               <span
-                className="h-1 w-1 animate-bounce rounded-full bg-purple-400"
+                className="h-1 w-1 animate-bounce rounded-full bg-blue-400"
                 style={{ animationDelay: "150ms" }}
               />
               <span
-                className="h-1 w-1 animate-bounce rounded-full bg-purple-400"
+                className="h-1 w-1 animate-bounce rounded-full bg-blue-400"
                 style={{ animationDelay: "300ms" }}
               />
             </span>
@@ -138,7 +138,7 @@ const AdviceThinkingBlock: React.FC<{
         </span>
         <div className="flex items-center gap-2">
           <span
-            className={`font-mono text-[9px] ${isLight ? "text-purple-400" : "text-purple-500/60"}`}
+            className={`font-mono text-[9px] ${isLight ? "text-blue-600/70" : "text-blue-400/60"}`}
           >
             {tokenCount} tokens
           </span>
@@ -149,7 +149,7 @@ const AdviceThinkingBlock: React.FC<{
                 userScrolledUpRef.current = false;
               }}
               className={`text-[9px] tracking-wider uppercase opacity-60 transition-opacity hover:opacity-100 ${
-                isLight ? "text-purple-600" : "text-purple-400"
+                isLight ? "text-blue-600" : "text-blue-400"
               }`}
             >
               {expanded ? "Collapse" : "Expand"}
@@ -1689,30 +1689,38 @@ const SmartInput: React.FC<SmartInputProps> = ({
         className={`group/inputcard relative z-10 flex w-full flex-col gap-1 rounded-lg border px-3 py-2 transition-all duration-300 ${
           isDragOver
             ? theme === "light"
-              ? "border-dashed border-purple-400 bg-purple-50 shadow-sm ring-2 ring-purple-300/50"
-              : "border-dashed border-purple-400/50 bg-purple-950/50 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-2 ring-purple-500/30"
+              ? "border-dashed border-blue-400 bg-blue-50 shadow-sm ring-2 ring-blue-300/50"
+              : theme === "modern"
+                ? "border-dashed border-blue-400/50 bg-blue-950/50 ring-2 ring-blue-500/30 backdrop-blur-xl backdrop-saturate-150"
+                : "border-dashed border-blue-400/50 bg-blue-950/50 ring-2 ring-blue-500/30"
             : mode === "agent"
               ? theme === "light"
-                ? "border-purple-300 bg-purple-50 text-purple-900 shadow-sm"
-                : "border-purple-500/30 bg-purple-950/40 text-purple-100 shadow-[0_0_20px_rgba(168,85,247,0.08)]"
+                ? "border-blue-300 bg-blue-50 text-blue-900 shadow-sm"
+                : theme === "modern"
+                  ? "border-blue-500/30 bg-blue-950/40 text-blue-100 backdrop-blur-xl backdrop-saturate-150"
+                  : "border-blue-500/30 bg-blue-950/40 text-blue-100"
               : mode === "advice"
                 ? theme === "light"
                   ? "border-blue-300 bg-blue-50 text-blue-900 shadow-sm"
-                  : "border-blue-500/25 bg-blue-950/30 text-blue-100 shadow-[0_0_15px_rgba(59,130,246,0.06)]"
+                  : theme === "modern"
+                    ? "border-blue-500/25 bg-blue-950/30 text-blue-100 backdrop-blur-xl backdrop-saturate-150"
+                    : "border-blue-500/25 bg-blue-950/30 text-blue-100"
                 : theme === "light"
                   ? "border-gray-200 bg-white text-black shadow-sm"
                   : theme === "modern"
-                    ? "border-white/[0.08] bg-white/[0.03] text-gray-100"
+                    ? "border-white/[0.1] bg-white/[0.06] text-gray-100 backdrop-blur-xl backdrop-saturate-150"
                     : "border-white/10 bg-[#0e0e0e] text-gray-200 shadow-xl"
         }`}
       >
         {/* Ctrl+R fuzzy history search overlay */}
         {historySearchOpen && (
           <div
-            className={`absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-lg border shadow-xl ${
+            className={`absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-xl border shadow-xl ${
               theme === "light"
-                ? "border-gray-200 bg-white text-gray-800"
-                : "border-white/10 bg-[#161616] text-gray-200"
+                ? "border-black/[0.08] bg-white text-gray-800"
+                : theme === "modern"
+                  ? "border-white/10 bg-[#141a2a] text-gray-200"
+                  : "border-white/10 bg-[#161616] text-gray-200"
             }`}
           >
             <div className={`flex items-center gap-2 border-b px-3 py-1.5 text-xs ${
@@ -1722,7 +1730,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
               <span>History search:</span>
               <span className="font-mono">{historyQuery || "type to filter…"}</span>
             </div>
-            <div className="max-h-48 overflow-y-auto py-1">
+            <div className="max-h-48 overflow-y-auto p-1">
               {historyMatches.length === 0 && (
                 <div className="px-3 py-3 text-center text-xs opacity-40">No matching history</div>
               )}
@@ -1731,9 +1739,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   key={`${h}-${i}`}
                   onMouseEnter={() => setHistorySearchIndex(i)}
                   onClick={() => { setValue(h); setHistorySearchOpen(false); inputRef.current?.focus(); }}
-                  className={`block w-full truncate px-3 py-1 text-left font-mono text-xs ${
+                  className={`block w-full truncate rounded-md px-2.5 py-1.5 text-left font-mono text-xs ${
                     i === historySearchIndex
-                      ? theme === "light" ? "bg-gray-100" : "bg-white/[0.08]"
+                      ? theme === "light" ? "bg-black/[0.05]" : "bg-white/[0.08]"
                       : ""
                   }`}
                 >
@@ -1752,7 +1760,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
             className={`absolute -top-1.5 -right-1.5 z-20 hidden h-5 w-5 items-center justify-center rounded-full border opacity-0 transition-opacity duration-150 hover:!opacity-100 group-hover/inputcard:flex group-hover/inputcard:opacity-60 ${
               theme === "light"
                 ? "border-gray-200 bg-white text-gray-500 shadow-sm"
-                : "border-white/15 bg-[#1a1a1a] text-gray-400"
+                : theme === "modern"
+                  ? "border-white/15 bg-[#141a2a] text-gray-400"
+                  : "border-white/15 bg-[#1a1a1a] text-gray-400"
             }`}
           >
             <ChevronDown className="h-3 w-3" />
@@ -1762,7 +1772,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
         {isDragOver && (
           <div
             className={`flex items-center justify-center py-2 text-xs font-medium ${
-              theme === "light" ? "text-purple-600" : "text-purple-300"
+              theme === "light" ? "text-blue-600" : "text-blue-300"
             }`}
           >
             <ImagePlus className="mr-1.5 h-4 w-4 opacity-70" />
@@ -1805,7 +1815,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 isAuto
                   ? "bg-teal-500/10 text-teal-400"
                   : mode === "agent"
-                    ? "bg-purple-500/10 text-purple-400"
+                    ? "bg-blue-500/10 text-blue-400"
                     : mode === "advice"
                       ? "bg-blue-500/10 text-blue-400"
                       : "bg-white/5 text-gray-400 hover:text-white"
@@ -1833,10 +1843,12 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   />
                   <div
                     data-testid="mode-menu"
-                    className={`fixed z-[999] w-36 overflow-hidden rounded-lg border shadow-xl ${
+                    className={`fixed z-[999] w-36 overflow-hidden rounded-xl border p-1 shadow-xl ${
                       theme === "light"
-                        ? "border-gray-200 bg-white"
-                        : "border-white/10 bg-[#1e1e1e]"
+                        ? "border-black/[0.08] bg-white"
+                        : theme === "modern"
+                          ? "border-white/10 bg-[#141a2a]"
+                          : "border-white/10 bg-[#1e1e1e]"
                     }`}
                     style={{
                       ...(modeBtnRef.current
@@ -1856,13 +1868,13 @@ const SmartInput: React.FC<SmartInputProps> = ({
                         id: "auto",
                         label: "Auto",
                         shortcut: "⌘0",
-                        icon: <Zap className="h-3 w-3" />,
+                        icon: <Zap className="h-3.5 w-3.5 opacity-70" strokeWidth={1.5} />,
                       },
                       {
                         id: "command",
                         label: "Command",
                         shortcut: "⌘1",
-                        icon: <ChevronRight className="h-3 w-3" />,
+                        icon: <ChevronRight className="h-3.5 w-3.5 opacity-70" strokeWidth={1.5} />,
                       },
                       ...(aiBehavior.adviceMode
                         ? [
@@ -1870,7 +1882,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                               id: "advice",
                               label: "Advice",
                               shortcut: "⌘2",
-                              icon: <Lightbulb className="h-3 w-3" />,
+                              icon: <Lightbulb className="h-3.5 w-3.5 opacity-70" strokeWidth={1.5} />,
                             },
                           ]
                         : []),
@@ -1878,7 +1890,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                         id: "agent",
                         label: "Agent",
                         shortcut: "⌘3",
-                        icon: <Bot className="h-3 w-3" />,
+                        icon: <Bot className="h-3.5 w-3.5 opacity-70" strokeWidth={1.5} />,
                       },
                     ].map((m) => (
                       <button
@@ -1894,23 +1906,23 @@ const SmartInput: React.FC<SmartInputProps> = ({
                           }
                           setShowModeMenu(false);
                         }}
-                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs ${
+                        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] ${
                           theme === "light"
                             ? (isAuto && m.id === "auto") ||
                               (!isAuto && mode === m.id)
-                              ? "bg-gray-100 text-gray-900"
-                              : "text-gray-600 hover:bg-gray-50"
+                              ? "bg-black/[0.05] text-gray-900"
+                              : "text-gray-600 hover:bg-black/[0.05]"
                             : (isAuto && m.id === "auto") ||
                                 (!isAuto && mode === m.id)
-                              ? "bg-white/5 text-white"
-                              : "text-gray-400 hover:bg-white/5"
+                              ? "bg-white/[0.08] text-white"
+                              : "text-gray-400 hover:bg-white/10"
                         }`}
                       >
                         <span className="flex w-4 justify-center text-center">
                           {m.icon}
                         </span>
                         <span className="flex-1">{m.label}</span>
-                        <span className="text-[10px] opacity-40">
+                        <span className="text-[11px] opacity-40">
                           {m.shortcut}
                         </span>
                       </button>
@@ -1957,7 +1969,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
               className={`w-full resize-none overflow-x-hidden overflow-y-auto bg-transparent font-mono text-sm outline-none ${
                 theme === "light"
                   ? "text-gray-900 placeholder-gray-400"
-                  : "text-gray-100 placeholder-gray-500"
+                  : theme === "modern"
+                    ? "text-gray-100 placeholder-gray-400"
+                    : "text-gray-100 placeholder-gray-500"
               }`}
               style={{ minHeight: "1.5em", maxHeight: "8em" }}
               placeholder={
@@ -2113,7 +2127,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 className={`rounded-md p-1.5 transition-colors ${
                   theme === "light"
                     ? "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                    : "text-gray-500 hover:bg-white/10 hover:text-gray-300"
+                    : theme === "modern"
+                      ? "text-gray-400 hover:bg-white/10 hover:text-gray-200"
+                      : "text-gray-500 hover:bg-white/10 hover:text-gray-300"
                 }`}
                 title={`Attach image (${attachedImages.length}/${MAX_IMAGES})`}
               >
@@ -2140,7 +2156,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
             className={`rounded-md p-1.5 transition-colors ${
               theme === "light"
                 ? "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                : "text-gray-500 hover:bg-white/10 hover:text-white"
+                : theme === "modern"
+                  ? "text-gray-400 hover:bg-white/10 hover:text-white"
+                  : "text-gray-500 hover:bg-white/10 hover:text-white"
             } ${isLoading || isAgentRunning ? "text-red-400 hover:bg-red-500/10 hover:text-red-300" : ""}`}
             title={isLoading || isAgentRunning ? "Stop Agent (Ctrl+C)" : "Run"}
           >
@@ -2160,15 +2178,19 @@ const SmartInput: React.FC<SmartInputProps> = ({
           Shows mode + shortcut hints, plus the panel-toggle hotkeys/buttons. */}
       <Collapsible visible={hintsVisible && aiBehavior.inputHints && !isTouchDevice()}>
         <div
-          className={`flex h-5 items-center justify-between overflow-hidden px-2 text-[10px] whitespace-nowrap select-none ${
-            theme === "light" ? "text-gray-500" : "text-gray-400"
+          className={`flex h-5 items-center justify-between overflow-hidden px-2 text-[11px] whitespace-nowrap select-none ${
+            theme === "light"
+              ? "text-gray-500"
+              : theme === "modern"
+                ? "text-gray-300"
+                : "text-gray-400"
           }`}
         >
           {/* Left: mode indicator + feedback */}
           <div className="flex shrink-0 items-center gap-2">
             {isAuto ? (
               <span
-                className={`font-medium ${mode === "agent" ? "text-purple-400" : "text-teal-400"}`}
+                className={`font-medium ${mode === "agent" ? "text-blue-400" : "text-teal-400"}`}
                 title="Auto-detects command vs natural language"
               >
                 auto · {mode}
@@ -2177,7 +2199,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
               <span
                 className={`font-medium ${
                   mode === "agent"
-                    ? "text-purple-400"
+                    ? "text-blue-400"
                     : mode === "advice"
                       ? "text-blue-400"
                       : ""
@@ -2192,8 +2214,8 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 className={`rounded border px-1 py-px transition-colors ${
                   thinkingEnabled
                     ? theme === "light"
-                      ? "border-purple-300 bg-purple-50 text-purple-600"
-                      : "border-purple-500/30 bg-purple-500/10 text-purple-400"
+                      ? "border-blue-300 bg-blue-50 text-blue-600"
+                      : "border-blue-500/30 bg-blue-500/10 text-blue-400"
                     : theme === "light"
                       ? "border-gray-300 bg-gray-50 text-gray-400"
                       : "border-white/10 bg-white/5 text-gray-500"
@@ -2272,7 +2294,13 @@ const SmartInput: React.FC<SmartInputProps> = ({
             animate="visible"
             exit="exit"
             ref={completionsRef}
-            className="absolute bottom-full left-0 z-20 mb-1 max-h-60 w-full max-w-md overflow-hidden overflow-y-auto rounded-lg border border-white/10 bg-[#1a1a1a] shadow-xl"
+            className={`absolute bottom-full left-0 z-20 mb-1 max-h-60 w-full max-w-md overflow-hidden overflow-y-auto rounded-xl border py-1 shadow-xl ${
+              theme === "light"
+                ? "border-black/[0.08] bg-white"
+                : theme === "modern"
+                  ? "border-white/10 bg-[#141a2a]"
+                  : "border-white/10 bg-[#1a1a1a]"
+            }`}
           >
             {completions.map((comp, i) => (
               <motion.div
@@ -2280,10 +2308,14 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.12 }}
-                className={`flex cursor-pointer items-center gap-2 px-3 py-2 font-mono text-xs ${
+                className={`flex cursor-pointer items-center gap-2 rounded-md mx-1 px-2.5 py-1.5 font-mono text-xs ${
                   i === selectedIndex
-                    ? "bg-blue-600 text-white"
-                    : "text-gray-400 hover:bg-white/5"
+                    ? theme === "light"
+                      ? "bg-black/[0.05] text-gray-900"
+                      : "bg-white/10 text-white"
+                    : theme === "light"
+                      ? "text-gray-600 hover:bg-black/[0.05]"
+                      : "text-gray-400 hover:bg-white/10"
                 }`}
                 onPointerDown={(e) => e.preventDefault()}
                 onClick={() => {
@@ -2298,7 +2330,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   <Terminal className="h-3 w-3 shrink-0 opacity-50" />
                 )}
                 <span
-                  className={`truncate${comp.source === "shell-history" ? "opacity-70" : ""}`}
+                  className={`truncate${comp.source === "shell-history" ? " opacity-70" : ""}`}
                 >
                   {comp.text}
                 </span>
@@ -2317,19 +2349,21 @@ const SmartInput: React.FC<SmartInputProps> = ({
             initial="hidden"
             animate="visible"
             exit="exit"
-            className={`absolute bottom-full left-0 z-10 mb-2 flex max-h-64 w-full flex-col rounded-lg border p-3 pb-2 shadow-xl ${
+            className={`absolute bottom-full left-0 z-10 mb-2 flex max-h-64 w-full flex-col rounded-xl border p-3 pb-2 shadow-xl ${
               theme === "light"
-                ? "border-blue-200 bg-white/95"
-                : "border-purple-500/20 bg-[#1a1a1a]/90"
+                ? "border-black/[0.08] bg-white"
+                : theme === "modern"
+                  ? "border-white/10 bg-[#141a2a]"
+                  : "border-white/10 bg-[#1a1a1a]"
             }`}
           >
             {/* Fixed header */}
             <div className="mb-3 flex shrink-0 items-center gap-3">
               <Lightbulb
-                className={`h-4 w-4 shrink-0 text-purple-400 ${isLoading ? "animate-pulse" : ""}`}
+                className={`h-4 w-4 shrink-0 text-blue-400 ${isLoading ? "animate-pulse" : ""}`}
               />
               <div
-                className={`text-sm font-medium ${theme === "light" ? "text-purple-700" : "text-purple-200"}`}
+                className={`text-[13px] font-medium tracking-tight ${theme === "light" ? "text-gray-800" : "text-gray-200"}`}
               >
                 AI Suggestion
               </div>
@@ -2418,11 +2452,11 @@ const SmartInput: React.FC<SmartInputProps> = ({
                     className={`flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
                       theme === "light"
                         ? "border border-blue-200 bg-blue-100 text-blue-700 hover:bg-blue-200"
-                        : "border border-purple-500/20 bg-purple-500/20 text-purple-300 hover:bg-purple-500/30"
+                        : "border border-blue-500/20 bg-blue-500/20 text-blue-300 hover:bg-blue-500/30"
                     }`}
                   >
                     <span
-                      className={`rounded px-1 py-px text-[9px] ${theme === "light" ? "bg-blue-200 text-blue-500" : "bg-purple-500/20 text-purple-400"}`}
+                      className={`rounded px-1 py-px text-[9px] ${theme === "light" ? "bg-blue-200 text-blue-500" : "bg-blue-500/20 text-blue-400"}`}
                     >
                       ↵
                     </span>

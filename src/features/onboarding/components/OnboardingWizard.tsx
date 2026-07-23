@@ -175,7 +175,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             <motion.div variants={scalePop}>
               <FeatureIcon
                 icon={theme === "modern" ? Gem : Monitor}
-                color={theme === "modern" ? "purple" : "blue"}
+                color="blue"
                 size="lg"
               />
             </motion.div>
@@ -183,7 +183,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               variants={staggerItem}
               className="text-center space-y-2"
             >
-              <h3 className="font-medium text-lg">Choose Appearance</h3>
+              <h3 className="font-medium tracking-tight text-[15px]">Choose Appearance</h3>
               <p className="text-sm text-gray-500 max-w-xs">
                 Select a theme that best suits your working environment.
               </p>
@@ -225,7 +225,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   label: "Modern",
                   swatch: (
                     <div
-                      className={`p-1.5 rounded-lg transition-colors ${theme === "modern" ? "bg-purple-500/20 text-purple-400" : "text-gray-400"}`}
+                      className={`p-1.5 rounded-lg transition-colors ${theme === "modern" ? "bg-blue-500/20 text-blue-400" : "text-gray-400"}`}
                     >
                       <Gem className="w-6 h-6" />
                     </div>
@@ -241,9 +241,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   onClick={() => setTheme(id)}
                   className={`p-3 border rounded-xl flex flex-col items-center gap-2 transition-colors ${
                     theme === id
-                      ? id === "modern"
-                        ? "border-purple-500/50 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50"
-                        : "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500"
+                      ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500"
                       : "border-transparent hover:bg-white/5 bg-white/5"
                   }`}
                 >
@@ -270,7 +268,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               variants={staggerItem}
               className="text-center space-y-2"
             >
-              <h3 className="font-medium text-lg">Choose Your View</h3>
+              <h3 className="font-medium tracking-tight text-[15px]">Choose Your View</h3>
               <p className="text-sm text-gray-500 max-w-xs">
                 Pick the interface that fits your workflow.
               </p>
@@ -298,7 +296,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     desc: "Chat-focused, AI-first interface",
                     icon: Bot,
                     activeBorder:
-                      "border-purple-500/50 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50",
+                      "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500",
                   },
                 ] as const
               ).map(({ id, label, desc, icon: Icon, activeBorder }) => (
@@ -319,7 +317,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                       id === "terminal"
                         ? "bg-gray-700 text-green-300"
-                        : "bg-purple-500/30 text-purple-300"
+                        : "bg-blue-500/30 text-blue-300"
                     }`}
                   >
                     <Icon className="w-5 h-5" />
@@ -344,7 +342,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
           >
             <motion.div variants={staggerItem} className="space-y-3 w-full">
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium opacity-80">
+                <label className="text-[13px] font-medium opacity-80">
                   AI Provider
                 </label>
                 <select
@@ -364,11 +362,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     }));
                     setConnectionStatus("idle");
                   }}
-                  className={`w-full p-2.5 pr-8 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                  className={`w-full p-2.5 pr-8 rounded-lg border outline-none focus:border-blue-500 transition-colors
                       ${
                         resolvedTheme === "light"
-                          ? "bg-white border-gray-200 text-gray-900 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
-                          : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                          ? "bg-white border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
                       }
                     `}
                 >
@@ -401,7 +399,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     className="flex flex-col gap-4 overflow-hidden"
                   >
                     <div className="flex flex-col gap-2">
-                      <label className="text-sm font-medium opacity-80">
+                      <label className="text-[13px] font-medium opacity-80">
                         {aiConfig.provider === "lmstudio" ? "LM Studio" : "Ollama"} URL
                       </label>
                       <div className="flex gap-2">
@@ -415,11 +413,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                           onBlur={() => {
                             invalidateModels();
                           }}
-                          className={`flex-1 p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                          className={`flex-1 p-2.5 rounded-lg border outline-none focus:border-blue-500 transition-colors font-mono text-[12px]
                             ${
                               resolvedTheme === "light"
-                                ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
-                                : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                                ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                                : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
                             }
                           `}
                           placeholder={aiConfig.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434"}
@@ -443,7 +441,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <label className="text-sm font-medium opacity-80">
+                      <label className="text-[13px] font-medium opacity-80">
                         API Key (optional)
                       </label>
                       <input
@@ -453,18 +451,18 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                           setAiConfig((c) => ({ ...c, apiKey: e.target.value }))
                         }
                         placeholder="Leave empty if not required"
-                        className={`w-full p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                        className={`w-full p-2.5 rounded-lg border outline-none focus:border-blue-500 transition-colors
                           ${
                             resolvedTheme === "light"
-                              ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
-                              : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                              ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                              : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
                           }
                         `}
                       />
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <label className="text-sm font-medium opacity-80">
+                      <label className="text-[13px] font-medium opacity-80">
                         Model
                       </label>
                       {(() => {
@@ -491,9 +489,9 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                                 onClick={() =>
                                   setAiConfig((c) => ({ ...c, model: m.name }))
                                 }
-                                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                                className={`w-full text-left px-3 py-2 text-[12px] font-mono flex items-center gap-2 transition-colors ${
                                   aiConfig.model === m.name
-                                    ? "bg-purple-500/10 text-purple-400"
+                                    ? "bg-blue-500/10 text-blue-400"
                                     : resolvedTheme === "light"
                                       ? "text-gray-700 hover:bg-gray-50"
                                       : "text-gray-300 hover:bg-white/5"
@@ -504,9 +502,9 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                                   {m.capabilities?.map((cap) => (
                                     <span
                                       key={cap}
-                                      className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
+                                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
                                         cap === "thinking"
-                                          ? "bg-purple-500/20 text-purple-400"
+                                          ? "bg-blue-500/20 text-blue-400"
                                           : cap === "vision"
                                             ? "bg-blue-500/20 text-blue-400"
                                             : cap === "tools"
@@ -536,7 +534,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   >
                     {(aiConfig.provider === "openai-compat" || aiConfig.provider === "anthropic-compat") && (
                       <div className="flex flex-col gap-2">
-                        <label className="text-sm font-medium opacity-80">
+                        <label className="text-[13px] font-medium opacity-80">
                           Base URL
                         </label>
                         <input
@@ -546,18 +544,18 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                             setAiConfig((c) => ({ ...c, baseUrl: e.target.value }))
                           }
                           placeholder={aiConfig.provider === "anthropic-compat" ? "https://your-proxy.example.com" : "https://your-api.example.com/v1"}
-                          className={`w-full p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                          className={`w-full p-2.5 rounded-lg border outline-none focus:border-blue-500 transition-colors font-mono text-[12px]
                             ${
                               resolvedTheme === "light"
-                                ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
-                                : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                                ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                                : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
                             }
                           `}
                         />
                       </div>
                     )}
                     <div className="flex flex-col gap-2">
-                      <label className="text-sm font-medium opacity-80">
+                      <label className="text-[13px] font-medium opacity-80">
                         Model Name
                       </label>
                       <input
@@ -567,17 +565,17 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                         onChange={(e) =>
                           setAiConfig((c) => ({ ...c, model: e.target.value }))
                         }
-                        className={`w-full p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                        className={`w-full p-2.5 rounded-lg border outline-none focus:border-blue-500 transition-colors font-mono text-[12px]
                           ${
                             resolvedTheme === "light"
-                              ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
-                              : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                              ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                              : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
                           }
                         `}
                       />
                     </div>
                     <div className="flex flex-col gap-2">
-                      <label className="text-sm font-medium opacity-80">
+                      <label className="text-[13px] font-medium opacity-80">
                         API Key{(aiConfig.provider === "openai-compat" || aiConfig.provider === "anthropic-compat") ? " (optional)" : ""}
                       </label>
                       <input
@@ -586,11 +584,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                         onChange={(e) =>
                           setAiConfig((c) => ({ ...c, apiKey: e.target.value }))
                         }
-                        className={`w-full p-2.5 rounded-lg border outline-none focus:border-purple-500 transition-colors
+                        className={`w-full p-2.5 rounded-lg border outline-none focus:border-blue-500 transition-colors
                           ${
                             resolvedTheme === "light"
-                              ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
-                              : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50"
+                              ? "bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                              : "bg-black/20 border-white/10 text-white placeholder-white/30 focus:bg-black/40 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50"
                           }
                         `}
                       />
@@ -650,8 +648,8 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
           <div className="flex items-center gap-2.5">
             <img src={logoSvg} alt="Tron" className="w-8 h-8" />
             <div>
-              <h2 className="text-xl font-bold">Setup Tron</h2>
-              <p className="text-sm opacity-60">
+              <h2 className="text-base font-medium tracking-tight">Setup Tron</h2>
+              <p className="text-[13px] opacity-60">
                 Step {currentStep + 1} of {STEPS.length}:{" "}
                 {STEPS[currentStep].title}
               </p>
@@ -665,9 +663,9 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   scale: i === currentStep ? 1.3 : 1,
                   backgroundColor:
                     i === currentStep
-                      ? "#a855f7"
+                      ? "#3b82f6"
                       : i < currentStep
-                        ? "#a855f7"
+                        ? "#3b82f6"
                         : "rgba(107,114,128,0.3)",
                 }}
                 transition={{ type: "spring", stiffness: 400, damping: 25 }}
@@ -681,7 +679,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
         <div className="px-5 py-3 sm:py-4 min-h-0 flex-1 overflow-y-auto">
           <motion.div
             key={currentStep}
-            className="mb-4 text-sm opacity-70"
+            className="mb-4 text-[13px] opacity-70"
             initial={{ opacity: 0 }}
             animate={{ opacity: 0.7 }}
             transition={{ delay: 0.1 }}
@@ -723,7 +721,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               whileTap={currentStep > 0 ? { scale: 0.95 } : {}}
               onClick={handleBack}
               disabled={currentStep === 0}
-              className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/5 disabled:opacity-0 transition-all"
+              className="px-4 py-2 rounded-lg text-[13px] font-medium hover:bg-white/5 disabled:opacity-0 transition-all"
               data-testid="onboarding-prev"
             >
               Back
@@ -734,10 +732,10 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               onClick={handleNext}
               disabled={connectionStatus === "testing"}
               data-testid="onboarding-next"
-              className={`px-6 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-purple-900/20 ${
+              className={`px-6 py-2 rounded-lg text-[13px] font-medium transition-colors ${
                 connectionStatus === "testing"
-                  ? "bg-purple-600/60 text-white/70 cursor-wait"
-                  : "bg-purple-600 hover:bg-purple-500 text-white"
+                  ? "bg-blue-500/60 text-white/70 cursor-wait"
+                  : "bg-blue-500 hover:bg-blue-600 text-white"
               }`}
             >
               {connectionStatus === "testing"

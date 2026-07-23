@@ -49,6 +49,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   closeTab: "Close Tab",
   splitHorizontal: "Split Horizontal",
   splitVertical: "Split Vertical",
+  splitWith: "Split With… (SSH / Remote / Local)",
   commandPalette: "Command Palette",
   focusPaneLeft: "Focus Pane Left",
   focusPaneRight: "Focus Pane Right",
@@ -148,13 +149,13 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+        <h3 className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}>
           <Globe className="w-3.5 h-3.5" />
           SSH Profiles
         </h3>
         <button
           onClick={openSSHModal}
-          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+          className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
           title="New SSH Connection"
         >
           <Plus className="w-3 h-3" />
@@ -164,7 +165,7 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
       {profiles.length === 0 ? (
         <div className={`${cardClass} text-center py-4`}>
           <p className={`text-xs ${t.textMuted}`}>No saved SSH profiles</p>
-          <p className={`text-[10px] ${t.textFaint} mt-1`}>
+          <p className={`text-[11px] ${t.textFaint} mt-1`}>
             Add a new connection to get started
           </p>
         </div>
@@ -174,12 +175,12 @@ function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
             <div key={p.id} className="flex items-center justify-between py-2 first:pt-0 last:pb-0">
               <div className="flex-1 min-w-0">
                 <div className={`text-xs font-medium truncate ${t.text}`}>{p.name || `${p.username}@${p.host}`}</div>
-                <div className={`text-[10px] ${t.textFaint}`}>{p.username}@{p.host}:{p.port || 22} ({p.authMethod})</div>
+                <div className={`text-[11px] font-mono ${t.textFaint}`}>{p.username}@{p.host}:{p.port || 22} ({p.authMethod})</div>
               </div>
               <div className="flex items-center gap-1.5 ml-2">
                 <button
                   onClick={() => toggleCredentials(p.id)}
-                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${p.saveCredentials
+                  className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${p.saveCredentials
                       ? "border-green-500/50 text-green-400 bg-green-500/10"
                       : `${t.border} ${t.textMuted} ${t.surfaceHover}`
                     }`}
@@ -244,13 +245,13 @@ function RemoteServersSection({ cardClass, t, resolvedTheme }: {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+        <h3 className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}>
           <Monitor className="w-3.5 h-3.5" />
           Remote Servers
         </h3>
         <button
           onClick={openRemoteModal}
-          className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+          className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
           title="New Remote Connection"
         >
           <Plus className="w-3 h-3" />
@@ -260,7 +261,7 @@ function RemoteServersSection({ cardClass, t, resolvedTheme }: {
       {profiles.length === 0 ? (
         <div className={`${cardClass} text-center py-4`}>
           <p className={`text-xs ${t.textMuted}`}>No saved remote servers</p>
-          <p className={`text-[10px] ${t.textFaint} mt-1`}>
+          <p className={`text-[11px] ${t.textFaint} mt-1`}>
             Add a remote Tron server to get started
           </p>
         </div>
@@ -270,7 +271,7 @@ function RemoteServersSection({ cardClass, t, resolvedTheme }: {
             <div key={p.id} className="flex items-center justify-between py-2 first:pt-0 last:pb-0">
               <div className="flex-1 min-w-0">
                 <div className={`text-xs font-medium truncate ${t.text}`}>{p.name || "Unnamed"}</div>
-                <div className={`text-[10px] ${t.textFaint}`}>{p.url}</div>
+                <div className={`text-[11px] font-mono ${t.textFaint}`}>{p.url}</div>
               </div>
               <div className="flex items-center gap-1.5 ml-2">
                 <button
@@ -334,7 +335,7 @@ function StorageSection({ cardClass, t, resolvedTheme }: {
 
   return (
     <div className="space-y-3">
-      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+      <h3 className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}>
         <HardDrive className="w-3.5 h-3.5" />
         Terminal History
       </h3>
@@ -347,14 +348,14 @@ function StorageSection({ cardClass, t, resolvedTheme }: {
                 ? "No saved sessions"
                 : `${stats.fileCount} saved session${stats.fileCount !== 1 ? "s" : ""} (${formatSize(stats.totalBytes)})`}
             </p>
-            <p className={`text-[10px] ${t.textFaint} mt-0.5`}>
+            <p className={`text-[11px] ${t.textFaint} mt-0.5`}>
               Terminal history files persisted to disk
             </p>
           </div>
           {stats.fileCount > 0 && (
             <button
               onClick={() => setShowConfirm(true)}
-              className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border transition-colors border-red-500/30 text-red-400 hover:bg-red-500/10"
+              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border transition-colors border-red-500/30 text-red-400 hover:bg-red-500/10"
             >
               <Trash2 className="w-3 h-3" />
               Clear All
@@ -519,7 +520,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
 
   return (
     <div className="space-y-3">
-      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+      <h3 className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}>
         <Wifi className="w-3.5 h-3.5" />
         Web Server
       </h3>
@@ -529,7 +530,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5">
             <span className={`text-xs font-medium ${t.text}`}>Enable Web Server</span>
-            <span className={`text-[10px] ${t.textFaint}`}>
+            <span className={`text-[11px] ${t.textFaint}`}>
               Access your terminal from any browser on the network
             </span>
           </div>
@@ -538,7 +539,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
             aria-checked={wsConfig.enabled}
             onClick={handleToggle}
             className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${wsConfig.enabled
-              ? "bg-purple-500"
+              ? "bg-blue-500"
               : resolvedTheme === "light"
                 ? "bg-gray-300"
                 : "bg-white/15"
@@ -556,7 +557,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5">
             <span className={`text-xs font-medium ${t.text}`}>Expose to Network</span>
-            <span className={`text-[10px] ${t.textFaint}`}>
+            <span className={`text-[11px] ${t.textFaint}`}>
               {wsConfig.expose
                 ? "Accessible from other devices on your local network"
                 : "Only accessible from this computer (localhost)"}
@@ -567,7 +568,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
             aria-checked={wsConfig.expose}
             onClick={handleExposeToggle}
             className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${wsConfig.expose
-              ? "bg-purple-500"
+              ? "bg-blue-500"
               : resolvedTheme === "light"
                 ? "bg-gray-300"
                 : "bg-white/15"
@@ -593,7 +594,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
             <button
               onClick={handleRestart}
               disabled={restarting}
-              className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover} ${restarting ? "opacity-50" : ""}`}
+              className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover} ${restarting ? "opacity-50" : ""}`}
               title="Restart server"
             >
               <RefreshCw className={`w-3 h-3 ${restarting ? "animate-spin" : ""}`} />
@@ -602,10 +603,10 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
           )}
         </div>
         {restarting && restartStep && (
-          <p className={`text-[10px] ${t.textFaint} mt-1.5 animate-pulse`}>{restartStep}</p>
+          <p className={`text-[11px] ${t.textFaint} mt-1.5 animate-pulse`}>{restartStep}</p>
         )}
         {!restarting && !status.running && status.error && (
-          <p className="text-[10px] text-red-400 mt-1.5">{status.error}</p>
+          <p className="text-[11px] text-red-400 mt-1.5">{status.error}</p>
         )}
       </div>
 
@@ -615,7 +616,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
           {wsConfig.expose && (
             <div className="flex-1">
               <label className={`text-xs font-medium mb-1.5 block ${t.textMuted}`}>IP Address</label>
-              <div className={`px-2 py-1 text-xs rounded border ${t.border} ${resolvedTheme === "light" ? "bg-gray-50 text-gray-500" : "bg-white/3 text-gray-400"}`}>
+              <div className={`px-2 py-1 text-xs font-mono rounded border ${t.border} ${resolvedTheme === "light" ? "bg-gray-50 text-gray-500" : resolvedTheme === "modern" ? "bg-white/[0.04] text-gray-300" : "bg-white/3 text-gray-400"}`}>
                 {status.localIPs.length > 0 ? primaryIP : "—"}
               </div>
             </div>
@@ -630,16 +631,16 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
                 value={portInput}
                 onChange={(e) => setPortInput(e.target.value)}
                 onBlur={handlePortBlur}
-                className={`w-20 px-2 py-1 text-xs rounded border ${t.border} ${t.surface} ${t.text} outline-none focus:border-purple-500`}
+                className={`w-20 px-2 py-1 text-xs font-mono rounded border ${t.border} ${t.surface} ${t.text} outline-none focus:border-blue-500`}
               />
             </div>
           </div>
         </div>
         {portWarning && (
-          <span className="text-[10px] text-amber-400 mt-1.5 block">{portWarning}</span>
+          <span className="text-[11px] text-amber-400 mt-1.5 block">{portWarning}</span>
         )}
         {wsConfig.expose && status.localIPs.length > 1 && (
-          <p className={`text-[10px] ${t.textFaint} mt-1.5`}>
+          <p className={`text-[11px] ${t.textFaint} mt-1.5`}>
             Also available on: {status.localIPs.slice(1).join(", ")}
           </p>
         )}
@@ -648,7 +649,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
             Port changed — restart to apply
           </p>
         ) : (
-          <p className={`text-[10px] ${t.textFaint} mt-1`}>
+          <p className={`text-[11px] ${t.textFaint} mt-1`}>
             Restart required after changing port
           </p>
         )}
@@ -681,7 +682,7 @@ function WebServerSection({ cardClass, t, resolvedTheme }: {
               </div>
             ))}
           </div>
-          <p className={`text-[10px] ${t.textFaint} mt-2 leading-relaxed`}>
+          <p className={`text-[11px] ${t.textFaint} mt-2 leading-relaxed`}>
             {wsConfig.expose
               ? "Use the IP address to access from other devices on your local network. For remote access, use Tailscale or a reverse proxy to securely expose this address."
               : "Server is only accessible from this computer. Enable \"Expose to Network\" to access from other devices."}
@@ -793,7 +794,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
 
   return (
     <div className="space-y-3">
-      <h3 className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}>
+      <h3 className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}>
         <Download className="w-3.5 h-3.5" />
         Updates
       </h3>
@@ -803,14 +804,14 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5">
             <span className={`text-xs font-medium ${t.text}`}>Current Version</span>
-            <span className={`text-[10px] ${t.textFaint}`}>
+            <span className={`text-[11px] ${t.textFaint}`}>
               {appVersion ? `v${appVersion}` : "Loading..."}
             </span>
           </div>
           <button
             onClick={handleCheck}
             disabled={checking || status === "downloading"}
-            className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover} ${(checking || status === "downloading") ? "opacity-50" : ""}`}
+            className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover} ${(checking || status === "downloading") ? "opacity-50" : ""}`}
           >
             <RefreshCw className={`w-3 h-3 ${checking ? "animate-spin" : ""}`} />
             {checking ? "Checking..." : "Check for Updates"}
@@ -823,7 +824,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5">
             <span className={`text-xs font-medium ${t.text}`}>Auto-download Updates</span>
-            <span className={`text-[10px] ${t.textFaint}`}>
+            <span className={`text-[11px] ${t.textFaint}`}>
               Automatically download updates when available
             </span>
           </div>
@@ -832,7 +833,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
             aria-checked={autoUpdate}
             onClick={handleToggleAutoUpdate}
             className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${autoUpdate
-              ? "bg-purple-500"
+              ? "bg-blue-500"
               : resolvedTheme === "light"
                 ? "bg-gray-300"
                 : "bg-white/15"
@@ -865,11 +866,11 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
             <div className="mt-2">
               <div className={`w-full h-1.5 rounded-full ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`}>
                 <div
-                  className="h-full rounded-full bg-purple-500 transition-all duration-300"
+                  className="h-full rounded-full bg-blue-500 transition-all duration-300"
                   style={{ width: `${Math.min(progress.percent, 100)}%` }}
                 />
               </div>
-              <p className={`text-[10px] ${t.textFaint} mt-1`}>
+              <p className={`text-[11px] ${t.textFaint} mt-1`}>
                 {(progress.transferred / 1024 / 1024).toFixed(1)} / {(progress.total / 1024 / 1024).toFixed(1)} MB
               </p>
             </div>
@@ -879,7 +880,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
           {status === "available" && !autoUpdate && (
             <button
               onClick={handleDownload}
-              className="mt-2 flex items-center gap-1 text-[10px] px-3 py-1 rounded border border-purple-500/30 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors"
+              className="mt-2 flex items-center gap-1 text-[11px] px-3 py-1 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors"
             >
               <Download className="w-3 h-3" />
               Download Update
@@ -889,7 +890,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
           {status === "downloaded" && (
             <button
               onClick={handleQuitAndInstall}
-              className="mt-2 flex items-center gap-1 text-[10px] px-3 py-1 rounded border border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
+              className="mt-2 flex items-center gap-1 text-[11px] px-3 py-1 rounded border border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
             >
               <RefreshCw className="w-3 h-3" />
               Relaunch to Update
@@ -898,7 +899,7 @@ function UpdatesSection({ cardClass, t, resolvedTheme }: {
 
           {/* Error */}
           {status === "error" && lastError && (
-            <p className="text-[10px] text-red-400 mt-1.5">{lastError}</p>
+            <p className="text-[11px] text-red-400 mt-1.5">{lastError}</p>
           )}
         </div>
       )}
@@ -1166,12 +1167,12 @@ const SettingsPane = () => {
         className={`shrink-0 w-10 sm:w-40 flex flex-col border-r pt-4 pb-4 gap-1 px-1 sm:px-2 ${resolvedTheme === "light"
           ? "bg-gray-50/80 border-gray-200"
           : resolvedTheme === "modern"
-            ? "bg-white/[0.02] border-white/6"
+            ? "bg-white/[0.04] backdrop-blur-xl backdrop-saturate-150 border-white/[0.08]"
             : "bg-[#0a0a0a] border-white/5"
           }`}
       >
         <div className={`px-1 sm:px-2 pb-3 mb-1 border-b ${t.borderSubtle}`}>
-          <h1 className={`text-sm font-bold ${t.text} hidden sm:block`}>Settings</h1>
+          <h1 className={`text-sm font-medium tracking-tight ${t.text} hidden sm:block`}>Settings</h1>
           <SlidersHorizontal className={`w-4 h-4 mx-auto ${t.text} sm:hidden`} />
         </div>
         {NAV_SECTIONS.map(({ id, label, icon: Icon }) => (
@@ -1182,9 +1183,9 @@ const SettingsPane = () => {
             title={label}
             className={`flex items-center justify-center sm:justify-start gap-2 px-1 sm:px-2 py-1.5 rounded-lg text-xs transition-colors text-left ${activeSection === id
               ? resolvedTheme === "light"
-                ? "bg-purple-50 text-purple-700 font-medium"
-                : "bg-purple-500/10 text-purple-300 font-medium"
-              : `${t.textMuted} hover:${t.surfaceHover}`
+                ? "bg-blue-50 text-blue-600"
+                : "bg-blue-500/10 text-blue-300"
+              : `${t.textMuted} ${t.surfaceHover}`
               }`}
           >
             <Icon className="w-3.5 h-3.5 shrink-0" />
@@ -1195,7 +1196,7 @@ const SettingsPane = () => {
         {/* Auto-save status indicator at bottom of sidebar */}
         <div className="mt-auto pt-3 h-8 flex items-center justify-center">
           <span
-            className={`text-[10px] flex items-center gap-1.5 transition-opacity duration-500 ${saveStatus === "saved" ? "text-green-500 opacity-100" : "opacity-0"
+            className={`text-[11px] flex items-center gap-1.5 transition-opacity duration-500 ${saveStatus === "saved" ? "text-green-500 opacity-100" : "opacity-0"
               }`}
           >
             <Save className="w-3.5 h-3.5" />
@@ -1212,15 +1213,15 @@ const SettingsPane = () => {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.15 }}
+            transition={{ type: "spring", bounce: 0, duration: 0.3 }}
             className="w-full max-w-xl flex flex-col gap-4 sm:gap-6 pb-16"
           >
             {/* Model selection toast */}
             {modelToast && (
-              <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg text-xs font-medium shadow-lg transition-opacity ${
+              <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-xl text-xs shadow-xl transition-opacity ${
                 resolvedTheme === "light"
-                  ? "bg-white/95 text-gray-700 border border-gray-200"
-                  : "bg-gray-800/95 text-gray-200 border border-gray-600"
+                  ? "bg-white/95 text-gray-700 border border-black/[0.08]"
+                  : "bg-gray-800/95 text-gray-200 border border-white/10"
               }`}>
                 {modelToast}
               </div>
@@ -1232,7 +1233,7 @@ const SettingsPane = () => {
                 className="space-y-3"
               >
                 <h3
-                  className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+                  className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}
                 >
                   <Cpu className="w-3.5 h-3.5" />
                   AI Configuration
@@ -1331,7 +1332,7 @@ const SettingsPane = () => {
                                     <div
                                       key={m.name}
                                       className={`w-full text-left px-3 py-1.5 text-xs flex items-center group transition-colors ${config.model === m.name
-                                        ? "bg-purple-500/10 text-purple-400"
+                                        ? "bg-blue-500/10 text-blue-400"
                                         : `${t.surfaceHover} ${t.textMuted}`
                                         }`}
                                     >
@@ -1345,8 +1346,8 @@ const SettingsPane = () => {
                                           {m.capabilities?.map((cap) => (
                                             <span
                                               key={cap}
-                                              className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
-                                                ? "bg-purple-500/20 text-purple-400"
+                                              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cap === "thinking"
+                                                ? "bg-blue-500/20 text-blue-400"
                                                 : cap === "vision"
                                                   ? "bg-blue-500/20 text-blue-400"
                                                   : cap === "tools"
@@ -1361,7 +1362,7 @@ const SettingsPane = () => {
                                       </button>
                                       <button
                                         onClick={(e) => { e.stopPropagation(); setApplyAllModel(m.name); }}
-                                        className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
+                                        className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity mr-1 ${t.surfaceHover} ${resolvedTheme === "modern" ? "text-gray-300" : "text-gray-400"} hover:text-blue-400`}
                                       >
                                         Apply to all
                                       </button>
@@ -1414,7 +1415,7 @@ const SettingsPane = () => {
                                 setConfig({ ...config, baseUrl: e.target.value })
                               }
                               placeholder={config.provider === "lmstudio" ? "http://127.0.0.1:1234" : "http://localhost:11434"}
-                              className={inputClass}
+                              className={`${inputClass} font-mono`}
                             />
                             <button
                               data-testid="base-url-confirm"
@@ -1455,7 +1456,7 @@ const SettingsPane = () => {
                                       setConfig({ ...config, baseUrl: e.target.value })
                                     }
                                     placeholder={config.provider === "anthropic-compat" ? "https://your-proxy.example.com" : "https://your-api.example.com/v1"}
-                                    className={inputClass}
+                                    className={`${inputClass} font-mono`}
                                   />
                                 </div>
                               )}
@@ -1468,7 +1469,7 @@ const SettingsPane = () => {
                                       <div className="flex items-center justify-between">
                                         <label className={labelClass}>Model</label>
                                         {isCompat && modelList.length === 0 && config.baseUrl && !isModelsFetching && (
-                                          <span className={`text-[10px] ${t.textFaint}`}>
+                                          <span className={`text-[11px] ${t.textFaint}`}>
                                             Could not list models from server — enter name below
                                           </span>
                                         )}
@@ -1481,7 +1482,7 @@ const SettingsPane = () => {
                                               <div
                                                 key={name}
                                                 className={`w-full flex items-center px-3 py-1.5 text-xs transition-colors group ${config.model === name
-                                                  ? "bg-purple-500/10 text-purple-400"
+                                                  ? "bg-blue-500/10 text-blue-400"
                                                   : `${t.surfaceHover} ${t.textMuted}`
                                                   }`}
                                               >
@@ -1493,7 +1494,7 @@ const SettingsPane = () => {
                                                 </button>
                                                 <button
                                                   onClick={(e) => { e.stopPropagation(); setApplyAllModel(name); }}
-                                                  className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ml-2 mr-1 ${t.surfaceHover} text-gray-400 hover:text-purple-400`}
+                                                  className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ml-2 mr-1 ${t.surfaceHover} ${resolvedTheme === "modern" ? "text-gray-300" : "text-gray-400"} hover:text-blue-400`}
                                                 >
                                                   Apply to all
                                                 </button>
@@ -1517,7 +1518,7 @@ const SettingsPane = () => {
                                         onChange={(e) =>
                                           setConfig({ ...config, model: e.target.value })
                                         }
-                                        className={inputClass}
+                                        className={`${inputClass} font-mono`}
                                       />
                                     </>
                                   );
@@ -1579,7 +1580,7 @@ const SettingsPane = () => {
                         setTestStatus("idle");
                       }}
                       data-testid="clear-provider-button"
-                      className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+                      className={`text-[11px] px-3 py-1 rounded-lg border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
                     >
                       <span className="flex items-center gap-1">
                         <RotateCcw className="w-3 h-3" />
@@ -1591,7 +1592,7 @@ const SettingsPane = () => {
                         data-testid="test-connection-button"
                         onClick={handleTestConnection}
                         disabled={testStatus === "testing" || !config.model}
-                        className={`text-[10px] px-3 py-1 rounded-lg border transition-colors ${testStatus === "success"
+                        className={`text-[11px] px-3 py-1 rounded-lg border transition-colors ${testStatus === "success"
                           ? "border-green-500/50 text-green-400 bg-green-500/10"
                           : testStatus === "error"
                             ? "border-red-500/50 text-red-400 bg-red-500/10"
@@ -1624,7 +1625,7 @@ const SettingsPane = () => {
                       <SlidersHorizontal className="w-3.5 h-3.5" />
                       Context Window
                     </label>
-                    <div className={`text-[10px] ${t.textFaint}`}>
+                    <div className={`text-[11px] ${t.textFaint}`}>
                       Max tokens sent to AI
                     </div>
                   </div>
@@ -1643,7 +1644,7 @@ const SettingsPane = () => {
                           contextWindow: Number(e.target.value),
                         })
                       }
-                      className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
+                      className={`flex-1 accent-blue-500 h-1 rounded-lg appearance-none cursor-pointer ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
                         }`}
                     />
                     <span
@@ -1663,7 +1664,7 @@ const SettingsPane = () => {
                       <SlidersHorizontal className="w-3.5 h-3.5" />
                       Max Agent Steps
                     </label>
-                    <div className={`text-[10px] ${t.textFaint}`}>
+                    <div className={`text-[11px] ${t.textFaint}`}>
                       Loop iterations before stopping
                     </div>
                   </div>
@@ -1682,7 +1683,7 @@ const SettingsPane = () => {
                           maxAgentSteps: Number(e.target.value),
                         })
                       }
-                      className={`flex-1 accent-purple-500 h-1 rounded-lg appearance-none cursor-pointer ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
+                      className={`flex-1 accent-blue-500 h-1 rounded-lg appearance-none cursor-pointer ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"
                         }`}
                     />
                     <span
@@ -1699,7 +1700,7 @@ const SettingsPane = () => {
             {activeSection === "ai-features" && (
               <div className="space-y-3">
                 <h3
-                  className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+                  className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}
                 >
                   <Sparkles className="w-3.5 h-3.5" />
                   AI Features
@@ -1719,7 +1720,7 @@ const SettingsPane = () => {
                     >
                       <div className="flex flex-col gap-0.5">
                         <span className={`text-xs font-medium ${t.text}`}>{label}</span>
-                        <span className={`text-[10px] ${t.textFaint}`}>{desc}</span>
+                        <span className={`text-[11px] ${t.textFaint}`}>{desc}</span>
                       </div>
                       <button
                         data-testid={`toggle-${key}`}
@@ -1727,7 +1728,7 @@ const SettingsPane = () => {
                         aria-checked={aiBehavior[key]}
                         onClick={() => updateAIBehavior({ [key]: !aiBehavior[key] })}
                         className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${aiBehavior[key]
-                          ? "bg-purple-500"
+                          ? "bg-blue-500"
                           : resolvedTheme === "light"
                             ? "bg-gray-300"
                             : "bg-white/15"
@@ -1750,7 +1751,7 @@ const SettingsPane = () => {
                 className="space-y-3"
               >
                 <h3
-                  className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+                  className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}
                 >
                   <Monitor className="w-3.5 h-3.5" />
                   View Mode
@@ -1775,14 +1776,13 @@ const SettingsPane = () => {
                         label: "Agent",
                         desc: "Chat-focused, AI-first",
                         icon: Bot,
-                        iconBg: "bg-purple-500/30 text-purple-300",
-                        activeBorder: "border-purple-500 bg-purple-500/10 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
+                        iconBg: "bg-blue-500/30 text-blue-300",
+                        activeBorder: "border-blue-500 bg-blue-500/10",
                       },
                     ] as const).map(({ id, label, desc, icon: Icon, iconBg, activeBorder }) => (
                       <motion.button
                         key={id}
                         data-testid={`view-mode-${id}`}
-                        whileHover={{ scale: 1.04 }}
                         whileTap={{ scale: 0.96 }}
                         onClick={() => setViewMode(id)}
                         className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${viewMode === id
@@ -1793,8 +1793,8 @@ const SettingsPane = () => {
                         <div className={`w-6 h-6 rounded-full ${iconBg} flex items-center justify-center`}>
                           <Icon className="w-3 h-3" />
                         </div>
-                        <span className="text-[10px] font-medium">{label}</span>
-                        <span className={`text-[9px] ${t.textFaint}`}>{desc}</span>
+                        <span className="text-[11px] font-medium">{label}</span>
+                        <span className={`text-[10px] ${t.textFaint}`}>{desc}</span>
                       </motion.button>
                     ))}
                   </div>
@@ -1808,7 +1808,7 @@ const SettingsPane = () => {
                 className="space-y-3"
               >
                 <h3
-                  className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+                  className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}
                 >
                   <Palette className="w-3.5 h-3.5" />
                   Appearance
@@ -1846,16 +1846,15 @@ const SettingsPane = () => {
                           id: "modern" as const,
                           label: "Modern",
                           icon: Gem,
-                          iconBg: "bg-purple-500/30 text-purple-300",
+                          iconBg: "bg-blue-500/30 text-blue-300",
                           activeBorder:
-                            "border-purple-500 bg-purple-500/10 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
+                            "border-blue-500 bg-blue-500/10",
                         },
                       ] as const
                     ).map(({ id, label, icon: Icon, iconBg, activeBorder }) => (
                       <motion.button
                         key={id}
                         data-testid={`theme-${id}`}
-                        whileHover={{ scale: 1.04 }}
                         whileTap={{ scale: 0.96 }}
                         onClick={() => setTheme(id)}
                         className={`p-2 border rounded-xl flex flex-col items-center gap-1.5 transition-colors ${theme === id
@@ -1868,7 +1867,7 @@ const SettingsPane = () => {
                         >
                           <Icon className="w-3 h-3" />
                         </div>
-                        <span className="text-[10px] font-medium">{label}</span>
+                        <span className="text-[11px] font-medium">{label}</span>
                       </motion.button>
                     ))}
                   </div>
@@ -1879,7 +1878,7 @@ const SettingsPane = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <label className={`text-xs font-medium ${t.textMuted}`}>Agent Status Bar</label>
-                      <p className={`text-[10px] ${t.textFaint} mt-0.5`}>Show a status row below the tab bar with agent activity</p>
+                      <p className={`text-[11px] ${t.textFaint} mt-0.5`}>Show a status row below the tab bar with agent activity</p>
                     </div>
                     <button
                       role="switch"
@@ -1903,7 +1902,7 @@ const SettingsPane = () => {
                 <div className={cardClass}>
                   <div className="mb-1">
                     <label className={`text-xs font-medium ${t.textMuted}`}>Panel Layout</label>
-                    <p className={`text-[10px] ${t.textFaint} mt-0.5`}>
+                    <p className={`text-[11px] ${t.textFaint} mt-0.5`}>
                       Hide these areas in every panel. You can also hide them per-panel
                       with the hide buttons in the hints bar or the toggle shortcuts
                       (configurable under Keyboard Shortcuts).
@@ -1990,14 +1989,14 @@ const SettingsPane = () => {
               >
                 <div className="flex items-center justify-between">
                   <h3
-                    className={`text-[10px] font-semibold ${t.textFaint} uppercase tracking-wider flex items-center gap-2`}
+                    className={`text-[11px] font-medium ${t.textFaint} uppercase tracking-wide flex items-center gap-2`}
                   >
                     <Keyboard className="w-3.5 h-3.5" />
                     Keyboard Shortcuts
                   </h3>
                   <button
                     onClick={resetHotkeys}
-                    className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
+                    className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-lg border transition-colors ${t.border} ${t.textMuted} ${t.surfaceHover}`}
                     title="Reset all shortcuts to defaults"
                   >
                     <RotateCcw className="w-3 h-3" />
@@ -2019,8 +2018,8 @@ const SettingsPane = () => {
                         <button
                           data-testid={`hotkey-${action}`}
                           onClick={() => setRecordingAction(isRecording ? null : action)}
-                          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition-colors ${isRecording
-                            ? "bg-purple-500/20 border border-purple-500 text-purple-300 ring-2 ring-purple-500/30"
+                          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${isRecording
+                            ? "bg-blue-500/20 border border-blue-500 text-blue-300"
                             : `${t.surface} border ${t.borderSubtle} ${t.surfaceHover} ${t.text}`
                             }`}
                           title={isRecording ? "Press a key combo... (Esc to cancel)" : "Click to change"}
@@ -2041,7 +2040,7 @@ const SettingsPane = () => {
                                 </span>
                               ))}
                               {!isDefault && (
-                                <span className="text-[9px] text-purple-400 ml-1">edited</span>
+                                <span className="text-[10px] text-blue-400 ml-1">edited</span>
                               )}
                             </>
                           )}

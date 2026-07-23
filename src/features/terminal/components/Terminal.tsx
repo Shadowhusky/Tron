@@ -44,10 +44,10 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
     selectionBackground: "#ffffff40",
   },
   modern: {
-    background: "#040414",
+    background: "rgba(9, 13, 24, 0.5)",
     foreground: "#d4d4e0",
-    cursor: "#c084fc",
-    selectionBackground: "#a855f740",
+    cursor: "#60a5fa",
+    selectionBackground: "#3b82f640",
   },
   light: {
     background: "#f9fafb",
@@ -180,6 +180,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       fontFamily: '"JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
       fontSize: 14,
       theme: termTheme,
+      // Modern theme uses a translucent background so the app's luminous
+      // backdrop shows through; opaque themes are unaffected.
+      allowTransparency: true,
       allowProposedApi: true,
       smoothScrollDuration: 0,
       // Large scrollback prevents "scroll to top" during fast output: when the
@@ -1770,13 +1773,15 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
   return (
     <div
-      className={`relative overflow-hidden ${className || ""}`}
+      className={`relative overflow-hidden ${resolvedTheme === "modern" ? "modern-terminal " : ""}${className || ""}`}
       style={{
         contain: "strict",
         // Match terminal theme background so canvas clear during fit() resize
         // is invisible — no overlay/mask needed. The container background fills
-        // the gap between canvas clear and redraw.
-        backgroundColor: theme?.background,
+        // the gap between canvas clear and redraw. Modern uses a translucent
+        // canvas bg — a matching container layer would double the alpha and
+        // block the app backdrop, so it stays transparent there.
+        backgroundColor: resolvedTheme === "modern" ? "transparent" : theme?.background,
       }}
     >
       <div
@@ -1789,7 +1794,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         <div
           className="absolute top-1 right-2 z-20 flex items-center gap-1 rounded-lg px-2 py-1 shadow-lg border"
           style={{
-            backgroundColor: theme?.background || "#0a0a0a",
+            // Floating over terminal text — must stay near-opaque even when
+            // the modern theme's terminal background is translucent.
+            backgroundColor: resolvedTheme === "modern" ? "rgba(13, 18, 32, 0.97)" : theme?.background || "#0a0a0a",
             borderColor: "rgba(255,255,255,0.15)",
           }}
         >

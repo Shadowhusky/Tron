@@ -52,7 +52,7 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
   if (node.type === "leaf" && node.contentType === "editor") {
     return (
       <div style={{ width: "100%", height: "100%", overflow: "hidden", position: "relative" }}>
-        <Suspense fallback={<div className="flex items-center justify-center h-full opacity-40 text-sm">Loading editor...</div>}>
+        <Suspense fallback={<div className="flex items-center justify-center h-full opacity-40 text-[13px]">Loading editor...</div>}>
           <CodeEditorPane sessionId={node.sessionId} filePath={node.editorPath || ""} sourceSessionId={node.sourceSessionId} />
         </Suspense>
       </div>

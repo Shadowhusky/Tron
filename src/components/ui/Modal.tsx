@@ -40,12 +40,12 @@ const panelTheme = (t: ResolvedTheme) =>
   t === "light"
     ? "bg-gray-100 text-gray-900 border border-black/[0.08]"
     : t === "modern"
-      ? "bg-[#0e0e14] text-gray-200 border border-white/[0.06]"
-      : "bg-[#0e0e0e] text-gray-200 border border-white/[0.06]";
+      ? "bg-[#0e0e14] text-gray-200 border border-white/[0.12]"
+      : "bg-[#0e0e0e] text-gray-200 border border-white/10";
 
 const btnStyle = (t: ResolvedTheme, type: ModalButtonType) => {
   const base =
-    "flex-1 px-3 py-3 text-xs font-medium transition-colors whitespace-nowrap";
+    "flex-1 px-3 py-3 text-[13px] font-medium transition-colors whitespace-nowrap";
   switch (type) {
     case "primary":
       return `${base} ${
@@ -116,17 +116,17 @@ const Modal: React.FC<ModalProps> = ({
             animate={{
               opacity: 1,
               y: 0,
-              transition: { duration: 0.15, ease: "easeOut" },
+              transition: { type: "spring", bounce: 0, duration: 0.3 },
             }}
-            exit={{ opacity: 0, y: 6, transition: { duration: 0.1 } }}
+            exit={{ opacity: 0, y: 6, transition: { duration: 0.1, ease: "easeIn" } }}
             onMouseDown={(e) => e.stopPropagation()}
-            className={`w-full ${maxWidth} mx-4 overflow-hidden ${panelTheme(resolvedTheme)}`}
+            className={`w-full ${maxWidth} mx-4 overflow-hidden rounded-xl shadow-xl ${panelTheme(resolvedTheme)}`}
           >
             {/* Header */}
             <div className="px-4 py-4 gap-2 flex flex-col">
-              <h3 className="text-sm flex font-semibold">{title}</h3>
+              <h3 className="text-[15px] flex font-medium tracking-tight">{title}</h3>
               {description && (
-                <p className="text-sm text-gray-500">{description}</p>
+                <p className="text-[13px] text-gray-500">{description}</p>
               )}
             </div>
 
