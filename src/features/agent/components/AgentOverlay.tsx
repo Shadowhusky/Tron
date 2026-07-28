@@ -669,15 +669,15 @@ const PermissionRequest: React.FC<{
       className={`flex flex-col border-t animate-in fade-in slide-in-from-bottom-2 ${
         dangerous
           ? isLight
-            ? "bg-red-50/90 border-red-300"
-            : "bg-red-950/40 border-red-500/30"
+            ? "bg-red-50 border-red-300"
+            : "bg-[#200d0d] border-red-500/40"
           : warning
             ? isLight
-              ? "bg-amber-50/90 border-amber-300"
-              : "bg-amber-950/40 border-amber-500/30"
+              ? "bg-amber-50 border-amber-300"
+              : "bg-[#211605] border-amber-500/40"
             : isLight
-              ? "bg-blue-50/80 border-blue-200"
-              : "bg-blue-900/20 border-blue-500/20"
+              ? "bg-blue-50 border-blue-200"
+              : "bg-[#0c1524] border-blue-500/30"
       }`}
     >
       {/* Scrollable content: header + command + warnings */}
@@ -1478,19 +1478,16 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
           animate={{ opacity: 1, y: 0 }}
           transition={{ type: "spring", bounce: 0 }}
           style={
-            !fullHeight &&
-            isExpanded &&
-            (liveHeight !== undefined || overlayHeight)
-              ? { height: liveHeight ?? overlayHeight, maxHeight: "100%" }
+            !fullHeight && isExpanded
+              ? // Always give the expanded panel a concrete height: without it
+                // the panel is content-sized, so streaming output resizes it
+                // every frame and the terminal above jumps around.
+                { height: liveHeight ?? overlayHeight ?? 300, maxHeight: "100%" }
               : undefined
           }
           className={`w-full ${fullHeight ? "flex-1 min-h-0" : ""} ${
             isExpanded
-              ? fullHeight
-                ? "flex-col"
-                : liveHeight !== undefined || overlayHeight
-                  ? "flex-col"
-                  : "max-h-[60%] flex-col"
+              ? "flex-col"
               : "h-auto flex-col cursor-pointer hover:opacity-100 opacity-90"
           } overflow-hidden border-t flex shadow-lg z-20 ${
             isLight
@@ -1648,13 +1645,13 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
               {activePlan && (
                 <div
                   data-testid="agent-active-plan"
-                  className={`shrink-0 mx-3 mt-3 mb-1 rounded-lg border ${
+                  className={`shrink-0 mx-3 mt-3 mb-1 rounded-lg border flex flex-col max-h-[40%] ${
                     isLight
                       ? "border-blue-200 bg-blue-50/60"
                       : "border-blue-500/30 bg-blue-500/[0.06]"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1">
+                  <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 shrink-0">
                     <ListOrdered
                       className={`w-3 h-3 ${isLight ? "text-blue-500" : "text-blue-400"}`}
                     />
@@ -1670,7 +1667,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                       {activePlan.length}
                     </span>
                   </div>
-                  <div className="flex flex-col gap-0.5 px-2.5 pb-2">
+                  <div className="flex flex-col gap-0.5 px-2.5 pb-2 overflow-y-auto min-h-0">
                     {activePlan.map((t, i) => {
                       const isDoneItem = t.status === "completed";
                       const isActiveItem = t.status === "in_progress";
@@ -2667,7 +2664,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                className="shrink-0 max-h-[50%] overflow-y-auto"
+                className="relative z-10 shrink-0 max-h-[50%] overflow-y-auto"
               >
                 <PermissionRequest
                   command={pendingCommand}

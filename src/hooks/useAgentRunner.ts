@@ -7,7 +7,7 @@ import { useLayout } from "../contexts/LayoutContext";
 import { useConfig } from "../contexts/ConfigContext";
 import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
-import { isDangerousCommand } from "../utils/dangerousCommand";
+import { classifyCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
 import { readScreenBuffer, isAlternateBuffer } from "../services/terminalBuffer";
 import { getRemoteConnection } from "../services/remote-bridge";
@@ -160,6 +160,13 @@ export function useAgentRunner(
       setModelCapabilities([]);
     }
   }, [effectiveModel, effectiveProvider, thinkingBump]);
+
+
+  // "Always allow" skips prompts for everything except truly destructive
+  // (danger-level) commands; warning-level is covered by the user's explicit
+  // opt-in. Warning/danger UI distinction still comes from PermissionRequest.
+  const requiresPrompt = (command: string) =>
+    !alwaysAllowRef.current || classifyCommand(command)?.level === "danger";
 
   // Ref to track latest alwaysAllowSession inside async closures
   const alwaysAllowRef = useRef(alwaysAllowSession);
@@ -673,7 +680,7 @@ ${prompt}
           // Helper: Check Permissions — use ref for latest value
           // Dangerous commands always require confirmation, even with auto-exec on
           const checkPermission = async (command: string) => {
-            if (alwaysAllowRef.current && !isDangerousCommand(command)) return;
+            if (!requiresPrompt(command)) return;
             setPendingCommand(command);
             const allowed = await new Promise<boolean>((resolve) => {
               setPermissionResolve(resolve);
@@ -728,7 +735,7 @@ ${prompt}
             if (checkPerm) {
               const displayCmd = cmd.replace(/\r$/, "");
               // Skip permission only if auto-exec on AND command is not dangerous
-              if (!(alwaysAllowRef.current && !isDangerousCommand(displayCmd))) {
+              if (requiresPrompt(displayCmd)) {
                 setPendingCommand(displayCmd);
                 const allowed = await new Promise<boolean>((resolve) => {
                   setPermissionResolve(resolve);
@@ -766,7 +773,7 @@ ${prompt}
           // For other commands: check permission, send with Ctrl+C prefix
           // Dangerous commands always require confirmation, even with auto-exec on
           const checkPermission = async (command: string) => {
-            if (alwaysAllowRef.current && !isDangerousCommand(command)) return;
+            if (!requiresPrompt(command)) return;
             setPendingCommand(command);
             const allowed = await new Promise<boolean>((resolve) => {
               setPermissionResolve(resolve);
@@ -1030,6 +1037,10 @@ ${prompt}
   const handlePermission = (choice: "allow" | "always" | "deny") => {
     if (!permissionResolve) return;
     if (choice === "always") {
+      // Update the ref synchronously: resolving resumes the agent loop on a
+      // microtask, BEFORE React re-renders and the effect syncs the ref — the
+      // next command would otherwise still see always-allow off and prompt.
+      alwaysAllowRef.current = true;
       setAlwaysAllowSession(true);
       permissionResolve(true);
     } else if (choice === "allow") {

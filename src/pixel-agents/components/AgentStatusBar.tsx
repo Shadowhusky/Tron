@@ -47,7 +47,7 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
       data-testid={`agent-dot-${agent.sessionId}`}
       data-status={agent.permission ? "needs-approval" : agent.active ? "active" : "idle"}
       data-tool={agent.tool ?? ""}
-      className={`inline-flex items-center gap-1 font-mono text-[10px] leading-none transition-colors duration-300 cursor-pointer rounded px-1 -mx-1 ${
+      className={`inline-flex items-center gap-1 font-mono text-[10px] leading-none whitespace-nowrap shrink-0 transition-colors duration-300 cursor-pointer rounded px-1 -mx-1 ${
         themeClass(resolvedTheme, {
           dark: "hover:bg-white/5",
           light: "hover:bg-gray-200/60",
@@ -115,7 +115,7 @@ export default function AgentStatusBar() {
   return (
     <div
       data-testid="agent-status-bar"
-      className={`flex items-center gap-3 px-3 py-0.5 shrink-0 overflow-hidden border-b font-mono ${themeClass(
+      className={`flex items-center gap-3 px-3 h-[21px] shrink-0 overflow-hidden border-b font-mono ${themeClass(
         resolvedTheme,
         {
           dark: "border-white/5 bg-[#0a0a0a]",
