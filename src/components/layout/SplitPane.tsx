@@ -202,7 +202,10 @@ const SplitChild: React.FC<{
   return (
     <>
       <div
-        style={{ flex: collapsed ? 0 : size / totalSize }}
+        // While maximized the visible branch must carry flex-grow 1, not its
+        // fractional share: with grow factors summing < 1, flexbox hands out
+        // only that fraction of the free space and the rest stays empty.
+        style={{ flex: collapsed ? 0 : maximizeActive ? 1 : size / totalSize }}
         className={`relative overflow-hidden min-w-0 min-h-0 ${
           isDragging ? "" : "transition-[flex-grow] duration-[240ms] ease-out motion-reduce:transition-none"
         } ${collapsed ? "pointer-events-none" : ""}`}
