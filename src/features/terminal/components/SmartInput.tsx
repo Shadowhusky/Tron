@@ -2227,30 +2227,34 @@ const SmartInput: React.FC<SmartInputProps> = ({
             )}
           </div>
 
-          {/* Right: shortcuts (hidden on touch/mobile — not useful without keyboard) */}
+          {/* Right: shortcuts (hidden on touch/mobile — not useful without keyboard).
+              The decorative hint texts shrink/clip first in narrow panes; the
+              hide controls are pinned shrink-0 so they always stay visible. */}
           {!isTouchDevice() && (
             <div
-              className={`flex shrink-0 items-center gap-0.5 ${
+              className={`flex min-w-0 items-center gap-0.5 ${
                 theme === "light" ? "opacity-70" : "opacity-80"
               }`}
             >
-              {hotkeys.cycleMode && (
-                <>
-                  <span>{formatHotkey(hotkeys.cycleMode)} cycle</span>
-                  <span className="mx-1 opacity-40">·</span>
-                </>
-              )}
-              <span>⇧↵ newline</span>
-              <span className="mx-1 opacity-40">·</span>
-              <span>{formatHotkey(hotkeys.forceAgent)} agent</span>
-              <span className="mx-1 opacity-40">·</span>
-              <span>{formatHotkey(hotkeys.forceCommand)} cmd</span>
-              <span className="mx-1 opacity-40">·</span>
-              <span>{formatHotkey(hotkeys.newTab)} tab</span>
-              <span className="mx-1 opacity-40">·</span>
-              <span>{formatHotkey(hotkeys.splitHorizontal)} split</span>
+              <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
+                {hotkeys.cycleMode && (
+                  <>
+                    <span>{formatHotkey(hotkeys.cycleMode)} cycle</span>
+                    <span className="mx-1 opacity-40">·</span>
+                  </>
+                )}
+                <span>⇧↵ newline</span>
+                <span className="mx-1 opacity-40">·</span>
+                <span>{formatHotkey(hotkeys.forceAgent)} agent</span>
+                <span className="mx-1 opacity-40">·</span>
+                <span>{formatHotkey(hotkeys.forceCommand)} cmd</span>
+                <span className="mx-1 opacity-40">·</span>
+                <span>{formatHotkey(hotkeys.newTab)} tab</span>
+                <span className="mx-1 opacity-40">·</span>
+                <span>{formatHotkey(hotkeys.splitHorizontal)} split</span>
+              </div>
               {onToggleRegion && (
-                <>
+                <div className="flex shrink-0 items-center gap-0.5">
                   <span className="mx-1 opacity-40">·</span>
                   <button
                     type="button"
@@ -2277,7 +2281,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
                   >
                     ✕
                   </button>
-                </>
+                </div>
               )}
             </div>
           )}
