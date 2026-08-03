@@ -146,8 +146,11 @@ environment:
 
 ### Terminal
 - Tabbed interface with split panes (vertical/horizontal, recursive nesting)
-- Smart input bar with shell completions, AI ghost text, and command history
-- Three themes — Dark, Light, Modern (frosty glass) + system auto-detect
+- **Command palette** (`Cmd+P`) covering every app action — tabs, panes, connections, themes, settings
+- **Split With…** (`Cmd+Shift+S` or right-click) — mix pane types in one tab: local terminal, SSH profile, remote server, or browser side by side
+- Built-in code editor — open files beside the terminal, syntax highlighting, `Cmd+S`/`Ctrl+S` save
+- Smart input bar with shell completions, AI ghost text, and command history (`Ctrl+R` fuzzy search)
+- Three themes — Dark, Light, Modern (glass) + system auto-detect
 - Persistent history — terminal output survives app restarts
 
 ### AI Agent
@@ -186,6 +189,8 @@ environment:
 ### Providers
 Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI Compatible, Anthropic Compatible.
 
+Model lists are fetched live from each provider's API when you pick a provider or open the model switcher, with a bundled fallback list when offline.
+
 ### Model Recommendations
 
 Tron's agent is designed for **everyday terminal tasks** — running commands, editing files, managing servers, light automation. You don't need the most powerful model for this.
@@ -206,8 +211,11 @@ Tron's agent is designed for **everyday terminal tasks** — running commands, e
 |--------|-------|---------------|
 | New tab | `Cmd+T` | `Ctrl+T` |
 | Close tab | `Cmd+W` | `Ctrl+W` |
+| Command palette | `Cmd+P` | `Ctrl+P` |
 | Split vertical | `Cmd+D` | `Ctrl+D` |
 | Split horizontal | `Cmd+Shift+D` | `Ctrl+Shift+D` |
+| Split With… (SSH / remote / browser) | `Cmd+Shift+S` | `Ctrl+Shift+S` |
+| Save file (editor) | `Cmd+S` | `Ctrl+S` |
 | Settings | `Cmd+,` | `Ctrl+,` |
 | Force agent | `Cmd+Enter` | `Ctrl+Enter` |
 | Cycle mode | `Ctrl+Shift+M` | `Ctrl+Shift+M` |

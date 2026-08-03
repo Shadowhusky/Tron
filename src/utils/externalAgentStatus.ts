@@ -249,6 +249,47 @@ const CODEX_BANNER_RE =
   /\bOpenAI\s+Codex(?:\s+(?:CLI|v?\d[\w.-]*))?\b|\bCodex\s+(?:CLI|v?\d[\w.-]*|agent|chat|repl)\b|chatgpt\.com\/codex|openai\/codex|\bcodex resume\b/i;
 const CURSOR_BANNER_RE = /\bcursor\s+(?:cli|agent)\b/i;
 
+export type ExternalAgentBrand = "claude" | "codex" | "aider" | "cursor";
+
+/**
+ * Identify WHICH agent CLI the text belongs to. Claude Code first — its
+ * markers are the most specific; a Claude transcript can mention "codex"
+ * but not the other way around.
+ */
+export function detectAgentBrand(text: string): ExternalAgentBrand | null {
+  const stripped = stripAnsi(text);
+  if (!stripped) return null;
+  if (AGENT_BANNER_RE.test(stripped) || AGENT_SECONDARY_RE.test(stripped)) return "claude";
+  if (CODEX_BANNER_RE.test(stripped)) return "codex";
+  if (AIDER_BANNER_RE.test(stripped)) return "aider";
+  if (CURSOR_BANNER_RE.test(stripped)) return "cursor";
+  return null;
+}
+
+/**
+ * Whether the BOTTOM region of a history tail shows live-frame evidence for
+ * `brand` — the input frame / status footer the TUI keeps on screen while
+ * running. Distinguishes "CLI was live at quit" from banners lingering in
+ * scrollback after the CLI exited back to a shell prompt.
+ */
+export function hasLiveAgentFrame(tailText: string, brand: ExternalAgentBrand): boolean {
+  const stripped = stripAnsi(tailText);
+  if (!stripped.trim()) return false;
+  switch (brand) {
+    case "claude":
+      return (
+        !!parseSpinnerLine(stripped) ||
+        IDLE_PROMPT_FRAME_RE.test(stripped) ||
+        IDLE_FRAME_CORROBORATOR_RE.test(stripped)
+      );
+    case "codex":
+      return CODEX_IDLE_PROMPT_RE.test(stripped) || CODEX_STATE_RE.test(stripped);
+    default:
+      // Aider/Cursor have no reliable always-on-screen frame to key off.
+      return false;
+  }
+}
+
 // =============================================================================
 
 export interface ExternalAgentSignal {

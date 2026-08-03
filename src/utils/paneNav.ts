@@ -81,6 +81,18 @@ export function snapDividerPosition(
   return bestPos;
 }
 
+/** Whether the layout subtree contains a leaf with the given sessionId. */
+export function subtreeContainsSession(node: LayoutNode, sessionId: string): boolean {
+  if (node.type === "leaf") return node.sessionId === sessionId;
+  return node.children.some((c) => subtreeContainsSession(c, sessionId));
+}
+
+/** Number of leaf panes in a layout subtree. */
+export function countLeaves(node: LayoutNode): number {
+  if (node.type === "leaf") return 1;
+  return node.children.reduce((sum, c) => sum + countLeaves(c), 0);
+}
+
 // ── Close-pane size redistribution ─────────────────────────────────────────
 
 /**

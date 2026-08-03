@@ -62,6 +62,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "web.fetch",
     "skills.discover",
     "skills.read",
+    "agent.findResumeSession",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",

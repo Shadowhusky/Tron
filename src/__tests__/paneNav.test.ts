@@ -4,6 +4,8 @@ import {
   snapDividerPosition,
   redistributeAfterClose,
   removePaneFromTree,
+  subtreeContainsSession,
+  countLeaves,
   type PaneRect,
 } from "../utils/paneNav";
 import type { LayoutNode } from "../types";
@@ -136,5 +138,28 @@ describe("removePaneFromTree (preserves sibling sizes)", () => {
       expect(out.sizes![0]).toBeCloseTo(100 / 3, 3);
       expect(out.sizes![1]).toBeCloseTo(200 / 3, 3);
     }
+  });
+});
+
+describe("subtreeContainsSession / countLeaves", () => {
+  const leaf = (id: string): LayoutNode => ({ type: "leaf", sessionId: id });
+  const nested: LayoutNode = {
+    type: "split", direction: "horizontal", sizes: [50, 50],
+    children: [
+      leaf("a"),
+      { type: "split", direction: "vertical", sizes: [50, 50], children: [leaf("b"), leaf("c")] },
+    ],
+  };
+
+  it("finds sessions at any depth", () => {
+    expect(subtreeContainsSession(nested, "a")).toBe(true);
+    expect(subtreeContainsSession(nested, "c")).toBe(true);
+    expect(subtreeContainsSession(nested, "zzz")).toBe(false);
+    expect(subtreeContainsSession(leaf("x"), "x")).toBe(true);
+  });
+
+  it("counts leaves across nesting", () => {
+    expect(countLeaves(nested)).toBe(3);
+    expect(countLeaves(leaf("x"))).toBe(1);
   });
 });

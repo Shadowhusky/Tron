@@ -8,7 +8,10 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
-import { registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader } from "../../../services/terminalBuffer";
+import { readScreenBuffer, registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader } from "../../../services/terminalBuffer";
+import { classifyTerminalOutput } from "../../../utils/terminalState";
+import { detectResumableAgent, extractResumeFragments, buildResumeCommand } from "../../../utils/agentRecovery";
+import type { ExternalAgentBrand } from "../../../utils/externalAgentStatus";
 import { startBlock, endBlock, appendBlockOutput, clearBlocks } from "../../../services/blocks";
 import { isElectronApp, isMacOS, isTouchDevice, normalizePath } from "../../../utils/platform";
 import { isRemoteSession } from "../../../services/remote-bridge";
@@ -35,6 +38,11 @@ interface TerminalProps {
   /** When true, touch events are handled by the native text overlay instead of scrolling. */
   selectionMode?: boolean;
 }
+
+// Sessions that already ran (or skipped) the AI-CLI auto-resume check this
+// app run. Guards against Terminal remounts (split layout changes, StrictMode)
+// re-triggering a resume against an already-running CLI.
+const attemptedAgentResume = new Set<string>();
 
 const THEMES: Record<string, Xterm["options"]["theme"]> = {
   dark: {
@@ -1168,11 +1176,12 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       const ch = el.clientHeight;
       if (cw === lastContainerW && ch === lastContainerH && lastContainerW > 0) return;
 
-      // Minimum height guard: if container is too small (< 80px ≈ 4 rows),
-      // skip resize entirely. Prevents absurd 1-2 row terminals that cause
-      // massive reflow and flicker. The PTY keeps its previous dimensions.
+      // Minimum size guard: if the container is too small (< ~80px in either
+      // axis), skip resize entirely. Prevents absurd 1-2 row/col terminals
+      // (e.g. panes collapsed by maximize) that cause massive reflow and
+      // flicker. The PTY keeps its previous dimensions.
       const fontSize = xtermRef.current?.options.fontSize || 14;
-      if (ch < fontSize * 5) return;
+      if (ch < fontSize * 5 || cw < fontSize * 5) return;
       lastContainerW = cw;
       lastContainerH = ch;
 
@@ -1243,6 +1252,40 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     // NOTE: No performResize() calls here! We defer until after history +
     // listener are set up (see getHistory .then() below).
+
+    // ---- AI CLI auto-resume (app restart) ----
+    // When the restored history shows Claude Code / Codex was live at quit,
+    // resolve the EXACT session id from the CLI's own session store (main
+    // process fingerprints the transcript against candidate session files),
+    // wait for the fresh shell prompt, then type the resume command. No
+    // confident id match → do nothing.
+    let resumeTimer: ReturnType<typeof setInterval> | undefined;
+    const cancelAgentResume = () => {
+      if (resumeTimer) { clearInterval(resumeTimer); resumeTimer = undefined; }
+    };
+    const scheduleAgentResume = (brand: ExternalAgentBrand, resumeSessionId: string) => {
+      const cmd = buildResumeCommand(brand, resumeSessionId);
+      if (!cmd || !window.electron) return;
+      const startedAt = Date.now();
+      // Starship/p10k prompts are a bare `❯` the generic idle classifier
+      // doesn't know; accept one only when stable across two polls so a
+      // mid-replay frame can't trigger the send.
+      let barePromptTicks = 0;
+      resumeTimer = setInterval(() => {
+        if (!mounted || Date.now() - startedAt > 15000) { cancelAgentResume(); return; }
+        // Fire only at a clean idle prompt — replayed history still shows the
+        // old CLI frame above, so this waits for the NEW shell to be ready
+        // and holds off if the user has started typing.
+        const tail = readScreenBuffer(sessionId, 5);
+        if (!tail || !tail.trim()) return; // no reader / nothing rendered yet
+        const lines = tail.split("\n").map((l) => l.trim()).filter(Boolean);
+        const lastLine = lines[lines.length - 1] || "";
+        barePromptTicks = /^[❯›]$/.test(lastLine) ? barePromptTicks + 1 : 0;
+        if (classifyTerminalOutput(tail) !== "idle" && barePromptTicks < 2) return;
+        cancelAgentResume();
+        window.electron?.ipcRenderer?.send(IPC.TERMINAL_WRITE, { id: sessionId, data: cmd + "\r" });
+      }, 500);
+    };
 
     // ---- IPC Listeners ----
     let mounted = true;
@@ -1430,6 +1473,29 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             suppressOutgoingRef.current = false;
             performResize();
             if (!isTouch) setTimeout(performResize, 250);
+
+            // App restart restore: persisted history + a fresh PTY (not a
+            // page-refresh reconnect, not a saved-tab load). One check per
+            // session per app run — remounts of live sessions must never
+            // type a resume command into an already-running CLI.
+            if (!pendingHistory && history && history.length > 0 && !attemptedAgentResume.has(sessionId)) {
+              attemptedAgentResume.add(sessionId);
+              const brand = detectResumableAgent(history);
+              if (brand) {
+                void (async () => {
+                  try {
+                    const fragments = extractResumeFragments(history);
+                    const cwd = await window.electron?.ipcRenderer?.invoke?.(IPC.TERMINAL_GET_CWD, sessionId);
+                    if (!cwd || fragments.length < 2) return;
+                    const res = await window.electron?.ipcRenderer?.invoke?.(
+                      IPC.AGENT_FIND_RESUME_SESSION,
+                      { brand, cwd, fragments },
+                    );
+                    if (res?.sessionId && mounted) scheduleAgentResume(brand, res.sessionId);
+                  } catch { /* store unavailable (web/demo mode) — skip */ }
+                })();
+              }
+            }
           }
 
           // Re-focus after reconnect settles or animation completes
@@ -1577,6 +1643,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       // Suppress outgoing writes during reconnect (prevents DSR corruption)
       if (suppressOutgoingRef.current) return;
 
+      // Real user input claims the session — abort any pending AI-CLI
+      // auto-resume. Escape-prefixed data (DA/DSR responses, arrows) ignored.
+      if (data === "\r" || (data.length === 1 && data >= " ")) cancelAgentResume();
+
       // Ctrl+C in terminal only sends to PTY — agent stop is handled by SmartInput only
 
       if (!activityFired && data === "\r") {
@@ -1595,6 +1665,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
 
     return () => {
       mounted = false;
+      cancelAgentResume();
       // Save final snapshot before unmount — must run BEFORE term.dispose()
       try { saveSnapshot(); } catch { /* term may already be disposed */ }
       clearInterval(snapshotTimer);

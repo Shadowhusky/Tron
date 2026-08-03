@@ -41,6 +41,7 @@ export const IPC = {
 
   // AI — invoke
   AI_TEST_CONNECTION: "ai.testConnection",
+  AGENT_FIND_RESUME_SESSION: "agent.findResumeSession",
 
   // SSH — invoke
   SSH_CONNECT: "ssh.connect",

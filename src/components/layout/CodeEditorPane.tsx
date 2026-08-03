@@ -15,6 +15,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import { themeClass } from "../../utils/theme";
 import { getRemoteConnection } from "../../services/remote-bridge";
+import { isMacOS } from "../../utils/platform";
 
 /** Map file extension to CodeMirror language extension. */
 function getLanguageExtension(filePath: string): Extension[] {
@@ -76,7 +77,7 @@ interface CodeEditorPaneProps {
 
 const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, sourceSessionId }) => {
   const { resolvedTheme } = useTheme();
-  const { closePane } = useLayout();
+  const { closePane, focusSession } = useLayout();
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [loading, setLoading] = useState(true);
@@ -141,25 +142,28 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
     }
   }, [filePath, content, isModified, saving, sourceSessionId]);
 
-  // Cmd/Ctrl+S keyboard shortcut
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        // Only handle if this editor pane is focused
-        if (containerRef.current?.contains(document.activeElement)) {
-          e.preventDefault();
-          handleSave();
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+  // Cmd+S (macOS) / Ctrl+S (Windows, Linux) — handled in the capture phase on
+  // the pane root, so it fires whenever focus is anywhere inside this pane
+  // (CodeMirror content, header buttons) and before CodeMirror's own keymaps.
+  // preventDefault also suppresses the browser's save-page dialog in web mode.
+  const handleShortcuts = useCallback((e: React.KeyboardEvent) => {
+    const mod = isMacOS() ? e.metaKey : e.ctrlKey;
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      e.stopPropagation();
+      handleSave();
+    }
   }, [handleSave]);
 
   const langExtensions = getLanguageExtension(filePath);
 
   return (
-    <div ref={containerRef} className="flex flex-col h-full w-full">
+    <div
+      ref={containerRef}
+      className="flex flex-col h-full w-full"
+      onKeyDownCapture={handleShortcuts}
+      onMouseDownCapture={() => focusSession(sessionId)}
+    >
       {/* Header bar */}
       <div
         className={`flex items-center gap-1.5 px-2 py-1.5 border-b shrink-0 ${t(
@@ -200,7 +204,7 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
               ? isLight ? "hover:bg-blue-100 text-blue-600" : "hover:bg-blue-500/20 text-blue-400"
               : isLight ? "text-gray-300 cursor-default" : "text-gray-600 cursor-default"
           }`}
-          title={`Save (${navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+S)`}
+          title={`Save (${isMacOS() ? "⌘" : "Ctrl"}+S)`}
         >
           {saving ? <RotateCw className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
         </button>

@@ -12,6 +12,7 @@ import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platfo
 import { themeClass } from "../../utils/theme";
 import { stripAnsi } from "../../utils/contextCleaner";
 import { classifyTerminalOutput, detectTuiProgram } from "../../utils/terminalState";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAllConfiguredModels, useThinkingModelInvalidation } from "../../hooks/useModels";
 import FolderPickerModal from "../ui/FolderPickerModal";
 
@@ -124,6 +125,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const ctxRingRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLDivElement>(null);
   const { data: availableModels = [] } = useAllConfiguredModels();
+  const queryClient = useQueryClient();
   useThinkingModelInvalidation();
   const activeModel = rawModel || null;
 
@@ -663,7 +665,15 @@ const ContextBar: React.FC<ContextBarProps> = ({
           <div
             data-testid="model-selector"
             className="flex items-center gap-1 min-w-0 opacity-70 hover:opacity-100 transition-opacity cursor-pointer text-blue-400 text-[10px]"
-            onClick={() => setShowModelMenu(!showModelMenu)}
+            onClick={() => {
+              // Refresh the model lists from every configured provider each time
+              // the dropdown opens; placeholderData keeps the current list visible
+              // while the background fetch runs (static fallback on failure).
+              if (!showModelMenu) {
+                queryClient.invalidateQueries({ queryKey: ["allConfiguredModels"] });
+              }
+              setShowModelMenu(!showModelMenu);
+            }}
           >
             <span className={`font-medium truncate ${!activeModel ? "opacity-50 italic" : ""}`}>{activeModel || "No model"}</span>
           </div>

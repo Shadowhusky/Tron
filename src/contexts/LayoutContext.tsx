@@ -16,7 +16,7 @@ import { isSshOnly } from "../services/mode";
 import { onServerReconnect } from "../services/ws-bridge";
 import { matchesHotkey } from "../hooks/useHotkey";
 import { selectTabByIndex } from "../utils/tabSwitcher";
-import { removePaneFromTree } from "../utils/paneNav";
+import { removePaneFromTree, subtreeContainsSession, countLeaves } from "../utils/paneNav";
 import { useConfig } from "./ConfigContext";
 import { isElectronApp } from "../utils/platform";
 import { connectRemote, createRemotePTY, getRemoteConnectionId, getActiveRemoteConnections, reviveRemoteSession, unregisterRemoteSession } from "../services/remote-bridge";
@@ -48,7 +48,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
  *  "local" forces a local PTY; sshProfileId forces an SSH pane; and
  *  remoteConnectionId forces a PTY on a connected remote Tron server. */
 export type SplitOptions = {
-  kind?: "local" | { sshProfileId: string } | { remoteConnectionId: string };
+  kind?: "local" | "browser" | { sshProfileId: string } | { remoteConnectionId: string };
+  /** Initial URL for a browser pane (kind: "browser") — e.g. a link clicked in the terminal. */
+  url?: string;
 };
 
 interface LayoutContextType {
@@ -83,6 +85,10 @@ interface LayoutContextType {
   clearPendingSettingsSection: () => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   focusSession: (sessionId: string) => void;
+  /** SessionId of the maximized pane in the active tab, or null. */
+  maximizedSessionId: string | null;
+  /** Toggle maximize for a pane (defaults to the active pane) in the active tab. */
+  toggleMaximizePane: (sessionId?: string) => void;
   renameTab: (sessionId: string, title: string, opts?: { force?: boolean }) => void;
   /** Check whether the tab containing sessionId has its title locked (user-renamed or auto-named). */
   isTabTitleLocked: (sessionId: string) => boolean;
@@ -584,6 +590,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 titleLocked,
                 root: newRoot,
                 activeSessionId: findFirstSession(newRoot),
+                // SSH reconnects change session IDs — drop a maximize that no
+                // longer points at a live leaf.
+                maximizedSessionId:
+                  tab.maximizedSessionId && subtreeContainsSession(newRoot, tab.maximizedSessionId)
+                    ? tab.maximizedSessionId
+                    : null,
               } as Tab;
             }),
           );
@@ -884,7 +896,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     setTabs((prev) =>
       prev.map((t) =>
         t.id === tab.id
-          ? { ...t, root: splitNode(t.root), activeSessionId: editorSessionId }
+          ? { ...t, root: splitNode(t.root), activeSessionId: editorSessionId, maximizedSessionId: null }
           : t,
       ),
     );
@@ -1059,6 +1071,38 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     // Prevent split if settings active
     if (tab.activeSessionId === "settings") return;
 
+    // Browser pane — a web view beside the current pane. No PTY session; the
+    // leaf itself carries the content type and URL (same shape as browser tabs).
+    if (opts?.kind === "browser") {
+      const browserId = `browser-${uuid()}`;
+      const targetId = tab.activeSessionId;
+      const splitInBrowser = (node: LayoutNode): LayoutNode => {
+        if (node.type === "leaf") {
+          if (node.sessionId === targetId) {
+            return {
+              type: "split",
+              direction,
+              children: [
+                node,
+                { type: "leaf", sessionId: browserId, contentType: "browser", url: opts?.url || "https://www.google.com" },
+              ],
+              sizes: [50, 50],
+            };
+          }
+          return node;
+        }
+        return { ...node, children: node.children.map(splitInBrowser) };
+      };
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === tab.id
+            ? { ...t, root: splitInBrowser(t.root), activeSessionId: browserId, maximizedSessionId: null }
+            : t,
+        ),
+      );
+      return;
+    }
+
     const currentSession = sessions.get(tab.activeSessionId);
     const sessionConfig = currentSession?.aiConfig || aiService.getConfig();
     // Pane kind override — mixed pane types in one tab: a "local" pane beside
@@ -1205,6 +1249,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
             ...t,
             root: splitNode(t.root, t.activeSessionId!),
             activeSessionId: newSessionId, // focus new split
+            maximizedSessionId: null, // new pane must be visible
           };
         }
         return t;
@@ -1240,7 +1285,13 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       setTabs((prev) =>
         prev.map((t) =>
           t.id === tab.id
-            ? { ...t, root: newRoot, activeSessionId: newActiveId }
+            ? {
+              ...t,
+              root: newRoot,
+              activeSessionId: newActiveId,
+              maximizedSessionId:
+                t.maximizedSessionId === targetId || countLeaves(newRoot) < 2 ? null : t.maximizedSessionId,
+            }
             : t,
         ),
       );
@@ -1271,7 +1322,15 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       const newActiveId = findFirstSession(newRoot);
       setTabs((prev) =>
-        prev.map((t) => (t.id === tab.id ? { ...t, root: newRoot, activeSessionId: newActiveId } : t)),
+        prev.map((t) => (t.id === tab.id
+          ? {
+            ...t,
+            root: newRoot,
+            activeSessionId: newActiveId,
+            maximizedSessionId:
+              t.maximizedSessionId === targetId || countLeaves(newRoot) < 2 ? null : t.maximizedSessionId,
+          }
+          : t)),
       );
     }
   };
@@ -1409,6 +1468,26 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         t.id === activeTabId ? { ...t, activeSessionId: sessionId } : t,
       ),
     );
+  };
+
+  const toggleMaximizePane = (sessionId?: string) => {
+    const tab = getActiveTab();
+    if (!tab) return;
+    const targetId = sessionId || tab.activeSessionId;
+    if (!targetId) return;
+    const next = tab.maximizedSessionId === targetId ? null : targetId;
+    if (next && (countLeaves(tab.root) < 2 || !subtreeContainsSession(tab.root, targetId))) return;
+    // Defer terminal fit() during the flex transition (same mechanism as
+    // divider drags) so hidden panes never resize the PTY mid-animation.
+    window.dispatchEvent(new Event("tron:splitDragStart"));
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === tab.id
+          ? { ...t, maximizedSessionId: next, activeSessionId: next ?? t.activeSessionId }
+          : t,
+      ),
+    );
+    setTimeout(() => window.dispatchEvent(new Event("tron:splitDragEnd")), 280);
   };
 
   /** Update tab title for the tab containing a given session */
@@ -1760,6 +1839,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const activeSessionId = getActiveTab()?.activeSessionId || null;
+  const maximizedSessionId = getActiveTab()?.maximizedSessionId || null;
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
 
@@ -2073,6 +2153,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         clearPendingSettingsSection,
         reorderTabs,
         focusSession,
+        maximizedSessionId,
+        toggleMaximizePane,
         renameTab,
         isTabTitleLocked,
         lockTabTitle,

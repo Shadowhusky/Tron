@@ -48,6 +48,7 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   togglePanelInput: "meta+shift+i",
   togglePanelHints: "meta+shift+j",
   togglePanelFooter: "meta+shift+u",
+  maximizePane: "meta+shift+m",
 };
 
 const DEFAULT_CONFIG: TronConfig = {

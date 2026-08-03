@@ -94,6 +94,7 @@ export interface HotkeyMap {
   togglePanelInput: string;
   togglePanelHints: string;
   togglePanelFooter: string;
+  maximizePane: string;
   [key: string]: string;
 }
 
@@ -202,6 +203,8 @@ export interface Tab {
   titleLocked?: boolean; // true once user or agent has set a meaningful title — blocks all auto-renames
   root: LayoutNode;
   activeSessionId: string | null; // Which session is active in this tab
+  /** When set, this pane fills the whole tab; siblings stay mounted but collapsed. */
+  maximizedSessionId?: string | null;
 }
 
 export interface TerminalState {

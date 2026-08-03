@@ -55,6 +55,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   focusPaneRight: "Focus Pane Right",
   focusPaneUp: "Focus Pane Up",
   focusPaneDown: "Focus Pane Down",
+  maximizePane: "Maximize / Restore Pane",
   openSettings: "Open Settings",
   toggleOverlay: "Toggle Agent Panel",
   stopAgent: "Stop Agent",
@@ -973,12 +974,28 @@ const SettingsPane = () => {
     setDebouncedApiKey(config.apiKey);
   }, [config.baseUrl, config.apiKey]);
 
+  // Debounce baseUrl/apiKey edits so model fetches fire after typing stops.
+  useEffect(() => {
+    clearTimeout(baseUrlTimerRef.current);
+    baseUrlTimerRef.current = setTimeout(() => setDebouncedBaseUrl(config.baseUrl), 1000);
+    return () => clearTimeout(baseUrlTimerRef.current);
+  }, [config.baseUrl]);
+  useEffect(() => {
+    clearTimeout(apiKeyTimerRef.current);
+    apiKeyTimerRef.current = setTimeout(() => setDebouncedApiKey(config.apiKey), 1000);
+    return () => clearTimeout(apiKeyTimerRef.current);
+  }, [config.apiKey]);
+
   const isLocal = config.provider === "ollama" || config.provider === "lmstudio";
+  const isCompatProvider = config.provider === "openai-compat" || config.provider === "anthropic-compat";
+  // Cloud providers fetch their latest model list live (falling back to the
+  // static models.json list inside getModels when the endpoint is unreachable).
+  const isCloudLive = !isLocal && !isCompatProvider && !!getCloudProvider(config.provider) && !!debouncedApiKey;
   const { data: allModels = [], isFetching: isModelsFetching } = useModelsWithCaps(
     isLocal ? debouncedBaseUrl : undefined,
-    isLocal,
+    isLocal || isCloudLive,
     config.provider,
-    isLocal ? debouncedApiKey : undefined,
+    debouncedApiKey,
   );
   const invalidateModels = useInvalidateModels();
   const invalidateProviderModels = useInvalidateProviderModels();
@@ -991,6 +1008,10 @@ const SettingsPane = () => {
     const current = aiService.getConfig();
     setConfig(current);
     setInitialConfig(JSON.stringify(current));
+    // Sync debounced values so the saved provider's live model fetch can run
+    // immediately (the debounced states were initialized before config loaded).
+    setDebouncedBaseUrl(current.baseUrl);
+    setDebouncedApiKey(current.apiKey);
   }, []);
 
   const hasChanges = JSON.stringify(config) !== initialConfig;
@@ -1443,7 +1464,16 @@ const SettingsPane = () => {
                           const isCompat = config.provider === "openai-compat" || config.provider === "anthropic-compat";
                           // For compat providers, show models scanned on save
                           const scannedModels = isCompat ? compatScannedModels : [];
-                          const modelList = scannedModels.length > 0 ? scannedModels.map((m) => m.name) : defaultModels;
+                          // Cloud providers: prefer the live-fetched list (getModels already
+                          // falls back to the static models.json list on fetch failure).
+                          const liveModels = !isCompat
+                            ? allModels.filter((m) => m.provider === config.provider).map((m) => m.name)
+                            : [];
+                          const modelList = scannedModels.length > 0
+                            ? scannedModels.map((m) => m.name)
+                            : liveModels.length > 0
+                              ? liveModels
+                              : defaultModels;
                           return (
                             <>
                               {isCompat && (
@@ -1468,6 +1498,11 @@ const SettingsPane = () => {
                                     <>
                                       <div className="flex items-center justify-between">
                                         <label className={labelClass}>Model</label>
+                                        {!isCompat && isModelsFetching && (
+                                          <span className={`text-[11px] ${t.textFaint}`}>
+                                            Fetching latest models…
+                                          </span>
+                                        )}
                                         {isCompat && modelList.length === 0 && config.baseUrl && !isModelsFetching && (
                                           <span className={`text-[11px] ${t.textFaint}`}>
                                             Could not list models from server — enter name below

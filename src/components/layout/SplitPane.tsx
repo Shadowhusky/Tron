@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react"
 import type { LayoutNode } from "../../types";
 import { useLayout } from "../../contexts/LayoutContext";
 import { useTheme } from "../../contexts/ThemeContext";
-import { snapDividerPosition } from "../../utils/paneNav";
+import { snapDividerPosition, subtreeContainsSession } from "../../utils/paneNav";
 import SettingsPane from "../../features/settings/components/SettingsPane";
 import TerminalPane from "./TerminalPane";
 import BrowserPane from "./BrowserPane";
@@ -19,7 +19,7 @@ const MIN_SIZE_PERCENT = 10; // Minimum panel size as percentage of total
 const SNAP_PX = 7;
 
 const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
-  const { updateSplitSizes, activeSessionId } = useLayout();
+  const { updateSplitSizes, activeSessionId, maximizedSessionId } = useLayout();
   const { resolvedTheme } = useTheme();
   const isLight = resolvedTheme === "light";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -80,6 +80,12 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
     node.children.map(() => 100 / node.children.length);
   const totalSize = sizes.reduce((a, b) => a + b, 0);
 
+  // Maximize: when this subtree holds the maximized pane, collapse every
+  // branch that doesn't contain it. Panes stay mounted (visibility, not
+  // unmount) so terminals keep their buffers; flex-grow animates the change.
+  const maximizeActive =
+    !!maximizedSessionId && subtreeContainsSession(node, maximizedSessionId);
+
   const handleMouseDown = (e: React.MouseEvent, index: number) => {
     e.preventDefault();
     const pos = isHorizontal ? e.clientX : e.clientY;
@@ -128,6 +134,8 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
           onEqualize={handleEqualize}
           isLight={isLight}
           activeSessionId={activeSessionId}
+          collapsed={maximizeActive && !subtreeContainsSession(child, maximizedSessionId!)}
+          maximizeActive={maximizeActive}
         />
       ))}
 
@@ -167,6 +175,8 @@ const SplitChild: React.FC<{
   onEqualize: () => void;
   isLight: boolean;
   activeSessionId: string | null;
+  collapsed: boolean;
+  maximizeActive: boolean;
 }> = ({
   child,
   index,
@@ -180,6 +190,8 @@ const SplitChild: React.FC<{
   onEqualize,
   isLight,
   activeSessionId,
+  collapsed,
+  maximizeActive,
 }) => {
   const isLeaf = child.type === "leaf";
   const paneSessionId = isLeaf ? child.sessionId : undefined;
@@ -190,8 +202,10 @@ const SplitChild: React.FC<{
   return (
     <>
       <div
-        style={{ flex: size / totalSize }}
-        className="relative overflow-hidden min-w-0 min-h-0"
+        style={{ flex: collapsed ? 0 : size / totalSize }}
+        className={`relative overflow-hidden min-w-0 min-h-0 ${
+          isDragging ? "" : "transition-[flex-grow] duration-[240ms] ease-out motion-reduce:transition-none"
+        } ${collapsed ? "pointer-events-none" : ""}`}
         data-pane-session={paneSessionId}
       >
         <SplitPane node={child} path={[...path, index]} />
@@ -203,7 +217,7 @@ const SplitChild: React.FC<{
       </div>
       {/* Resize handle between this child and the next. A 1px visual line with
           a wider invisible hit area (overflows into neighbors) for easy grab. */}
-      {index < totalChildren - 1 && (
+      {index < totalChildren - 1 && !maximizeActive && (
         <div
           className={`shrink-0 z-20 relative ${isHorizontal ? "w-px cursor-col-resize" : "h-px cursor-row-resize"}`}
         >

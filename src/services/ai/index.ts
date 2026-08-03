@@ -90,7 +90,7 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
   anthropic: {
     chatUrl: "https://api.anthropic.com/v1/messages",
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).anthropic || [],
-    placeholder: "claude-sonnet-4-6",
+    placeholder: "claude-sonnet-5",
     label: "Anthropic",
     modelsUrl: "https://api.anthropic.com/v1/models",
     authStyle: "anthropic",
@@ -104,7 +104,7 @@ const CLOUD_PROVIDERS: Record<string, ProviderInfo> = {
     chatUrl:
       "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     defaultModels: (DEFAULT_MODELS as Record<string, string[]>).gemini || [],
-    placeholder: "gemini-2.5-flash",
+    placeholder: "gemini-flash-latest",
     label: "Gemini (Google)",
     modelsUrl: (apiKey) => `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
     filterModels: (models) =>

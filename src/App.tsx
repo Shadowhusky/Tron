@@ -119,6 +119,8 @@ const AppContent = () => {
     focusSession,
     splitUserAction,
     closePane,
+    maximizedSessionId,
+    toggleMaximizePane,
   } = useLayout();
   const { resolvedTheme, setTheme } = useTheme();
   const { config, updateConfig, hotkeys, isLoaded: configLoaded } = useConfig();
@@ -420,10 +422,12 @@ const AppContent = () => {
         document.querySelectorAll<HTMLElement>("[data-pane-session]"),
       ).filter((el) => {
         if (!el.getAttribute("data-pane-session")) return false;
+        // Collapsed (maximized-away) panes keep visibility but have no size.
+        if (el.offsetWidth < 2 || el.offsetHeight < 2) return false;
         const cv = (el as HTMLElement & { checkVisibility?: (o?: unknown) => boolean }).checkVisibility;
         return typeof cv === "function"
           ? cv.call(el, { visibilityProperty: true })
-          : el.offsetWidth > 0 && el.offsetHeight > 0;
+          : true;
       });
       if (els.length < 2) return;
       const panes = els.map((el) => {
@@ -445,6 +449,7 @@ const AppContent = () => {
   useHotkey("focusPaneRight", () => focusPane("right"), [focusPane]);
   useHotkey("focusPaneUp", () => focusPane("up"), [focusPane]);
   useHotkey("focusPaneDown", () => focusPane("down"), [focusPane]);
+  useHotkey("maximizePane", () => toggleMaximizePane(), [toggleMaximizePane]);
 
   // ── Command palette (⌘P) ────────────────────────────────────────────────
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -502,6 +507,7 @@ const AppContent = () => {
       { id: "split-v", label: "Split Vertical", hint: fmt("splitVertical"), section: "Panes", run: () => splitUserAction("vertical") },
       ...[
         { key: "local", name: "Local Terminal", kind: { kind: "local" as const } },
+        { key: "browser", name: "Browser", kind: { kind: "browser" as const } },
         ...sshProfilesForPalette.map((p) => ({
           key: `ssh-${p.id}`,
           name: `SSH: ${p.name || `${p.username}@${p.host}`}`,
@@ -519,6 +525,7 @@ const AppContent = () => {
         run: () => splitUserAction(dir, t.kind),
       }))),
       ...(activeSessionId ? [
+        { id: "maximize-pane", label: maximizedSessionId ? "Restore Pane" : "Maximize Pane", hint: fmt("maximizePane"), section: "Panes", run: () => toggleMaximizePane(activeSessionId) },
         { id: "close-pane", label: "Close Pane", section: "Panes", run: () => closePane(activeSessionId) },
         { id: "focus-left", label: "Focus Pane Left", hint: fmt("focusPaneLeft"), section: "Panes", run: () => focusPane("left") },
         { id: "focus-right", label: "Focus Pane Right", hint: fmt("focusPaneRight"), section: "Panes", run: () => focusPane("right") },
@@ -552,7 +559,7 @@ const AppContent = () => {
       { id: "check-updates", label: "Check for Updates", section: "App", run: () => { window.dispatchEvent(new Event("tron:manual-update-check")); window.electron?.ipcRenderer?.checkForUpdates?.()?.catch?.(() => {}); } },
     ];
     return acts;
-  }, [hotkeys, createTab, closeTab, activeTabId, duplicateTab, saveTab, getSessionPersistable, splitUserAction, sshProfilesForPalette, activeSessionId, sessions, closePane, focusPane, stopAgentForSession, setTheme, openSettingsTab, openBrowserTab]);
+  }, [hotkeys, createTab, closeTab, activeTabId, duplicateTab, saveTab, getSessionPersistable, splitUserAction, sshProfilesForPalette, activeSessionId, sessions, closePane, focusPane, stopAgentForSession, setTheme, openSettingsTab, openBrowserTab, maximizedSessionId, toggleMaximizePane]);
 
   // Check if any session in a tab's tree is dirty
   const isTabDirty = useCallback(
@@ -949,6 +956,18 @@ const AppContent = () => {
             >
               <PanelRight className="h-3.5 w-3.5" />
               Open in Tab
+            </button>
+            <button
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
+                resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
+              }`}
+              onClick={() => {
+                if (linkPopover) splitUserAction("horizontal", { kind: "browser", url: linkPopover.url });
+                setLinkPopover(null);
+              }}
+            >
+              <Columns2 className="h-3.5 w-3.5" />
+              Open in Split Pane
             </button>
           </Popover.Content>
         </Popover.Portal>

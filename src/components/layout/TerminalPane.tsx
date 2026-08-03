@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, SquareSplitHorizontal, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search } from "lucide-react";
+import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, SquareSplitHorizontal, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search, Maximize2, Minimize2 } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -13,7 +13,9 @@ import { useAgentRunner } from "../../hooks/useAgentRunner";
 import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
 import logoSvg from "../../assets/logo.svg";
-import { useHotkey } from "../../hooks/useHotkey";
+import { useHotkey, formatHotkey } from "../../hooks/useHotkey";
+import { useConfig } from "../../contexts/ConfigContext";
+import { subtreeContainsSession, countLeaves } from "../../utils/paneNav";
 import { usePanelChrome } from "../../hooks/usePanelChrome";
 import { Collapsible } from "../ui/Collapsible";
 import { setFocusedSession, getFocusedSession } from "../../services/panelFocus";
@@ -55,12 +57,19 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     closePane,
     serverDisconnected,
     reconnectSSH,
+    maximizedSessionId,
+    toggleMaximizePane,
   } = useLayout();
   const { resolvedTheme, viewMode } = useTheme();
   const isAgentMode = viewMode === "agent";
   const isActive = sessionId === activeSessionId;
   const session = sessions.get(sessionId);
   const isConnectPane = sessionId.startsWith("ssh-connect");
+  const { hotkeys } = useConfig();
+  const isMaximized = maximizedSessionId === sessionId;
+  const paneTab = tabs.find((t) => subtreeContainsSession(t.root, sessionId));
+  const canMaximize = !!paneTab && countLeaves(paneTab.root) > 1;
+  const maximizeTitle = `${isMaximized ? "Restore pane" : "Maximize pane"} (${formatHotkey(hotkeys.maximizePane)})`;
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [connectToast, setConnectToast] = useState(false);
   const connectToastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -856,6 +865,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         window.dispatchEvent(new CustomEvent("tron:openCommandPalette", { detail: { query: "split with" } }));
       },
     },
+    ...(canMaximize || isMaximized ? [{
+      label: isMaximized ? "Restore Pane" : "Maximize Pane",
+      icon: isMaximized
+        ? <Minimize2 className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />
+        : <Maximize2 className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
+      action: () => { focusSession(sessionId); toggleMaximizePane(sessionId); },
+    }] : []),
     { separator: true as const },
     {
       label: "Close Pane",
@@ -870,7 +886,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       ref={paneRootRef}
       onMouseDown={handlePaneFocus}
       onFocusCapture={() => setFocusedSession(sessionId)}
-      className={`relative flex h-full w-full flex-col border border-transparent ${isActive ? "z-10" : "opacity-80 hover:opacity-100"}`}
+      className={`group/pane relative flex h-full w-full flex-col border border-transparent ${isActive ? "z-10" : "opacity-80 hover:opacity-100"}`}
     >
       {/* Server disconnected overlay — shown when tabs are restored offline */}
       {serverDisconnected && (
@@ -949,6 +965,18 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 ? session?.cwd || "~"
                 : abbreviateHome(session?.cwd || "~")}
             </span>
+            {(canMaximize || isMaximized) && (
+              <button
+                onClick={() => toggleMaximizePane(sessionId)}
+                title={maximizeTitle}
+                aria-label={maximizeTitle}
+                className="ml-auto shrink-0 opacity-60 transition-opacity hover:opacity-100"
+              >
+                {isMaximized
+                  ? <Minimize2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  : <Maximize2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
+              </button>
+            )}
           </div>
 
           {/* AgentOverlay — full height, always expanded */}
@@ -1162,6 +1190,25 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 )}`}
               >
                 ↓ Scroll to bottom
+              </button>
+            )}
+            {/* Maximize / restore pane — hover chrome, always visible while maximized */}
+            {(canMaximize || isMaximized) && !selectionMode && !isConnectPane && (
+              <button
+                onClick={() => toggleMaximizePane(sessionId)}
+                title={maximizeTitle}
+                aria-label={maximizeTitle}
+                className={`absolute top-2 right-2 z-20 flex h-7 w-7 items-center justify-center rounded-md border shadow-lg transition-opacity ${
+                  isMaximized ? "opacity-80" : "opacity-0 group-hover/pane:opacity-80 focus-visible:opacity-80"
+                } hover:opacity-100 ${themeClass(resolvedTheme, {
+                  dark: "bg-gray-800/90 hover:bg-gray-700/90 text-gray-200 border-gray-600/50",
+                  modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border-white/10",
+                  light: "bg-white/90 hover:bg-gray-100/90 text-gray-700 border-gray-300",
+                })}`}
+              >
+                {isMaximized
+                  ? <Minimize2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  : <Maximize2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
               </button>
             )}
           </div>
