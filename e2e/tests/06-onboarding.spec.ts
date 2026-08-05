@@ -46,8 +46,17 @@ test.describe("Onboarding Wizard", () => {
     await nextBtn.click();
     await expect(wizard).toContainText("Intelligence", { timeout: 5_000 });
 
-    // The next button should now say "Get Started"
+    // Leaving the AI step with no model: first click warns, second skips ahead
+    await nextBtn.click();
+    await nextBtn.click();
+    await expect(wizard).toContainText("Highlights", { timeout: 5_000 });
+
+    // The next button should now say "Get Started" on the final step
     await expect(nextBtn).toContainText("Get Started");
+
+    // Go back to step 3
+    await prevBtn.click();
+    await expect(wizard).toContainText("Intelligence", { timeout: 5_000 });
 
     // Go back to step 2
     await prevBtn.click();
@@ -183,16 +192,18 @@ test.describe("Onboarding Wizard", () => {
     await nextBtn.click();
     await expect(wizard).toContainText("Intelligence", { timeout: 5_000 });
 
-    // Click "Get Started" once — shows validation warning (no model configured)
+    // Click "Continue" once — shows validation warning (no model configured)
     await nextBtn.click();
     await expect(wizard).toContainText("No model validated yet", {
       timeout: 5_000,
     });
 
-    // Click "Get Started" again — skips validation and completes
+    // Click again — skips validation, advances to the feature Highlights step
     await nextBtn.click();
+    await expect(wizard).toContainText("Highlights", { timeout: 5_000 });
 
-    // Wizard should disappear
+    // "Get Started" completes the wizard
+    await nextBtn.click();
     await expect(wizard).not.toBeVisible({ timeout: 10_000 });
 
     // tron_configured should now be set

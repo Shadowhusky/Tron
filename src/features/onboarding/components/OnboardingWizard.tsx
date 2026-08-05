@@ -1,9 +1,12 @@
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useTheme } from "../../../contexts/ThemeContext";
+import { useConfig } from "../../../contexts/ConfigContext";
+import { formatHotkey } from "../../../hooks/useHotkey";
+import { sectorPath } from "../../../utils/tabWheel";
 import type { AIConfig } from "../../../types";
 import { aiService, getCloudProviderList, providerUsesBaseUrl } from "../../../services/ai";
-import { Monitor, Gem, Terminal, Bot } from "lucide-react";
+import { Monitor, Gem, Terminal, Bot, Maximize2, Command, History } from "lucide-react";
 import logoSvg from "../../../assets/logo.svg";
 import {
   useModelsWithCaps,
@@ -25,22 +28,44 @@ const STEPS = [
   {
     id: "theme",
     title: "Appearance",
-    description: "Choose your preferred look and feel.",
+    description: "Choose the look that suits your space.",
   },
   {
     id: "viewmode",
     title: "View Mode",
-    description: "Choose your preferred interface style.",
+    description: "Pick the interface that fits your workflow.",
   },
   {
     id: "ai",
     title: "Intelligence",
-    description: "Configure your AI assistant.",
+    description: "Connect an AI provider — or do it later in Settings.",
+  },
+  {
+    id: "features",
+    title: "Highlights",
+    description: "A few things worth knowing before you start.",
   },
 ];
 
+/** Miniature of the actual tab-wheel geometry (see utils/tabWheel). */
+const MiniWheel: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20">
+    {[0, 1, 2, 3].map((i) => (
+      <path
+        key={i}
+        d={sectorPath(10, 10, 3.5, 9, i * 90 - 42, i * 90 + 42)}
+        fill="currentColor"
+        opacity={i === 0 ? 1 : 0.3}
+      />
+    ))}
+  </svg>
+);
+
 const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const { theme, resolvedTheme, setTheme, viewMode, setViewMode } = useTheme();
+  const { hotkeys } = useConfig();
+  const reduceMotion = useReducedMotion();
+  const isLight = resolvedTheme === "light";
   const [currentStep, setCurrentStep] = useState(0);
   const [stepDirection, setStepDirection] = useState(1); // 1 = forward, -1 = back
   const [aiConfig, setAiConfig] = useState<AIConfig>(aiService.getConfig());
@@ -97,46 +122,49 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
     }
   };
 
+  const advance = () => {
+    setStepDirection(1);
+    setCurrentStep((c) => c + 1);
+    setShowValidationWarn(false);
+  };
+
   const handleNext = async () => {
+    // Leaving the AI step — validate (second click skips), save, then advance.
+    if (STEPS[currentStep].id === "ai") {
+      if (!aiConfig.model) {
+        if (!showValidationWarn) {
+          setShowValidationWarn(true);
+          return;
+        }
+        aiService.saveConfig(aiConfig); // second click = skip
+        advance();
+        return;
+      }
+      if (isLocalProvider && connectionStatus !== "success") {
+        if (showValidationWarn) {
+          aiService.saveConfig(aiConfig); // second click after failed test = skip
+          advance();
+          return;
+        }
+        const ok = await handleTestConnection();
+        if (ok) {
+          aiService.saveConfig(aiConfig);
+          advance();
+        } else {
+          setShowValidationWarn(true);
+        }
+        return;
+      }
+      // Cloud provider with model set, or local already tested
+      aiService.saveConfig(aiConfig);
+      advance();
+      return;
+    }
+
     if (currentStep < STEPS.length - 1) {
-      setStepDirection(1);
-      setCurrentStep((c) => c + 1);
-      setShowValidationWarn(false);
+      advance();
       return;
     }
-
-    // Final step — AI config
-    if (!aiConfig.model) {
-      if (showValidationWarn) {
-        // Second click = skip
-        aiService.saveConfig(aiConfig);
-        onComplete();
-        return;
-      }
-      setShowValidationWarn(true);
-      return;
-    }
-
-    if (isLocalProvider && connectionStatus !== "success") {
-      if (showValidationWarn) {
-        // Second click after failed test = skip
-        aiService.saveConfig(aiConfig);
-        onComplete();
-        return;
-      }
-      // Auto-trigger test connection then proceed if successful
-      const ok = await handleTestConnection();
-      if (ok) {
-        aiService.saveConfig(aiConfig);
-        onComplete();
-      } else {
-        setShowValidationWarn(true);
-      }
-      return;
-    }
-
-    // Cloud provider with model selected, or local already tested — proceed
-    aiService.saveConfig(aiConfig);
     onComplete();
   };
 
@@ -145,20 +173,22 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
     setCurrentStep((c) => Math.max(0, c - 1));
   };
 
+  // Critically damped springs; enter/exit mirror along the same axis. Reduced
+  // motion swaps the slide for a plain cross-fade.
   const stepVariants = {
     hidden: (dir: number) => ({
       opacity: 0,
-      x: dir > 0 ? 40 : -40,
+      x: reduceMotion ? 0 : dir > 0 ? 40 : -40,
     }),
     visible: {
       opacity: 1,
       x: 0,
-      transition: { duration: 0.3, ease: "easeOut" as const },
+      transition: { type: "spring" as const, bounce: 0, duration: 0.4 },
     },
     exit: (dir: number) => ({
       opacity: 0,
-      x: dir > 0 ? -40 : 40,
-      transition: { duration: 0.2, ease: "easeIn" as const },
+      x: reduceMotion ? 0 : dir > 0 ? -40 : 40,
+      transition: { duration: 0.15, ease: "easeIn" as const },
     }),
   };
 
@@ -179,14 +209,8 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                 size="lg"
               />
             </motion.div>
-            <motion.div
-              variants={staggerItem}
-              className="text-center space-y-2"
-            >
-              <h3 className="font-medium tracking-tight text-[15px]">Choose Appearance</h3>
-              <p className="text-sm text-gray-500 max-w-xs">
-                Select a theme that best suits your working environment.
-              </p>
+            <motion.div variants={staggerItem} className="text-center">
+              <h3 className="font-semibold tracking-tight text-[15px]">Choose Appearance</h3>
             </motion.div>
 
             <motion.div
@@ -242,7 +266,9 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   className={`p-3 border rounded-xl flex flex-col items-center gap-2 transition-colors ${
                     theme === id
                       ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500"
-                      : "border-transparent hover:bg-white/5 bg-white/5"
+                      : isLight
+                        ? "border-transparent bg-gray-50 hover:bg-gray-100"
+                        : "border-transparent bg-white/5 hover:bg-white/10"
                   }`}
                 >
                   {swatch}
@@ -264,14 +290,8 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             <motion.div variants={scalePop}>
               <FeatureIcon icon={Monitor} color="blue" size="lg" />
             </motion.div>
-            <motion.div
-              variants={staggerItem}
-              className="text-center space-y-2"
-            >
-              <h3 className="font-medium tracking-tight text-[15px]">Choose Your View</h3>
-              <p className="text-sm text-gray-500 max-w-xs">
-                Pick the interface that fits your workflow.
-              </p>
+            <motion.div variants={staggerItem} className="text-center">
+              <h3 className="font-semibold tracking-tight text-[15px]">Choose Your View</h3>
             </motion.div>
 
             <motion.div
@@ -310,7 +330,9 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                   className={`p-4 border rounded-xl flex flex-col items-center gap-2 transition-colors ${
                     viewMode === id
                       ? activeBorder
-                      : "border-transparent hover:bg-white/5 bg-white/5"
+                      : isLight
+                        ? "border-transparent bg-gray-50 hover:bg-gray-100"
+                        : "border-transparent bg-white/5 hover:bg-white/10"
                   }`}
                 >
                   <div
@@ -625,6 +647,76 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             </motion.div>
           </motion.div>
         );
+
+      case "features": {
+        const rows = [
+          {
+            icon: <MiniWheel />,
+            tint: "text-blue-400 bg-blue-500/15",
+            title: "Tab Wheel",
+            desc: "Hold, point, release — flick between tabs like a game weapon wheel.",
+            hint: formatHotkey(hotkeys.tabWheel),
+          },
+          {
+            icon: <Maximize2 className="h-4 w-4" strokeWidth={1.8} />,
+            tint: isLight ? "text-gray-600 bg-gray-200/70" : "text-gray-300 bg-white/10",
+            title: "Maximize Pane",
+            desc: "Zoom any split pane to fill the tab, then drop it back in place.",
+            hint: formatHotkey(hotkeys.maximizePane),
+          },
+          {
+            icon: <Command className="h-4 w-4" strokeWidth={1.8} />,
+            tint: isLight ? "text-gray-600 bg-gray-200/70" : "text-gray-300 bg-white/10",
+            title: "Command Palette",
+            desc: "Every action — tabs, panes, themes — one keystroke away.",
+            hint: formatHotkey(hotkeys.commandPalette),
+          },
+          {
+            icon: <History className="h-4 w-4" strokeWidth={1.8} />,
+            tint: "text-green-400 bg-green-500/15",
+            title: "Sessions That Come Back",
+            desc: "Claude Code and Codex conversations resume after a restart — on their own.",
+            hint: "Automatic",
+          },
+        ];
+        return (
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            animate="visible"
+            className="flex flex-col gap-2 py-2"
+          >
+            {rows.map((row) => (
+              <motion.div
+                key={row.title}
+                variants={staggerItem}
+                className={`flex items-center gap-3 rounded-xl border p-3 ${
+                  isLight ? "border-gray-200 bg-gray-50" : "border-white/5 bg-white/5"
+                }`}
+              >
+                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${row.tint}`}>
+                  {row.icon}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-semibold tracking-tight">{row.title}</div>
+                  <div className={`text-[12px] leading-snug ${isLight ? "text-gray-500" : "text-gray-400"}`}>
+                    {row.desc}
+                  </div>
+                </div>
+                <kbd
+                  className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${
+                    isLight
+                      ? "border-gray-200 bg-white text-gray-500"
+                      : "border-white/10 bg-black/20 text-gray-400"
+                  }`}
+                >
+                  {row.hint}
+                </kbd>
+              </motion.div>
+            ))}
+          </motion.div>
+        );
+      }
     }
   };
 
@@ -642,7 +734,9 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
       >
         {/* Header */}
         <div
-          className="px-5 py-3 sm:py-4 border-b border-white/5 flex items-center justify-between drag-region shrink-0"
+          className={`px-5 py-3 sm:py-4 border-b flex items-center justify-between drag-region shrink-0 ${
+            isLight ? "border-gray-200" : "border-white/5"
+          }`}
           style={{ WebkitAppRegion: "drag", appRegion: "drag" } as any}
         >
           <div className="flex items-center gap-2.5">
@@ -655,21 +749,17 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
               </p>
             </div>
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex items-center gap-1.5">
             {STEPS.map((_, i) => (
               <motion.div
                 key={i}
                 animate={{
-                  scale: i === currentStep ? 1.3 : 1,
+                  width: i === currentStep ? 20 : 8,
                   backgroundColor:
-                    i === currentStep
-                      ? "#3b82f6"
-                      : i < currentStep
-                        ? "#3b82f6"
-                        : "rgba(107,114,128,0.3)",
+                    i <= currentStep ? "#3b82f6" : "rgba(107,114,128,0.3)",
                 }}
-                transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                className="w-2 h-2 rounded-full"
+                transition={{ type: "spring", bounce: 0, duration: 0.35 }}
+                className="h-2 rounded-full"
               />
             ))}
           </div>
@@ -701,17 +791,19 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-white/5 flex flex-col gap-2 bg-black/20 shrink-0">
+        <div className={`px-5 py-3 border-t flex flex-col gap-2 shrink-0 ${
+          isLight ? "border-gray-200 bg-gray-50" : "border-white/5 bg-black/20"
+        }`}>
           {showValidationWarn && (
             <motion.p
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
-              className="text-xs text-amber-400 text-center"
+              className={`text-xs text-center ${isLight ? "text-amber-600" : "text-amber-400"}`}
             >
               {!aiConfig.model
-                ? "No model selected. Click again to skip setup."
+                ? "No model validated yet — click again to skip."
                 : connectionStatus === "error"
-                  ? "Connection failed. Click again to continue anyway."
+                  ? "Connection failed — click again to continue anyway."
                   : "Click again to skip."}
             </motion.p>
           )}
@@ -740,7 +832,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
             >
               {connectionStatus === "testing"
                 ? "Connecting..."
-                : currentStep === STEPS.length - 1 ? "Get Started" : "Next"}
+                : currentStep === STEPS.length - 1 ? "Get Started" : "Continue"}
             </motion.button>
           </div>
         </div>
