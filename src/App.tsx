@@ -14,7 +14,8 @@ import { IPC } from "./constants/ipc";
 import { getTheme } from "./utils/theme";
 import { aiService } from "./services/ai";
 import { fadeIn } from "./utils/motion";
-import { useHotkey, formatHotkey } from "./hooks/useHotkey";
+import { useHotkey, formatHotkey, matchesHotkey } from "./hooks/useHotkey";
+import { TabWheel } from "./components/ui/TabWheel";
 import { nearestPaneInDirection } from "./utils/paneNav";
 import { useInvalidateModels } from "./hooks/useModels";
 import CloseConfirmModal from "./components/layout/CloseConfirmModal";
@@ -451,6 +452,25 @@ const AppContent = () => {
   useHotkey("focusPaneDown", () => focusPane("down"), [focusPane]);
   useHotkey("maximizePane", () => toggleMaximizePane(), [toggleMaximizePane]);
 
+  // ── Tab wheel — hold-to-show radial switcher ────────────────────────────
+  // Opens on keydown of the combo, commits on keyup (handled inside TabWheel).
+  // Capture phase so xterm never sees the trigger key.
+  const [wheelOpen, setWheelOpen] = useState(false);
+  const wheelHotkey = hotkeys.tabWheel;
+  const tabCount = tabs.length;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!wheelHotkey || tabCount < 2) return;
+      if (matchesHotkey(e, wheelHotkey)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) setWheelOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [wheelHotkey, tabCount]);
+
   // ── Command palette (⌘P) ────────────────────────────────────────────────
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
@@ -692,6 +712,19 @@ const AppContent = () => {
         />
         <TabSearchPalette />
         <CommandPalette key={paletteOpen ? `open:${paletteQuery}` : "closed"} open={paletteOpen} initialQuery={paletteQuery} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
+
+        {wheelOpen && (
+          <TabWheel
+            tabs={tabs}
+            currentTabId={activeTabId}
+            combo={wheelHotkey}
+            resolvedTheme={resolvedTheme}
+            onCommit={(tabId) => {
+              setWheelOpen(false);
+              if (tabId && tabId !== activeTabId) selectTab(tabId);
+            }}
+          />
+        )}
         {/* Render tabs in a STABLE DOM order (first-seen ascending) so a
             TabBar reorder never causes React to move existing tab DOM
             nodes via insertBefore — moving an xterm canvas mid-render
@@ -715,7 +748,7 @@ const AppContent = () => {
                 zIndex: tab.id === activeTabId ? 1 : 0,
               }}
             >
-              <SplitPane node={tab.root} />
+              <SplitPane node={tab.root} maximizedSessionId={tab.maximizedSessionId ?? null} />
             </div>
           ));
         })()}

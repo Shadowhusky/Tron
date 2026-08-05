@@ -79,6 +79,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   switchTab9: "Switch to Tab 9",
   switchTabLast: "Switch to Last Tab",
   tabSearch: "Tab Search Palette",
+  tabWheel: "Tab Wheel (hold to show)",
   togglePanelInput: "Toggle Input Box",
   togglePanelHints: "Toggle Hints Bar",
   togglePanelFooter: "Toggle Footer Bar",

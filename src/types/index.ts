@@ -91,6 +91,7 @@ export interface HotkeyMap {
   switchTab9: string;
   switchTabLast: string;
   tabSearch: string;
+  tabWheel: string;
   togglePanelInput: string;
   togglePanelHints: string;
   togglePanelFooter: string;

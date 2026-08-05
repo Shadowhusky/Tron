@@ -11,6 +11,10 @@ const CodeEditorPane = lazy(() => import("./CodeEditorPane"));
 interface SplitPaneProps {
   node: LayoutNode;
   path?: number[];
+  /** The OWNING tab's maximized pane — passed down from the tab root, NOT the
+   *  active tab's value. Hidden tabs must keep their collapsed layout while
+   *  inactive, or switching back animates the collapse again (flicker). */
+  maximizedSessionId?: string | null;
 }
 
 const MIN_SIZE_PERCENT = 10; // Minimum panel size as percentage of total
@@ -18,8 +22,8 @@ const MIN_SIZE_PERCENT = 10; // Minimum panel size as percentage of total
  *  of another divider on the same axis, it snaps into alignment. */
 const SNAP_PX = 7;
 
-const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
-  const { updateSplitSizes, activeSessionId, maximizedSessionId } = useLayout();
+const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [], maximizedSessionId = null }) => {
+  const { updateSplitSizes, activeSessionId } = useLayout();
   const { resolvedTheme } = useTheme();
   const isLight = resolvedTheme === "light";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -136,6 +140,7 @@ const SplitPane: React.FC<SplitPaneProps> = ({ node, path = [] }) => {
           activeSessionId={activeSessionId}
           collapsed={maximizeActive && !subtreeContainsSession(child, maximizedSessionId!)}
           maximizeActive={maximizeActive}
+          maximizedSessionId={maximizedSessionId}
         />
       ))}
 
@@ -177,6 +182,7 @@ const SplitChild: React.FC<{
   activeSessionId: string | null;
   collapsed: boolean;
   maximizeActive: boolean;
+  maximizedSessionId: string | null;
 }> = ({
   child,
   index,
@@ -192,6 +198,7 @@ const SplitChild: React.FC<{
   activeSessionId,
   collapsed,
   maximizeActive,
+  maximizedSessionId,
 }) => {
   const isLeaf = child.type === "leaf";
   const paneSessionId = isLeaf ? child.sessionId : undefined;
@@ -211,7 +218,7 @@ const SplitChild: React.FC<{
         } ${collapsed ? "pointer-events-none" : ""}`}
         data-pane-session={paneSessionId}
       >
-        <SplitPane node={child} path={[...path, index]} />
+        <SplitPane node={child} path={[...path, index]} maximizedSessionId={maximizedSessionId} />
         <div
           className={`pointer-events-none absolute inset-0 z-30 transition-opacity duration-300 ${
             isLight ? "bg-black/[0.05]" : "bg-black/[0.14]"

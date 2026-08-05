@@ -58,7 +58,6 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     serverDisconnected,
     reconnectSSH,
     restartShell,
-    maximizedSessionId,
     toggleMaximizePane,
   } = useLayout();
   const { resolvedTheme, viewMode } = useTheme();
@@ -67,8 +66,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const session = sessions.get(sessionId);
   const isConnectPane = sessionId.startsWith("ssh-connect");
   const { hotkeys } = useConfig();
-  const isMaximized = maximizedSessionId === sessionId;
   const paneTab = tabs.find((t) => subtreeContainsSession(t.root, sessionId));
+  // Own tab's value, not the active tab's — panes in hidden tabs must keep
+  // their maximize state (context maximizedSessionId is active-tab only).
+  const isMaximized = paneTab?.maximizedSessionId === sessionId;
   const canMaximize = !!paneTab && countLeaves(paneTab.root) > 1;
   const maximizeTitle = `${isMaximized ? "Restore pane" : "Maximize pane"} (${formatHotkey(hotkeys.maximizePane)})`;
   const [showSSHModal, setShowSSHModal] = useState(false);
