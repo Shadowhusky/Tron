@@ -114,6 +114,8 @@ interface LayoutContextType {
   refreshCwd: (sessionId?: string) => Promise<void>;
   /** Reconnect a disconnected SSH session using its stored profile. */
   reconnectSSH: (sessionId: string) => Promise<void>;
+  /** Respawn the PTY of a pane whose shell process died (keeps the same session id). */
+  restartShell: (sessionId: string) => Promise<void>;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -1470,6 +1472,43 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
+  // A shell process died mid-session (crash, kill, memory pressure). Mark the
+  // session so TerminalPane can show a restart overlay instead of leaving a
+  // silent zombie pane that ignores input. SSH sessions are skipped — they
+  // emit terminal.exit too but have their own reconnect overlay.
+  useEffect(() => {
+    if (!window.electron) return;
+    const remove = window.electron.ipcRenderer.on(
+      IPC.TERMINAL_EXIT,
+      ({ id, exitCode }: { id: string; exitCode: number }) => {
+        setSessions((prev) => {
+          const session = prev.get(id);
+          if (!session || session.sshProfileId) return prev; // pane closed / SSH
+          const next = new Map(prev);
+          next.set(id, { ...session, exited: exitCode ?? 0 });
+          return next;
+        });
+      },
+    );
+    return remove;
+  }, []);
+
+  /** Respawn a dead pane's PTY under the SAME session id — the mounted
+   *  Terminal keeps its buffer and IPC wiring; the new shell's prompt simply
+   *  appends. Local panes only (SSH/remote have their own reconnect paths). */
+  const restartShell = async (sessionId: string) => {
+    const session = sessions.get(sessionId);
+    if (!session || session.sshProfileId || session.remoteUrl) return;
+    try {
+      const newId = await createPTY(session.cwd, sessionId);
+      if (newId === sessionId) {
+        updateSession(sessionId, { exited: null, reconnected: false });
+      }
+    } catch (err) {
+      console.warn(`[Layout] restartShell failed for ${sessionId.slice(0, 8)}:`, err);
+    }
+  };
+
   const toggleMaximizePane = (sessionId?: string) => {
     const tab = getActiveTab();
     if (!tab) return;
@@ -2172,6 +2211,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         setConfirmHandler,
         refreshCwd,
         reconnectSSH,
+        restartShell,
       }}
     >
       {children}

@@ -176,6 +176,8 @@ export interface TerminalSession {
   sshProfileId?: string;  // If set, this is a remote SSH session
   remoteUrl?: string;     // If set, this session is on a remote Tron server
   reconnected?: boolean; // true if session was reconnected to an existing PTY (page refresh)
+  /** Exit code of a shell that died mid-session — pane shows a restart overlay. Cleared on restart. */
+  exited?: number | null;
   /** Saved terminal history to restore when loading a saved tab. Written to xterm on mount. */
   pendingHistory?: string;
   interactions?: {

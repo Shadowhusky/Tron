@@ -727,6 +727,12 @@ function registerTerminalHandlers(getMainWindow) {
                         const msg = `\r\n\x1b[31m[Shell exited with code ${exitCode}]\x1b[0m\r\n\x1b[33mCWD was: ${safeCwd}\x1b[0m\r\n`;
                         mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data: msg });
                     }
+                    else {
+                        // Mid-session death (crash, kill, memory pressure): print the exit
+                        // code into the pane so it never dies silently.
+                        const msg = `\r\n\x1b[31m[Process exited with code ${exitCode}]\x1b[0m\r\n`;
+                        mainWindow.webContents.send("terminal.incomingData", { id: sessionId, data: msg });
+                    }
                     mainWindow.webContents.send("terminal.exit", {
                         id: sessionId,
                         exitCode,

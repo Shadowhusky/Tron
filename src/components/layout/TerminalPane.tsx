@@ -57,6 +57,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     closePane,
     serverDisconnected,
     reconnectSSH,
+    restartShell,
     maximizedSessionId,
     toggleMaximizePane,
   } = useLayout();
@@ -911,6 +912,34 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 />
               ))}
             </div>
+          </div>
+        </div>
+      )}
+      {/* Shell-exited overlay — the pane's process died mid-session. Without
+          this the pane silently ignores all input (no PTY behind it). */}
+      {session?.exited != null && !serverDisconnected && !isConnectPane && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/50">
+          <div className={`flex flex-col items-center gap-3 rounded-xl px-8 py-6 ${themeClass(resolvedTheme, {
+            dark: "bg-gray-900/90 border border-white/10",
+            modern: "bg-gray-900/90 border border-white/10",
+            light: "bg-white/95 border border-gray-200 shadow-lg",
+          })}`}>
+            <div className={`text-sm font-medium ${resolvedTheme === "light" ? "text-gray-700" : "text-gray-200"}`}>
+              Shell exited{session.exited !== 0 ? ` (code ${session.exited})` : ""}
+            </div>
+            <div className={`text-xs ${resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"}`}>
+              The process behind this pane ended. Scrollback is preserved.
+            </div>
+            <button
+              onClick={() => restartShell(sessionId)}
+              className={`cursor-pointer rounded-lg px-5 py-2 text-sm font-medium transition-colors ${themeClass(resolvedTheme, {
+                dark: "bg-blue-500 text-white hover:bg-blue-600",
+                modern: "bg-blue-500 text-white hover:bg-blue-600",
+                light: "bg-blue-600 text-white hover:bg-blue-700",
+              })}`}
+            >
+              Restart Shell
+            </button>
           </div>
         </div>
       )}
