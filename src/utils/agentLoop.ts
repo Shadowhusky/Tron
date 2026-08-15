@@ -120,3 +120,55 @@ export function parseBracketToolCall(
   }
   return action;
 }
+
+/**
+ * Infer the tool from bare ARGUMENT JSON that carries no tool name at all.
+ *
+ * Tool-trained models (observed: qwen3.8-27b on LM Studio, log/live 2026-08-15)
+ * leak their native function-calling format into plain text: instead of
+ * {"tool":"todo_write","todos":[...]} they emit just {"todos":[...]} (sometimes
+ * inside <tool_call> XML). Without inference the parser either fails outright
+ * (5 silent retries, each 30–80s on a local model) or — worse — coerces a todo
+ * ITEM ({"content":"...","status":"in_progress"}) into a bogus final_answer
+ * that the completion guards then reject forever.
+ *
+ * Only unambiguous key signatures are mapped, most-specific first; anything
+ * ambiguous returns null so the caller's existing coercion/retry paths run.
+ * Pure, unit-tested.
+ */
+export function inferToolFromShape(
+  obj: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  if (typeof obj.tool === "string" || "_plan" in obj) return null;
+  const has = (k: string) => typeof obj[k] === "string" && (obj[k] as string).length > 0;
+
+  if (
+    Array.isArray(obj.todos) &&
+    obj.todos.length > 0 &&
+    obj.todos.every((t) => t && typeof t === "object" && typeof (t as { content?: unknown }).content === "string")
+  ) {
+    return { tool: "todo_write", ...obj };
+  }
+  // A single todo item — only when status is one of the protocol's enum values
+  // (a final answer never carries status:"in_progress").
+  if (has("content") && ["pending", "in_progress", "completed"].includes(obj.status as string)) {
+    return { tool: "todo_write", todos: [{ content: obj.content, status: obj.status }] };
+  }
+  if (has("path") && has("search") && typeof obj.replace === "string") {
+    return { tool: "edit_file", ...obj };
+  }
+  if (has("path") && typeof obj.content === "string") {
+    return { tool: "write_file", ...obj };
+  }
+  if (has("path") && has("query")) return { tool: "search_dir", ...obj };
+  if (has("url")) return { tool: "web_fetch", ...obj };
+  if (has("query")) return { tool: "web_search", ...obj };
+  if (has("command")) return { tool: "execute_command", ...obj };
+  if (has("question")) return { tool: "ask_question", ...obj };
+  if (has("text") && has("description")) return { tool: "send_text", ...obj };
+  if (typeof obj.lines === "number" && Object.keys(obj).length === 1) {
+    return { tool: "read_terminal", ...obj };
+  }
+  return null;
+}

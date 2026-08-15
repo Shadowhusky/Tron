@@ -7,6 +7,7 @@ import {
   isUselessFetchResult,
   MIN_USEFUL_FETCH_CHARS,
   parseBracketToolCall,
+  inferToolFromShape,
 } from "../utils/agentLoop";
 
 const TOOLS = new Set([
@@ -119,5 +120,69 @@ describe("parseBracketToolCall", () => {
   it("strips trailing JSON artifacts from the command", () => {
     const a = parseBracketToolCall('[execute_command ls -la"}', isTool);
     expect(a).toEqual({ tool: "execute_command", command: "ls -la" });
+  });
+});
+
+describe("inferToolFromShape (bare tool arguments, no tool name)", () => {
+  it("maps qwen's bare {todos:[...]} to todo_write (observed live 2026-08-15)", () => {
+    const args = {
+      todos: [
+        { content: "Create a self-contained HTML Flappy Bird game", status: "in_progress" },
+        { content: "Verify the file was written correctly", status: "pending" },
+        { content: "Open it in the default browser", status: "pending" },
+      ],
+    };
+    expect(inferToolFromShape(args)).toEqual({ tool: "todo_write", ...args });
+  });
+
+  it("maps a single todo ITEM to a 1-item todo_write, never a final_answer", () => {
+    expect(
+      inferToolFromShape({ content: "Create flappy bird HTML game file", status: "in_progress" }),
+    ).toEqual({
+      tool: "todo_write",
+      todos: [{ content: "Create flappy bird HTML game file", status: "in_progress" }],
+    });
+    // Non-protocol status → NOT a todo item; leave it to the answer coercion.
+    expect(inferToolFromShape({ content: "Done.", status: "success" })).toBeNull();
+  });
+
+  it("maps file/search/web/terminal argument shapes, most-specific first", () => {
+    expect(inferToolFromShape({ path: "/a.html", content: "<h1>hi</h1>" })).toEqual({
+      tool: "write_file", path: "/a.html", content: "<h1>hi</h1>",
+    });
+    expect(inferToolFromShape({ path: "/a.ts", search: "old", replace: "" })).toEqual({
+      tool: "edit_file", path: "/a.ts", search: "old", replace: "",
+    });
+    expect(inferToolFromShape({ path: "/src", query: "TODO" })).toEqual({
+      tool: "search_dir", path: "/src", query: "TODO",
+    });
+    expect(inferToolFromShape({ query: "flappy bird tutorial" })).toEqual({
+      tool: "web_search", query: "flappy bird tutorial",
+    });
+    expect(inferToolFromShape({ url: "https://x.test" })).toEqual({
+      tool: "web_fetch", url: "https://x.test",
+    });
+    expect(inferToolFromShape({ command: "open /tmp/a.html" })).toEqual({
+      tool: "execute_command", command: "open /tmp/a.html",
+    });
+    expect(inferToolFromShape({ question: "Which folder?" })).toEqual({
+      tool: "ask_question", question: "Which folder?",
+    });
+    expect(inferToolFromShape({ text: "\r", description: "press enter" })).toEqual({
+      tool: "send_text", text: "\r", description: "press enter",
+    });
+    expect(inferToolFromShape({ lines: 80 })).toEqual({ tool: "read_terminal", lines: 80 });
+  });
+
+  it("refuses ambiguous or already-named shapes", () => {
+    expect(inferToolFromShape({ tool: "write_file", path: "/a", content: "x" })).toBeNull();
+    expect(inferToolFromShape({ _plan: true, steps: [] } as never)).toBeNull();
+    expect(inferToolFromShape({ path: "/a" })).toBeNull(); // read_file? list_dir? don't guess
+    expect(inferToolFromShape({ content: "Just an answer." })).toBeNull();
+    expect(inferToolFromShape({ text: "an answer without description" })).toBeNull();
+    expect(inferToolFromShape({ todos: "not an array" } as never)).toBeNull();
+    expect(inferToolFromShape({ todos: [] })).toBeNull();
+    expect(inferToolFromShape([] as never)).toBeNull();
+    expect(inferToolFromShape(null as never)).toBeNull();
   });
 });

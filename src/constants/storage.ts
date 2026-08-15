@@ -12,4 +12,5 @@ export const STORAGE_KEYS = {
   TUTORIAL_COMPLETED: "tron_tutorial_completed",
   SSH_PROFILES: "tron_ssh_profiles",
   DETECTED_THINKING_MODELS: "tron_detected_thinking_models",
+  NATIVE_TOOL_MODELS: "tron_native_tool_models",
 } as const;

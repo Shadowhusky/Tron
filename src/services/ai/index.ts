@@ -22,9 +22,11 @@ import {
   isNovelAction,
   isUselessFetchResult,
   parseBracketToolCall,
+  inferToolFromShape,
 } from "../../utils/agentLoop";
 import { searchQualityHint } from "../../utils/searchQuality";
 import { smartQuotePaths } from "../../utils/commandClassifier";
+import { AGENT_TOOLS, AGENT_TOOL_NAMES, ToolCallAssembler, type OpenAITool } from "./toolSchemas";
 
 export interface AgentContinuation {
   history: any[];
@@ -419,6 +421,29 @@ class AIService {
       // Notify listeners so UI updates capabilities immediately (no refresh needed)
       window.dispatchEvent(new CustomEvent("tron:thinkingModelDetected", { detail: { provider, model } }));
     } catch { /* non-critical */ }
+  }
+
+  /** Remember that a model answers the agent protocol with NATIVE tool calls
+   *  (learned from the server's parse error), so future runs declare tools
+   *  up front instead of paying a failed attempt first. */
+  markModelNeedsNativeTools(provider: string, model: string): void {
+    const key = `${provider}:${model}`;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_TOOL_MODELS);
+      const set: string[] = raw ? JSON.parse(raw) : [];
+      if (set.includes(key)) return;
+      set.push(key);
+      localStorage.setItem(STORAGE_KEYS.NATIVE_TOOL_MODELS, JSON.stringify(set));
+    } catch { /* non-critical */ }
+  }
+
+  isNativeToolsModel(provider: string, model: string): boolean {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_TOOL_MODELS);
+      if (!raw) return false;
+      const set: string[] = JSON.parse(raw);
+      return set.includes(`${provider}:${model}`);
+    } catch { return false; }
   }
 
   /** Check if a model was detected as having thinking capability at runtime. */
@@ -1176,6 +1201,7 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
     responseFormat?: string,
     baseUrl?: string,
     thinking?: boolean,
+    tools?: OpenAITool[],
   ): Promise<{ content: string; thinking: string }> {
     const useResponses = isResponsesModel(model);
     const useCompletions = !useResponses && isCompletionsModel(model);
@@ -1199,6 +1225,12 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
     // Only send response_format for cloud providers that support json_object (chat completions only).
     if (!useCompletions && !useResponses && responseFormat === "json" && !providerUsesBaseUrl(provider)) {
       body.response_format = { type: "json_object" };
+    }
+    // Native function-calling declarations (chat completions only). The
+    // server then parses tool-trained models' native calls and streams
+    // `tool_calls`, which parseOpenAIStream folds back into agent JSON.
+    if (!useCompletions && !useResponses && tools && tools.length > 0) {
+      body.tools = tools;
     }
 
     // Enable reasoning/thinking for providers that support it
@@ -1232,7 +1264,7 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
         // "not a chat model" → learn this model needs Responses API, retry automatically
         if (/not a chat model/i.test(errMsg) && !isResponsesModel(model)) {
           responsesModelCache.add(model.toLowerCase());
-          return this.streamOpenAIChat(provider, model, apiKey, messages, onToken, signal, responseFormat, baseUrl, thinking);
+          return this.streamOpenAIChat(provider, model, apiKey, messages, onToken, signal, responseFormat, baseUrl, thinking, tools);
         }
         throw new Error(`API Error: ${errMsg}`);
       }
@@ -1273,6 +1305,7 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
     let thinkingText = "";
     let buffer = "";
     let currentEventType = ""; // Track SSE event type for Responses API
+    const toolCalls = new ToolCallAssembler(); // native tool_calls → agent JSON
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1350,10 +1383,21 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
             fullText += delta.content;
             if (onToken) onToken(delta.content);
           }
+          if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const piece = toolCalls.push(tc);
+              if (piece && onToken) onToken(piece);
+            }
+          }
         } else {
           continue;
         }
       }
+    }
+    // A native tool call IS the model's answer — hand it back as agent JSON so
+    // the loop's parser/guards see exactly what a JSON-protocol model would send.
+    if (toolCalls.size > 0 && !fullText.trim()) {
+      fullText = toolCalls.text();
     }
     return { content: fullText, thinking: thinkingText };
   }
@@ -2403,6 +2447,25 @@ ${agentPrompt}
     let reflectionCount = 0; // How many stagnation reflections have fired without progress since — 2 → escalate
     let consecutiveBusy = 0; // Count consecutive busy-state skips to avoid infinite loops
     let consecutiveGuardBlocks = 0; // Global counter for ANY guard rejection — force-stops when too high
+    // Every bounce path below MUST be bounded, or a broken/stubborn model spins
+    // to maxSteps (observed in fd5977963a.json: ~30× "BLOCKED … use final_answer"
+    // while final_answer itself was the blocked action). These counters reset
+    // whenever a non-terminal action is accepted for dispatch.
+    let apiErrors = 0; // API/model failures — MAX_API_ERRORS → fail (not reset by a mere successful parse)
+    let terminalAttempts = 0; // final_answer / ask_question bounced by guards — cap → force-resolve
+    let blockedRepeats = 0; // Re-emissions of the loop-blocked action — cap → escalate to user
+    let cappedRepeats = 0; // Variations of an exhausted (capped) shape after STOP — cap → escalate
+    let breakerTrips = 0; // Circuit-breaker firings without a successful action between — cap → escalate
+    const MAX_API_ERRORS = 3;
+    const MAX_TERMINAL_REJECTIONS = 3;
+    // Declare native function-calling tools for models that answer with a
+    // native tool call instead of protocol JSON (learned per model from the
+    // server's parse error, persisted). Not declared by default: the rendered
+    // schemas cost ~1-2k prompt tokens, which overflows small local contexts
+    // for models that never needed them (qwen3.8 @ 8k did exactly that).
+    let useNativeTools = this.isNativeToolsModel(provider, model);
+    const MAX_BLOCKED_REPEATS = 3;
+    const MAX_BREAKER_TRIPS = 3;
     let tuiExitFailures = 0; // Count consecutive TUI auto-exit failures — escalates to ask_question
     let lastReadTerminalOutput = ""; // Track consecutive identical read_terminal results
     let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
@@ -2631,13 +2694,27 @@ ${agentPrompt}
       }
       // Circuit breaker: if too many consecutive guard rejections, reset scaffold state and unblock
       if (consecutiveGuardBlocks >= 3) {
+        breakerTrips++;
+        if (breakerTrips >= MAX_BREAKER_TRIPS) {
+          // Resetting the guards hasn't helped — every action since the last
+          // success has been rejected. Stop spinning and ask the user.
+          const tried = recentActionDetails
+            .slice(-6)
+            .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
+            .join("; ");
+          return escalateStuck(
+            `I keep running into blocked actions and can't make progress. Recent attempts: ${tried || "various commands"}. What would you like me to do? (e.g. give me a specific command, or tell me to stop)`,
+          );
+        }
         onUpdate(
           "failed",
           `Circuit breaker: ${consecutiveGuardBlocks} consecutive blocks — resetting guards`,
         );
-        // Reset scaffold flag — the scaffold likely failed if agent keeps getting blocked
+        // Reset scaffold flag — the scaffold likely failed if agent keeps getting
+        // blocked. executedCommands is deliberately NOT cleared: it is the "work
+        // was done" evidence for the final_answer guards, and wiping it made every
+        // later final_answer bounce as "executed 0 commands".
         usedScaffold = false;
-        executedCommands.clear();
         history.push({
           role: "user",
           content:
@@ -2804,9 +2881,23 @@ ${agentPrompt}
 
       // 1. Get LLM Response (streaming for Ollama)
       let thinkingText = "";
+      // True once this attempt has streamed reasoning to the UI — lets the
+      // API-error path retract the half-finished thinking entry (instead of
+      // leaving it spinning) without touching an earlier completed thought.
+      let sawReasoning = false;
+      const emitThinking = (text: string) => {
+        sawReasoning = true;
+        onUpdate("streaming_thinking", text);
+      };
 
       // Thinking-tag interceptor: detects <think>/<thinking>/<thought> in regular
       // token stream (e.g. LM Studio) and reroutes to thinking accumulator.
+      // Display policy: reasoning the model actually produces is streamed to
+      // the UI whether or not thinking was requested. `thinkingEnabled` only
+      // controls the request (and providers like LM Studio can't switch
+      // reasoning off) — hiding a 60s+ reasoning phase reads as a hang
+      // (log 52e887da4e: muse-glimmer streamed 1666 reasoning tokens into a
+      // blank "thinking" indicator until the user gave up).
       const thinkTagOpenRe = /^<(think|thinking|thought)>/i;
       const thinkTagCloseRe = /<\/(think|thinking|thought)>/i;
       let _inThinkTag = false;
@@ -2826,7 +2917,7 @@ ${agentPrompt}
             const afterTag = _tokenBuf.trimStart().replace(thinkTagOpenRe, "");
             if (afterTag) {
               thinkingAcc.value += afterTag;
-              if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAcc.value);
+              emitThinking(thinkingAcc.value);
             }
             return;
           }
@@ -2846,7 +2937,7 @@ ${agentPrompt}
             const thinkPart = token.replace(thinkTagCloseRe, "").replace(/[\s\S]*$/, "");
             if (thinkPart) {
               thinkingAcc.value += thinkPart;
-              if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAcc.value);
+              emitThinking(thinkingAcc.value);
             }
             if (afterClose.trim()) {
               contentAcc.value += afterClose;
@@ -2856,7 +2947,7 @@ ${agentPrompt}
             _tokenBuf = afterClose;
           } else {
             thinkingAcc.value += token;
-            if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAcc.value);
+            emitThinking(thinkingAcc.value);
           }
           return;
         }
@@ -2874,9 +2965,10 @@ ${agentPrompt}
             model,
             history,
             (token, thinking) => {
-              if (thinking && thinkingEnabled) {
+              if (thinking) {
+                if (!thinkingAccumulated && !thinkingEnabled) this.markModelAsThinking(provider, model);
                 thinkingAccumulated += thinking;
-                onUpdate("streaming_thinking", thinkingAccumulated);
+                emitThinking(thinkingAccumulated);
               }
               if (token) {
                 interceptThinkingTokens(token, thinkAcc, contentAcc);
@@ -2961,7 +3053,7 @@ ${agentPrompt}
                 if (evt.type === "content_block_delta") {
                   if (evt.delta?.type === "thinking_delta" && evt.delta?.thinking) {
                     thinkingAccumulated += evt.delta.thinking;
-                    if (thinkingEnabled) onUpdate("streaming_thinking", thinkingAccumulated);
+                    emitThinking(thinkingAccumulated);
                   } else if (evt.delta?.text) {
                     contentAccumulated += evt.delta.text;
                     onUpdate("streaming_response", contentAccumulated);
@@ -2994,9 +3086,13 @@ ${agentPrompt}
             apiKey || "",
             history,
             (token, thinking) => {
-              if (thinking && thinkingEnabled) {
+              if (thinking) {
+                // reasoning_content from a model we didn't know reasons (e.g. a
+                // Harmony-format model on LM Studio) — show it, and remember the
+                // model so the thinking toggle appears from now on.
+                if (!thinkingAccumulated && !thinkingEnabled) this.markModelAsThinking(provider, model);
                 thinkingAccumulated += thinking;
-                onUpdate("streaming_thinking", thinkingAccumulated);
+                emitThinking(thinkingAccumulated);
               }
               if (token) {
                 interceptThinkingTokens(token, oaiThinkAcc, oaiContentAcc);
@@ -3006,6 +3102,7 @@ ${agentPrompt}
             "json",
             baseUrl,
             thinkingEnabled,
+            useNativeTools ? AGENT_TOOLS : undefined,
           );
           responseText = oaiThinkAcc.value ? oaiContentAcc.value : result.content;
           thinkingText = result.thinking || oaiThinkAcc.value;
@@ -3038,19 +3135,48 @@ ${agentPrompt}
           onUpdate("error", `${label} error: ${detail} `);
           return { success: false, message: `${label}: ${detail}` };
         }
-        // API/model errors (invalid format, model refusal, etc.) — silent retry up to 3 times
-        parseFailures++;
+        // API/model errors (engine failure, transient 5xx, etc.) — silent retry
+        // of the SAME request. Nothing is pushed to history: an "(API error)"
+        // placeholder turn taught weak models to echo it back as their
+        // final_answer, and the counter must not reset on such a bogus parse.
         const safeErrMsg = sanitizeError(e.message || "Unknown error");
-        if (parseFailures >= 3) {
-          onUpdate("error", `${label} error: ${safeErrMsg} `);
-          return { success: false, message: `${label}: ${safeErrMsg}` };
+        // The server's native tool-call parser rejected the reply ("does not
+        // match the expected peg-native format"): the model answered our JSON
+        // protocol with a NATIVE tool call, which the server only accepts when
+        // the tools are declared. Switch this model to native tools (persisted)
+        // and retry the same request — not counted as an API error.
+        const isNativeToolCallMismatch =
+          /does not match the expected .*format|peg-native|unparsed .*output/i.test(safeErrMsg);
+        if (isNativeToolCallMismatch && !useNativeTools && isOpenAICompatible(provider)) {
+          useNativeTools = true;
+          this.markModelNeedsNativeTools(provider, model);
+          if (sawReasoning) onUpdate("retract_thought", "");
+          onUpdate("failed", `${label}: this model uses native tool calls — switching to native tool declarations and retrying`);
+          continue;
         }
-        // Push error context so model can adjust on retry
-        history.push({ role: "assistant", content: "(API error)" });
-        history.push({
-          role: "user",
-          content: `Error from API: ${safeErrMsg}\nPlease retry. Respond with ONLY a JSON object — no markdown, no explanation.`,
-        });
+        apiErrors++;
+        // Deterministic failures (prompt too long for the loaded context) come
+        // back identical on every retry — fail now instead of burning three
+        // full prompt evaluations (an 8k-context LM Studio load vs our ~6.6k
+        // token agent prompt did exactly that).
+        const isContextOverflow =
+          /context (size|length|window)|exceed(s|ed)? .*context|maximum context|too many tokens|prompt is too long|input is too long/i.test(
+            safeErrMsg,
+          );
+        if (apiErrors >= MAX_API_ERRORS || isContextOverflow) {
+          const hint = isContextOverflow
+            ? " — the prompt does not fit this model's context window. Load the model with a larger context or use a model with a bigger window."
+            : isNativeToolCallMismatch
+              ? " — the server still couldn't parse this model's tool-call output even with tools declared; try a different model."
+              : "";
+          onUpdate("error", `${label} error: ${safeErrMsg}${hint} `);
+          return { success: false, message: `${label}: ${safeErrMsg}${hint}` };
+        }
+        // Not silent: a slow local model may have streamed a minute of
+        // reasoning before failing — drop that half-finished thinking entry
+        // and tell the user why the next attempt starts over.
+        if (sawReasoning) onUpdate("retract_thought", "");
+        onUpdate("failed", `${label} error: ${safeErrMsg.slice(0, 200)} — retrying (${apiErrors}/${MAX_API_ERRORS})`);
         continue;
       }
 
@@ -3084,13 +3210,7 @@ ${agentPrompt}
       };
 
       // Known tool names — used to normalize {"tool_name": {...}} into {"tool": "tool_name", ...}
-      const TOOL_NAMES = new Set([
-        "execute_command", "run_in_terminal", "send_text", "read_terminal",
-        "write_file", "read_file", "edit_file", "list_dir", "search_dir",
-        "web_search", "web_fetch",
-        "todo_write", "remember", "read_skill", "get_recent_blocks",
-        "ask_question", "final_answer",
-      ]);
+      const TOOL_NAMES = new Set(AGENT_TOOL_NAMES);
 
       // If the model used a tool name as a top-level key (e.g. {"final_answer": {"content":"..."}})
       // restructure it into {"tool": "final_answer", "content": "..."}
@@ -3130,6 +3250,12 @@ ${agentPrompt}
             return { tool: "execute_command", command };
           }
         }
+        // Bare tool ARGUMENTS with no tool name at all — tool-trained models
+        // (qwen3-style) leak their native format into text, e.g. {"todos":[...]}
+        // instead of {"tool":"todo_write","todos":[...]}. Infer from the
+        // argument-key shape (pure helper, unambiguous signatures only).
+        const inferred = inferToolFromShape(obj);
+        if (inferred) return inferred;
         return obj;
       };
 
@@ -3453,176 +3579,51 @@ ${agentPrompt}
 
       history.push({ role: "assistant", content: JSON.stringify(action) });
 
-      // Loop detection: heuristics flag suspicion; an LLM arbiter confirms
-      // whether the agent is actually stuck. Arbiter-confirmed loops redirect
-      // with concrete suggestions; 3 confirmations terminate the agent.
-      // For file edits we hash the full edit payload (search/replace/content)
-      // so identical re-emissions are blocked even when only the path is the
-      // same. Without this, agents loop "edit_file foo.ts" with the same
-      // search/replace pair indefinitely (the actionKey would be identical
-      // for any-content match but only-path was being recorded, so the
-      // duplicate-suppression branch never fired). Hash to keep the key
-      // bounded for large payloads.
-      const hashContent = (s: string | undefined): string | undefined => {
-        if (typeof s !== "string" || s.length === 0) return s;
-        if (s.length <= 64) return s;
-        let h = 0;
-        for (let i = 0; i < s.length; i++) {
-          h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-        }
-        return `${s.length}#${h}`;
-      };
-      const actionKey = JSON.stringify({
-        tool: action.tool,
-        path: action.path,
-        command: action.command,
-        text: action.text,
-        query: action.query,
-        url: action.url,
-        search: hashContent(action.search),
-        replace: hashContent(action.replace),
-        content: hashContent(action.content),
-      });
-
-      // Block the most recently *arbiter-confirmed* looped action — cleared
-      // once the agent actually tries something different
-      if (actionKey && recentlyBlockedAction === actionKey) {
-        history.push({
-          role: "user",
-          content: `BLOCKED: you tried the SAME action again after a loop warning. You MUST use a different tool or different parameters${lastArbiterSuggestion ? `. Specifically: ${lastArbiterSuggestion}` : ""}. If you cannot proceed, use final_answer.`,
-        });
-        continue;
-      }
-      // Agent moved on to a different action — clear the block
-      if (actionKey && recentlyBlockedAction && actionKey !== recentlyBlockedAction) {
-        recentlyBlockedAction = null;
-        lastArbiterSuggestion = null;
-      }
-
-      if (actionKey) recentActions.push(actionKey);
-      if (recentActions.length > 8) recentActions.shift();
-
-      // Consecutive suspicion: same exact action N times in a row.
-      // Tools that legitimately repeat (send_text for menu nav, read_terminal
-      // for monitoring) get a higher tolerance. Everything else (exec, edits,
-      // file reads) is suspicious on the *second* identical call — re-running
-      // the same `sed` or `edit_file` back-to-back is almost always a model
-      // glitch (observed pattern: model emits the same command twice in
-      // consecutive responses without learning from the first result).
-      const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 2;
-      let isConsecutiveSuspicion = false;
-      if (actionKey != null && recentActions.length >= maxConsecutive) {
-        isConsecutiveSuspicion = true;
-        for (let i = 1; i <= maxConsecutive; i++) {
-          if (recentActions[recentActions.length - i] !== actionKey) {
-            isConsecutiveSuspicion = false;
-            break;
+      // Terminal tools are exempt from loop detection: their repetition is
+      // governed by the guard-rejection cap in their handlers. Loop-blocking a
+      // final_answer while telling the model to "use final_answer" is a
+      // deadlock by construction (fd5977963a.json).
+      const isTerminalTool =
+        action.tool === "final_answer" || action.tool === "ask_question";
+      if (!isTerminalTool) {
+        // Loop detection: heuristics flag suspicion; an LLM arbiter confirms
+        // whether the agent is actually stuck. Arbiter-confirmed loops redirect
+        // with concrete suggestions; 3 confirmations terminate the agent.
+        // For file edits we hash the full edit payload (search/replace/content)
+        // so identical re-emissions are blocked even when only the path is the
+        // same. Without this, agents loop "edit_file foo.ts" with the same
+        // search/replace pair indefinitely (the actionKey would be identical
+        // for any-content match but only-path was being recorded, so the
+        // duplicate-suppression branch never fired). Hash to keep the key
+        // bounded for large payloads.
+        const hashContent = (s: string | undefined): string | undefined => {
+          if (typeof s !== "string" || s.length === 0) return s;
+          if (s.length <= 64) return s;
+          let h = 0;
+          for (let i = 0; i < s.length; i++) {
+            h = ((h << 5) - h + s.charCodeAt(i)) | 0;
           }
-        }
-      }
-
-      // Alternating suspicion: A→B→A→B→A→B pattern
-      const isAlternatingSuspicion =
-        recentActions.length >= 6 &&
-        recentActions[recentActions.length - 1] ===
-        recentActions[recentActions.length - 3] &&
-        recentActions[recentActions.length - 3] ===
-        recentActions[recentActions.length - 5] &&
-        recentActions[recentActions.length - 2] ===
-        recentActions[recentActions.length - 4] &&
-        recentActions[recentActions.length - 4] ===
-        recentActions[recentActions.length - 6];
-
-      // Semantic suspicion: coarse-prefix match catches minor-variation probes
-      // (different python one-liners, grep patterns, JSON paths) all doing the
-      // same diagnostic work. For file edits, include a short prefix of the
-      // search/replace/content so we don't flag legitimate "5 different edits
-      // to the same file" as semantically repeated — only re-emissions of
-      // the same edit (which the exact-string consecutive check above also
-      // catches) and minor reword-only reattempts.
-      const coarseArgs = action.command || action.query || action.path || action.url || "";
-      const fileEditFingerprint = action.tool === "write_file" || action.tool === "edit_file"
-        ? `:${(action.search || action.content || "").slice(0, 30)}>${(action.replace || "").slice(0, 30)}`
-        : "";
-      const coarseKey = action.tool === "write_file" || action.tool === "edit_file"
-        ? `${action.tool}:${action.path || ""}${fileEditFingerprint}`
-        : `${action.tool}:${coarseArgs.slice(0, 50)}`;
-      recentCoarseKeys.push(coarseKey);
-      if (recentCoarseKeys.length > 12) recentCoarseKeys.shift();
-      const coarseThreshold = action.tool === "read_terminal" || action.tool === "send_text" ? 8 : 5;
-      const coarseCount = recentCoarseKeys.filter((k) => k === coarseKey).length;
-      const isSemanticSuspicion = coarseCount >= coarseThreshold;
-
-      // Cumulative shape count across the whole task (arbiter-independent).
-      const coarseTotal = (coarseKeyTotals.get(coarseKey) ?? 0) + 1;
-      coarseKeyTotals.set(coarseKey, coarseTotal);
-      const isHardRep = isHardRepetitionLoop(coarseTotal, action.tool);
-      // Genuine forward progress = exploring a NEW action shape (not merely
-      // producing output, which a stuck agent does every step). Reset the
-      // stagnation counters when the agent tries something genuinely new.
-      const actionWasNovel = isNovelAction(coarseTotal);
-      if (actionWasNovel) {
-        lastProgressStep = i;
-        reflectionCount = 0;
-      }
-
-      // Record action detail for arbiter context (cap at last 15)
-      recentActionDetails.push({ tool: action.tool, args: coarseArgs || action.text || "" });
-      if (recentActionDetails.length > 15) recentActionDetails.shift();
-
-      const suspicionTriggered =
-        isConsecutiveSuspicion || isAlternatingSuspicion || isSemanticSuspicion || isHardRep;
-
-      // ── Cumulative repetition cap (arbiter-independent) ──────────────────
-      // A coarse action shape that has run ≥12 times across the task is an
-      // exhausted, looping approach — no LLM judgement needed (the arbiter has
-      // usually been lenient, which is exactly why we got here). Block the
-      // dead shape every time it recurs; count it as a loop break only on the
-      // first crossing so 3 DISTINCT exhausted approaches still escalate.
-      if (isHardRep) {
-        if (isFirstCapCross(coarseTotal, action.tool) && !cappedCoarseKeys.has(coarseKey)) {
-          loopBreaks++;
-          cappedCoarseKeys.add(coarseKey);
-        }
-        if (actionKey) recentlyBlockedAction = actionKey;
-        recentActions.length = 0;
-        recentCoarseKeys.length = 0;
-        if (loopBreaks >= 3) {
-          const tried = recentActionDetails
-            .slice(-6)
-            .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
-            .join("; ");
-          return escalateStuck(
-            `I've tried several approaches but can't make progress on this. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. give me a specific command, point me at docs, or tell me to stop)`,
-          );
-        }
-        history.push({
-          role: "user",
-          content: `STOP: you've run essentially the same ${action.tool} approach ~${coarseTotal} times ("${(coarseArgs || action.text || "").slice(0, 60)}…") without resolving the task. This approach is EXHAUSTED and is now BLOCKED — do not retry variations of it. Either (a) try a STRUCTURALLY different approach (different tool / different data source), (b) use ask_question to get the missing piece from the user, or (c) use final_answer to report what you DID find and what's blocking you.`,
+          return `${s.length}#${h}`;
+        };
+        const actionKey = JSON.stringify({
+          tool: action.tool,
+          path: action.path,
+          command: action.command,
+          text: action.text,
+          query: action.query,
+          url: action.url,
+          search: hashContent(action.search),
+          replace: hashContent(action.replace),
+          content: hashContent(action.content),
         });
-        continue;
-      }
 
-      if (suspicionTriggered) {
-        // Rate-limit arbiter: don't call again within 3 steps of a previous
-        // call (arbiter itself costs an LLM roundtrip; false positives don't
-        // block) — UNLESS the suspicion is exact-string consecutive. Same
-        // action emitted three times in a row is unambiguous, no LLM check
-        // needed: just block. Observed in log e13450f1ee.json — `openclaw
-        // directory peers list … | grep -v '🦞'` ran 3 times in a row, the
-        // first triggered the arbiter, the next two were silently allowed
-        // through because of the rate limit.
-        const exactDup = isConsecutiveSuspicion;
-        if (lastArbiterStep >= 0 && i - lastArbiterStep < 3 && !exactDup) {
-          // Treat as benign — heuristic already asked recently, give it space
-        } else if (exactDup && lastArbiterStep >= 0 && i - lastArbiterStep < 3) {
-          // Identical-string duplicate during arbiter cooldown: skip the LLM
-          // call but still block. The heuristic is decisive on its own here.
-          loopBreaks++;
-          if (actionKey) recentlyBlockedAction = actionKey;
-          recentActions.length = 0;
-          recentCoarseKeys.length = 0;
-          if (loopBreaks >= 3) {
+        // Block the most recently *arbiter-confirmed* looped action — cleared
+        // once the agent actually tries something different
+        if (actionKey && recentlyBlockedAction === actionKey) {
+          blockedRepeats++;
+          if (blockedRepeats >= MAX_BLOCKED_REPEATS) {
+            // The model isn't reading the block — it re-emits the same call
+            // every turn. Bounded: hand it to the user instead of spinning.
             const tried = recentActionDetails
               .slice(-6)
               .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
@@ -3633,71 +3634,230 @@ ${agentPrompt}
           }
           history.push({
             role: "user",
-            content: `LOOP DETECTED: you ran "${action.tool}" with the SAME parameters again. The output won't change. This action is BLOCKED. Either parse the output you already have, try a structurally different approach (different tool, different file/path), or use ask_question / final_answer.`,
+            content: `BLOCKED: you tried the SAME action again after a loop warning. You MUST use a different tool or different parameters${lastArbiterSuggestion ? `. Specifically: ${lastArbiterSuggestion}` : ""}. If you cannot proceed, use final_answer.`,
           });
           continue;
-        } else {
-          lastArbiterStep = i;
-          // Don't emit a "thinking" update here — that surfaces as a thought
-          // entry in the agent thread (especially jarring on non-thinking
-          // models). The arbiter is a fast background check; users only need
-          // to know about it if it actually blocks an action, in which case
-          // the LOOP DETECTED message below handles it.
-          const taskForArbiter = options?.rawUserTask || prompt || "";
-          const arbiter = await this.arbitrateAgentLoop(
-            taskForArbiter,
-            recentActionDetails.slice(-15),
-            { tool: action.tool, args: coarseArgs || action.text || "" },
-            cfg,
-            signal,
-          );
+        }
+        // Agent moved on to a different action — clear the block
+        if (actionKey && recentlyBlockedAction && actionKey !== recentlyBlockedAction) {
+          recentlyBlockedAction = null;
+          lastArbiterSuggestion = null;
+          blockedRepeats = 0;
+        }
 
-          if (arbiter.stuck) {
+        if (actionKey) recentActions.push(actionKey);
+        if (recentActions.length > 8) recentActions.shift();
+
+        // Consecutive suspicion: same exact action N times in a row.
+        // Tools that legitimately repeat (send_text for menu nav, read_terminal
+        // for monitoring) get a higher tolerance. Everything else (exec, edits,
+        // file reads) is suspicious on the *second* identical call — re-running
+        // the same `sed` or `edit_file` back-to-back is almost always a model
+        // glitch (observed pattern: model emits the same command twice in
+        // consecutive responses without learning from the first result).
+        const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 2;
+        let isConsecutiveSuspicion = false;
+        if (actionKey != null && recentActions.length >= maxConsecutive) {
+          isConsecutiveSuspicion = true;
+          for (let i = 1; i <= maxConsecutive; i++) {
+            if (recentActions[recentActions.length - i] !== actionKey) {
+              isConsecutiveSuspicion = false;
+              break;
+            }
+          }
+        }
+
+        // Alternating suspicion: A→B→A→B→A→B pattern
+        const isAlternatingSuspicion =
+          recentActions.length >= 6 &&
+          recentActions[recentActions.length - 1] ===
+          recentActions[recentActions.length - 3] &&
+          recentActions[recentActions.length - 3] ===
+          recentActions[recentActions.length - 5] &&
+          recentActions[recentActions.length - 2] ===
+          recentActions[recentActions.length - 4] &&
+          recentActions[recentActions.length - 4] ===
+          recentActions[recentActions.length - 6];
+
+        // Semantic suspicion: coarse-prefix match catches minor-variation probes
+        // (different python one-liners, grep patterns, JSON paths) all doing the
+        // same diagnostic work. For file edits, include a short prefix of the
+        // search/replace/content so we don't flag legitimate "5 different edits
+        // to the same file" as semantically repeated — only re-emissions of
+        // the same edit (which the exact-string consecutive check above also
+        // catches) and minor reword-only reattempts.
+        const coarseArgs = action.command || action.query || action.path || action.url || "";
+        const fileEditFingerprint = action.tool === "write_file" || action.tool === "edit_file"
+          ? `:${(action.search || action.content || "").slice(0, 30)}>${(action.replace || "").slice(0, 30)}`
+          : "";
+        const coarseKey = action.tool === "write_file" || action.tool === "edit_file"
+          ? `${action.tool}:${action.path || ""}${fileEditFingerprint}`
+          : `${action.tool}:${coarseArgs.slice(0, 50)}`;
+        recentCoarseKeys.push(coarseKey);
+        if (recentCoarseKeys.length > 12) recentCoarseKeys.shift();
+        const coarseThreshold = action.tool === "read_terminal" || action.tool === "send_text" ? 8 : 5;
+        const coarseCount = recentCoarseKeys.filter((k) => k === coarseKey).length;
+        const isSemanticSuspicion = coarseCount >= coarseThreshold;
+
+        // Cumulative shape count across the whole task (arbiter-independent).
+        const coarseTotal = (coarseKeyTotals.get(coarseKey) ?? 0) + 1;
+        coarseKeyTotals.set(coarseKey, coarseTotal);
+        const isHardRep = isHardRepetitionLoop(coarseTotal, action.tool);
+        // Genuine forward progress = exploring a NEW action shape (not merely
+        // producing output, which a stuck agent does every step). Reset the
+        // stagnation counters when the agent tries something genuinely new.
+        const actionWasNovel = isNovelAction(coarseTotal);
+        if (actionWasNovel) {
+          lastProgressStep = i;
+          reflectionCount = 0;
+        }
+
+        // Record action detail for arbiter context (cap at last 15)
+        recentActionDetails.push({ tool: action.tool, args: coarseArgs || action.text || "" });
+        if (recentActionDetails.length > 15) recentActionDetails.shift();
+
+        const suspicionTriggered =
+          isConsecutiveSuspicion || isAlternatingSuspicion || isSemanticSuspicion || isHardRep;
+
+        // ── Cumulative repetition cap (arbiter-independent) ──────────────────
+        // A coarse action shape that has run ≥12 times across the task is an
+        // exhausted, looping approach — no LLM judgement needed (the arbiter has
+        // usually been lenient, which is exactly why we got here). Block the
+        // dead shape every time it recurs; count it as a loop break only on the
+        // first crossing so 3 DISTINCT exhausted approaches still escalate.
+        if (isHardRep) {
+          if (isFirstCapCross(coarseTotal, action.tool) && !cappedCoarseKeys.has(coarseKey)) {
+            loopBreaks++;
+            cappedCoarseKeys.add(coarseKey);
+          } else {
+            // Re-trying a variation of an already-exhausted shape after being
+            // told STOP. loopBreaks only bumps on the first crossing, so this
+            // needs its own bound or the STOP message re-emits until maxSteps.
+            cappedRepeats++;
+          }
+          if (actionKey) recentlyBlockedAction = actionKey;
+          recentActions.length = 0;
+          recentCoarseKeys.length = 0;
+          if (loopBreaks >= 3 || cappedRepeats >= MAX_BLOCKED_REPEATS) {
+            const tried = recentActionDetails
+              .slice(-6)
+              .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
+              .join("; ");
+            return escalateStuck(
+              `I've tried several approaches but can't make progress on this. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. give me a specific command, point me at docs, or tell me to stop)`,
+            );
+          }
+          history.push({
+            role: "user",
+            content: `STOP: you've run essentially the same ${action.tool} approach ~${coarseTotal} times ("${(coarseArgs || action.text || "").slice(0, 60)}…") without resolving the task. This approach is EXHAUSTED and is now BLOCKED — do not retry variations of it. Either (a) try a STRUCTURALLY different approach (different tool / different data source), (b) use ask_question to get the missing piece from the user, or (c) use final_answer to report what you DID find and what's blocking you.`,
+          });
+          continue;
+        }
+
+        if (suspicionTriggered) {
+          // Rate-limit arbiter: don't call again within 3 steps of a previous
+          // call (arbiter itself costs an LLM roundtrip; false positives don't
+          // block) — UNLESS the suspicion is exact-string consecutive. Same
+          // action emitted three times in a row is unambiguous, no LLM check
+          // needed: just block. Observed in log e13450f1ee.json — `openclaw
+          // directory peers list … | grep -v '🦞'` ran 3 times in a row, the
+          // first triggered the arbiter, the next two were silently allowed
+          // through because of the rate limit.
+          const exactDup = isConsecutiveSuspicion;
+          if (lastArbiterStep >= 0 && i - lastArbiterStep < 3 && !exactDup) {
+            // Treat as benign — heuristic already asked recently, give it space
+          } else if (exactDup && lastArbiterStep >= 0 && i - lastArbiterStep < 3) {
+            // Identical-string duplicate during arbiter cooldown: skip the LLM
+            // call but still block. The heuristic is decisive on its own here.
             loopBreaks++;
             if (actionKey) recentlyBlockedAction = actionKey;
-            lastArbiterSuggestion = arbiter.suggestion || null;
             recentActions.length = 0;
             recentCoarseKeys.length = 0;
-
             if (loopBreaks >= 3) {
-              // Don't terminate silently — flip to ask_question so the user
-              // can unblock. The agent has been spinning; the user knows
-              // what they want and can usually clarify in one sentence.
               const tried = recentActionDetails
                 .slice(-6)
                 .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
                 .join("; ");
-              const question = arbiter.suggestion
-                ? `I've gotten stuck. ${arbiter.suggestion} (Recent attempts: ${tried || "various"}). How should I proceed?`
-                : `I've tried several approaches but can't make progress. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. provide a specific command, point me at docs, or ask me to abandon the task)`;
-              return escalateStuck(question);
+              return escalateStuck(
+                `I'm stuck repeating the same action and can't figure out the right approach. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do?`,
+              );
             }
-
-            const suggestion = arbiter.suggestion
-              ? ` Suggestion: ${arbiter.suggestion}`
-              : "";
             history.push({
               role: "user",
-              content:
-                loopBreaks === 1
-                  ? `LOOP DETECTED (confirmed by independent check): you are repeating similar "${action.tool}" calls without converging on the task. This action is BLOCKED.${suggestion} STRONGLY consider using ask_question to clarify with the user — they can usually unblock you in one sentence (e.g. providing a chat ID, an API key, the right command, or a doc URL).`
-                  : `LOOP DETECTED AGAIN (${loopBreaks}/3, confirmed). You are still stuck.${suggestion} Your NEXT response MUST be either ask_question (preferred — get user help) or final_answer (only if you truly cannot proceed). One more loop will auto-escalate to the user.`,
+              content: `LOOP DETECTED: you ran "${action.tool}" with the SAME parameters again. The output won't change. This action is BLOCKED. Either parse the output you already have, try a structurally different approach (different tool, different file/path), or use ask_question / final_answer.`,
             });
             continue;
-          }
-          // Arbiter said: not a loop. Let the action through. But soften the
-          // heuristic state so we don't re-fire on the very next step.
-          if (isConsecutiveSuspicion || isAlternatingSuspicion) {
-            recentActions.length = 0;
-          }
-          if (isSemanticSuspicion) {
-            // Drop a few entries so we need genuinely-new repetitions to re-flag
-            recentCoarseKeys.splice(0, Math.max(0, recentCoarseKeys.length - 3));
+          } else {
+            lastArbiterStep = i;
+            // Don't emit a "thinking" update here — that surfaces as a thought
+            // entry in the agent thread (especially jarring on non-thinking
+            // models). The arbiter is a fast background check; users only need
+            // to know about it if it actually blocks an action, in which case
+            // the LOOP DETECTED message below handles it.
+            const taskForArbiter = options?.rawUserTask || prompt || "";
+            const arbiter = await this.arbitrateAgentLoop(
+              taskForArbiter,
+              recentActionDetails.slice(-15),
+              { tool: action.tool, args: coarseArgs || action.text || "" },
+              cfg,
+              signal,
+            );
+
+            if (arbiter.stuck) {
+              loopBreaks++;
+              if (actionKey) recentlyBlockedAction = actionKey;
+              lastArbiterSuggestion = arbiter.suggestion || null;
+              recentActions.length = 0;
+              recentCoarseKeys.length = 0;
+
+              if (loopBreaks >= 3) {
+                // Don't terminate silently — flip to ask_question so the user
+                // can unblock. The agent has been spinning; the user knows
+                // what they want and can usually clarify in one sentence.
+                const tried = recentActionDetails
+                  .slice(-6)
+                  .map((a) => `${a.tool}(${a.args.slice(0, 60)})`)
+                  .join("; ");
+                const question = arbiter.suggestion
+                  ? `I've gotten stuck. ${arbiter.suggestion} (Recent attempts: ${tried || "various"}). How should I proceed?`
+                  : `I've tried several approaches but can't make progress. Recent attempts: ${tried || "various exploration commands"}. What would you like me to do? (e.g. provide a specific command, point me at docs, or ask me to abandon the task)`;
+                return escalateStuck(question);
+              }
+
+              const suggestion = arbiter.suggestion
+                ? ` Suggestion: ${arbiter.suggestion}`
+                : "";
+              history.push({
+                role: "user",
+                content:
+                  loopBreaks === 1
+                    ? `LOOP DETECTED (confirmed by independent check): you are repeating similar "${action.tool}" calls without converging on the task. This action is BLOCKED.${suggestion} STRONGLY consider using ask_question to clarify with the user — they can usually unblock you in one sentence (e.g. providing a chat ID, an API key, the right command, or a doc URL).`
+                    : `LOOP DETECTED AGAIN (${loopBreaks}/3, confirmed). You are still stuck.${suggestion} Your NEXT response MUST be either ask_question (preferred — get user help) or final_answer (only if you truly cannot proceed). One more loop will auto-escalate to the user.`,
+              });
+              continue;
+            }
+            // Arbiter said: not a loop. Let the action through. But soften the
+            // heuristic state so we don't re-fire on the very next step.
+            if (isConsecutiveSuspicion || isAlternatingSuspicion) {
+              recentActions.length = 0;
+            }
+            if (isSemanticSuspicion) {
+              // Drop a few entries so we need genuinely-new repetitions to re-flag
+              recentCoarseKeys.splice(0, Math.max(0, recentCoarseKeys.length - 3));
+            }
           }
         }
       }
 
       // 3. Execute Tool
+
+      // A non-terminal action made it past every loop guard: the model is
+      // following the protocol again, so the bounce counters start fresh.
+      if (!isTerminalTool) {
+        apiErrors = 0;
+        terminalAttempts = 0;
+        cappedRepeats = 0;
+      }
 
       // Track substantive (non-parse-retry, non-blocked) tool calls — drives
       // the plan-first nudge above. Don't count todo_write itself (that's
@@ -3936,8 +4096,23 @@ ${agentPrompt}
       }
 
       if (action.tool === "final_answer") {
-        // Reject if the content is clearly a tool name — model confused output format
         const finalContent = (action.content || "").trim();
+        // Every guard below bounces the answer back to the model. A model that
+        // keeps insisting on a rejected answer (or a broken one that only ever
+        // echoes an error) must not spin to maxSteps — after the cap, resolve
+        // honestly: fail if nothing was done, else surface its best answer.
+        if (++terminalAttempts > MAX_TERMINAL_REJECTIONS) {
+          const didWork = executedCommands.size > 0 || wroteFiles || usedWebTools;
+          if (!didWork) {
+            return {
+              success: false,
+              message: `The model kept trying to finish without doing any work (last answer: "${finalContent.slice(0, 160)}"). Try a more capable model or rephrase the task.`,
+            };
+          }
+          markPlanCompleteOnFinish();
+          return { success: true, message: finalContent, type: "success", payload: action };
+        }
+        // Reject if the content is clearly a tool name — model confused output format
         const toolNameMatch = finalContent.match(/^\[?(\w+)\]?$/);
         if (toolNameMatch && TOOL_NAMES.has(toolNameMatch[1]) && toolNameMatch[1] !== "final_answer") {
           history.push({
@@ -4185,7 +4360,10 @@ ${agentPrompt}
         // General autonomy guard: if agent hasn't tried any commands yet and the
         // question isn't about credentials/preferences, reject it. The agent should
         // explore the system first (commands, file reads) before asking the user.
-        if (!isCredentialQuestion && !isPreferenceQuestion && executedCommands.size === 0 && !wroteFiles && !usedWebTools) {
+        // Bounded: past the cap the model clearly won't act on its own — let the
+        // question through rather than bounce forever.
+        const pastRejectionCap = ++terminalAttempts > MAX_TERMINAL_REJECTIONS;
+        if (!pastRejectionCap && !isCredentialQuestion && !isPreferenceQuestion && executedCommands.size === 0 && !wroteFiles && !usedWebTools) {
           history.push({
             role: "user",
             content: `REJECTED: Do NOT ask the user — you haven't tried anything yet. Be autonomous: use execute_command to check system state (system_profiler, diskutil, ps, lsof, ls, find, which, curl). Discover the answer yourself first. Only ask_question if you truly cannot determine the answer after trying.`,
@@ -4475,6 +4653,7 @@ ${agentPrompt}
           terminalBusy = true; // Set BEFORE await — reset in catch if it fails
           consecutiveBusy = 0; // Successfully dispatched a command
           consecutiveGuardBlocks = 0;
+          breakerTrips = 0;
           await writeToTerminal(runCmd + "\r", true, true);
           // Wait briefly for output to arrive, then snapshot the terminal
           await new Promise((r) => setTimeout(r, 1500));
@@ -4853,6 +5032,7 @@ ${agentPrompt}
             onUpdate("executed", `Wrote file: ${filePath}\n---\n${preview}`, action);
             wroteFiles = true;
             consecutiveGuardBlocks = 0;
+            breakerTrips = 0;
             // Track project root — use the shallowest (shortest) directory written to
             const dir = filePath.substring(0, filePath.lastIndexOf("/"));
             if (dir && (!lastWriteDir || dir.length < lastWriteDir.length)) {
@@ -4983,6 +5163,7 @@ ${agentPrompt}
             );
             wroteFiles = true;
             consecutiveGuardBlocks = 0;
+            breakerTrips = 0;
             // Track project root — use the shallowest directory
             const dir = filePath.substring(0, filePath.lastIndexOf("/"));
             if (dir && (!lastWriteDir || dir.length < lastWriteDir.length)) {
@@ -5594,6 +5775,7 @@ ${agentPrompt}
           // Successful exec means terminal is at shell prompt
           terminalBusy = false;
           consecutiveGuardBlocks = 0;
+          breakerTrips = 0;
           // Track mkdir as project dir
           const mkdirMatch = cmd.match(/\bmkdir\s+(?:-p\s+)?([^\s&;|]+)/);
           if (mkdirMatch) lastWriteDir = mkdirMatch[1];
