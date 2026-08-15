@@ -1393,7 +1393,9 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
                 // No snapshot available — strip ALL escape sequences and show
                 // clean text tail so user sees recent shell commands/output.
                 // eslint-disable-next-line no-control-regex
-                const plainText = cleanHistory.replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+                const plainText = cleanHistory.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // complete OSC first (payloads leak otherwise)
+                  // eslint-disable-next-line no-control-regex
+                  .replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
                   .replace(/[^\n]*\r(?!\n)/g, ""); // Handle \r overwrites
                 const lines = plainText.split("\n").filter(l => l.trim());
                 const tail = lines.slice(-100).join("\r\n");

@@ -102,6 +102,7 @@ import { randomUUID, randomBytes } from "crypto";
 import { exec, ChildProcess } from "child_process";
 import { sshSessionIds, sshSessions } from "./ssh";
 import { applyShellIntegrationEnv } from "./shellIntegration";
+import { cleanExecCapture, stripOscSequences } from "./execOutput";
 
 /** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text: string): string {
@@ -1012,9 +1013,11 @@ export function registerTerminalHandlers(
     try {
       const history = sessionHistory.get(sessionId) || "";
       if (!history) return "(No terminal output yet)";
-      // Clean escape codes for easier reading by LLM
+      // Clean escape codes for easier reading by LLM. Complete OSC sequences
+      // first — the ESC strip below leaves their payloads behind otherwise
+      // (shell integration's TronBlockStart markers would show as junk lines).
       // eslint-disable-next-line no-control-regex
-      let clean = history.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+      let clean = stripOscSequences(history).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
       // Handle \r overwrites (keep only text after last \r on each segment)
       clean = clean.replace(/[^\n]*\r(?!\n)/g, "");
       // Strip sentinel patterns so agent doesn't see internal markers (Unix + Windows)
@@ -1288,7 +1291,7 @@ export function registerTerminalHandlers(
             let terminalOutput = s.output.slice(idx + 5);
             // Clean ANSI codes and sentinels from terminal output
             // eslint-disable-next-line no-control-regex
-            terminalOutput = terminalOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+            terminalOutput = stripOscSequences(terminalOutput).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
             // Use robust sentinels stripped
             terminalOutput = stripSentinels(terminalOutput);
             // eslint-disable-next-line no-control-regex
@@ -1470,35 +1473,4 @@ export function registerTerminalHandlers(
 }
 
 // Helper to clean captured output
-function cleanOutput(output: string, sentinel: string) {
-  let captured = output;
-  // eslint-disable-next-line no-control-regex
-  captured = captured.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
-  // Handle \r overwrites (keep only text after last \r on each segment)
-  captured = captured.replace(/[^\n]*\r(?!\n)/g, "");
-
-  const sentinelIdx = captured.indexOf(sentinel);
-  if (sentinelIdx >= 0) {
-    captured = captured.slice(0, sentinelIdx);
-  }
-
-  // Strip the command echo line (first line) which includes the sentinel printf
-  const firstNewline = captured.indexOf("\n");
-  if (firstNewline >= 0) {
-    captured = captured.slice(firstNewline + 1);
-  }
-
-  // Strip any remaining sentinel fragments (Unix printf + Windows Write-Host)
-  captured = captured.replace(/; printf '\\n__TRON_DONE_[^']*' \$\?/g, "");
-  captured = captured.replace(/; printf [^\n]*$/m, "");
-  captured = captured.replace(/; Write-Host ["']__TRON_DONE_[^"']*\$LASTEXITCODE["']/g, "");
-  captured = captured.replace(/; Write-Host [^\n]*$/m, "");
-  // eslint-disable-next-line no-control-regex
-  captured = captured.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-  captured = captured.trim();
-
-  if (captured.length > 8000) {
-    captured = captured.slice(0, 4000) + "\n...(truncated)...\n" + captured.slice(-4000);
-  }
-  return captured;
-}
+const cleanOutput = cleanExecCapture;

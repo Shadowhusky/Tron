@@ -717,6 +717,20 @@ export async function getSystemInfo(sessionId?: string): Promise<{ platform: str
 
 // --- Additional handlers needed for web mode ---
 
+/**
+ * Remove COMPLETE OSC sequences (ESC ] ... BEL|ST), payload included.
+ * Mirrors electron/ipc/execOutput.ts (rootDir isolation prevents a shared
+ * import; source of truth + unit tests live in src/__tests__/execOutput.test.ts).
+ * The generic ESC strip only removes "ESC ]", leaving the payload as plain
+ * text — and the shell integration's TronBlockStart marker embeds the
+ * URL-encoded command line INCLUDING the sentinel verbatim, which corrupts
+ * sentinel-based capture (log f62ad06c2b).
+ */
+function stripOscSequences(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "");
+}
+
 /** Strip sentinel patterns from display data (Unix printf + Windows Write-Host) */
 function stripSentinels(text: string): string {
   let d = text;
@@ -798,7 +812,7 @@ export function readHistory(sessionId: string, lines: number = 100): string {
     const history = sessionHistory.get(sessionId) || "";
     if (!history) return "(No terminal output yet)";
     // eslint-disable-next-line no-control-regex
-    let clean = history.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+    let clean = stripOscSequences(history).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
     clean = clean.replace(/[^\n]*\r(?!\n)/g, "");
     clean = stripSentinels(clean);
     // eslint-disable-next-line no-control-regex
@@ -912,7 +926,7 @@ export async function execInTerminal(
 
 function cleanExecOutput(raw: string, sentinel: string): string {
   // eslint-disable-next-line no-control-regex
-  let clean = raw.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+  let clean = stripOscSequences(raw).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
   clean = clean.replace(/[^\n]*\r(?!\n)/g, "");
   clean = stripSentinels(clean);
   // eslint-disable-next-line no-control-regex
@@ -1187,7 +1201,7 @@ export function saveSessionLog(data: {
         const idx = s.output.indexOf("\n---\n");
         let terminalOutput = s.output.slice(idx + 5);
         // eslint-disable-next-line no-control-regex
-        terminalOutput = terminalOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+        terminalOutput = stripOscSequences(terminalOutput).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
         terminalOutput = stripSentinels(terminalOutput);
         // eslint-disable-next-line no-control-regex
         terminalOutput = terminalOutput.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
