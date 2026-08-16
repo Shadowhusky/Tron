@@ -1,7 +1,7 @@
  <h1 align="center">Tron — Vibe Code Anywhere</h1>  
 <img width="2032" height="1167" alt="Screenshot 2026-02-26 at 20 37 54" src="https://github.com/user-attachments/assets/a21ea28c-c7f4-4496-92b2-d161e3961604" />
 
-<h3 align="center">Open-source AI terminal with a built-in web server.<br/>Open the app, and your AI coding environment is instantly available from any browser — phone, tablet, or another machine.</h3>
+<h3 align="center">The open-source AI terminal that runs it for you.<br/>An autonomous agent in your real shell — plus a built-in web server, so your coding environment is available from any browser: phone, tablet, or another machine.</h3>
 
 <p align="center">
   <a href="https://github.com/Shadowhusky/Tron/stargazers"><img src="https://img.shields.io/github/stars/Shadowhusky/Tron?style=flat&color=yellow" alt="Stars" /></a>
@@ -29,7 +29,8 @@
 
 - **Vibe code everywhere** — built-in web server starts automatically; open any browser on your phone, tablet, or another PC and you're in
 - **Sessions never die** — close the browser, reopen it hours later, everything is exactly where you left it: terminal output, agent threads, scroll position
-- **AI agent in your real shell** — the agent executes multi-step plans directly in your terminal with live output and permission controls
+- **AI agent in your real shell** — the agent plans, executes step by step, reads the real output, and fixes its own mistakes — with live output and permission controls
+- **Steer it mid-task** — queue follow-ups while it works, or press `⌥⏎` to inject your message into the running task at its next step; the plan adapts without restarting
 - **Any model** — Ollama, LM Studio, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Qwen, GLM, MiniMax, or any compatible API
 - **SSH remote** — connect to remote servers; terminal, agent, and all features work identically over SSH
 - **Private & secure** — everything runs on your machine, dangerous command detection, permission prompts, loop guards
@@ -150,16 +151,21 @@ environment:
 - **Split With…** (`Cmd+Shift+S` or right-click) — mix pane types in one tab: local terminal, SSH profile, remote server, or browser side by side
 - Built-in code editor — open files beside the terminal, syntax highlighting, `Cmd+S`/`Ctrl+S` save
 - Smart input bar with shell completions, AI ghost text, and command history (`Ctrl+R` fuzzy search)
+- **Tab wheel** — hold `⌃Tab` and flick the mouse; a radial switcher jumps to the tab you point at
+- **Pane maximize** (`Cmd+Shift+M`) — zoom one split to full size and back without disturbing the layout
 - Three themes — Dark, Light, Modern (glass) + system auto-detect
 - Persistent history — terminal output survives app restarts
+- **Shell-exit recovery** — if a shell process dies, the pane offers Restart Shell with scrollback intact
 
 ### AI Agent
-- Autonomous multi-step execution with live terminal output
+- Autonomous multi-step execution with live terminal output and a pinned, collapsible plan card
+- **Steering & prompt queue** — send a message while the agent works: `⏎` queues it for after the task, `⌥⏎` steers (injected into the running task at its next step). Queued prompts are a real list: drag to reorder, click to edit in place, send one now, `esc` pops the newest back into the input. Stopping the agent pauses the queue visibly instead of silently dropping it
 - **Agent View** — full-height, chat-focused AI-first interface
-- Tools: `execute_command`, `run_in_terminal`, `write_file`, `read_file`, `edit_file`, `send_text`, `read_terminal`
+- 17 tools including `execute_command`, `run_in_terminal`, `write_file` / `read_file` / `edit_file`, `search_dir`, `read_terminal`, `send_text`, `web_search` / `web_fetch`, and `todo_write` for visible planning
 - Permission system with dangerous command detection and double-confirm
+- Hardened for local models — native tool-call formats (JSON, bare arguments, Hermes-style XML) are all parsed; every retry path is bounded so a weak model fails fast instead of looping
 - Auto-execute mode, thinking mode, streaming overlay with diff previews
-- Context management with usage ring, summarization, and `/log` export
+- Context management with usage ring, auto-summarization near the limit, and `/log` export
 
 ### Input Modes
 | Mode | Description |
@@ -183,7 +189,7 @@ environment:
 ### Session Persistence
 - Terminal output survives app restarts — reopen and see your full history
 - Save tabs to disk and restore them anytime (right-click tab → Save)
-- Use your preferred coding agent (Claude Code, Codex, etc.) inside Tron and resume seamlessly even if the page closes
+- **AI CLI auto-resume** — quit while Claude Code or Codex is mid-conversation and Tron finds that exact session and resumes it on relaunch
 - Agent threads, overlay state, and scroll position are all preserved
 
 ### Providers
@@ -215,6 +221,9 @@ Tron's agent is designed for **everyday terminal tasks** — running commands, e
 | Split vertical | `Cmd+D` | `Ctrl+D` |
 | Split horizontal | `Cmd+Shift+D` | `Ctrl+Shift+D` |
 | Split With… (SSH / remote / browser) | `Cmd+Shift+S` | `Ctrl+Shift+S` |
+| Tab wheel | hold `Ctrl+Tab` | hold `Ctrl+Tab` |
+| Maximize pane | `Cmd+Shift+M` | `Ctrl+Shift+M` |
+| Steer the running agent | `Option+Enter` | `Alt+Enter` |
 | Save file (editor) | `Cmd+S` | `Ctrl+S` |
 | Settings | `Cmd+,` | `Ctrl+,` |
 | Force agent | `Cmd+Enter` | `Ctrl+Enter` |
