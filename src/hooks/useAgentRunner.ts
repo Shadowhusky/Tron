@@ -337,28 +337,39 @@ export function useAgentRunner(
   // Cooldown ref to prevent rapid-fire agent runs (e.g. on error loops)
   const lastAgentRunRef = useRef(0);
 
+  /** Returns true when the prompt was accepted (queued or a run started).
+   *  False = silently rejected (empty / throttled) — callers draining a queue
+   *  MUST re-queue the item instead of letting it drop. */
   const handleAgentRun = async (
     prompt: string,
-    queueCallback?: (item: { type: "agent"; content: string }) => void,
+    queueCallback?: (item: { type: "agent"; content: string; images?: AttachedImage[] }) => void,
     images?: AttachedImage[],
-  ) => {
+    opts?: { fromQueue?: boolean },
+  ): Promise<boolean> => {
     if (isAgentRunning && queueCallback) {
-      queueCallback({ type: "agent", content: prompt });
-      return;
+      queueCallback({ type: "agent", content: prompt, images });
+      return true;
+    }
+    if (isAgentRunning) {
+      // No queue to fall back on — refuse to start a concurrent run. Queue
+      // drains hit this when a run raced in; they re-queue the item and retry.
+      return false;
     }
 
     // Guard: reject empty prompts (unless images are attached)
     const hasImages = images && images.length > 0;
     if (!prompt.trim() && !hasImages) {
       console.warn("handleAgentRun: ignoring empty prompt");
-      return;
+      return false;
     }
 
-    // Cooldown: prevent rapid-fire runs (min 500ms between starts)
+    // Cooldown: prevent rapid-fire runs (min 500ms between starts). Queue
+    // drains are exempt — they are paced by isAgentRunning transitions, and
+    // throttling one used to silently DROP the dequeued prompt.
     const now = Date.now();
-    if (now - lastAgentRunRef.current < 500) {
+    if (!opts?.fromQueue && now - lastAgentRunRef.current < 500) {
       console.warn("handleAgentRun: throttled (too fast)");
-      return;
+      return false;
     }
     lastAgentRunRef.current = now;
 
@@ -446,7 +457,7 @@ export function useAgentRunner(
         window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
         setIsThinking(false);
       }
-      return;
+      return true;
     }
 
     // Check if this is a continuation from a previous ask_question
@@ -1032,6 +1043,7 @@ ${prompt}
       setIsThinking(false);
       // unregisterAbortController(controller); // Not available in context
     }
+    return true;
   };
 
   const handlePermission = (choice: "allow" | "always" | "deny") => {

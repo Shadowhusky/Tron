@@ -33,6 +33,7 @@ import {
   ImagePlus,
   X,
   Clock,
+  CornerDownLeft,
 } from "lucide-react";
 import type { AttachedImage } from "../../../types";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -73,6 +74,12 @@ interface SmartInputProps {
   hintsVisible?: boolean;
   /** Toggle a panel-chrome region (input / hints / footer). */
   onToggleRegion?: (region: PanelChromeRegion) => void;
+  /** Steer the RUNNING agent with a mid-task message (Option+Enter). */
+  onSteer?: (text: string) => void;
+  /** Number of queued prompts (for hints + Esc-pop). */
+  queuedCount?: number;
+  /** Pop the most recent queued prompt back into the input for editing. */
+  onPopQueued?: () => string | null;
 }
 
 /** Thinking display for advice mode — mirrors AgentOverlay's ThinkingBlock */
@@ -224,6 +231,9 @@ const SmartInput: React.FC<SmartInputProps> = ({
   inputVisible = true,
   hintsVisible = true,
   onToggleRegion,
+  onSteer,
+  queuedCount = 0,
+  onPopQueued,
 }) => {
   const { resolvedTheme: theme } = useTheme();
   const { activeSessionId: layoutActiveSessionId } = useLayout();
@@ -1146,8 +1156,23 @@ const SmartInput: React.FC<SmartInputProps> = ({
       return;
     }
 
-    // Escape: Dismiss
+    // Escape: Dismiss — or, with an empty input and nothing to dismiss, pop
+    // the most recent queued prompt back into the box for editing.
     if (e.key === "Escape") {
+      if (
+        !showCompletions &&
+        !ghostText &&
+        !suggestedCommand &&
+        !value.trim() &&
+        queuedCount > 0 &&
+        onPopQueued
+      ) {
+        const popped = onPopQueued();
+        if (popped !== null) {
+          setValue(popped);
+          return;
+        }
+      }
       setCompletions([]);
       setShowCompletions(false);
       setGhostText("");
@@ -1375,6 +1400,21 @@ const SmartInput: React.FC<SmartInputProps> = ({
     // Enter
     if (e.key === "Enter") {
       e.stopPropagation(); // Prevent terminal from also receiving this Enter
+
+      // Option+Enter while the agent runs: STEER — inject the message into the
+      // current run at the next step instead of queueing it for afterwards.
+      if (e.altKey && isAgentRunning && onSteer && value.trim() && mode !== "command") {
+        e.preventDefault();
+        const text = value.trim();
+        onSteer(text);
+        addToHistory(text);
+        setFeedbackMsg("Steering the agent");
+        setValue("");
+        setGhostText("");
+        setCompletions([]);
+        setShowCompletions(false);
+        return;
+      }
 
       // Shift+Enter (without Cmd): insert newline.
       // Let the browser's default textarea behavior handle it —
@@ -2138,6 +2178,36 @@ const SmartInput: React.FC<SmartInputProps> = ({
             </>
           )}
 
+          {/* Queue button — visible while the agent runs so queueing isn't
+              Enter-only. Click = queue (same path as ⏎); ⌥-click = steer. */}
+          {isAgentRunning && !isLoading && !pendingCommand && value.trim() && (
+            <button
+              data-testid="queue-button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                if (e.altKey && onSteer && mode !== "command") {
+                  const text = value.trim();
+                  onSteer(text);
+                  addToHistory(text);
+                  setFeedbackMsg("Steering the agent");
+                  setValue("");
+                  setGhostText("");
+                  setCompletions([]);
+                  setShowCompletions(false);
+                } else {
+                  handleSend();
+                }
+              }}
+              className={`rounded-md p-1.5 transition-colors ${
+                theme === "light"
+                  ? "text-blue-500 hover:bg-blue-50 hover:text-blue-600"
+                  : "text-blue-400 hover:bg-blue-500/10 hover:text-blue-300"
+              }`}
+              title="Queue message (⏎) · ⌥-click to steer the running agent"
+            >
+              <CornerDownLeft className="h-4 w-4" />
+            </button>
+          )}
           <button
             data-testid={
               isLoading || isAgentRunning ? "stop-button" : "send-button"
@@ -2237,6 +2307,18 @@ const SmartInput: React.FC<SmartInputProps> = ({
               }`}
             >
               <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
+                {isAgentRunning && (
+                  <>
+                    <span className="text-blue-400/80">⏎ queue · ⌥⏎ steer</span>
+                    <span className="mx-1 opacity-40">·</span>
+                  </>
+                )}
+                {!isAgentRunning && queuedCount > 0 && (
+                  <>
+                    <span className="text-blue-400/80">esc edit queued</span>
+                    <span className="mx-1 opacity-40">·</span>
+                  </>
+                )}
                 {hotkeys.cycleMode && (
                   <>
                     <span>{formatHotkey(hotkeys.cycleMode)} cycle</span>

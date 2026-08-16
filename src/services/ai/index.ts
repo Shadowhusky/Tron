@@ -23,6 +23,8 @@ import {
   isUselessFetchResult,
   parseBracketToolCall,
   inferToolFromShape,
+  parseXmlToolCall,
+  looksLikeToolCallText,
 } from "../../utils/agentLoop";
 import { searchQualityHint } from "../../utils/searchQuality";
 import { smartQuotePaths } from "../../utils/commandClassifier";
@@ -444,6 +446,28 @@ class AIService {
       const set: string[] = JSON.parse(raw);
       return set.includes(`${provider}:${model}`);
     } catch { return false; }
+  }
+
+  // ── Mid-run steering ───────────────────────────────────────────────────
+  // Messages posted while an agent run is active are injected into the run's
+  // history at the top of the next loop iteration (before the next LLM call).
+  private steeringQueues = new Map<string, string[]>();
+
+  /** Queue a user message for injection into the RUNNING agent for a session. */
+  postSteeringMessage(sessionId: string, text: string): void {
+    const q = this.steeringQueues.get(sessionId) || [];
+    q.push(text);
+    this.steeringQueues.set(sessionId, q);
+  }
+
+  /** Drain pending steering messages for a session. Called by the agent loop
+   *  each iteration, and by the UI after a run ends to reclaim messages that
+   *  were posted too late to steer (they demote back into the input queue). */
+  takeSteeringMessages(sessionId: string): string[] {
+    const q = this.steeringQueues.get(sessionId);
+    if (!q || q.length === 0) return [];
+    this.steeringQueues.delete(sessionId);
+    return q;
   }
 
   /** Check if a model was detected as having thinking capability at runtime. */
@@ -2688,9 +2712,25 @@ ${agentPrompt}
     // Uses a global flag checked each read_terminal iteration
     (globalThis as any).__tronAgentContinue = false;
 
+    // Drop steering messages left over from a previous run of this session —
+    // they were posted too late to steer anything.
+    if (options?.sessionId) this.takeSteeringMessages(options.sessionId);
+
     for (let i = 0; i < maxSteps; i++) {
       if (signal?.aborted) {
         throw new Error("Agent aborted by user.");
+      }
+      // Mid-run steering: inject user messages posted while the run is active.
+      // Injected before the next LLM call so the model can adjust course
+      // without the run being stopped and restarted.
+      if (options?.sessionId) {
+        for (const steer of this.takeSteeringMessages(options.sessionId)) {
+          history.push({
+            role: "user",
+            content: `[USER UPDATE — adjust your current approach to incorporate this, then continue the task]\n${steer}`,
+          });
+          onUpdate("steered", steer);
+        }
       }
       // Circuit breaker: if too many consecutive guard rejections, reset scaffold state and unblock
       if (consecutiveGuardBlocks >= 3) {
@@ -3384,8 +3424,15 @@ ${agentPrompt}
           // "[read_terminal(lines=50)]" fell through and became a bogus "done"
           // final_answer (observed in log ce6d216e7e). parseBracketToolCall
           // (pure + unit-tested) handles all shapes.
-          const bracketAction = parseBracketToolCall(trimmed, (n) => TOOL_NAMES.has(n));
-          if (bracketAction) {
+          // Hermes/qwen-style XML tool calls emitted as plain text
+          // (<function=search_dir><parameter=path>...) — parse them instead of
+          // letting the coercion below turn them into a bogus final_answer
+          // (observed in log d3f522fd6d: run ended "done" with raw XML).
+          const xmlAction = parseXmlToolCall(trimmed, (n) => TOOL_NAMES.has(n));
+          const bracketAction = xmlAction ? null : parseBracketToolCall(trimmed, (n) => TOOL_NAMES.has(n));
+          if (xmlAction) {
+            action = xmlAction;
+          } else if (bracketAction) {
             action = bracketAction;
           } else if (trimmed && !trimmed.includes("{")) {
             // Plain text without JSON braces.
@@ -3394,7 +3441,7 @@ ${agentPrompt}
             // bogus-"done" bug). Force a parse retry + correction instead.
             const btool = trimmed.match(/^\[\s*(\w+)/);
             const looksLikeBracketToolCall = !!(btool && TOOL_NAMES.has(btool[1]));
-            if (looksLikeBracketToolCall) {
+            if (looksLikeBracketToolCall || looksLikeToolCallText(trimmed)) {
               action = null;
             } else {
               action = {};
@@ -3492,9 +3539,10 @@ ${agentPrompt}
 
         // All retries exhausted — fall back gracefully
         const fallbackText = (responseText || thinkingText || "").trim();
-        // If we got plain text that isn't a confused JSON tool call, use it as the answer
-        const hasToolCallJSON = /{"tool"\s*:/.test(fallbackText);
-        if (fallbackText.length > 0 && !hasToolCallJSON) {
+        // If we got plain text that isn't a confused tool call (JSON or XML
+        // style), use it as the answer — echoing an attempted tool call as
+        // "done" is a false completion (log d3f522fd6d).
+        if (fallbackText.length > 0 && !looksLikeToolCallText(fallbackText)) {
           // Don't synthesise success from a generic completion claim when zero
           // work has been done — that's a false "done" (observed bug). Force
           // the model to actually do something or admit failure.

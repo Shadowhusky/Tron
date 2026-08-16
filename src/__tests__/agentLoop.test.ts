@@ -8,11 +8,13 @@ import {
   MIN_USEFUL_FETCH_CHARS,
   parseBracketToolCall,
   inferToolFromShape,
+  parseXmlToolCall,
+  looksLikeToolCallText,
 } from "../utils/agentLoop";
 
 const TOOLS = new Set([
   "execute_command", "run_in_terminal", "read_terminal",
-  "final_answer", "ask_question", "write_file", "read_file",
+  "final_answer", "ask_question", "write_file", "read_file", "search_dir",
 ]);
 const isTool = (n: string) => TOOLS.has(n);
 
@@ -184,5 +186,49 @@ describe("inferToolFromShape (bare tool arguments, no tool name)", () => {
     expect(inferToolFromShape({ todos: [] })).toBeNull();
     expect(inferToolFromShape([] as never)).toBeNull();
     expect(inferToolFromShape(null as never)).toBeNull();
+  });
+});
+
+describe("parseXmlToolCall (Hermes/qwen XML tool calls in plain text)", () => {
+  const LIVE_XML = `<tool_call>
+<function=search_dir>
+<parameter=path>
+"/Users/richardliao/Desktop/flux-3d"
+</parameter>
+<parameter="query>
+updateRipples()
+</parameter>
+</function>
+</tool_call>`;
+
+  it("parses the exact live sample from log d3f522fd6d (malformed quote in key, quoted value)", () => {
+    expect(parseXmlToolCall(LIVE_XML, isTool)).toEqual({
+      tool: "search_dir",
+      path: "/Users/richardliao/Desktop/flux-3d",
+      query: "updateRipples()",
+    });
+  });
+
+  it("handles name= syntax, missing closers, and numeric params", () => {
+    expect(
+      parseXmlToolCall('<function name="read_terminal">\n<parameter=lines>50', isTool),
+    ).toEqual({ tool: "read_terminal", lines: 50 });
+    expect(
+      parseXmlToolCall("<function=execute_command><parameter=command>echo hi</function>", isTool),
+    ).toEqual({ tool: "execute_command", command: "echo hi" });
+  });
+
+  it("returns null for unknown tools or plain prose", () => {
+    expect(parseXmlToolCall("<function=make_coffee><parameter=size>xl</parameter>", isTool)).toBeNull();
+    expect(parseXmlToolCall("The function updateRipples() is never called.", isTool)).toBeNull();
+  });
+});
+
+describe("looksLikeToolCallText", () => {
+  it("flags XML and JSON tool-call attempts, passes ordinary answers", () => {
+    expect(looksLikeToolCallText("<tool_call>\n<function=search_dir>")).toBe(true);
+    expect(looksLikeToolCallText('{"tool": "final_answer", "content": "x"}')).toBe(true);
+    expect(looksLikeToolCallText("</parameter>\n</function>")).toBe(true);
+    expect(looksLikeToolCallText("The simulator is ready at index.html — open it in Chrome.")).toBe(false);
   });
 });

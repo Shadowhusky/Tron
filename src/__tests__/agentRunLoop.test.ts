@@ -380,3 +380,107 @@ describe("runAgent — bare tool arguments from tool-trained models (qwen live 2
     expect(calls()).toBe(2);
   });
 });
+
+describe("runAgent — mid-run steering", () => {
+  it("injects posted steering messages before the next LLM call and emits a steered step", async () => {
+    const SID = "sess-steer-test";
+    let calls = 0;
+    let steeredTurn: string | null = null;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat = async (...a: unknown[]) => {
+      const messages = a[3] as Msg[];
+      calls++;
+      if (calls === 1) {
+        // User steers while the model is "working" on the first step
+        aiService.postSteeringMessage(SID, "Actually make the bird blue");
+        return { content: exec("echo hi"), thinking: "" };
+      }
+      const injected = messages.find(
+        (m) => m.role === "user" && String(m.content).includes("Actually make the bird blue"),
+      );
+      steeredTurn = injected ? String(injected.content) : null;
+      return { content: '{"tool":"final_answer","content":"Done — blue bird."}', thinking: "" };
+    };
+
+    const steps: Array<{ step: string; output: string }> = [];
+    const result = await aiService.runAgent(
+      "make a flappy bird game",
+      async () => "hi",
+      () => {},
+      async () => "richardliao@mac ~ % ",
+      (step, output) => steps.push({ step, output }),
+      CFG,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { rawUserTask: "make a flappy bird game", sessionId: SID },
+    );
+    expect(result.success).toBe(true);
+    expect(steeredTurn).toContain("[USER UPDATE");
+    expect(steps.some((s) => s.step === "steered" && s.output === "Actually make the bird blue")).toBe(true);
+  });
+
+  it("takeSteeringMessages drains once and stale messages are cleared at run start", async () => {
+    const SID = "sess-steer-stale";
+    aiService.postSteeringMessage(SID, "late message");
+    expect(aiService.takeSteeringMessages(SID)).toEqual(["late message"]);
+    expect(aiService.takeSteeringMessages(SID)).toEqual([]);
+
+    // A message left over from a dead run must not leak into the next run
+    aiService.postSteeringMessage(SID, "stale from previous run");
+    const calls = scriptModel(['{"tool":"final_answer","content":"Quick answer to a question."}'], false);
+    const steps: Array<{ step: string; output: string }> = [];
+    await aiService.runAgent(
+      "just answer: what is 2+2?",
+      async () => "",
+      () => {},
+      async () => "richardliao@mac ~ % ",
+      (step, output) => steps.push({ step, output }),
+      CFG,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { rawUserTask: "just answer: what is 2+2?", sessionId: SID },
+    );
+    expect(calls()).toBeGreaterThan(0);
+    expect(steps.some((s) => s.step === "steered")).toBe(false);
+  });
+});
+
+describe("runAgent — XML tool calls in plain text (log d3f522fd6d)", () => {
+  it("dispatches a Hermes-style XML tool call instead of ending 'done' with raw XML", async () => {
+    const XML_CALL =
+      "<tool_call>\n<function=execute_command>\n<parameter=command>\necho hi\n</parameter>\n</function>\n</tool_call>";
+    const executed: string[] = [];
+    const calls = scriptModel([
+      XML_CALL,
+      '{"tool":"final_answer","content":"Printed hi."}',
+    ], false);
+    const { result, steps } = await run("print hi", async (cmd) => {
+      executed.push(cmd);
+      return "hi";
+    });
+    expect(result.success).toBe(true);
+    expect(result.message).toBe("Printed hi.");
+    expect(executed).toContain("echo hi");
+    // The XML must never surface as a completion answer
+    expect(steps.some((s) => s.step === "done" && s.output.includes("<tool_call>"))).toBe(false);
+    expect(calls()).toBe(2);
+  });
+
+  it("retries instead of answering when tool-call-like text is malformed beyond parsing", async () => {
+    // Unknown tool name → XML parse fails → must NOT be coerced into final_answer
+    const BAD_XML = "<tool_call>\n<function=do_magic>\n<parameter=x>\n1\n</parameter>\n</tool_call>";
+    const calls = scriptModel([
+      BAD_XML,
+      exec("echo ok"),
+      '{"tool":"final_answer","content":"Ran it."}',
+    ], false);
+    const { result, steps } = await run("do the thing", async () => "ok");
+    expect(result.success).toBe(true);
+    expect(steps.some((s) => s.step === "done" && s.output.includes("<tool_call>"))).toBe(false);
+    expect(calls()).toBe(3); // one silent retry, then real work
+  });
+});

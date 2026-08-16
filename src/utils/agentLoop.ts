@@ -172,3 +172,60 @@ export function inferToolFromShape(
   }
   return null;
 }
+
+/**
+ * Parse a Hermes/qwen-style XML tool call emitted as plain TEXT:
+ *   <tool_call>
+ *   <function=search_dir>
+ *   <parameter=path>
+ *   "/Users/richardliao/Desktop/flux-3d"
+ *   </parameter>
+ *   <parameter="query>          ← malformed quoting seen live
+ *   updateRipples()
+ *   </parameter>
+ *   </function>
+ *   </tool_call>
+ * Observed live (log d3f522fd6d): qwen3.8 emitted exactly this on the text
+ * path; unparsed, the plain-text coercion turned it into a bogus "done"
+ * final_answer containing raw XML. Tolerates missing closers, `name="x"`
+ * syntax, and stray quotes around keys/values. Pure, unit-tested.
+ */
+export function parseXmlToolCall(
+  text: string,
+  isKnownTool: (name: string) => boolean,
+): Record<string, unknown> | null {
+  const fnMatch = text.match(/<function(?:\s+name\s*=\s*|[=\s:]+)["']?([\w.-]+)["']?\s*>/i);
+  if (!fnMatch || !isKnownTool(fnMatch[1])) return null;
+  const action: Record<string, unknown> = { tool: fnMatch[1] };
+
+  const paramRe = /<parameter[=\s:]+["']?([\w.-]+)["']?\s*>/gi;
+  const opens: Array<{ key: string; start: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = paramRe.exec(text)) !== null) {
+    opens.push({ key: m[1], start: m.index + m[0].length });
+  }
+  for (const { key, start } of opens) {
+    // Value runs to the earliest terminator — models drop closing tags freely.
+    let end = text.length;
+    for (const term of ["</parameter>", "<parameter", "</function>", "</tool_call>"]) {
+      const idx = text.indexOf(term, start);
+      if (idx >= 0 && idx < end) end = idx;
+    }
+    let raw = text.slice(start, end).trim();
+    // Strip one pair of wrapping quotes: "/some/path" → /some/path
+    if (raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))) {
+      raw = raw.slice(1, -1);
+    }
+    let value: unknown = raw;
+    if (/^-?\d+$/.test(raw)) value = parseInt(raw, 10);
+    else if (raw === "true" || raw === "false") value = raw === "true";
+    action[key] = value;
+  }
+  return action;
+}
+
+/** True when text looks like an ATTEMPTED tool call (XML or JSON style) —
+ *  such text must never be coerced into a final_answer. */
+export function looksLikeToolCallText(text: string): boolean {
+  return /<tool_call|<function[=\s:>]|<\/?parameter[=\s:>]|\{\s*"tool"\s*:/i.test(text);
+}

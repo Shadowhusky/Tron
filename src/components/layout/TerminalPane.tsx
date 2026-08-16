@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, Reorder, useDragControls } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, SquareSplitHorizontal, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search, Maximize2, Minimize2 } from "lucide-react";
+import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, SquareSplitHorizontal, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search, Maximize2, Minimize2, GripVertical, Play, CornerRightUp, ImageIcon } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -38,6 +38,109 @@ import { writeClipboardText } from "../../utils/clipboard";
 interface TerminalPaneProps {
   sessionId: string;
 }
+
+/** A prompt or command waiting for the agent to become free. */
+interface QueueItem {
+  id: string;
+  type: "command" | "agent";
+  content: string;
+  images?: AttachedImage[];
+}
+
+let queueItemIdCounter = 0;
+const newQueueItemId = () => `q${++queueItemIdCounter}-${Math.random().toString(36).slice(2, 7)}`;
+
+/** One row in the queued-prompts list: drag handle, inline edit, steer/delete. */
+const QueueRow: React.FC<{
+  item: QueueItem;
+  resolvedTheme: string;
+  isAgentRunning: boolean;
+  editing: boolean;
+  onStartEdit: () => void;
+  onSaveEdit: (text: string) => void;
+  onCancelEdit: () => void;
+  onDelete: () => void;
+  onSteer: () => void;
+}> = ({ item, resolvedTheme, isAgentRunning, editing, onStartEdit, onSaveEdit, onCancelEdit, onDelete, onSteer }) => {
+  const dragControls = useDragControls();
+  const isAgentItem = item.type === "agent";
+  return (
+    <Reorder.Item
+      value={item}
+      dragListener={false}
+      dragControls={dragControls}
+      className={`group flex items-center gap-1.5 rounded-md px-1.5 py-1 ${themeClass(resolvedTheme, {
+        dark: "hover:bg-white/[0.05]",
+        modern: "hover:bg-white/[0.06]",
+        light: "hover:bg-gray-100",
+      })}`}
+    >
+      <span
+        onPointerDown={(e) => {
+          e.preventDefault();
+          dragControls.start(e);
+        }}
+        style={{ touchAction: "none" }}
+        title="Drag to reorder"
+        className="shrink-0 cursor-grab opacity-20 transition-opacity group-hover:opacity-50 active:cursor-grabbing"
+      >
+        <GripVertical className="h-3 w-3" />
+      </span>
+      {isAgentItem ? (
+        <Bot className="h-3 w-3 shrink-0 text-blue-400/70" />
+      ) : (
+        <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
+      )}
+      {editing ? (
+        <input
+          autoFocus
+          defaultValue={item.content}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") onSaveEdit((e.target as HTMLInputElement).value);
+            else if (e.key === "Escape") onCancelEdit();
+          }}
+          onBlur={(e) => onSaveEdit(e.target.value)}
+          className={`min-w-0 flex-1 bg-transparent font-mono text-[11px] outline-none ${themeClass(resolvedTheme, {
+            dark: "text-gray-200",
+            modern: "text-gray-100",
+            light: "text-gray-800",
+          })}`}
+        />
+      ) : (
+        <span
+          onClick={onStartEdit}
+          title="Click to edit"
+          className="min-w-0 flex-1 cursor-text truncate font-mono text-[11px] opacity-80 transition-opacity hover:opacity-100"
+        >
+          {item.content || "(image prompt)"}
+        </span>
+      )}
+      {item.images && item.images.length > 0 && (
+        <span className="flex shrink-0 items-center gap-0.5 text-[10px] opacity-50">
+          <ImageIcon className="h-2.5 w-2.5" />
+          {item.images.length}
+        </span>
+      )}
+      {isAgentRunning && isAgentItem && !item.images?.length && (
+        <button
+          onClick={onSteer}
+          title="Send now — steer the running agent with this message"
+          className="shrink-0 rounded p-0.5 text-blue-400 opacity-0 transition-opacity hover:bg-blue-400/10 group-hover:opacity-80"
+        >
+          <CornerRightUp className="h-3 w-3" />
+        </button>
+      )}
+      <button
+        onClick={onDelete}
+        title="Remove from queue"
+        className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-white/10 group-hover:opacity-60"
+      >
+        <X className="h-2.5 w-2.5" />
+      </button>
+    </Reorder.Item>
+  );
+};
 
 const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const {
@@ -315,18 +418,23 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     return () => clearTimeout(timer);
   }, [sessionId]);
 
-  // Input Queue
-  const [inputQueue, setInputQueue] = useState<
-    Array<{ type: "command" | "agent"; content: string }>
-  >([]);
-  // When the user manually stops the agent we suppress ONE queue drain so the
-  // next queued message isn't silently auto-fired — it stays in the queue for
-  // the user to run or edit. Reset when a new run starts.
-  const suppressQueueDrainRef = useRef(false);
+  // Input Queue — prompts/commands sent while the agent is busy. An item is
+  // only removed once its run actually STARTS: a rejected drain re-queues it
+  // at the front, and a watchdog retries so a missed state transition (e.g.
+  // auto-summarize churn) can never strand the queue.
+  const [inputQueue, setInputQueue] = useState<QueueItem[]>([]);
+  const inputQueueRef = useRef<QueueItem[]>([]);
+  inputQueueRef.current = inputQueue;
+  // When the user manually stops the agent the queue PAUSES (visibly) so the
+  // next queued message isn't silently auto-fired. Any new run resumes it.
+  const [queuePaused, setQueuePaused] = useState(false);
+  // Bumped to force a drain retry (rejected drain, watchdog tick, manual resume)
+  const [drainNonce, setDrainNonce] = useState(0);
+  const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
 
   // Stable ref for queueItem so stableOnRunAgent can use it
   const queueItemRef = useRef<
-    (item: { type: "command" | "agent"; content: string }) => void
+    (item: { type: "command" | "agent"; content: string; images?: AttachedImage[] }) => void
   >(() => {});
 
   // SSH status tracking
@@ -442,38 +550,79 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     return () => window.removeEventListener("tutorial-run-agent", handler);
   }, [isActive, handleAgentRun]);
 
+  // Reclaim steering messages that were posted too late to steer (the run
+  // ended first) — demote them to the front of the queue instead of dropping.
+  const prevAgentRunningRef = useRef(false);
+  useEffect(() => {
+    if (prevAgentRunningRef.current && !isAgentRunning) {
+      const leftovers = aiService.takeSteeringMessages(sessionId);
+      if (leftovers.length > 0) {
+        setInputQueue((prev) => [
+          ...leftovers.map((t) => ({ id: newQueueItemId(), type: "agent" as const, content: t })),
+          ...prev,
+        ]);
+      }
+    }
+    prevAgentRunningRef.current = isAgentRunning;
+  }, [isAgentRunning, sessionId]);
+
   // Process Queue Effect
   useEffect(() => {
-    // A new run resets the manual-stop suppression so the queue drains normally
-    // after the agent finishes on its own.
-    if (isAgentRunning) suppressQueueDrainRef.current = false;
-    if (!isAgentRunning && inputQueue.length > 0 && !suppressQueueDrainRef.current) {
-      const nextItem = inputQueue[0];
-      setInputQueue((prev) => prev.slice(1));
+    // A new run resumes a paused queue so it drains normally after the agent
+    // finishes on its own.
+    if (isAgentRunning) {
+      if (queuePaused) setQueuePaused(false);
+      return;
+    }
+    if (inputQueue.length === 0 || queuePaused) return;
+    const nextItem = inputQueue[0];
+    // Hold the drain while the user is editing the item that's up next — the
+    // save/cancel updates editingQueueId, which re-triggers this effect.
+    if (editingQueueId === nextItem.id) return;
+    setInputQueue((prev) => prev.filter((it) => it.id !== nextItem.id));
 
-      if (nextItem.type === "command") {
-        if (isAgentMode) {
-          if (isInteractiveCommand(nextItem.content)) {
-            setShowEmbeddedTerminal(true);
-            handleCommand(nextItem.content);
-          } else {
-            handleCommandInOverlay(nextItem.content);
-          }
-        } else {
+    if (nextItem.type === "command") {
+      if (isAgentMode) {
+        if (isInteractiveCommand(nextItem.content)) {
+          setShowEmbeddedTerminal(true);
           handleCommand(nextItem.content);
+        } else {
+          handleCommandInOverlay(nextItem.content);
         }
       } else {
-        handleAgentRun(nextItem.content);
+        handleCommand(nextItem.content);
       }
+    } else if (nextItem.content.trim() || nextItem.images?.length) {
+      void handleAgentRun(nextItem.content, undefined, nextItem.images, { fromQueue: true }).then(
+        (accepted) => {
+          if (accepted === false) {
+            // Rejected (e.g. another run raced in) — put it back and retry
+            // shortly instead of silently dropping the prompt.
+            setInputQueue((prev) => [nextItem, ...prev]);
+            setTimeout(() => setDrainNonce((n) => n + 1), 800);
+          }
+        },
+      );
     }
   }, [
     isAgentRunning,
     inputQueue,
+    queuePaused,
+    drainNonce,
+    editingQueueId,
     handleCommand,
     handleCommandInOverlay,
     handleAgentRun,
     isAgentMode,
   ]);
+
+  // Watchdog: while idle with a non-empty, unpaused queue, retry the drain
+  // every 2s. Guarantees recovery if a state transition was missed.
+  useEffect(() => {
+    if (isAgentRunning || inputQueue.length === 0 || queuePaused) return;
+    const iv = setInterval(() => setDrainNonce((n) => n + 1), 2000);
+    return () => clearInterval(iv);
+  }, [isAgentRunning, inputQueue.length, queuePaused]);
 
   // On a manual stop, pause the queue for this pane so the next queued message
   // isn't auto-fired the instant the agent stops (see AgentContext.stopAgent).
@@ -481,16 +630,41 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     const onStopped = (e: Event) => {
       const detail = (e as CustomEvent).detail as { sessionId?: string };
       if (detail?.sessionId && detail.sessionId !== sessionId) return;
-      suppressQueueDrainRef.current = true;
+      if (inputQueueRef.current.length > 0) setQueuePaused(true);
     };
     window.addEventListener("tron:agentManuallyStopped", onStopped);
     return () => window.removeEventListener("tron:agentManuallyStopped", onStopped);
   }, [sessionId]);
 
-  const queueItem = (item: { type: "command" | "agent"; content: string }) => {
-    setInputQueue((prev) => [...prev, item]);
+  const queueItem = (item: { type: "command" | "agent"; content: string; images?: AttachedImage[] }) => {
+    setInputQueue((prev) => [...prev, { ...item, id: newQueueItemId() }]);
   };
   queueItemRef.current = queueItem;
+
+  /** Steer the RUNNING agent — or start a fresh run if it just finished. */
+  const steerText = useCallback(
+    (text: string) => {
+      if (!text.trim()) return;
+      if (isAgentRunning) {
+        aiService.postSteeringMessage(sessionId, text.trim());
+      } else {
+        wrappedHandleAgentRunRef.current(text.trim(), (item: QueueItem) => queueItemRef.current(item));
+      }
+    },
+    [isAgentRunning, sessionId],
+  );
+
+  /** Pop the most recent queued prompt (no attachments) for editing in the input. */
+  const popQueuedForEdit = useCallback((): string | null => {
+    const q = inputQueueRef.current;
+    for (let i = q.length - 1; i >= 0; i--) {
+      if (q[i].images?.length) continue;
+      const item = q[i];
+      setInputQueue((prev) => prev.filter((it) => it.id !== item.id));
+      return item.content;
+    }
+    return null;
+  }, []);
 
   // Close embedded terminal: aggressively exit whatever is running, wait for cleanup, then hide
   const closeEmbeddedTerminal = useCallback(() => {
@@ -1281,7 +1455,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         </div>
       )}
 
-      {/* Queue display */}
+      {/* Queued prompts — list above the input (drag to reorder, click to edit) */}
       <AnimatePresence>
         {inputQueue.length > 0 && (
           <motion.div
@@ -1291,69 +1465,69 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             transition={{ duration: 0.15 }}
             className="overflow-hidden"
           >
-            <div className={`flex flex-wrap items-center gap-1.5 px-3 py-1 ${themeClass(resolvedTheme, {
-              dark: "bg-[#0a0a0a]",
-              modern: "bg-[#070b14]/70 backdrop-blur-xl backdrop-saturate-150",
-              light: "bg-gray-50",
+            <div className={`px-3 pb-1 pt-1.5 ${themeClass(resolvedTheme, {
+              dark: "bg-[#0a0a0a] text-gray-400",
+              modern: "bg-[#070b14]/70 text-gray-300 backdrop-blur-xl backdrop-saturate-150",
+              light: "bg-gray-50 text-gray-500",
             })}`}>
-              <span
-                className={`shrink-0 text-[11px] font-medium uppercase tracking-wide opacity-40`}
-              >
-                queued
-              </span>
-              {inputQueue.map((item, i) => (
-                <div
-                  key={i}
-                  className={`flex max-w-[220px] items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] ${themeClass(
-                    resolvedTheme,
-                    {
-                      dark: "bg-white/[0.04] text-gray-400",
-                      modern: item.type === "agent"
-                        ? "bg-blue-400/[0.08] text-blue-300/80"
-                        : "bg-white/[0.04] text-gray-300",
-                      light: item.type === "agent"
-                        ? "bg-blue-50 text-blue-600"
-                        : "bg-gray-100 text-gray-500",
-                    },
-                  )}`}
-                >
-                  {item.type === "agent" ? (
-                    <Bot className="h-2.5 w-2.5 shrink-0 opacity-50" />
-                  ) : (
-                    <ChevronRight className="h-2.5 w-2.5 shrink-0 opacity-50" />
-                  )}
-                  <span
-                    className="cursor-pointer truncate opacity-80 hover:opacity-100"
+              <div className="flex items-center gap-2 pb-1">
+                <span className="shrink-0 text-[10px] font-medium uppercase tracking-wider opacity-40">
+                  Queued · {inputQueue.length}
+                </span>
+                {queuePaused && (
+                  <button
                     onClick={() => {
+                      setQueuePaused(false);
+                      setDrainNonce((n) => n + 1);
+                    }}
+                    title="Queue paused after manual stop — click to resume"
+                    className="flex shrink-0 items-center gap-1 rounded-full bg-amber-400/10 px-2 py-px text-[10px] font-medium text-amber-400 transition-colors hover:bg-amber-400/20"
+                  >
+                    <Play className="h-2.5 w-2.5" />
+                    paused — resume
+                  </button>
+                )}
+                <span className="flex-1" />
+                <button
+                  onClick={() => setInputQueue([])}
+                  title="Clear queue"
+                  className="shrink-0 text-[10px] uppercase tracking-wide opacity-30 transition-opacity hover:opacity-80"
+                >
+                  clear
+                </button>
+              </div>
+              <Reorder.Group
+                axis="y"
+                values={inputQueue}
+                onReorder={setInputQueue}
+                className="flex flex-col gap-px"
+              >
+                {inputQueue.map((item) => (
+                  <QueueRow
+                    key={item.id}
+                    item={item}
+                    resolvedTheme={resolvedTheme}
+                    isAgentRunning={isAgentRunning}
+                    editing={editingQueueId === item.id}
+                    onStartEdit={() => setEditingQueueId(item.id)}
+                    onSaveEdit={(text) => {
+                      setEditingQueueId(null);
+                      const trimmed = text.trim();
                       setInputQueue((prev) =>
-                        prev.filter((_, idx) => idx !== i),
-                      );
-                      window.dispatchEvent(
-                        new CustomEvent("tron:editQueueItem", {
-                          detail: {
-                            sessionId,
-                            text: item.content,
-                            type: item.type,
-                          },
-                        }),
+                        trimmed || item.images?.length
+                          ? prev.map((it) => (it.id === item.id ? { ...it, content: trimmed } : it))
+                          : prev.filter((it) => it.id !== item.id),
                       );
                     }}
-                    title="Click to edit"
-                  >
-                    {item.content}
-                  </span>
-                  <button
-                    onClick={() =>
-                      setInputQueue((prev) =>
-                        prev.filter((_, idx) => idx !== i),
-                      )
-                    }
-                    className="shrink-0 opacity-30 transition-opacity hover:opacity-80"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </div>
-              ))}
+                    onCancelEdit={() => setEditingQueueId(null)}
+                    onDelete={() => setInputQueue((prev) => prev.filter((it) => it.id !== item.id))}
+                    onSteer={() => {
+                      setInputQueue((prev) => prev.filter((it) => it.id !== item.id));
+                      steerText(item.content);
+                    }}
+                  />
+                ))}
+              </Reorder.Group>
             </div>
           </motion.div>
         )}
@@ -1381,6 +1555,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           draftInput={draftInput}
           onDraftChange={stableSetDraftInput}
           onSlashCommand={stableSlashCommand}
+          onSteer={steerText}
+          queuedCount={inputQueue.length}
+          onPopQueued={popQueuedForEdit}
           stopAgent={stableStopAgent}
           thinkingEnabled={thinkingEnabled}
           setThinkingEnabled={stableSetThinkingEnabled}

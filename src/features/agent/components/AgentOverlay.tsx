@@ -5,7 +5,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { extractDirectory } from "../../../utils/platform";
 import {
@@ -24,6 +24,9 @@ import {
   Info,
   Loader2,
   ListOrdered,
+  CornerRightUp,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { marked } from "marked";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -605,6 +608,19 @@ const ThinkingBlock: React.FC<{
           className={`text-[11px] leading-relaxed ${isLight ? "text-gray-700" : "text-gray-300"}`}
         />
       </div>
+      {/* Collapse affordance at the BOTTOM too — after reading a long thought
+          you shouldn't have to scroll back up to fold it away. */}
+      {expanded && isTruncated && (
+        <button
+          onClick={() => setExpanded(false)}
+          className={`mt-1 flex w-full items-center justify-center gap-1 rounded-md py-0.5 text-[9px] uppercase tracking-wider opacity-50 transition-opacity hover:opacity-100 ${
+            isLight ? "text-blue-600 hover:bg-blue-100/50" : "text-blue-400 hover:bg-blue-500/10"
+          }`}
+        >
+          <ChevronUp className="h-3 w-3" />
+          collapse
+        </button>
+      )}
     </div>
   );
 };
@@ -1024,6 +1040,13 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
   // Collapsible executed steps: track which step indices are collapsed
   const [collapsedSteps, setCollapsedSteps] = useState<Set<number>>(new Set());
+  // Pinned plan card collapse — collapsed shows just the header + progress bar
+  const [planCollapsed, setPlanCollapsed] = useState(false);
+  const reduceMotion = useReducedMotion();
+  // Highest step index that has already animated in. Initialized to the
+  // restored thread length so an existing conversation doesn't flash on mount;
+  // only steps appended AFTER mount get the entrance animation, exactly once.
+  const lastAnimatedIdxRef = useRef<number>(agentThread.length - 1);
   // Collapsible run groups (previous agent runs): track by runIdx
   const [collapsedRuns, setCollapsedRuns] = useState<Set<number>>(new Set());
   // Steps the user has manually toggled open — these are never auto-collapsed
@@ -1314,7 +1337,6 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
     // Use length as the proxy — a new step appended (or replaced) bumps
     // .length or replaces the last item; both flip array identity. We
     // don't need to recompute on every streaming-thinking byte.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentThread]);
 
   // Active plan summary: the most recent plan step's todo list, IF it has
@@ -1429,9 +1451,21 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
       if (item.kind === "loader" || item.kind === "continue") return 36;
       return 50;
     },
+    // Stable keys — without them the measurement cache is index-based, so any
+    // list growth shifts every cached height and scrolling back through
+    // history visibly jumps/flickers while rows re-measure.
+    getItemKey: (i) => {
+      const item = flatItems[i];
+      if (!item) return i;
+      if (item.kind === "step") return `s${item.globalIdx}`;
+      if (item.kind === "group") return `g${item.runIdx}`;
+      return item.kind;
+    },
     paddingStart: 16,
     paddingEnd: 16,
-    overscan: 3,
+    // Measure rows well before they enter the viewport so the correction
+    // happens off-screen instead of under the user's eyes.
+    overscan: 8,
   });
 
   const showPanel =
@@ -1485,7 +1519,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                 { height: liveHeight ?? overlayHeight ?? 300, maxHeight: "100%" }
               : undefined
           }
-          className={`w-full ${fullHeight ? "flex-1 min-h-0" : ""} ${
+          className={`relative w-full ${fullHeight ? "flex-1 min-h-0" : ""} ${
             isExpanded
               ? "flex-col"
               : "h-auto flex-col cursor-pointer hover:opacity-100 opacity-90"
@@ -1493,11 +1527,17 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
             isLight
               ? "bg-white/95 border-gray-200 text-gray-900"
               : resolvedTheme === "modern"
-                ? "bg-[#0a0a1a]/60 backdrop-blur-xl backdrop-saturate-150 border-white/[0.08] text-white shadow-[0_-4px_24px_rgba(0,0,0,0.3)]"
+                ? "bg-transparent border-white/[0.08] text-white shadow-[0_-4px_24px_rgba(0,0,0,0.3)]"
                 : "bg-[#0a0a0a]/95 border-white/10 text-white"
           }`}
           onClick={!isExpanded ? onExpand : undefined}
         >
+          {/* Modern glass: blur lives on its OWN layer behind the content.
+              With backdrop-filter on the panel itself, every scroll frame of
+              the thread recomposited the blur — visible app-wide flicker. */}
+          {!isLight && resolvedTheme === "modern" && (
+            <div className="pointer-events-none absolute inset-0 -z-10 bg-[#0a0a1a]/60 backdrop-blur-xl backdrop-saturate-150" />
+          )}
           {/* Resize grip — only in terminal mode when expanded */}
           {!fullHeight && isExpanded && (
             <div
@@ -1642,71 +1682,116 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                   visible at the top of the panel while the agent works
                   through it. Disappears (drops into history) once every
                   todo is completed. */}
-              {activePlan && (
+              {activePlan && (() => {
+                const doneCount = activePlan.filter((t) => t.status === "completed").length;
+                const inProg = activePlan.find((t) => t.status === "in_progress");
+                return (
                 <div
                   data-testid="agent-active-plan"
-                  className={`shrink-0 mx-3 mt-3 mb-1 rounded-lg border flex flex-col max-h-[40%] ${
+                  className={`shrink-0 mx-3 mt-3 mb-1 rounded-lg border flex flex-col overflow-hidden ${planCollapsed ? "" : "max-h-[38%]"} ${
                     isLight
                       ? "border-blue-200 bg-blue-50/60"
                       : "border-blue-500/30 bg-blue-500/[0.06]"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 shrink-0">
+                  <button
+                    onClick={() => setPlanCollapsed((v) => !v)}
+                    title={planCollapsed ? "Expand plan" : "Collapse plan"}
+                    className="group flex w-full items-center gap-1.5 px-2.5 pt-2 pb-1.5 text-left shrink-0"
+                  >
                     <ListOrdered
-                      className={`w-3 h-3 ${isLight ? "text-blue-500" : "text-blue-400"}`}
+                      className={`w-3 h-3 shrink-0 ${isLight ? "text-blue-500" : "text-blue-400"}`}
                     />
                     <span
-                      className={`uppercase font-medium text-[11px] tracking-wide ${isLight ? "text-blue-600" : "text-blue-300"}`}
+                      className={`uppercase font-medium text-[11px] tracking-wide shrink-0 ${isLight ? "text-blue-600" : "text-blue-300"}`}
                     >
-                      Active Plan
+                      Plan
                     </span>
+                    {planCollapsed && inProg && (
+                      <span
+                        className={`min-w-0 flex-1 truncate text-[11px] ${isLight ? "text-blue-700" : "text-blue-200"}`}
+                      >
+                        → {inProg.content}
+                      </span>
+                    )}
                     <span
-                      className={`ml-auto text-[10px] ${isLight ? "text-gray-500" : "text-gray-500"}`}
+                      className={`ml-auto shrink-0 text-[10px] tabular-nums ${isLight ? "text-gray-500" : "text-gray-500"}`}
                     >
-                      {activePlan.filter((t) => t.status === "completed").length}/
-                      {activePlan.length}
+                      {doneCount}/{activePlan.length}
                     </span>
+                    <motion.span
+                      initial={false}
+                      animate={{ rotate: planCollapsed ? -90 : 0 }}
+                      transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
+                      className="shrink-0 opacity-40 transition-opacity group-hover:opacity-80"
+                    >
+                      <ChevronDown className={`w-3 h-3 ${isLight ? "text-blue-500" : "text-blue-400"}`} />
+                    </motion.span>
+                  </button>
+                  <div
+                    className={`mx-2.5 h-[3px] shrink-0 overflow-hidden rounded-full ${planCollapsed ? "mb-2" : ""} ${isLight ? "bg-blue-100" : "bg-blue-500/10"}`}
+                  >
+                    <motion.div
+                      initial={false}
+                      animate={{ width: `${activePlan.length ? (doneCount / activePlan.length) * 100 : 0}%` }}
+                      transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.5 }}
+                      className={`h-full rounded-full ${isLight ? "bg-blue-500" : "bg-blue-400"}`}
+                    />
                   </div>
-                  <div className="flex flex-col gap-0.5 px-2.5 pb-2 overflow-y-auto min-h-0">
-                    {activePlan.map((t, i) => {
-                      const isDoneItem = t.status === "completed";
-                      const isActiveItem = t.status === "in_progress";
-                      const mark = isDoneItem ? "✓" : isActiveItem ? "→" : "○";
-                      const lineCls = isDoneItem
-                        ? isLight
-                          ? "text-gray-400 line-through"
-                          : "text-gray-500 line-through"
-                        : isActiveItem
-                          ? isLight
-                            ? "text-blue-700 font-medium"
-                            : "text-blue-200 font-medium"
-                          : isLight
-                            ? "text-gray-700"
-                            : "text-gray-300";
-                      const markCls = isDoneItem
-                        ? isLight
-                          ? "text-green-600"
-                          : "text-green-400"
-                        : isActiveItem
-                          ? isLight
-                            ? "text-blue-500"
-                            : "text-blue-300"
-                          : isLight
-                            ? "text-gray-400"
-                            : "text-gray-600";
-                      return (
-                        <div
-                          key={i}
-                          className="flex items-baseline gap-2 text-[11px] leading-snug"
-                        >
-                          <span className={`${markCls} font-mono w-3 shrink-0`}>{mark}</span>
-                          <span className={lineCls}>{t.content}</span>
+                  <AnimatePresence initial={false}>
+                    {!planCollapsed && (
+                      <motion.div
+                        key="plan-items"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={reduceMotion ? { duration: 0.1 } : { type: "spring", bounce: 0, duration: 0.35 }}
+                        className="flex min-h-0 flex-col overflow-hidden"
+                      >
+                        <div className="flex flex-col gap-0.5 px-2.5 py-2 overflow-y-auto min-h-0">
+                          {activePlan.map((t, i) => {
+                            const isDoneItem = t.status === "completed";
+                            const isActiveItem = t.status === "in_progress";
+                            const mark = isDoneItem ? "✓" : isActiveItem ? "→" : "○";
+                            const lineCls = isDoneItem
+                              ? isLight
+                                ? "text-gray-400 line-through"
+                                : "text-gray-500 line-through"
+                              : isActiveItem
+                                ? isLight
+                                  ? "text-blue-700 font-medium"
+                                  : "text-blue-200 font-medium"
+                                : isLight
+                                  ? "text-gray-700"
+                                  : "text-gray-300";
+                            const markCls = isDoneItem
+                              ? isLight
+                                ? "text-green-600"
+                                : "text-green-400"
+                              : isActiveItem
+                                ? isLight
+                                  ? "text-blue-500"
+                                  : "text-blue-300"
+                                : isLight
+                                  ? "text-gray-400"
+                                  : "text-gray-600";
+                            return (
+                              <div
+                                key={i}
+                                className="flex items-baseline gap-2 text-[11px] leading-snug transition-colors duration-300"
+                              >
+                                <span className={`${markCls} font-mono w-3 shrink-0 ${isActiveItem ? "motion-safe:animate-pulse" : ""}`}>{mark}</span>
+                                <span className={lineCls}>{t.content}</span>
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
-                  </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
-              )}
+                );
+              })()}
               <div
                 ref={scrollRef}
                 onScroll={handleScroll}
@@ -1737,6 +1822,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                     const isSystem = step.step === "system";
                     const isSummarizing = step.step === "summarizing";
                     const isSummarized = step.step === "summarized";
+                    const isSteered = step.step === "steered";
                     const streamInfo = isStreamingStep
                       ? describeStreamingContent(step.output)
                       : null;
@@ -1867,7 +1953,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                               ? isLight
                                 ? "border-green-300"
                                 : "border-green-500/30"
-                              : isSummarizing || isSummarized
+                              : isSummarizing || isSummarized || isSteered
                                 ? isLight
                                   ? "border-blue-300"
                                   : "border-blue-500/30"
@@ -1923,6 +2009,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
                           ) : isSummarized ? (
                             <Check className="w-3 h-3 text-blue-400" />
+                          ) : isSteered ? (
+                            <CornerRightUp className="w-3 h-3 text-blue-400" />
                           ) : isSystem ? (
                             <Info className="w-3 h-3 text-teal-400" />
                           ) : isQuestion ? (
@@ -1950,7 +2038,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                                     ? "text-red-400"
                                     : isDone
                                       ? "text-green-400"
-                                      : isSummarizing || isSummarized
+                                      : isSummarizing || isSummarized || isSteered
                                         ? "text-blue-400"
                                         : isSystem
                                           ? "text-teal-400"
@@ -1965,6 +2053,8 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           >
                             {isExecuting
                               ? "running..."
+                              : isSteered
+                                ? "steering update"
                               : isSummarizing
                                 ? "summarizing..."
                                 : isThinkingStep
@@ -2308,7 +2398,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             }
                             return null;
                           })()
-                        ) : isDone || isSystem || isQuestion || isSummarized ? (
+                        ) : isDone || isSystem || isQuestion || isSummarized || isSteered ? (
                           <LinkifiedDoneContent
                             content={step.output}
                             className={`text-[11px] leading-relaxed ${isLight ? "markdown-light text-gray-700" : "text-gray-300"}`}
@@ -2599,6 +2689,11 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             />
                           );
                         }
+                        const isNewStep =
+                          item.kind === "step" && item.globalIdx > lastAnimatedIdxRef.current;
+                        if (isNewStep && item.kind === "step") {
+                          lastAnimatedIdxRef.current = item.globalIdx;
+                        }
                         return (
                           <div
                             key={vRow.key}
@@ -2614,17 +2709,19 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                               paddingBottom: 8,
                             }}
                           >
-                            {item.kind === "step"
-                              ? renderStep(
-                                  item.step,
-                                  `step-${item.globalIdx}`,
-                                  item.globalIdx,
-                                )
-                              : item.kind === "group"
-                                ? renderGroup(item)
-                                : item.kind === "loader"
-                                  ? renderLoader()
-                                  : renderContinue()}
+                            <div className={isNewStep ? "step-enter" : undefined}>
+                              {item.kind === "step"
+                                ? renderStep(
+                                    item.step,
+                                    `step-${item.globalIdx}`,
+                                    item.globalIdx,
+                                  )
+                                : item.kind === "group"
+                                  ? renderGroup(item)
+                                  : item.kind === "loader"
+                                    ? renderLoader()
+                                    : renderContinue()}
+                            </div>
                           </div>
                         );
                       })}
