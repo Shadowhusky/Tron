@@ -484,3 +484,128 @@ describe("runAgent — XML tool calls in plain text (log d3f522fd6d)", () => {
     expect(calls()).toBe(3); // one silent retry, then real work
   });
 });
+
+describe("runAgent — planning is no longer forced (log 39172cb246)", () => {
+  it("does not demand a plan during ordinary multi-step work", async () => {
+    // Six substantive tool calls, no todo_write. The old loop injected
+    // "[plan check] … Your NEXT response MUST be a todo_write call" at 5
+    // steps, which is what turned small tasks into 4-item checklists.
+    const pushed: string[] = [];
+    let n = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async (...a: unknown[]) => {
+        for (const m of a[3] as Msg[]) {
+          if (m.role === "user") pushed.push(String(m.content));
+        }
+        n++;
+        if (n <= 6) return { content: exec(`echo step${n}`), thinking: "" };
+        return { content: '{"tool":"final_answer","content":"Done."}', thinking: "" };
+      };
+    const { result } = await run("do a few things", async () => "ok");
+    expect(result.success).toBe(true);
+    expect(pushed.some((m) => m.includes("[plan check]"))).toBe(false);
+    expect(pushed.some((m) => /NEXT response MUST be a todo_write/i.test(m))).toBe(false);
+  });
+
+  it("offers — never demands — a course correction on a genuinely long run", async () => {
+    const pushed: string[] = [];
+    let n = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async (...a: unknown[]) => {
+        for (const m of a[3] as Msg[]) {
+          if (m.role === "user") pushed.push(String(m.content));
+        }
+        n++;
+        if (n <= 14) return { content: exec(`echo s${n}`), thinking: "" };
+        return { content: '{"tool":"final_answer","content":"Done."}', thinking: "" };
+      };
+    const { result } = await run("a genuinely long task", async () => "ok");
+    expect(result.success).toBe(true);
+    const checkIn = pushed.find((m) => m.includes("[check-in]"));
+    expect(checkIn).toBeTruthy();
+    // Advisory, not an order — and it must offer answering as an option.
+    expect(checkIn).toMatch(/just carry on/i);
+    expect(checkIn).not.toMatch(/MUST/);
+  });
+
+  it("tells a 1-item plan to just do the work, without inviting padding to 3", async () => {
+    const pushed: string[] = [];
+    let n = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async (...a: unknown[]) => {
+        for (const m of a[3] as Msg[]) {
+          if (m.role === "user") pushed.push(String(m.content));
+        }
+        n++;
+        if (n === 1) {
+          return { content: '{"tool":"todo_write","todos":[{"content":"Check the weather","status":"in_progress"}]}', thinking: "" };
+        }
+        if (n === 2) return { content: exec("curl wttr.in"), thinking: "" };
+        return { content: '{"tool":"final_answer","content":"It is sunny."}', thinking: "" };
+      };
+    const { result } = await run("whats todays weather", async () => "sunny");
+    expect(result.success).toBe(true);
+    const msg = pushed.find((m) => m.includes("1-item plan"));
+    expect(msg).toBeTruthy();
+    expect(msg).toMatch(/just do/i);
+    expect(msg).toMatch(/do not pad/i);
+  });
+});
+
+describe("runAgent — blocked web search (log 39172cb246)", () => {
+  it("stops searching and is pointed at web_fetch when every backend is blocked", async () => {
+    const prevWindow = (globalThis as Record<string, unknown>).window;
+    const searched: string[] = [];
+    (globalThis as Record<string, unknown>).window = {
+      dispatchEvent() {},
+      electron: {
+        ipcRenderer: {
+          invoke: async (channel: string, arg: { query?: string }) => {
+            if (channel === "web.search") {
+              searched.push(arg.query || "");
+              // Every backend rate-limited — the live 2026-08-18 state.
+              return { results: [], failure: "blocked", error: "All search backends are rate-limited or blocked." };
+            }
+            if (channel === "web.fetch") {
+              return { content: '{"current_condition":[{"temp_C":"23","weatherDesc":[{"value":"Overcast"}]}]}' };
+            }
+            return {};
+          },
+        },
+      },
+    };
+    try {
+      const pushed: string[] = [];
+      let n = 0;
+      svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+      (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+        async (...a: unknown[]) => {
+          for (const m of a[3] as Msg[]) {
+            if (m.role === "user") pushed.push(String(m.content));
+          }
+          n++;
+          if (n === 1) return { content: '{"tool":"web_search","query":"london weather today"}', thinking: "" };
+          // The desired reaction: give up on search, fetch a known URL.
+          if (n === 2) return { content: '{"tool":"web_fetch","url":"https://wttr.in/?format=j1"}', thinking: "" };
+          return { content: '{"tool":"final_answer","content":"Overcast, 23C."}', thinking: "" };
+        };
+      const { result, steps } = await run("whats todays weather", async () => "");
+      expect(result.success).toBe(true);
+      expect(searched).toEqual(["london weather today"]);
+
+      const guidance = pushed.find((m) => m.includes("UNAVAILABLE"));
+      expect(guidance).toBeTruthy();
+      // The old code told it to reformulate — that's what burned two turns.
+      expect(guidance).not.toMatch(/Reformulate/i);
+      expect(guidance).toMatch(/web_fetch/);
+      // The UI must not claim "no results" when the service is down.
+      expect(steps.some((s) => /Web search unavailable/.test(s.output))).toBe(true);
+      expect(steps.some((s) => /no results for/.test(s.output))).toBe(false);
+    } finally {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+  });
+});

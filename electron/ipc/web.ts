@@ -1,119 +1,116 @@
 import { ipcMain } from "electron";
+import {
+  isBlockedResponse,
+  parseBrave,
+  parseBraveApi,
+  parseDdgHtml,
+  parseDdgLite,
+  type SearchFailure,
+  type SearchResult,
+} from "./webSearchParse";
 
-/** Strip HTML tags and decode entities. */
-function stripTags(s: string): string {
-  return s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
-}
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-type SearchResult = { title: string; url: string; snippet: string };
+/** Thrown when a backend answers with a captcha / rate-limit page. */
+class BlockedError extends Error {}
 
-/** Brave Search HTML scraping. */
-async function braveSearch(query: string): Promise<SearchResult[]> {
-  const resp = await fetch(`https://search.brave.com/search?q=${encodeURIComponent(query)}`, {
+/** Fetch a URL with a browser-ish UA, raising BlockedError on a challenge page. */
+async function getHtml(
+  url: string,
+  init: RequestInit = {},
+): Promise<string> {
+  const resp = await fetch(url, {
+    ...init,
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml",
+      "User-Agent": UA,
+      Accept: "text/html,application/xhtml+xml",
       "Accept-Language": "en-US,en;q=0.9",
+      ...(init.headers || {}),
     },
     signal: AbortSignal.timeout(8000),
     redirect: "follow",
   });
   const html = await resp.text();
-  // Detect rate limiting (PoW Captcha page)
-  if (html.includes("PoW Captcha") || html.includes("captcha")) {
-    throw new Error("Brave rate limited");
-  }
-  const results: SearchResult[] = [];
-  const blocks = html.split(/class="snippet\s+svelte/);
-  for (const block of blocks.slice(1, 10)) {
-    const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
-    const titleMatch = block.match(/class="[^"]*snippet-title[^"]*"[^>]*>([\s\S]*?)<\/div>/)
-      || block.match(/class="title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
-    const descMatch = block.match(/class="snippet-description[^"]*"[^>]*>([\s\S]*?)<\/p>/)
-      || block.match(/class="content[^"]*line-clamp[^"]*"[^>]*>([\s\S]*?)<\/div>/);
-    if (urlMatch && titleMatch) {
-      const url = urlMatch[1];
-      const title = stripTags(titleMatch[1]);
-      const snippet = descMatch ? stripTags(descMatch[1]).slice(0, 300) : "";
-      if (title && !url.includes("brave.com") && !url.includes("imgs.search")) {
-        results.push({ title, url, snippet });
-      }
-    }
-    if (results.length >= 7) break;
-  }
-  return results;
+  if (isBlockedResponse(resp.status, html)) throw new BlockedError(String(resp.status));
+  return html;
 }
 
-/** DuckDuckGo fallback via duck-duck-scrape npm package. */
-async function ddgSearch(query: string): Promise<SearchResult[]> {
-  // Dynamic import — package may not be installed in all environments
-  const DDG = await import("duck-duck-scrape");
-  const searchFn = DDG.search || DDG.default?.search;
-  if (!searchFn) throw new Error("duck-duck-scrape API changed");
-  const data = await searchFn(query, { safeSearch: DDG.SafeSearchType?.MODERATE ?? 0 });
-  return (data.results || []).slice(0, 7).map((r: any) => ({
-    title: r.title || "",
-    url: r.url || r.href || "",
-    snippet: (r.description || r.body || "").slice(0, 300),
-  }));
-}
-
-/** Startpage (Google proxy) HTML scraping. */
-async function startpageSearch(query: string): Promise<SearchResult[]> {
-  const resp = await fetch("https://www.startpage.com/sp/search", {
-    method: "POST",
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Content-Type": "application/x-www-form-urlencoded",
+/** Brave Search API — only used when the user configured a key. */
+async function braveApiSearch(query: string, key: string): Promise<SearchResult[]> {
+  const resp = await fetch(
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=7`,
+    {
+      headers: { Accept: "application/json", "X-Subscription-Token": key },
+      signal: AbortSignal.timeout(8000),
     },
-    body: `query=${encodeURIComponent(query)}&cat=web`,
-    signal: AbortSignal.timeout(8000),
-    redirect: "follow",
-  });
-  const html = await resp.text();
-  const results: SearchResult[] = [];
-  const blocks = html.split(/class="result\s+css/);
-  for (const block of blocks.slice(1, 10)) {
-    const titleMatch = block.match(/class="result-title result-link[^"]*"[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-    const descMatch = block.match(/<p[^>]*class="[^"]*"[^>]*>([\s\S]*?)<\/p>/);
-    if (titleMatch) {
-      const url = titleMatch[1];
-      // Strip inline CSS from title (Startpage embeds <style> classes in title text)
-      const title = stripTags(titleMatch[2]).replace(/\.css-[a-z0-9]+\{[^}]*\}(@media[^{]*\{[^}]*\})?\s*/g, "").replace(/^[{}]\s*/g, "").trim();
-      const snippet = descMatch ? stripTags(descMatch[1]).slice(0, 300) : "";
-      if (title && !url.includes("startpage.com")) {
-        results.push({ title, url, snippet });
-      }
+  );
+  if (resp.status === 429 || resp.status === 403) throw new BlockedError(String(resp.status));
+  if (!resp.ok) throw new Error(`Brave API ${resp.status}`);
+  return parseBraveApi(await resp.json());
+}
+
+async function ddgLiteSearch(query: string): Promise<SearchResult[]> {
+  return parseDdgLite(
+    await getHtml("https://lite.duckduckgo.com/lite/", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ q: query }).toString(),
+    }),
+  );
+}
+
+async function ddgHtmlSearch(query: string): Promise<SearchResult[]> {
+  return parseDdgHtml(
+    await getHtml(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`),
+  );
+}
+
+async function braveScrapeSearch(query: string): Promise<SearchResult[]> {
+  return parseBrave(
+    await getHtml(`https://search.brave.com/search?q=${encodeURIComponent(query)}`),
+  );
+}
+
+/**
+ * Search with a best-effort backend chain.
+ *
+ * Returns `failure: "blocked"` when every backend was rate-limited or
+ * captcha-walled (as opposed to genuinely returning nothing) so the caller
+ * can tell the agent to stop searching instead of rewording its query.
+ */
+async function webSearch(
+  query: string,
+): Promise<{ results: SearchResult[]; error?: string; failure?: SearchFailure }> {
+  const apiKey = process.env.BRAVE_SEARCH_API_KEY || "";
+  const backends: Array<() => Promise<SearchResult[]>> = [
+    ...(apiKey ? [() => braveApiSearch(query, apiKey)] : []),
+    () => ddgLiteSearch(query),
+    () => ddgHtmlSearch(query),
+    () => braveScrapeSearch(query),
+  ];
+
+  let blocked = 0;
+  for (const run of backends) {
+    try {
+      const results = await run();
+      if (results.length > 0) return { results };
+    } catch (err) {
+      if (err instanceof BlockedError) blocked++;
     }
-    if (results.length >= 7) break;
   }
-  return results;
+
+  // Every backend refused us → this is an outage, not an unlucky query.
+  if (blocked === backends.length) {
+    return {
+      results: [],
+      failure: "blocked",
+      error: "All search backends are rate-limited or blocked.",
+    };
+  }
+  return { results: [], failure: "empty" };
 }
 
-/** Search with fallback chain: Brave → DuckDuckGo → Startpage. */
-async function webSearch(query: string): Promise<{ results: SearchResult[]; error?: string }> {
-  // Try Brave first
-  try {
-    const results = await braveSearch(query);
-    if (results.length > 0) return { results };
-  } catch { /* fall through */ }
-
-  // Fallback: duck-duck-scrape
-  try {
-    const results = await ddgSearch(query);
-    if (results.length > 0) return { results };
-  } catch { /* fall through */ }
-
-  // Fallback: Startpage (Google proxy)
-  try {
-    const results = await startpageSearch(query);
-    if (results.length > 0) return { results };
-  } catch { /* fall through */ }
-
-  return { results: [], error: "All search providers failed (rate limited). Try again later." };
-}
 
 /** Fetch a URL and return plain text content (HTML stripped). */
 async function webFetch(url: string): Promise<{ content: string; error?: string }> {

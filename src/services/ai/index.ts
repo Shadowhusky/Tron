@@ -27,6 +27,7 @@ import {
   looksLikeToolCallText,
 } from "../../utils/agentLoop";
 import { searchQualityHint } from "../../utils/searchQuality";
+import { describeSearchFailure, type SearchFailure } from "../../utils/searchFailure";
 import { smartQuotePaths } from "../../utils/commandClassifier";
 import { AGENT_TOOLS, AGENT_TOOL_NAMES, ToolCallAssembler, type OpenAITool } from "./toolSchemas";
 
@@ -2297,10 +2298,14 @@ ${skillsBlock}
 
 ═══ HOW TO WORK ═══
 
-PLAN FIRST. For tasks needing 3+ tool calls, emit todo_write with 3+ concrete
-sub-steps before any other tool call. The list is your contract with yourself —
-work the list, don't wander off it. NEVER emit a 1-item plan; for trivial 1–2
-step tasks skip todo_write entirely and just execute the work.
+PLAN ONLY WHEN IT PAYS. Use todo_write for genuinely multi-step work (3+
+distinct actions) — then the list is your contract with yourself, so work it
+and don't wander off it. Do NOT plan for informational or conversational
+requests ("what's the weather", "what time is it", "explain X"), for one or
+two step tasks, or when the list would have a single item. Skip planning for
+the easiest ~25% of tasks and just do the work; never pad a small task into a
+3-item list. If the whole request fits in one or two tool calls, make them and
+answer — no plan, no preamble.
 
 DIAGNOSE BEFORE RETRYING. When a tool fails:
   1. READ the <tool_use_error> message — exit codes, "command not found",
@@ -2875,14 +2880,14 @@ ${agentPrompt}
           if (
             agentTodos.length > 0 &&
             hasIncomplete &&
-            stepsSincePlan >= 4
+            stepsSincePlan >= 6
           ) {
             const inProg = agentTodos.find((t) => t.status === "in_progress");
             const target = inProg
               ? `"${inProg.content.slice(0, 80)}"`
               : "the current pending item";
             lines.push(
-              `(⚠ Plan is stale: ${stepsSincePlan} steps since last todo_write update. If you finished ${target}, your NEXT response MUST be todo_write marking it 'completed' (and the next item 'in_progress'). If you're still working on it, continue — but emit a refreshed todo_write at least every 4 steps.)`,
+              `(The plan still shows ${target} as unfinished, ${stepsSincePlan} steps ago. If you've finished it, mark it completed with todo_write when convenient — but don't spend a turn on a status update if you can do real work instead. This is just a reminder; ignore it if it doesn't apply.)`,
             );
           } else {
             lines.push(
@@ -2893,24 +2898,18 @@ ${agentPrompt}
         }
       }
 
-      // Plan-first enforcement. Past a few substantive steps with no plan
-      // published, the agent is wandering — inject a forcing nudge. Models
-      // that ignored the system-prompt PLAN FIRST rule respond well to a
-      // mid-stream user message that demands the next action shape.
-      if (!hasPublishedPlan && substantiveSteps >= 5 && planNudgesSent === 0) {
+      // Long-run check. A plan is NOT demanded for ordinary work — five tool
+      // calls is a normal amount of work, not wandering, and forcing a plan
+      // there is what made simple requests sprout 4-item todo lists
+      // (log 39172cb246). Only once a run is genuinely long without a plan
+      // do we offer — not demand — a course correction.
+      if (!hasPublishedPlan && substantiveSteps >= 12 && planNudgesSent === 0) {
         history.push({
           role: "user",
           content:
-            "[plan check] You've taken 5+ tool calls without publishing a plan. STOP exploring. Your NEXT response MUST be a todo_write call with 3-7 short, verb-led steps describing the work ahead. After that, work the list one item at a time. If the original task is genuinely ambiguous (e.g. recipient unspecified, multiple plausible targets), use ask_question instead of guessing.",
+            "[check-in] That's 12+ tool calls on this task. If it's turning out to be genuinely multi-step, a todo_write plan would help you keep track. If you're stuck on one sub-problem, ask_question. If you already have what you need, answer with final_answer. If none of those apply, just carry on.",
         });
         planNudgesSent = 1;
-      } else if (!hasPublishedPlan && substantiveSteps >= 12 && planNudgesSent < 2) {
-        history.push({
-          role: "user",
-          content:
-            "[plan check — final] You have ignored the planning request. You are clearly stuck or going in circles. Either: (a) emit todo_write NOW with a plan reflecting what you've discovered, (b) emit ask_question to clarify the user's intent, or (c) emit final_answer reporting what you've found and what blocked you. Any other tool call will be terminated.",
-        });
-        planNudgesSent = 2;
       }
 
       if (thinkingEnabled) {
@@ -3976,7 +3975,7 @@ ${agentPrompt}
         if (cleaned.length === 1 && agentTodos.length < 2) {
           history.push({
             role: "user",
-            content: `REJECTED: A 1-item plan is noise. Either (a) skip todo_write and just execute the work directly with the relevant tool (execute_command, write_file, run_in_terminal), or (b) split the task into 3+ concrete sub-steps and re-emit todo_write. Do NOT publish single-item plans.`,
+            content: `A 1-item plan isn't worth a turn — this task is small enough to just do. Skip todo_write and execute the work directly with the relevant tool (execute_command, write_file, run_in_terminal, web_fetch). Only re-plan if the task turns out to have 3+ genuinely distinct steps; do not pad it to reach 3.`,
           });
           continue;
         }
@@ -5359,10 +5358,21 @@ ${agentPrompt}
           recentSearchQueries.push(query);
           if (recentSearchQueries.length > 12) recentSearchQueries.shift();
           if (results.length === 0) {
-            onUpdate("executed", `Web search: no results for "${query}"`, { ...action, searchResults: [] });
+            // "blocked" (every backend rate-limited) is NOT "no results" —
+            // telling the model to reformulate against a dead backend makes
+            // it burn turns rewording the query (log 39172cb246).
+            const failure: SearchFailure =
+              data?.failure === "blocked" ? "blocked" : "empty";
+            onUpdate(
+              "executed",
+              failure === "blocked"
+                ? `Web search unavailable (backends blocked)`
+                : `Web search: no results for "${query}"`,
+              { ...action, searchResults: [] },
+            );
             history.push({
               role: "user",
-              content: `Web search for "${query}" returned no results.\n\n⚠ Reformulate: use specific keywords (not a full question), try fewer/different terms, drop quotes, or add a site: filter. Don't re-run the same query.`,
+              content: describeSearchFailure(query, failure),
             });
           } else {
             const formatted = results.map((r: any, i: number) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n\n");
