@@ -1,153 +1,91 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerWebHandlers = registerWebHandlers;
 const electron_1 = require("electron");
-/** Strip HTML tags and decode entities. */
-function stripTags(s) {
-    return s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-        .replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+const webSearchParse_1 = require("./webSearchParse");
+const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+/** Thrown when a backend answers with a captcha / rate-limit page. */
+class BlockedError extends Error {
 }
-/** Brave Search HTML scraping. */
-async function braveSearch(query) {
-    const resp = await fetch(`https://search.brave.com/search?q=${encodeURIComponent(query)}`, {
+/** Fetch a URL with a browser-ish UA, raising BlockedError on a challenge page. */
+async function getHtml(url, init = {}) {
+    const resp = await fetch(url, {
+        ...init,
         headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": UA,
+            Accept: "text/html,application/xhtml+xml",
             "Accept-Language": "en-US,en;q=0.9",
+            ...(init.headers || {}),
         },
         signal: AbortSignal.timeout(8000),
         redirect: "follow",
     });
     const html = await resp.text();
-    // Detect rate limiting (PoW Captcha page)
-    if (html.includes("PoW Captcha") || html.includes("captcha")) {
-        throw new Error("Brave rate limited");
-    }
-    const results = [];
-    const blocks = html.split(/class="snippet\s+svelte/);
-    for (const block of blocks.slice(1, 10)) {
-        const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
-        const titleMatch = block.match(/class="[^"]*snippet-title[^"]*"[^>]*>([\s\S]*?)<\/div>/)
-            || block.match(/class="title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
-        const descMatch = block.match(/class="snippet-description[^"]*"[^>]*>([\s\S]*?)<\/p>/)
-            || block.match(/class="content[^"]*line-clamp[^"]*"[^>]*>([\s\S]*?)<\/div>/);
-        if (urlMatch && titleMatch) {
-            const url = urlMatch[1];
-            const title = stripTags(titleMatch[1]);
-            const snippet = descMatch ? stripTags(descMatch[1]).slice(0, 300) : "";
-            if (title && !url.includes("brave.com") && !url.includes("imgs.search")) {
-                results.push({ title, url, snippet });
-            }
-        }
-        if (results.length >= 7)
-            break;
-    }
-    return results;
+    if ((0, webSearchParse_1.isBlockedResponse)(resp.status, html))
+        throw new BlockedError(String(resp.status));
+    return html;
 }
-/** DuckDuckGo fallback via duck-duck-scrape npm package. */
-async function ddgSearch(query) {
-    // Dynamic import — package may not be installed in all environments
-    const DDG = await Promise.resolve().then(() => __importStar(require("duck-duck-scrape")));
-    const searchFn = DDG.search || DDG.default?.search;
-    if (!searchFn)
-        throw new Error("duck-duck-scrape API changed");
-    const data = await searchFn(query, { safeSearch: DDG.SafeSearchType?.MODERATE ?? 0 });
-    return (data.results || []).slice(0, 7).map((r) => ({
-        title: r.title || "",
-        url: r.url || r.href || "",
-        snippet: (r.description || r.body || "").slice(0, 300),
+/** Brave Search API — only used when the user configured a key. */
+async function braveApiSearch(query, key) {
+    const resp = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=7`, {
+        headers: { Accept: "application/json", "X-Subscription-Token": key },
+        signal: AbortSignal.timeout(8000),
+    });
+    if (resp.status === 429 || resp.status === 403)
+        throw new BlockedError(String(resp.status));
+    if (!resp.ok)
+        throw new Error(`Brave API ${resp.status}`);
+    return (0, webSearchParse_1.parseBraveApi)(await resp.json());
+}
+async function ddgLiteSearch(query) {
+    return (0, webSearchParse_1.parseDdgLite)(await getHtml("https://lite.duckduckgo.com/lite/", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ q: query }).toString(),
     }));
 }
-/** Startpage (Google proxy) HTML scraping. */
-async function startpageSearch(query) {
-    const resp = await fetch("https://www.startpage.com/sp/search", {
-        method: "POST",
-        headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: `query=${encodeURIComponent(query)}&cat=web`,
-        signal: AbortSignal.timeout(8000),
-        redirect: "follow",
-    });
-    const html = await resp.text();
-    const results = [];
-    const blocks = html.split(/class="result\s+css/);
-    for (const block of blocks.slice(1, 10)) {
-        const titleMatch = block.match(/class="result-title result-link[^"]*"[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-        const descMatch = block.match(/<p[^>]*class="[^"]*"[^>]*>([\s\S]*?)<\/p>/);
-        if (titleMatch) {
-            const url = titleMatch[1];
-            // Strip inline CSS from title (Startpage embeds <style> classes in title text)
-            const title = stripTags(titleMatch[2]).replace(/\.css-[a-z0-9]+\{[^}]*\}(@media[^{]*\{[^}]*\})?\s*/g, "").replace(/^[{}]\s*/g, "").trim();
-            const snippet = descMatch ? stripTags(descMatch[1]).slice(0, 300) : "";
-            if (title && !url.includes("startpage.com")) {
-                results.push({ title, url, snippet });
-            }
-        }
-        if (results.length >= 7)
-            break;
-    }
-    return results;
+async function ddgHtmlSearch(query) {
+    return (0, webSearchParse_1.parseDdgHtml)(await getHtml(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`));
 }
-/** Search with fallback chain: Brave → DuckDuckGo → Startpage. */
+async function braveScrapeSearch(query) {
+    return (0, webSearchParse_1.parseBrave)(await getHtml(`https://search.brave.com/search?q=${encodeURIComponent(query)}`));
+}
+/**
+ * Search with a best-effort backend chain.
+ *
+ * Returns `failure: "blocked"` when every backend was rate-limited or
+ * captcha-walled (as opposed to genuinely returning nothing) so the caller
+ * can tell the agent to stop searching instead of rewording its query.
+ */
 async function webSearch(query) {
-    // Try Brave first
-    try {
-        const results = await braveSearch(query);
-        if (results.length > 0)
-            return { results };
+    const apiKey = process.env.BRAVE_SEARCH_API_KEY || "";
+    const backends = [
+        ...(apiKey ? [() => braveApiSearch(query, apiKey)] : []),
+        () => ddgLiteSearch(query),
+        () => ddgHtmlSearch(query),
+        () => braveScrapeSearch(query),
+    ];
+    let blocked = 0;
+    for (const run of backends) {
+        try {
+            const results = await run();
+            if (results.length > 0)
+                return { results };
+        }
+        catch (err) {
+            if (err instanceof BlockedError)
+                blocked++;
+        }
     }
-    catch { /* fall through */ }
-    // Fallback: duck-duck-scrape
-    try {
-        const results = await ddgSearch(query);
-        if (results.length > 0)
-            return { results };
+    // Every backend refused us → this is an outage, not an unlucky query.
+    if (blocked === backends.length) {
+        return {
+            results: [],
+            failure: "blocked",
+            error: "All search backends are rate-limited or blocked.",
+        };
     }
-    catch { /* fall through */ }
-    // Fallback: Startpage (Google proxy)
-    try {
-        const results = await startpageSearch(query);
-        if (results.length > 0)
-            return { results };
-    }
-    catch { /* fall through */ }
-    return { results: [], error: "All search providers failed (rate limited). Try again later." };
+    return { results: [], failure: "empty" };
 }
 /** Fetch a URL and return plain text content (HTML stripped). */
 async function webFetch(url) {

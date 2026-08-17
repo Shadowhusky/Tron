@@ -255,38 +255,109 @@ function readSkill(filePath) {
         return { success: false, error: err.message };
     }
 }
+/**
+ * Mirrors electron/ipc/web.ts. Keyless search backends all rate-limit
+ * scrapers, so this is best-effort — the important part is reporting
+ * `failure: "blocked"` (every backend refused) distinctly from an
+ * genuinely empty result set, so the agent stops searching instead of
+ * rewording its query against a dead service (log 39172cb246).
+ */
 async function webSearchImpl(q) {
     if (!q)
-        return { results: [] };
-    // Try Brave Search first
+        return { results: [], failure: "empty" };
+    const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+    const isBlocked = (status, html) => {
+        if (status === 429 || status === 403 || status === 202)
+            return true;
+        const head = html.slice(0, 4000);
+        return /<title>\s*captcha/i.test(head)
+            || /detected an anomaly|unusual traffic|are you a robot|pow captcha/i.test(head);
+    };
+    const decodeDdg = (href) => {
+        let url = href;
+        const m = url.match(/[?&]uddg=([^&]+)/);
+        if (m) {
+            try {
+                url = decodeURIComponent(m[1]);
+            }
+            catch { /* keep */ }
+        }
+        return url.startsWith("//") ? "https:" + url : url;
+    };
+    let blocked = 0;
+    let attempted = 0;
+    const apiKey = process.env.BRAVE_SEARCH_API_KEY || "";
+    if (apiKey) {
+        attempted++;
+        try {
+            const r = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=7`, { headers: { Accept: "application/json", "X-Subscription-Token": apiKey }, signal: AbortSignal.timeout(8000) });
+            if (r.status === 429 || r.status === 403)
+                blocked++;
+            else if (r.ok) {
+                const j = await r.json();
+                const results = (j?.web?.results || []).slice(0, 7).map((x) => ({
+                    title: _stripTags(x.title || ""), url: x.url || "",
+                    snippet: _stripTags(x.description || "").slice(0, 300),
+                })).filter((x) => x.title && x.url);
+                if (results.length > 0)
+                    return { results };
+            }
+        }
+        catch { /* fall through */ }
+    }
+    // DuckDuckGo lite — note class='result-link' uses SINGLE quotes
+    attempted++;
     try {
-        const resp = await fetch(`https://search.brave.com/search?q=${encodeURIComponent(q)}`, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
+        const r = await fetch("https://lite.duckduckgo.com/lite/", {
+            method: "POST",
+            headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ q }).toString(),
             signal: AbortSignal.timeout(8000),
-            redirect: "follow",
         });
-        const html = await resp.text();
-        if (!html.includes("PoW Captcha") && !html.includes("captcha")) {
+        const html = await r.text();
+        if (isBlocked(r.status, html))
+            blocked++;
+        else {
+            const links = [...html.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g)];
+            const snips = [...html.matchAll(/<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/g)]
+                .map((m) => _stripTags(m[1]));
             const results = [];
-            const blocks = html.split(/class="snippet\s+svelte/);
-            for (const block of blocks.slice(1, 10)) {
+            links.forEach((m, i) => {
+                const url = decodeDdg(m[1]);
+                const title = _stripTags(m[2]);
+                if (title && /^https?:\/\//.test(url)) {
+                    results.push({ title, url, snippet: (snips[i] || "").slice(0, 300) });
+                }
+            });
+            if (results.length > 0)
+                return { results: results.slice(0, 7) };
+        }
+    }
+    catch { /* fall through */ }
+    // Brave HTML scrape
+    attempted++;
+    try {
+        const r = await fetch(`https://search.brave.com/search?q=${encodeURIComponent(q)}`, {
+            headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
+            signal: AbortSignal.timeout(8000), redirect: "follow",
+        });
+        const html = await r.text();
+        if (isBlocked(r.status, html))
+            blocked++;
+        else {
+            const results = [];
+            for (const block of html.split(/class="snippet[\s"]/).slice(1, 12)) {
                 const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
                 const titleMatch = block.match(/class="[^"]*snippet-title[^"]*"[^>]*>([\s\S]*?)<\/div>/)
                     || block.match(/class="title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
-                const descMatch = block.match(/class="snippet-description[^"]*"[^>]*>([\s\S]*?)<\/p>/)
-                    || block.match(/class="content[^"]*line-clamp[^"]*"[^>]*>([\s\S]*?)<\/div>/);
-                if (urlMatch && titleMatch) {
-                    const url = urlMatch[1];
-                    const title = _stripTags(titleMatch[1]);
-                    const snippet = descMatch ? _stripTags(descMatch[1]).slice(0, 300) : "";
-                    if (title && !url.includes("brave.com") && !url.includes("imgs.search")) {
-                        results.push({ title, url, snippet });
-                    }
-                }
+                const descMatch = block.match(/class="snippet-description[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+                if (!urlMatch || !titleMatch)
+                    continue;
+                const url = urlMatch[1];
+                const title = _stripTags(titleMatch[1]);
+                if (!title || url.includes("brave.com") || url.includes("imgs.search"))
+                    continue;
+                results.push({ title, url, snippet: descMatch ? _stripTags(descMatch[1]).slice(0, 300) : "" });
                 if (results.length >= 7)
                     break;
             }
@@ -294,56 +365,11 @@ async function webSearchImpl(q) {
                 return { results };
         }
     }
-    catch { /* fall through to DDG */ }
-    // Fallback: duck-duck-scrape
-    try {
-        const DDG = await import("duck-duck-scrape");
-        const searchFn = DDG.search || DDG.default?.search;
-        if (searchFn) {
-            const data = await searchFn(q, { safeSearch: DDG.SafeSearchType?.MODERATE ?? 0 });
-            const results = (data.results || []).slice(0, 7).map((r) => ({
-                title: r.title || "", url: r.url || r.href || "",
-                snippet: (r.description || r.body || "").slice(0, 300),
-            }));
-            if (results.length > 0)
-                return { results };
-        }
-    }
     catch { /* fall through */ }
-    // Fallback: Startpage (Google proxy)
-    try {
-        const spResp = await fetch("https://www.startpage.com/sp/search", {
-            method: "POST",
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: `query=${encodeURIComponent(q)}&cat=web`,
-            signal: AbortSignal.timeout(8000),
-            redirect: "follow",
-        });
-        const spHtml = await spResp.text();
-        const spResults = [];
-        const spBlocks = spHtml.split(/class="result\s+css/);
-        for (const block of spBlocks.slice(1, 10)) {
-            const titleMatch = block.match(/class="result-title result-link[^"]*"[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-            const descMatch = block.match(/<p[^>]*class="[^"]*"[^>]*>([\s\S]*?)<\/p>/);
-            if (titleMatch) {
-                const url = titleMatch[1];
-                const title = _stripTags(titleMatch[2]).replace(/\.css-[a-z0-9]+\{[^}]*\}(@media[^{]*\{[^}]*\})?\s*/g, "").replace(/^[{}]\s*/g, "").trim();
-                const snippet = descMatch ? _stripTags(descMatch[1]).slice(0, 300) : "";
-                if (title && !url.includes("startpage.com")) {
-                    spResults.push({ title, url, snippet });
-                }
-            }
-            if (spResults.length >= 7)
-                break;
-        }
-        if (spResults.length > 0)
-            return { results: spResults };
+    if (blocked === attempted) {
+        return { results: [], failure: "blocked", error: "All search backends are rate-limited or blocked." };
     }
-    catch { /* fall through */ }
-    return { results: [], error: "All search providers failed (rate limited). Try again later." };
+    return { results: [], failure: "empty" };
 }
 async function webFetchImpl(url) {
     if (!url)
