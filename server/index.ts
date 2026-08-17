@@ -284,19 +284,19 @@ async function webSearchImpl(
     return url.startsWith("//") ? "https:" + url : url;
   };
 
-  let blocked = 0;
-  let attempted = 0;
+  // A backend "answered" only if it returned a parseable page. If none did
+  // (blocked, timed out, or transport error) search is unavailable.
+  let answered = 0;
 
   const apiKey = process.env.BRAVE_SEARCH_API_KEY || "";
   if (apiKey) {
-    attempted++;
     try {
       const r = await fetch(
         `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=7`,
         { headers: { Accept: "application/json", "X-Subscription-Token": apiKey }, signal: AbortSignal.timeout(8000) },
       );
-      if (r.status === 429 || r.status === 403) blocked++;
-      else if (r.ok) {
+      if (r.ok) {
+        answered++;
         const j: any = await r.json();
         const results: SR[] = (j?.web?.results || []).slice(0, 7).map((x: any) => ({
           title: _stripTags(x.title || ""), url: x.url || "",
@@ -308,7 +308,6 @@ async function webSearchImpl(
   }
 
   // DuckDuckGo lite — note class='result-link' uses SINGLE quotes
-  attempted++;
   try {
     const r = await fetch("https://lite.duckduckgo.com/lite/", {
       method: "POST",
@@ -317,8 +316,8 @@ async function webSearchImpl(
       signal: AbortSignal.timeout(8000),
     });
     const html = await r.text();
-    if (isBlocked(r.status, html)) blocked++;
-    else {
+    if (!isBlocked(r.status, html)) {
+      answered++;
       const links = [...html.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g)];
       const snips = [...html.matchAll(/<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/g)]
         .map((m) => _stripTags(m[1]));
@@ -335,15 +334,14 @@ async function webSearchImpl(
   } catch { /* fall through */ }
 
   // Brave HTML scrape
-  attempted++;
   try {
     const r = await fetch(`https://search.brave.com/search?q=${encodeURIComponent(q)}`, {
       headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
       signal: AbortSignal.timeout(8000), redirect: "follow",
     });
     const html = await r.text();
-    if (isBlocked(r.status, html)) blocked++;
-    else {
+    if (!isBlocked(r.status, html)) {
+      answered++;
       const results: SR[] = [];
       for (const block of html.split(/class="snippet[\s"]/).slice(1, 12)) {
         const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
@@ -361,8 +359,8 @@ async function webSearchImpl(
     }
   } catch { /* fall through */ }
 
-  if (blocked === attempted) {
-    return { results: [], failure: "blocked", error: "All search backends are rate-limited or blocked." };
+  if (answered === 0) {
+    return { results: [], failure: "blocked", error: "All search backends are rate-limited, blocked, or unreachable." };
   }
   return { results: [], failure: "empty" };
 }

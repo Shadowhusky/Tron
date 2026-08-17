@@ -90,22 +90,25 @@ async function webSearch(
     () => braveScrapeSearch(query),
   ];
 
-  let blocked = 0;
+  // A backend "answered" only if it returned a parseable page without being
+  // blocked or erroring. If NONE answered, search is unavailable — that
+  // includes timeouts and network errors, not just explicit rate limits.
+  let answered = 0;
   for (const run of backends) {
     try {
       const results = await run();
+      answered++;
       if (results.length > 0) return { results };
-    } catch (err) {
-      if (err instanceof BlockedError) blocked++;
+    } catch {
+      /* blocked, timed out, or transport error — try the next backend */
     }
   }
 
-  // Every backend refused us → this is an outage, not an unlucky query.
-  if (blocked === backends.length) {
+  if (answered === 0) {
     return {
       results: [],
       failure: "blocked",
-      error: "All search backends are rate-limited or blocked.",
+      error: "All search backends are rate-limited, blocked, or unreachable.",
     };
   }
   return { results: [], failure: "empty" };
