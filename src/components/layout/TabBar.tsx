@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
-import { Reorder, AnimatePresence, motion } from "framer-motion";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Reorder, AnimatePresence, motion, DragControls } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
 import type { Tab } from "../../types";
 import type { ResolvedTheme } from "../../contexts/ThemeContext";
 import { themeClass } from "../../utils/theme";
+import { canArmTabDrag, shouldPromoteToDrag } from "../../utils/tabDrag";
 import { FileCode, Globe } from "lucide-react";
 import { isWindows, isMacOS, isElectronApp, isTouchDevice } from "../../utils/platform";
 import { isSshOnly } from "../../services/mode";
@@ -59,9 +60,40 @@ const TabBar: React.FC<TabBarProps> = ({
   const [localTabs, setLocalTabs] = useState(tabs);
   const isDraggingRef = useRef(false);
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
-  // Refs to track which tab is being dragged and whether it moved far enough to count as a real drag
   const draggingTabIdRef = useRef<string | null>(null);
-  const realDragRef = useRef(false);
+
+  /**
+   * Drag is OPT-IN, gated behind a movement threshold we own.
+   *
+   * `Reorder.Item` hard-enables `drag={axis}`, and framer-motion's PanSession
+   * promotes a pointerdown into a drag after only 3px (`distanceThreshold`).
+   * Once that happens the item leaves layout flow and `checkReorder` starts
+   * evaluating swaps against layout boxes measured at the last render — which
+   * are stale if the tab strip has been scrolled since. The result is a plain
+   * click occasionally reordering tabs. Suppressing the *commit* after the
+   * fact (the previous fix) can't help: framer-motion has already entered
+   * drag state, and an early-return with no state update never lets its
+   * internal `isReordering` latch reset.
+   *
+   * So: `dragListener={false}` means a click NEVER starts a drag. We start it
+   * ourselves, via per-tab DragControls, only once the pointer has actually
+   * travelled horizontally.
+   */
+  // One controls object per tab id. Keyed on the SORTED ids so it survives a
+  // reorder (which changes order, not membership) and is only rebuilt when a
+  // tab is actually added or closed — never mid-drag.
+  const tabIdKey = localTabs.map((t) => t.id).sort().join(",");
+  const dragControlsByTab = useMemo(() => {
+    const map = new Map<string, DragControls>();
+    for (const id of tabIdKey ? tabIdKey.split(",") : []) {
+      map.set(id, new DragControls());
+    }
+    return map;
+  }, [tabIdKey]);
+  const dragGateRef = useRef<
+    { tabId: string; startX: number; started: boolean } | null
+  >(null);
+
   /** True for a brief window after a real drag ends — used to suppress the
    *  synthetic click event that bubbles from framer-motion's Reorder.Item
    *  on drag release. Without this, a successful drag-and-drop would also
@@ -152,6 +184,30 @@ const TabBar: React.FC<TabBarProps> = ({
     return () => window.removeEventListener("click", closeContextMenu);
   }, []);
 
+  // Promote a held pointer into a real drag once it travels far enough.
+  // Listening on window (not the tab) so the gesture survives the pointer
+  // leaving the tab's bounds, and so pointerup anywhere disarms it.
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const gate = dragGateRef.current;
+      if (!gate || gate.started) return;
+      if (!shouldPromoteToDrag(gate.startX, e.clientX)) return;
+      gate.started = true;
+      dragControlsByTab.get(gate.tabId)?.start(e);
+    };
+    const disarm = () => {
+      dragGateRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", disarm);
+    window.addEventListener("pointercancel", disarm);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", disarm);
+      window.removeEventListener("pointercancel", disarm);
+    };
+  }, [dragControlsByTab]);
+
   // Sync from parent when not dragging
   useEffect(() => {
     if (!isDraggingRef.current) {
@@ -199,13 +255,13 @@ const TabBar: React.FC<TabBarProps> = ({
   const commitReorder = () => {
     isDraggingRef.current = false;
     const draggedId = draggingTabIdRef.current;
-    const wasRealDrag = realDragRef.current;
     draggingTabIdRef.current = null;
-    realDragRef.current = false;
+    dragGateRef.current = null;
     setDraggingTabId(null);
 
-    if (!draggedId || !wasRealDrag) {
-      // Click or accidental tiny movement — reset visual order to match parent state
+    // onDragEnd only fires for a gated drag, so draggedId is normally set;
+    // bail defensively rather than committing a bogus reorder.
+    if (!draggedId) {
       setLocalTabs(tabs);
       return;
     }
@@ -262,15 +318,12 @@ const TabBar: React.FC<TabBarProps> = ({
         axis="x"
         values={localTabs}
         onReorder={(newTabs) => {
-          // Only accept framer-motion's reorder events AFTER the drag has
-          // crossed the threshold (realDragRef set in the per-item onDrag
-          // handler below). Otherwise a click that lands near a tab edge
-          // can briefly swap the visual order before the click handler
-          // fires, producing the "tab shifted on click" flicker reported
-          // by the user. We still flag isDraggingRef so commitReorder can
-          // distinguish the post-click revert.
+          // Reachable only from a gated drag (see dragGateRef), so this is
+          // always a real reorder. Committing unconditionally also keeps
+          // framer-motion's internal `isReordering` latch healthy — it is
+          // cleared in a render effect, so an early return that skipped the
+          // state update would leave the group wedged.
           isDraggingRef.current = true;
-          if (!realDragRef.current) return;
           setLocalTabs(newTabs);
         }}
         className="flex items-stretch"
@@ -289,6 +342,12 @@ const TabBar: React.FC<TabBarProps> = ({
                 key={tab.id}
                 value={tab}
                 drag={isTouchDevice() ? false : "x"}
+                // Never let framer-motion start the drag from its own
+                // pointerdown (3px threshold) — we start it via dragControls
+                // once the pointer has actually travelled. A click therefore
+                // never enters drag state at all.
+                dragListener={false}
+                dragControls={dragControlsByTab.get(tab.id)}
                 dragConstraints={{ top: 0, bottom: 0 }}
                 dragElastic={0.1}
                 initial={{ opacity: 0 }}
@@ -297,16 +356,12 @@ const TabBar: React.FC<TabBarProps> = ({
                 transition={{ duration: 0.12, ease: "easeOut" }}
                 onDragStart={() => {
                   draggingTabIdRef.current = tab.id;
-                  realDragRef.current = false;
-                }}
-                onDrag={(_, info) => {
-                  // 14px threshold (was 8) — macOS trackpad clicks can emit
-                  // 5-10px of incidental motion, and 14px is small enough
-                  // that intentional drags still feel responsive.
-                  if (!realDragRef.current && Math.abs(info.offset.x) > 14) {
-                    realDragRef.current = true;
-                    setDraggingTabId(tab.id);
-                  }
+                  isDraggingRef.current = true;
+                  // Re-renders the group, so every item re-registers its
+                  // layout box before the first swap check — otherwise a
+                  // drag after scrolling the strip measures against stale
+                  // coordinates and can swap almost immediately.
+                  setDraggingTabId(tab.id);
                 }}
                 onDragEnd={commitReorder}
                 dragMomentum={false}
@@ -345,6 +400,20 @@ const TabBar: React.FC<TabBarProps> = ({
                       })
                 }`}
                 data-testid={`tab-${tab.id}`}
+                onPointerDown={(e) => {
+                  // Left button only, mouse/pen only (touch keeps long-press),
+                  // and never while renaming this tab.
+                  if (!canArmTabDrag({
+                    button: e.button,
+                    pointerType: e.pointerType,
+                    isRenaming: renamingTabId === tab.id,
+                  })) return;
+                  dragGateRef.current = {
+                    tabId: tab.id,
+                    startX: e.clientX,
+                    started: false,
+                  };
+                }}
                 onClick={() => {
                   if (longPressFired.current) return; // Prevent click after long-press
                   // Suppress the click that fires immediately after a drag
