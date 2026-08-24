@@ -9,7 +9,8 @@ describe("AGENT_TOOLS declarations", () => {
       "execute_command", "run_in_terminal", "send_text", "read_terminal",
       "write_file", "read_file", "edit_file", "list_dir", "search_dir",
       "web_search", "web_fetch",
-      "todo_write", "remember", "read_skill", "get_recent_blocks",
+      "todo_write", "remember", "read_skill",
+    "read_history", "get_recent_blocks",
       "ask_question", "final_answer",
     ]);
   });

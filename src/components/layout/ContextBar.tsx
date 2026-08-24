@@ -9,6 +9,7 @@ import { Folder, X, Loader2, Trash2, Search, Settings, ChevronDown } from "lucid
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platform";
+import { contextCharsFor } from "../../utils/modelContext";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi } from "../../utils/contextCleaner";
 import { classifyTerminalOutput, detectTuiProgram } from "../../utils/terminalState";
@@ -89,10 +90,13 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const session = sessions.get(sessionId);
   const cwd = session?.cwd || "~/";
   const rawModel = session?.aiConfig?.model || aiService.getConfig().model;
-  const maxContext =
-    session?.aiConfig?.contextWindow ||
-    aiService.getConfig().contextWindow ||
-    16000;
+  // Derived from the model when the user hasn't pinned a value, so the gauge
+  // (and the 90% auto-summarize trigger) reflect the model's real headroom
+  // instead of a flat 16k for everything.
+  const maxContext = contextCharsFor(
+    rawModel,
+    session?.aiConfig?.contextWindow || aiService.getConfig().contextWindow,
+  );
 
   // Poll for context length (history size)
   const [contextLength, setContextLength] = useState(0);

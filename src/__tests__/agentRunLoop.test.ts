@@ -609,3 +609,209 @@ describe("runAgent — blocked web search (log 39172cb246)", () => {
     }
   });
 });
+
+describe("runAgent — a malformed tool call must not kill the run (log ddb57d1bbd)", () => {
+  it("recovers when execute_command arrives with no command field", async () => {
+    // Live crash: qwen3.8 emitted execute_command without `command`, and
+    // `action.command.split(/;|&&/)` threw
+    // "Cannot read properties of undefined (reading 'split')".
+    // The throw escaped runAgent entirely, so the whole run ended after a
+    // single successful step.
+    const executed: string[] = [];
+    let n = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async () => {
+        n++;
+        if (n === 1) return { content: exec("which cargo"), thinking: "" };
+        if (n === 2) return { content: '{"tool":"execute_command"}', thinking: "" };
+        if (n === 3) return { content: exec("which brew"), thinking: "" };
+        return { content: '{"tool":"final_answer","content":"Toolchain checked."}', thinking: "" };
+      };
+    const { result, steps } = await run("check the toolchain", async (cmd) => {
+      executed.push(cmd);
+      return "not found";
+    });
+
+    // The run must survive and finish.
+    expect(result.success).toBe(true);
+    expect(result.message).toBe("Toolchain checked.");
+    // It must keep working AFTER the malformed call, not stop at step 1.
+    expect(executed).toEqual(["which cargo", "which brew"]);
+    // And it must never surface a raw JS TypeError to the user.
+    expect(steps.some((s) => /Cannot read properties of undefined/.test(s.output))).toBe(false);
+  });
+
+  it("recovers when run_in_terminal arrives with no command field", async () => {
+    let n = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async () => {
+        n++;
+        if (n === 1) return { content: '{"tool":"run_in_terminal"}', thinking: "" };
+        if (n === 2) return { content: exec("echo ok"), thinking: "" };
+        return { content: '{"tool":"final_answer","content":"Done."}', thinking: "" };
+      };
+    const { result } = await run("do a thing", async () => "ok");
+    expect(result.success).toBe(true);
+  });
+
+  it("tells the model exactly which argument was missing", async () => {
+    const pushed: string[] = [];
+    let n = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async (...a: unknown[]) => {
+        for (const m of a[3] as Msg[]) if (m.role === "user") pushed.push(String(m.content));
+        n++;
+        if (n === 1) return { content: '{"tool":"write_file","path":"/tmp/x.txt"}', thinking: "" };
+        return { content: '{"tool":"final_answer","content":"ok"}', thinking: "" };
+      };
+    await run("write a file", async () => "");
+    const err = pushed.find((m) => m.includes("tool_use_error"));
+    expect(err).toBeTruthy();
+    expect(err).toMatch(/content/);
+  });
+});
+
+describe("runAgent — per-step error boundary", () => {
+  /** readTerminal throws on the first N calls, then behaves. execute_command
+   *  reads terminal state internally, so this injects an unexpected throw on
+   *  a path that has no inner try — exactly where log ddb57d1bbd died. */
+  function runWithFlakyRead(replies: string[], failFirst: number) {
+    let n = 0;
+    let reads = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async () => ({ content: replies[Math.min(n++, replies.length - 1)], thinking: "" });
+    const steps: Array<{ step: string; output: string }> = [];
+    return aiService
+      .runAgent(
+        "check things then finish",
+        async () => "ok",
+        () => {},
+        async () => {
+          reads++;
+          if (reads <= failFirst) {
+            throw new TypeError("Cannot read properties of undefined (reading 'split')");
+          }
+          return "richardliao@mac ~ % ";
+        },
+        (step, output) => steps.push({ step, output }),
+        CFG,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { rawUserTask: "check things then finish" },
+      )
+      .then((result) => ({ result, steps }));
+  }
+
+  it("survives an internal throw and still completes the task", async () => {
+    const { result, steps } = await runWithFlakyRead(
+      [exec("which cargo"), exec("which brew"), '{"tool":"final_answer","content":"Checked the toolchain."}'],
+      1,
+    );
+    expect(result.success).toBe(true);
+    expect(result.message).toBe("Checked the toolchain.");
+    // Surfaced, not silently swallowed.
+    expect(steps.some((s) => s.step === "failed" && /Internal error/.test(s.output))).toBe(true);
+    // And never shown to the user as a bare JS stack noise.
+    expect(steps.some((s) => s.step === "error")).toBe(false);
+  });
+
+  it("is bounded — a persistently broken path stops instead of spinning", async () => {
+    const { result, steps } = await runWithFlakyRead([exec("which cargo")], Number.MAX_SAFE_INTEGER);
+    // It terminates (escalating to the user counts) rather than running to
+    // maxSteps, and the internal-error path is capped.
+    expect(result).toBeTruthy();
+    expect(steps.filter((s) => /Internal error/.test(s.output)).length).toBeLessThanOrEqual(3);
+    expect(steps.length).toBeLessThan(40); // maxSteps is 80
+  });
+});
+
+describe("runAgent — read_history recall (log ddb57d1bbd)", () => {
+  const OLD_TASK =
+    "Create a tui (terminal ui) program that shows the allocation of current machine's storage" +
+    "(what files/folder take how many storage space etc..), be easy to use, clean ui, lightwieght, lightnign fast";
+
+  function runContinue(conversation: Array<{ role: string; content: string }>, replies: string[]) {
+    let n = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    const seen: string[] = [];
+    (svc as unknown as { streamOpenAIChat: (...a: unknown[]) => Promise<unknown> }).streamOpenAIChat =
+      async (...a: unknown[]) => {
+        for (const m of a[3] as Msg[]) if (m.role === "user") seen.push(String(m.content));
+        return { content: replies[Math.min(n++, replies.length - 1)], thinking: "" };
+      };
+    const steps: Array<{ step: string; output: string }> = [];
+    return aiService
+      .runAgent(
+        "continue",
+        async () => "ok",
+        () => {},
+        async () => "richardliao@mac ~ % ",
+        (step, output) => steps.push({ step, output }),
+        CFG,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { rawUserTask: "continue", conversation },
+      )
+      .then((result) => ({ result, steps, seen }));
+  }
+
+  it("hands the agent the full earlier task, not a clipped prefix", async () => {
+    const { result, seen, steps } = await runContinue(
+      [
+        { role: "user", content: OLD_TASK },
+        { role: "agent", content: "cargo is not installed." },
+      ],
+      [
+        '{"tool":"read_history"}',
+        exec("cargo --version"),
+        '{"tool":"final_answer","content":"Resuming the storage TUI."}',
+      ],
+    );
+    expect(result.success).toBe(true);
+    const recalled = seen.find((m) => m.includes("CONVERSATION HISTORY"));
+    expect(recalled).toBeTruthy();
+    // The whole instruction, including the tail the 80-char clip destroyed.
+    expect(recalled).toContain("lightnign fast");
+    expect(recalled).toContain("clean ui");
+    expect(steps.some((s) => /Recalled \d+ earlier turn/.test(s.output))).toBe(true);
+  });
+
+  it("filters to matching turns when given a query", async () => {
+    const { seen } = await runContinue(
+      [
+        { role: "user", content: "set up a postgres database" },
+        { role: "agent", content: "postgres is running on 5432." },
+        { role: "user", content: OLD_TASK },
+      ],
+      ['{"tool":"read_history","query":"storage"}', exec("echo hi"), '{"tool":"final_answer","content":"ok"}'],
+    );
+    const recalled = seen.find((m) => m.includes("CONVERSATION HISTORY"));
+    expect(recalled).toContain("storage");
+    expect(recalled).not.toContain("postgres");
+  });
+
+  it("says so plainly when there is nothing to recall", async () => {
+    const { seen } = await runContinue(
+      [],
+      ['{"tool":"read_history"}', exec("echo hi"), '{"tool":"final_answer","content":"done"}'],
+    );
+    expect(seen.some((m) => /No earlier conversation is recorded/.test(m))).toBe(true);
+  });
+
+  it("reports a miss without derailing the run", async () => {
+    const { result, seen } = await runContinue(
+      [{ role: "user", content: "build a website" }],
+      ['{"tool":"read_history","query":"kubernetes"}', exec("echo hi"), '{"tool":"final_answer","content":"done"}'],
+    );
+    expect(result.success).toBe(true);
+    expect(seen.some((m) => /found no earlier turn matching/.test(m))).toBe(true);
+  });
+});

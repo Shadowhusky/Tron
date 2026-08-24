@@ -29,7 +29,7 @@ import {
 import { searchQualityHint } from "../../utils/searchQuality";
 import { describeSearchFailure, type SearchFailure } from "../../utils/searchFailure";
 import { smartQuotePaths } from "../../utils/commandClassifier";
-import { AGENT_TOOLS, AGENT_TOOL_NAMES, ToolCallAssembler, type OpenAITool } from "./toolSchemas";
+import { AGENT_TOOLS, AGENT_TOOL_NAMES, ToolCallAssembler, missingToolArgs, type OpenAITool } from "./toolSchemas";
 
 export interface AgentContinuation {
   history: any[];
@@ -2102,7 +2102,7 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     thinkingEnabled: boolean = true,
     continuation?: AgentContinuation,
     images?: AttachedImage[],
-    options?: { isSSH?: boolean; sessionId?: string; rawUserTask?: string; isAlternateBuffer?: () => boolean },
+    options?: { isSSH?: boolean; sessionId?: string; rawUserTask?: string; isAlternateBuffer?: () => boolean; conversation?: Array<{ role: string; content: string }> },
     checkFilePermission?: (description: string) => Promise<void>,
   ): Promise<AgentResult> {
     const cfg = sessionConfig || this.config;
@@ -2255,6 +2255,13 @@ ${skillsBlock}
   command; get_recent_blocks is for understanding history. Available
   ONLY in zsh sessions where Tron's shell-integration is loaded; falls
   back to "(no blocks recorded)" otherwise.
+
+{"tool":"read_history","query":"<optional keywords>"}
+  Recall earlier turns of THIS conversation, in full. The conversation shown to
+  you above may be abbreviated to fit the context window. If the user sends a
+  short follow-up ("continue", "again", "more", "finish it") and you are not
+  certain what it refers to, call read_history FIRST instead of guessing. Add
+  a "query" to filter to matching turns; omit it for the most recent ones.
 
 {"tool":"read_skill","name":"<skill-name>"}
   Load the body of a discoverable Agent Skill (Anthropic Agent Skills format).
@@ -2495,6 +2502,13 @@ ${agentPrompt}
     let useNativeTools = this.isNativeToolsModel(provider, model);
     const MAX_BLOCKED_REPEATS = 3;
     const MAX_BREAKER_TRIPS = 3;
+    /** Unexpected internal errors caught by the per-step boundary. Bounded so a
+     *  genuinely broken tool path escalates instead of spinning. */
+    let unexpectedErrors = 0;
+    const MAX_UNEXPECTED_ERRORS = 3;
+    /** Tool of the step in flight — the error boundary lives outside the
+     *  loop body's scope, so it can't read `action` directly. */
+    let lastToolName: string | undefined;
     let tuiExitFailures = 0; // Count consecutive TUI auto-exit failures — escalates to ask_question
     let lastReadTerminalOutput = ""; // Track consecutive identical read_terminal results
     let identicalReadCount = 0; // How many times in a row read_terminal returned the same content
@@ -2722,6 +2736,16 @@ ${agentPrompt}
     if (options?.sessionId) this.takeSteeringMessages(options.sessionId);
 
     for (let i = 0; i < maxSteps; i++) {
+      // ── Per-step error boundary ───────────────────────────────────────
+      // An unexpected throw anywhere below used to escape runAgent entirely
+      // and end the run mid-task (log ddb57d1bbd: a malformed tool call threw
+      // a TypeError after one successful command). A single bad step must
+      // never cost the whole run, so it is reported to the model as a tool
+      // error and the loop carries on — bounded by MAX_UNEXPECTED_ERRORS.
+      // NOTE: the body below is deliberately NOT re-indented into this try,
+      // so that this safety net reads as a small diff rather than burying it
+      // in a 3000-line whitespace change.
+      try {
       if (signal?.aborted) {
         throw new Error("Agent aborted by user.");
       }
@@ -3953,6 +3977,30 @@ ${agentPrompt}
       delete action._action;
       delete action._step_done;
 
+      // Required-argument gate. Weak models emit tool calls with the arguments
+      // missing entirely (`{"tool":"execute_command"}` with no `command`).
+      // Those used to reach the handlers and throw a raw TypeError, which
+      // escaped runAgent and killed the run after one good step
+      // (log ddb57d1bbd). Now the model is told precisely what it left out and
+      // gets to try again, like any other recoverable tool error.
+      const missingArgs = missingToolArgs(action);
+      if (missingArgs.length > 0) {
+        const list = missingArgs.join(", ");
+        onUpdate(
+          "failed",
+          `${action.tool}: missing required ${missingArgs.length === 1 ? "argument" : "arguments"} (${list})`,
+          action,
+        );
+        history.push({
+          role: "user",
+          content: `<tool_use_error>${action.tool} is missing required ${missingArgs.length === 1 ? "argument" : "arguments"}: ${list}. Re-send the SAME tool call with ${missingArgs.length === 1 ? "that field" : "those fields"} filled in — e.g. {"tool":"${action.tool}"${missingArgs.map((k) => `,"${k}":"..."`).join("")}}.</tool_use_error>`,
+        });
+        consecutiveGuardBlocks++;
+        continue;
+      }
+
+      lastToolName = String(action.tool);
+
       if (action.tool === "todo_write") {
         // Replace the plan wholesale — model re-emits the full list each time
         // so it can update statuses. Validate and clamp.
@@ -4063,6 +4111,49 @@ ${agentPrompt}
             content: `<tool_use_error>get_recent_blocks failed: ${err.message}</tool_use_error>`,
           });
         }
+        continue;
+      }
+
+      if (action.tool === "read_history") {
+        // Recall earlier turns verbatim. The context block built in
+        // useAgentRunner is budget-limited, so a long conversation is
+        // abbreviated there; this is the escape hatch that makes a bare
+        // "continue" answerable instead of guessable (log ddb57d1bbd).
+        const convo = options?.conversation || [];
+        const q = typeof action.query === "string" ? action.query.trim().toLowerCase() : "";
+        const matches = q
+          ? convo.filter((m) => (m.content || "").toLowerCase().includes(q))
+          : convo;
+        if (matches.length === 0) {
+          onUpdate("executed", q ? `No earlier turns matching "${action.query}"` : "No earlier conversation", action);
+          history.push({
+            role: "user",
+            content: q
+              ? `<tool_use_error>read_history found no earlier turn matching "${action.query}". Try different keywords, or call read_history with no query to see the most recent turns.</tool_use_error>`
+              : `No earlier conversation is recorded for this session — this is the first task.`,
+          });
+          continue;
+        }
+        // Newest-last, capped so a very long thread can't flood the context.
+        const MAX_CHARS = 8000;
+        const picked: string[] = [];
+        let used = 0;
+        for (let k = matches.length - 1; k >= 0; k--) {
+          const m = matches[k];
+          const line = `${m.role === "user" ? "User" : "Agent"}: ${(m.content || "").trim()}`;
+          if (used + line.length > MAX_CHARS) break;
+          picked.unshift(line);
+          used += line.length + 1;
+        }
+        onUpdate(
+          "executed",
+          `Recalled ${picked.length} earlier turn${picked.length === 1 ? "" : "s"}${q ? ` matching "${action.query}"` : ""}`,
+          action,
+        );
+        history.push({
+          role: "user",
+          content: `[CONVERSATION HISTORY${q ? ` — matching "${action.query}"` : ""}]\n${picked.join("\n")}\n\nUse this to interpret the current task. Do NOT re-execute these older tasks.`,
+        });
         continue;
       }
 
@@ -5984,6 +6075,27 @@ ${agentPrompt}
               c.slice(-200);
           }
         }
+      }
+      } catch (stepErr: any) {
+        if (signal?.aborted) throw stepErr; // user stop is not a bug
+        unexpectedErrors++;
+        // Volatile PTY state is set before awaits and cleared in catches; a
+        // throw between those points would otherwise wedge the agent into
+        // believing the terminal is permanently busy.
+        terminalBusy = false;
+        const detail = stepErr?.message || String(stepErr);
+        onUpdate("failed", `Internal error running ${lastToolName || "the last tool"}: ${detail}`);
+        if (unexpectedErrors >= MAX_UNEXPECTED_ERRORS) {
+          return escalateStuck(
+            `I keep hitting an internal error (${detail}). This looks like a bug in Tron rather than something I can work around. What would you like me to do?`,
+          );
+        }
+        history.push({
+          role: "user",
+          content: `<tool_use_error>${lastToolName || "That tool call"} failed with an internal error: ${detail}. This is not something you can fix by repeating it — try a different tool or a different approach.</tool_use_error>`,
+        });
+        consecutiveGuardBlocks++;
+        continue;
       }
     }
 

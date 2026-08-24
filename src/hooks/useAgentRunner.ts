@@ -7,6 +7,8 @@ import { useLayout } from "../contexts/LayoutContext";
 import { useConfig } from "../contexts/ConfigContext";
 import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
+import { buildOlderConversation } from "../utils/agentContext";
+import { contextCharsFor, conversationBudgetChars } from "../utils/modelContext";
 import { classifyCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
 import { readScreenBuffer, isAlternateBuffer } from "../services/terminalBuffer";
@@ -618,16 +620,18 @@ System Paths:
             break;
           }
         }
-        const olderInteractions = nonCurrent
-          .filter((i) => i !== lastAgent && i !== lastUserBeforeAgent)
-          .slice(-6)
-          .map((i) => {
-            const role = i.role === "user" ? "User" : "Agent";
-            const text = typeof i.content === "string" ? i.content : "";
-            const summary = text.length > 80 ? text.slice(0, 80) + "…" : text;
-            return `${role}: ${summary}`;
-          })
-          .join("\n");
+        // How much of the earlier conversation we can afford depends on the
+        // model, not on a fixed 6-turn / 80-char rule. A 200k-token cloud model
+        // carries the whole thing verbatim; a small local model still gets the
+        // clipped summaries it can fit.
+        const contextChars = contextCharsFor(
+          session?.aiConfig?.model || aiService.getConfig().model,
+          session?.aiConfig?.contextWindow || aiService.getConfig().contextWindow,
+        );
+        const olderInteractions = buildOlderConversation(
+          nonCurrent.filter((i) => i !== lastAgent && i !== lastUserBeforeAgent),
+          conversationBudgetChars(contextChars),
+        );
 
         const lastUserText = (lastUserBeforeAgent?.content as string) || "";
         const lastAgentText = (lastAgent?.content as string) || "";
@@ -950,7 +954,17 @@ ${prompt}
         thinkingEnabled && modelSupportsThinking,
         currentContinuation || undefined,
         images,
-        { isSSH: !!session?.sshProfileId, sessionId, rawUserTask: prompt, isAlternateBuffer: () => isAlternateBuffer(sessionId) },
+        {
+          isSSH: !!session?.sshProfileId,
+          sessionId,
+          rawUserTask: prompt,
+          isAlternateBuffer: () => isAlternateBuffer(sessionId),
+          // Full, untruncated thread so read_history can recall anything the
+          // budget-limited context block above had to leave out.
+          conversation: (session?.interactions || [])
+            .filter((i) => typeof i.content === "string")
+            .map((i) => ({ role: i.role, content: i.content as string })),
+        },
         async (description: string) => {
           if (alwaysAllowRef.current) return;
           setPendingCommand(description);

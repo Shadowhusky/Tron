@@ -81,6 +81,12 @@ export const AGENT_TOOLS: OpenAITool[] = [
   }),
   tool("remember", "Store a short note for later in this session.", { content: str("The note") }),
   tool("read_skill", "Expand a listed skill's full guidance.", { name: str("Skill name") }),
+  tool(
+    "read_history",
+    "Recall earlier turns of THIS conversation in full. Use when a short follow-up ('continue', 'do it again', 'more') refers to something older than the context you were given, or when you need the exact wording of a previous request.",
+    { query: str("Optional keywords to filter to matching turns. Omit for the most recent turns.") },
+    [],
+  ),
   tool("get_recent_blocks", "Get the last N command/output blocks from the terminal.", {
     n: { type: "integer", description: "How many blocks" },
   }, []),
@@ -154,4 +160,35 @@ export class ToolCallAssembler {
       })
       .join("\n");
   }
+}
+
+/**
+ * Required argument names per tool, derived from the schemas above so there is
+ * one source of truth.
+ *
+ * Weak models routinely emit a tool call with the arguments missing entirely —
+ * `{"tool":"execute_command"}` with no `command`. Before this map existed those
+ * calls reached the handlers, where `action.command.split(...)` threw
+ * "Cannot read properties of undefined (reading 'split')". That TypeError
+ * escaped runAgent and ended the whole run after a single successful step
+ * (log ddb57d1bbd, qwen3.8 on LM Studio).
+ */
+export const REQUIRED_TOOL_ARGS: Record<string, string[]> = Object.fromEntries(
+  AGENT_TOOLS.map((t) => [
+    t.function.name,
+    (t.function.parameters.required as string[] | undefined) ?? [],
+  ]),
+);
+
+/** Names of required arguments that are missing or blank on an action. */
+export function missingToolArgs(action: Record<string, unknown>): string[] {
+  const required = REQUIRED_TOOL_ARGS[String(action.tool)];
+  if (!required) return [];
+  return required.filter((key) => {
+    const v = action[key];
+    if (v === undefined || v === null) return true;
+    if (typeof v === "string") return v.trim() === "";
+    if (Array.isArray(v)) return v.length === 0;
+    return false;
+  });
 }
