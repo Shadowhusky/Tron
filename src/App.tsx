@@ -31,7 +31,10 @@ import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
 import { getActiveRemoteConnections, disconnectRemote } from "./services/remote-bridge";
 import { isTouchDevice, isElectronApp } from "./utils/platform";
-import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye, Columns2 } from "lucide-react";
+import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye, Columns2, ArrowLeftRight } from "lucide-react";
+import { forwardOpensLocally, parseLoopbackUrl, rewriteToForward } from "./utils/portForward";
+import { ensureLocalForward, openUrlExternally } from "./services/portForwards";
+import { usePortForwards } from "./hooks/usePortForwards";
 import AgentStatusBar from "./pixel-agents/components/AgentStatusBar";
 
 /**
@@ -143,7 +146,7 @@ const AppContent = () => {
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
   const [updateVersion, setUpdateVersion] = useState("");
   const [updateNotes, setUpdateNotes] = useState("");
-  const [linkPopover, setLinkPopover] = useState<{ url: string; x: number; y: number } | null>(null);
+  const [linkPopover, setLinkPopover] = useState<{ url: string; x: number; y: number; sessionId?: string } | null>(null);
   const linkAnchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
     getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
   });
@@ -318,7 +321,7 @@ const AppContent = () => {
   // installs its pointer-down-outside listener (otherwise it closes immediately).
   useEffect(() => {
     const handler = (e: Event) => {
-      const { url, x, y } = (e as CustomEvent).detail;
+      const { url, x, y, sessionId } = (e as CustomEvent).detail;
       if (!url) return;
       // file:// URLs — open directly in system file manager, skip popover
       if (url.startsWith("file://")) {
@@ -330,11 +333,45 @@ const AppContent = () => {
         }
         return;
       }
-      requestAnimationFrame(() => setLinkPopover({ url, x: x ?? 0, y: y ?? 0 }));
+      requestAnimationFrame(() => setLinkPopover({ url, x: x ?? 0, y: y ?? 0, sessionId }));
     };
     window.addEventListener("tron:linkClicked", handler);
     return () => window.removeEventListener("tron:linkClicked", handler);
   }, []);
+
+  // A localhost URL printed by an SSH pane lives on the remote machine: open it
+  // through a local port forward (created on demand, reused when it exists).
+  const linkSession = linkPopover?.sessionId ? sessions.get(linkPopover.sessionId) : undefined;
+  const linkLoopback = linkPopover && linkSession?.sshProfileId ? parseLoopbackUrl(linkPopover.url) : null;
+  const linkForwardable =
+    !!linkLoopback &&
+    forwardOpensLocally({
+      isElectron: isElectronApp(),
+      locationHostname: window.location.hostname,
+      sessionRemote: !!linkSession?.remoteUrl,
+    });
+  const linkSessionForwards = usePortForwards(linkPopover?.sessionId, !!linkLoopback);
+  const linkExistingForward = linkLoopback
+    ? linkSessionForwards.find(
+        (f) =>
+          f.type === "local" &&
+          f.status === "active" &&
+          f.remotePort === linkLoopback.port &&
+          f.remoteHost === linkLoopback.forwardHost,
+      )
+    : undefined;
+
+  const resolveLinkUrl = async (url: string, sessionId: string | undefined): Promise<string> => {
+    if (!sessionId || !linkLoopback || !linkForwardable) return url;
+    try {
+      const rec = await ensureLocalForward(sessionId, linkLoopback.port, linkLoopback.forwardHost);
+      if (rec.status === "active") return rewriteToForward(url, rec.localPort);
+      window.dispatchEvent(new CustomEvent("tron:toast", { detail: { message: `Port forward failed: ${rec.error}` } }));
+    } catch (e) {
+      window.dispatchEvent(new CustomEvent("tron:toast", { detail: { message: `Port forward failed: ${(e as Error).message}` } }));
+    }
+    return url;
+  };
 
   // Listen for file path clicks — show file popover at click position
   useEffect(() => {
@@ -559,6 +596,9 @@ const AppContent = () => {
         { id: "toggle-input", label: "Toggle Input Box", hint: fmt("togglePanelInput"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "input" }) },
         { id: "toggle-hints", label: "Toggle Hints Bar", hint: fmt("togglePanelHints"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "hints" }) },
         { id: "toggle-footer", label: "Toggle Footer Bar", hint: fmt("togglePanelFooter"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "footer" }) },
+      ] : []),
+      ...(activeSessionId && activeSess?.sshProfileId ? [
+        { id: "forward-port", label: "Forward a Port…", section: "Terminal", run: evt("tron:openPortForwards", { sessionId: activeSessionId }) },
       ] : []),
       ...(activeCwd && isElectronApp() && activeSess && !activeSess.sshProfileId && !activeSess.remoteUrl ? [
         // Local sessions in the desktop app only: an SSH/remote cwd is a path
@@ -959,19 +999,28 @@ const AppContent = () => {
             }`}>
               {linkPopover?.url}
             </div>
+            {linkLoopback && (
+              <div
+                data-testid="link-forward-hint"
+                className={`flex items-center gap-1.5 px-3 pb-1.5 text-[11px] ${
+                  resolvedTheme === "light" ? "text-gray-500" : "text-gray-400"
+                }`}
+              >
+                <ArrowLeftRight className="h-3 w-3 shrink-0" />
+                {!linkForwardable
+                  ? "On the SSH host — forwards listen on the Tron server, not this device"
+                  : linkExistingForward
+                    ? `via forward → localhost:${linkExistingForward.localPort}`
+                    : `Opens through an SSH forward of port ${linkLoopback.port}`}
+              </div>
+            )}
             <div className={`my-0.5 h-px ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`} />
             <button
               className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-colors ${
                 resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
               }`}
               onClick={() => {
-                if (linkPopover) {
-                  if (window.electron?.ipcRenderer) {
-                    window.electron.ipcRenderer.invoke("shell.openExternal", linkPopover.url)?.catch(() => {});
-                  } else {
-                    window.open(linkPopover.url, "_blank", "noopener,noreferrer");
-                  }
-                }
+                if (linkPopover) resolveLinkUrl(linkPopover.url, linkPopover.sessionId).then(openUrlExternally);
                 setLinkPopover(null);
               }}
             >
@@ -983,7 +1032,7 @@ const AppContent = () => {
                 resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
               }`}
               onClick={() => {
-                if (linkPopover) openBrowserTab(linkPopover.url);
+                if (linkPopover) resolveLinkUrl(linkPopover.url, linkPopover.sessionId).then((u) => openBrowserTab(u));
                 setLinkPopover(null);
               }}
             >
@@ -995,7 +1044,11 @@ const AppContent = () => {
                 resolvedTheme === "light" ? "cursor-pointer hover:bg-gray-100" : "cursor-pointer hover:bg-white/10"
               }`}
               onClick={() => {
-                if (linkPopover) splitUserAction("horizontal", { kind: "browser", url: linkPopover.url });
+                if (linkPopover) {
+                  resolveLinkUrl(linkPopover.url, linkPopover.sessionId).then((u) =>
+                    splitUserAction("horizontal", { kind: "browser", url: u }),
+                  );
+                }
                 setLinkPopover(null);
               }}
             >

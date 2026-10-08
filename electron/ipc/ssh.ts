@@ -1,6 +1,14 @@
 import { ipcMain, BrowserWindow, app } from "electron";
 import { Client, ConnectConfig } from "ssh2";
 import { bufferIfExecActive } from "./terminal";
+import {
+  ForwardManager,
+  sameForwardSpec,
+  toPersistedSpec,
+  validateForwardSpec,
+  type ForwardRecord,
+  type ForwardSpec,
+} from "./sshForward";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -38,6 +46,7 @@ interface SSHProfile {
   savedPassphrase?: string;
   fingerprint?: string;
   lastConnected?: number;
+  forwards?: ForwardSpec[];
 }
 
 interface Disposable {
@@ -291,6 +300,11 @@ class SSHSession implements PtyLike {
 
 export const sshSessionIds = new Set<string>();
 export const sshSessions = new Map<string, SSHSession>();
+/** sessionId → SSH profile id, so forwards can be remembered per profile. */
+const sshSessionProfiles = new Map<string, string>();
+
+let emitForwards: (sessionId: string, forwards: ForwardRecord[]) => void = () => {};
+const forwardManager = new ForwardManager((sessionId, forwards) => emitForwards(sessionId, forwards));
 
 // --- Profile Persistence ---
 
@@ -315,6 +329,16 @@ function writeProfiles(profiles: SSHProfile[]): boolean {
   } catch { return false; }
 }
 
+function updateProfileForwards(sessionId: string, update: (forwards: ForwardSpec[]) => ForwardSpec[]): void {
+  const profileId = sshSessionProfiles.get(sessionId);
+  if (!profileId) return;
+  const profiles = readProfiles();
+  const profile = profiles.find((p) => p.id === profileId);
+  if (!profile) return;
+  profile.forwards = update(profile.forwards || []);
+  writeProfiles(profiles);
+}
+
 // --- Register IPC Handlers ---
 
 export function registerSSHHandlers(
@@ -322,6 +346,11 @@ export function registerSSHHandlers(
   getSessions: () => Map<string, any>,
   getSessionHistory: () => Map<string, string>,
 ) {
+  emitForwards = (sessionId, forwards) => {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) win.webContents.send("ssh.forwardsChanged", { sessionId, forwards });
+  };
+
   ipcMain.handle("ssh.connect", async (_event, config: SSHConnectionConfig) => {
     const session = new SSHSession();
     const sessionId = config.sessionId || `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -331,6 +360,7 @@ export function registerSSHHandlers(
     // Register in tracking
     sshSessionIds.add(sessionId);
     sshSessions.set(sessionId, session);
+    sshSessionProfiles.set(sessionId, config.id);
 
     const sessions = getSessions();
     const history = getSessionHistory();
@@ -362,16 +392,19 @@ export function registerSSHHandlers(
         mainWindow.webContents.send("terminal.exit", { id: sessionId, exitCode: 0 });
         mainWindow.webContents.send("ssh.statusChange", { sessionId, status: "disconnected" });
       }
+      forwardManager.closeSession(sessionId);
       sessions.delete(sessionId);
       history.delete(sessionId);
       sshSessionIds.delete(sessionId);
       sshSessions.delete(sessionId);
+      sshSessionProfiles.delete(sessionId);
     });
 
     // Save profile
+    const profiles = readProfiles();
+    const existingIdx = profiles.findIndex((p: SSHProfile) => p.id === config.id);
+    const savedForwards = existingIdx >= 0 ? profiles[existingIdx].forwards : undefined;
     if (config.saveCredentials || config.name) {
-      const profiles = readProfiles();
-      const existingIdx = profiles.findIndex((p: SSHProfile) => p.id === config.id);
       const profile: SSHProfile = {
         id: config.id,
         name: config.name || `${config.username}@${config.host}`,
@@ -385,6 +418,7 @@ export function registerSSHHandlers(
         savedPassphrase: config.saveCredentials ? config.passphrase : undefined,
         fingerprint: config.fingerprint,
         lastConnected: Date.now(),
+        forwards: savedForwards,
       };
       if (existingIdx >= 0) profiles[existingIdx] = profile;
       else profiles.push(profile);
@@ -395,8 +429,37 @@ export function registerSSHHandlers(
       mainWindow.webContents.send("ssh.statusChange", { sessionId, status: "connected" });
     }
 
+    for (const spec of savedForwards || []) {
+      forwardManager.add(sessionId, session.sshClient, spec, { persist: true }).catch(() => {});
+    }
+
     return { sessionId };
   });
+
+  ipcMain.handle("ssh.forward.add", async (_event, data: { sessionId: string; persist?: boolean } & Record<string, unknown>) => {
+    const session = sshSessions.get(data?.sessionId);
+    if (!session) throw new Error("Not an active SSH session");
+    const spec = validateForwardSpec(data);
+    if (typeof spec === "string") throw new Error(spec);
+    const record = await forwardManager.add(data.sessionId, session.sshClient, spec, { persist: data.persist });
+    if (data.persist && record.status === "active") {
+      const saved = toPersistedSpec(record);
+      updateProfileForwards(data.sessionId, (list) => [...list.filter((f) => !sameForwardSpec(f, saved)), saved]);
+    }
+    return record;
+  });
+
+  ipcMain.handle("ssh.forward.remove", (_event, data: { sessionId: string; id: string }) => {
+    const record = forwardManager.list(data?.sessionId).find((f) => f.id === data?.id);
+    if (!record) return false;
+    if (record.persist) {
+      const saved = toPersistedSpec(record);
+      updateProfileForwards(data.sessionId, (list) => list.filter((f) => !sameForwardSpec(f, saved)));
+    }
+    return forwardManager.remove(data.sessionId, data.id);
+  });
+
+  ipcMain.handle("ssh.forward.list", (_event, sessionId: string) => forwardManager.list(sessionId));
 
   ipcMain.handle("ssh.testConnection", async (_event, config: any) => {
     const client = new Client();
@@ -464,6 +527,7 @@ export function registerSSHHandlers(
 }
 
 export function cleanupAllSSHSessions() {
+  for (const sessionId of sshSessions.keys()) forwardManager.closeSession(sessionId);
   for (const [, session] of sshSessions) {
     try { session.kill(); } catch { /* ignore */ }
   }

@@ -579,6 +579,7 @@ function installVisibilityHandler(): void {
 
 /** Channels where the sessionId is passed as the direct data argument (string). */
 const SESSION_AS_DATA_CHANNELS = new Set([
+  "ssh.forward.list",
   "terminal.sessionExists",
   "terminal.getHistory",
   "terminal.getCwd",
@@ -589,6 +590,8 @@ const SESSION_AS_DATA_CHANNELS = new Set([
 
 /** Channels where data is an object with a sessionId field. */
 const SESSION_IN_OBJECT_CHANNELS = new Set([
+  "ssh.forward.add",
+  "ssh.forward.remove",
   "terminal.create",
   "terminal.checkCommand",
   "terminal.exec",
