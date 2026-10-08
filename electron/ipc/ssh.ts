@@ -3,6 +3,8 @@ import { Client, ConnectConfig } from "ssh2";
 import { bufferIfExecActive } from "./terminal";
 import {
   ForwardManager,
+  missingRememberedForwards,
+  preserveProfileForwards,
   sameForwardSpec,
   toPersistedSpec,
   validateForwardSpec,
@@ -329,6 +331,23 @@ function writeProfiles(profiles: SSHProfile[]): boolean {
   } catch { return false; }
 }
 
+/**
+ * Run a profile's remembered forwards on one of its live sessions (the newest)
+ * — once per profile, so splits and duplicate tabs don't each grab a port.
+ * Called on connect and when a session ends, which hands the forwards over.
+ */
+function applyRememberedForwards(profileId: string): void {
+  const specs = readProfiles().find((p) => p.id === profileId)?.forwards || [];
+  if (!specs.length) return;
+  const live = [...sshSessionProfiles].filter(([sid, pid]) => pid === profileId && sshSessions.has(sid)).map(([sid]) => sid);
+  const target = live[live.length - 1];
+  if (!target) return;
+  const running = live.flatMap((sid) => forwardManager.list(sid));
+  for (const spec of missingRememberedForwards(specs, running)) {
+    forwardManager.add(target, sshSessions.get(target)!.sshClient, spec, { persist: true }).catch(() => {});
+  }
+}
+
 function updateProfileForwards(sessionId: string, update: (forwards: ForwardSpec[]) => ForwardSpec[]): void {
   const profileId = sshSessionProfiles.get(sessionId);
   if (!profileId) return;
@@ -398,6 +417,7 @@ export function registerSSHHandlers(
       sshSessionIds.delete(sessionId);
       sshSessions.delete(sessionId);
       sshSessionProfiles.delete(sessionId);
+      applyRememberedForwards(config.id);
     });
 
     // Save profile
@@ -429,9 +449,7 @@ export function registerSSHHandlers(
       mainWindow.webContents.send("ssh.statusChange", { sessionId, status: "connected" });
     }
 
-    for (const spec of savedForwards || []) {
-      forwardManager.add(sessionId, session.sshClient, spec, { persist: true }).catch(() => {});
-    }
+    applyRememberedForwards(config.id);
 
     return { sessionId };
   });
@@ -522,7 +540,7 @@ export function registerSSHHandlers(
   });
 
   ipcMain.handle("ssh.profiles.write", (_event, profiles: SSHProfile[]) => {
-    return writeProfiles(profiles);
+    return writeProfiles(preserveProfileForwards(readProfiles(), profiles));
   });
 }
 

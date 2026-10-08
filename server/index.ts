@@ -605,6 +605,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   // Update pushEvent for all existing sessions owned by this client
   // (handles WS reconnect without page reload — e.g., mobile sleep/wake)
   terminal.updateClientPushEvent(clientId, pushEvent);
+  ssh.updateClientForwardPushers(clientId, pushEvent, terminal.getSessionOwners());
 
   ws.on("message", async (raw: Buffer) => {
     let msg: any;
@@ -666,7 +667,13 @@ const SSH_ONLY_BLOCKED_CHANNELS = new Set([
   "cliAgent.respond",
   "cliAgent.stop",
   "cliAgent.complete",
+  // Forward listeners and -R targets would live on the gateway's own loopback,
+  // shared by every user of the gateway.
+  "ssh.forward.add",
+  "ssh.forward.remove",
+  "ssh.forward.list",
 ]);
+if (sshOnly) ssh.disableForwarding();
 
 // Terminal channels that take a sessionId — in SSH-only mode, must be an SSH session
 const SSH_ONLY_SESSION_CHANNELS = new Set([
@@ -754,7 +761,7 @@ async function handleInvoke(
     case "ssh.profiles.read":
       return ssh.readProfiles();
     case "ssh.profiles.write":
-      return ssh.writeProfiles(data);
+      return ssh.writeClientProfiles(data);
     case "ssh.forward.add":
     case "ssh.forward.remove":
     case "ssh.forward.list": {

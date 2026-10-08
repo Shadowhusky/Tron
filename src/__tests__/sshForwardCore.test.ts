@@ -1,7 +1,10 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { EventEmitter } from "events";
 import fs from "fs";
 import net from "net";
 import path from "path";
+import { PassThrough } from "stream";
+import type { Client } from "ssh2";
 import {
   parseSocks5Greeting,
   parseSocks5Request,
@@ -10,6 +13,9 @@ import {
   validateForwardSpec,
   toPersistedSpec,
   sameForwardSpec,
+  preserveProfileForwards,
+  missingRememberedForwards,
+  ForwardManager,
   type ForwardRecord,
 } from "../../electron/ipc/sshForward";
 
@@ -135,6 +141,172 @@ describe("listenOnFreePort", () => {
     await listenOnFreePort(s);
     expect((s.address() as net.AddressInfo).address).toBe("127.0.0.1");
   });
+
+  // Binding 127.0.0.1:P succeeds even when a local server holds [::1]:P or
+  // *:P (SO_REUSEADDR), and browsers resolve localhost to ::1 first — the
+  // forward would silently shadow the user's own server.
+  const occupyOn = async (host: string, port = 0): Promise<number | null> => {
+    const s = net.createServer();
+    const ok = await new Promise<boolean>((r) => {
+      s.once("error", () => r(false));
+      s.listen(port, host, () => r(true));
+    });
+    if (!ok) return null;
+    servers.push(s);
+    return (s.address() as net.AddressInfo).port;
+  };
+
+  it("skips a port a local server answers on over IPv6 loopback", async () => {
+    const busy = await occupyOn("::1");
+    if (busy === null) return; // no IPv6 loopback on this machine
+    const s = net.createServer();
+    servers.push(s);
+    expect(await listenOnFreePort(s, busy)).not.toBe(busy);
+  });
+
+  it("skips a port a local server holds on the wildcard address", async () => {
+    const busy = await occupyOn("0.0.0.0");
+    const s = net.createServer();
+    servers.push(s);
+    expect(await listenOnFreePort(s, busy!)).not.toBe(busy);
+  });
+});
+
+/** Just enough of ssh2's Client for ForwardManager; forwardOut answers via `onForwardOut`. */
+function fakeClient(onForwardOut: (cb: (err: Error | undefined, ch: PassThrough) => void) => void = () => {}) {
+  const ee = new EventEmitter() as EventEmitter & Record<string, unknown>;
+  ee.forwardOut = (_a: string, _b: number, _c: string, _d: number, cb: (err: Error | undefined, ch: PassThrough) => void) =>
+    onForwardOut(cb);
+  ee.forwardIn = (_addr: string, port: number, cb: (err: Error | undefined, port: number) => void) => cb(undefined, port || 40000);
+  ee.unforwardIn = () => {};
+  return ee as unknown as Client;
+}
+
+/** A channel that echoes what it is sent, standing in for the remote end. */
+function echoChannel(): PassThrough {
+  const ch = new PassThrough() as PassThrough & { close: () => void };
+  ch.close = () => ch.destroy();
+  return ch;
+}
+
+describe("ForwardManager edge cases", () => {
+  const managers: ForwardManager[] = [];
+  afterEach(() => {
+    for (const m of managers.splice(0)) m.closeSession("s1");
+  });
+  const manager = (onChange: (sid: string, list: ForwardRecord[]) => void = () => {}) => {
+    const m = new ForwardManager(onChange);
+    managers.push(m);
+    return m;
+  };
+
+  it("survives a client resetting the connection before the tunnel opens", async () => {
+    const mgr = manager();
+    const rec = await mgr.add("s1", fakeClient(), { type: "local", remoteHost: "localhost", remotePort: 5173 });
+    const errors: unknown[] = [];
+    const onUncaught = (e: unknown) => errors.push(e);
+    process.on("uncaughtException", onUncaught);
+    try {
+      await new Promise<void>((resolve) => {
+        const sock = net.connect(rec.localPort, "127.0.0.1", () => {
+          sock.resetAndDestroy();
+          setTimeout(resolve, 150);
+        });
+      });
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it("shares one listener between concurrent identical requests", async () => {
+    const mgr = manager();
+    const client = fakeClient();
+    const [a, b] = await Promise.all([
+      mgr.add("s1", client, { type: "local", remoteHost: "localhost", remotePort: 5173 }),
+      mgr.add("s1", client, { type: "local", remoteHost: "localhost", remotePort: 5173 }),
+    ]);
+    expect(b.id).toBe(a.id);
+    expect(mgr.list("s1")).toHaveLength(1);
+  });
+
+  it("tracks every forward when different ones are added concurrently", async () => {
+    const mgr = manager();
+    const client = fakeClient();
+    await Promise.all([
+      mgr.add("s1", client, { type: "local", remoteHost: "localhost", remotePort: 5173 }),
+      mgr.add("s1", client, { type: "dynamic" }),
+    ]);
+    expect(mgr.list("s1").map((f) => f.type).sort()).toEqual(["dynamic", "local"]);
+  });
+
+  it("marks an existing forward as remembered and reports the change", async () => {
+    const changes: ForwardRecord[][] = [];
+    const mgr = manager((_sid, list) => changes.push(list));
+    const client = fakeClient();
+    const first = await mgr.add("s1", client, { type: "local", remoteHost: "localhost", remotePort: 5173 });
+    expect(first.persist).toBeUndefined();
+    const again = await mgr.add("s1", client, { type: "local", remoteHost: "localhost", remotePort: 5173 }, { persist: true });
+    expect(again.id).toBe(first.id);
+    expect(again.persist).toBe(true);
+    expect(changes.at(-1)?.[0].persist).toBe(true);
+  });
+
+  it("does not drop SOCKS client data sent while the tunnel is opening", async () => {
+    let open: ((err: Error | undefined, ch: PassThrough) => void) | undefined;
+    const mgr = manager();
+    const rec = await mgr.add("s1", fakeClient((cb) => { open = cb; }), { type: "dynamic" });
+    const received = await new Promise<string>((resolve, reject) => {
+      const sock = net.connect(rec.localPort, "127.0.0.1");
+      let stage = 0;
+      let buf = Buffer.alloc(0);
+      sock.on("data", (d) => {
+        buf = Buffer.concat([buf, d]);
+        if (stage === 0 && buf.length >= 2) {
+          buf = buf.subarray(2);
+          stage = 1;
+          sock.write(Buffer.from([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x1f, 0x90]));
+          setTimeout(() => {
+            sock.write("early");
+            setTimeout(() => open?.(undefined, echoChannel()), 50);
+          }, 50);
+        }
+        if (stage === 1 && buf.length >= 10 + 5) {
+          sock.destroy();
+          resolve(buf.subarray(10).toString());
+        }
+      });
+      sock.on("error", reject);
+      sock.write(Buffer.from([0x05, 0x01, 0x00]));
+      setTimeout(() => reject(new Error("timed out")), 2000);
+    });
+    expect(received).toBe("early");
+  });
+
+  it("rejects remote connections that match no forward", async () => {
+    const mgr = manager();
+    const client = fakeClient();
+    await mgr.add("s1", client, { type: "remote", remotePort: 9000, localPort: 3000 });
+    const accept = vi.fn();
+    const reject = vi.fn();
+    (client as unknown as EventEmitter).emit("tcp connection", { destPort: 9999 }, accept, reject);
+    expect(reject).toHaveBeenCalled();
+    expect(accept).not.toHaveBeenCalled();
+  });
+
+  it("closes forwards that finish starting after their session is gone", async () => {
+    const mgr = manager();
+    const pending = mgr.add("s1", fakeClient(), { type: "dynamic" });
+    mgr.closeSession("s1");
+    const rec = await pending;
+    expect(mgr.list("s1")).toEqual([]);
+    await expect(
+      new Promise((resolve, reject) => {
+        const sock = net.connect(rec.localPort, "127.0.0.1", () => { sock.destroy(); resolve("connected"); });
+        sock.on("error", reject);
+      }),
+    ).rejects.toThrow(/ECONNREFUSED/);
+  });
 });
 
 describe("validateForwardSpec", () => {
@@ -185,7 +357,7 @@ describe("persisted forward specs", () => {
 
   it("keeps only what is needed to recreate the forward", () => {
     expect(toPersistedSpec(rec({}))).toEqual({ type: "local", remoteHost: "localhost", remotePort: 5173 });
-    expect(toPersistedSpec(rec({ type: "dynamic", localPort: 1080, remoteHost: "", remotePort: 0 }))).toEqual({
+    expect(toPersistedSpec(rec({ type: "dynamic", localPort: 1080, remoteHost: "", remotePort: 0, requestedLocalPort: 1080 }))).toEqual({
       type: "dynamic",
       localPort: 1080,
     });
@@ -204,6 +376,48 @@ describe("persisted forward specs", () => {
 
   it("never matches across types", () => {
     expect(sameForwardSpec({ type: "dynamic", localPort: 5173 }, { type: "local", remoteHost: "localhost", remotePort: 5173 })).toBe(false);
+  });
+
+  it("remembers the local port the user chose, not a fallback", () => {
+    expect(toPersistedSpec(rec({ localPort: 8000, requestedLocalPort: 8000 }))).toEqual({
+      type: "local", remoteHost: "localhost", remotePort: 5173, localPort: 8000,
+    });
+    // SOCKS fell back from 1080 to 1081: next connect should try 1080 again
+    expect(toPersistedSpec(rec({ type: "dynamic", localPort: 1081, remoteHost: "", remotePort: 0 }))).toEqual({ type: "dynamic" });
+  });
+});
+
+describe("preserveProfileForwards", () => {
+  const fwd = [{ type: "local" as const, remoteHost: "localhost", remotePort: 5173 }];
+
+  it("carries remembered forwards onto a profile rebuilt without them", () => {
+    const out = preserveProfileForwards([{ id: "p1", host: "a", forwards: fwd }], [{ id: "p1", host: "b" }]);
+    expect(out).toEqual([{ id: "p1", host: "b", forwards: fwd }]);
+  });
+
+  it("respects an explicit forwards list, including an empty one", () => {
+    expect(preserveProfileForwards([{ id: "p1", forwards: fwd }], [{ id: "p1", forwards: [] }])).toEqual([{ id: "p1", forwards: [] }]);
+  });
+
+  it("leaves new and forward-less profiles untouched", () => {
+    expect(preserveProfileForwards([{ id: "p1" }], [{ id: "p1" }, { id: "p2" }])).toEqual([{ id: "p1" }, { id: "p2" }]);
+  });
+});
+
+describe("missingRememberedForwards", () => {
+  const live = (over: Partial<ForwardRecord>): ForwardRecord => ({
+    id: "x", type: "local", localHost: "127.0.0.1", localPort: 5174,
+    remoteHost: "localhost", remotePort: 5173, status: "active", ...over,
+  });
+  const web = { type: "local" as const, remoteHost: "localhost", remotePort: 5173 };
+  const socks = { type: "dynamic" as const };
+
+  it("skips forwards another session of the profile already runs", () => {
+    expect(missingRememberedForwards([web, socks], [live({})])).toEqual([socks]);
+  });
+
+  it("returns everything when nothing is running", () => {
+    expect(missingRememberedForwards([web, socks], [])).toEqual([web, socks]);
   });
 });
 

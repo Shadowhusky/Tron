@@ -26,6 +26,8 @@ export interface ForwardRecord {
   status: "active" | "error";
   error?: string;
   persist?: boolean;
+  /** Local port the user asked for — what a profile remembers (absent = defaulted). */
+  requestedLocalPort?: number;
 }
 
 const LOOPBACK = "127.0.0.1";
@@ -62,9 +64,11 @@ export function validateForwardSpec(input: unknown): ForwardSpec | string {
 
 /** What a profile stores to recreate a forward on the next connect. */
 export function toPersistedSpec(r: ForwardRecord): ForwardSpec {
-  if (r.type === "dynamic") return { type: "dynamic", localPort: r.localPort };
+  if (r.type === "dynamic") return r.requestedLocalPort ? { type: "dynamic", localPort: r.requestedLocalPort } : { type: "dynamic" };
   if (r.type === "remote") return { type: "remote", localPort: r.localPort, remoteHost: r.remoteHost, remotePort: r.remotePort };
-  return { type: "local", remoteHost: r.remoteHost, remotePort: r.remotePort };
+  const spec: ForwardSpec = { type: "local", remoteHost: r.remoteHost, remotePort: r.remotePort };
+  if (r.requestedLocalPort) spec.localPort = r.requestedLocalPort;
+  return spec;
 }
 
 export function sameForwardSpec(a: ForwardSpec, b: ForwardSpec): boolean {
@@ -72,6 +76,20 @@ export function sameForwardSpec(a: ForwardSpec, b: ForwardSpec): boolean {
   if (a.type === "dynamic") return a.localPort === b.localPort;
   if (a.type === "remote") return a.remotePort === b.remotePort && a.localPort === b.localPort;
   return a.remoteHost === b.remoteHost && a.remotePort === b.remotePort;
+}
+
+/**
+ * Renderer profile saves rebuild each profile field by field and know nothing
+ * about remembered forwards — carry them over unless the caller set the list.
+ */
+export function preserveProfileForwards<T extends { id: string; forwards?: ForwardSpec[] }>(existing: T[], incoming: T[]): T[] {
+  const saved = new Map(existing.map((p) => [p.id, p.forwards]));
+  return incoming.map((p) => (p.forwards !== undefined || !saved.get(p.id) ? p : { ...p, forwards: saved.get(p.id) }));
+}
+
+/** Remembered forwards no live session of the profile runs yet — each runs once per profile. */
+export function missingRememberedForwards(specs: ForwardSpec[], live: ForwardRecord[]): ForwardSpec[] {
+  return specs.filter((s) => !live.some((r) => sameForwardSpec(s, toPersistedSpec(r))));
 }
 
 // ---------------------------------------------------------------------------
@@ -146,10 +164,29 @@ function tryListen(server: net.Server, port: number): Promise<number | null> {
   });
 }
 
-/** Listen on loopback: the preferred port, else a nearby free one, else any. */
+/** Whether something already answers on host:port. */
+function answers(port: number, host: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host });
+    const done = (v: boolean) => {
+      sock.destroy();
+      resolve(v);
+    };
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    sock.setTimeout(300, () => done(false));
+  });
+}
+
+/**
+ * Listen on loopback: the preferred port, else a nearby free one, else any.
+ * A port some local server already answers on (over ::1, or a wildcard bind
+ * SO_REUSEADDR would let us share) is skipped so a forward never shadows it.
+ */
 export async function listenOnFreePort(server: net.Server, preferred?: number): Promise<number> {
   if (preferred && preferred > 0) {
     for (let p = preferred; p < preferred + PORT_SEARCH_SPAN && p <= 65535; p++) {
+      if ((await answers(p, LOOPBACK)) || (await answers(p, "::1"))) continue;
       const bound = await tryListen(server, p);
       if (bound !== null) return bound;
     }
@@ -171,8 +208,14 @@ interface Entry {
   close: () => void;
 }
 
+function specKey(spec: ForwardSpec): string {
+  return spec.type === "local" ? `local ${spec.remoteHost || "localhost"}:${spec.remotePort}` : JSON.stringify(spec);
+}
+
 export class ForwardManager {
   private sessions = new Map<string, Entry[]>();
+  private closedSessions = new Set<string>();
+  private inflight = new Map<string, Promise<ForwardRecord>>();
   private routedClients = new WeakSet<Client>();
   private remoteSockets = new Map<string, Set<net.Socket>>();
   private nextId = 1;
@@ -193,10 +236,22 @@ export class ForwardManager {
     spec: ForwardSpec,
     opts: { persist?: boolean } = {},
   ): Promise<ForwardRecord> {
-    const entries = this.sessions.get(sessionId) || [];
+    // Identical requests in flight (a double click) share one listener.
+    const key = `${sessionId} ${specKey(spec)}`;
+    let pending = this.inflight.get(key);
+    if (!pending) {
+      pending = this.create(sessionId, client, spec, opts).finally(() => this.inflight.delete(key));
+      this.inflight.set(key, pending);
+    }
+    const record = await pending;
+    if (opts.persist) this.markPersisted(sessionId, record.id);
+    return this.list(sessionId).find((r) => r.id === record.id) ?? record;
+  }
+
+  private async create(sessionId: string, client: Client, spec: ForwardSpec, opts: { persist?: boolean }): Promise<ForwardRecord> {
     if (spec.type === "local") {
       const host = spec.remoteHost || "localhost";
-      const existing = entries.find(
+      const existing = this.sessions.get(sessionId)?.find(
         (e) =>
           e.record.type === "local" &&
           e.record.status === "active" &&
@@ -212,11 +267,26 @@ export class ForwardManager {
         : spec.type === "remote"
           ? await this.startRemote(client, spec)
           : await this.startDynamic(client, spec);
+    if (this.closedSessions.has(sessionId)) {
+      entry.close();
+      return { ...entry.record, status: "error", error: "SSH session closed" };
+    }
     entry.record.persist = opts.persist || undefined;
+    if (spec.localPort) entry.record.requestedLocalPort = spec.localPort;
+    // Re-read after the await: concurrent adds for one session must all land
+    // in the same list, not overwrite each other's copy.
+    const entries = this.sessions.get(sessionId) || [];
     entries.push(entry);
     this.sessions.set(sessionId, entries);
     this.emit(sessionId);
     return { ...entry.record };
+  }
+
+  private markPersisted(sessionId: string, id: string) {
+    const entry = this.sessions.get(sessionId)?.find((e) => e.record.id === id);
+    if (!entry || entry.record.persist) return;
+    entry.record.persist = true;
+    this.emit(sessionId);
   }
 
   remove(sessionId: string, id: string): boolean {
@@ -230,6 +300,7 @@ export class ForwardManager {
   }
 
   closeSession(sessionId: string): void {
+    this.closedSessions.add(sessionId);
     const entries = this.sessions.get(sessionId);
     if (!entries) return;
     this.sessions.delete(sessionId);
@@ -252,6 +323,9 @@ export class ForwardManager {
     const server = net.createServer((sock) => {
       sockets.add(sock);
       sock.on("close", () => sockets.delete(sock));
+      // Before forwardOut: a reset during the SSH round trip would otherwise be
+      // an unhandled 'error' that takes down the Electron main process.
+      sock.on("error", () => sock.destroy());
       client.forwardOut(sock.remoteAddress || LOOPBACK, sock.remotePort || 0, remoteHost, remotePort, (err, ch) => {
         if (err) return sock.destroy();
         pipeBoth(sock, ch);
@@ -305,6 +379,9 @@ export class ForwardManager {
           return;
         }
         sock.off("data", onData);
+        // Removing the listener doesn't stop a flowing stream: pause so bytes
+        // sent before the tunnel opens wait for the pipe instead of vanishing.
+        sock.pause();
         if (r.cmd !== 0x01) {
           sock.end(socks5Reply(0x07));
           return;
@@ -365,11 +442,14 @@ export class ForwardManager {
   private ensureRemoteRouting(client: Client) {
     if (this.routedClients.has(client)) return;
     this.routedClients.add(client);
-    client.on("tcp connection", (info, accept) => {
+    client.on("tcp connection", (info, accept, reject) => {
       const entry = [...this.sessions.values()]
         .flat()
         .find((e) => e.client === client && e.record.type === "remote" && e.record.status === "active" && e.record.remotePort === info.destPort);
-      if (!entry) return;
+      if (!entry) {
+        reject();
+        return;
+      }
       const ch = accept();
       const sock = net.connect(entry.record.localPort, entry.record.localHost);
       this.remoteSockets.get(entry.record.id)?.add(sock);

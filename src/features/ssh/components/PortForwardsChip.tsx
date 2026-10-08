@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { ArrowLeftRight, Copy, ExternalLink, X } from "lucide-react";
 import { themeClass } from "../../../utils/theme";
-import { describeForward } from "../../../utils/portForward";
+import { describeForward, forwardLocalAddress } from "../../../utils/portForward";
 import { addPortForward, openUrlExternally, removePortForward } from "../../../services/portForwards";
 import type { ResolvedTheme } from "../../../contexts/ThemeContext";
 import type { PortForward, PortForwardSpec, PortForwardType } from "../../../types";
@@ -113,7 +113,7 @@ function ForwardRow({
   canOpenLocally: boolean;
   onStop: () => void;
 }) {
-  const localUrl = f.type === "dynamic" ? `localhost:${f.localPort}` : `http://localhost:${f.localPort}`;
+  const localUrl = forwardLocalAddress(f);
   const iconBtn = `rounded p-1 transition-colors ${themeClass(resolvedTheme, {
     dark: "text-gray-400 hover:bg-white/10 hover:text-white",
     modern: "text-gray-400 hover:bg-white/10 hover:text-white",

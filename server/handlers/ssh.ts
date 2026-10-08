@@ -5,6 +5,8 @@ import os from "os";
 import { EventPusher, pushSessionData } from "./terminal.js";
 import {
   ForwardManager,
+  missingRememberedForwards,
+  preserveProfileForwards,
   sameForwardSpec,
   toPersistedSpec,
   validateForwardSpec,
@@ -360,6 +362,21 @@ const forwardManager = new ForwardManager((sessionId, forwards: ForwardRecord[])
   forwardPushers.get(sessionId)?.("ssh.forwardsChanged", { sessionId, forwards });
 });
 
+// Off in SSH-only (gateway) mode: listeners and -R targets would sit on the
+// gateway host's own loopback, shared by every user.
+let forwardingEnabled = true;
+
+export function disableForwarding(): void {
+  forwardingEnabled = false;
+}
+
+/** After a WebSocket reconnect, send forward changes to the client's new socket. */
+export function updateClientForwardPushers(clientId: string, pushEvent: EventPusher, ownerMap: Map<string, string>): void {
+  for (const [sessionId, owner] of ownerMap) {
+    if (owner === clientId && sshSessionIds.has(sessionId)) forwardPushers.set(sessionId, pushEvent);
+  }
+}
+
 // --- SSH Profile Persistence ---
 
 function getProfilesPath(): string {
@@ -382,6 +399,11 @@ export function readProfiles(): SSHProfile[] {
   }
 }
 
+/** Profile saves from a client — keeps remembered forwards the client didn't send. */
+export function writeClientProfiles(profiles: SSHProfile[]): boolean {
+  return writeProfiles(preserveProfileForwards(readProfiles(), profiles));
+}
+
 export function writeProfiles(profiles: SSHProfile[]): boolean {
   try {
     const filePath = getProfilesPath();
@@ -389,6 +411,26 @@ export function writeProfiles(profiles: SSHProfile[]): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Run a profile's remembered forwards on one of the owning client's live
+ * sessions (the newest) — once per profile, so splits and duplicate tabs don't
+ * each grab a port. Called on connect and when a session ends (hand-over).
+ */
+function applyRememberedForwards(profileId: string, clientId: string, ownerMap?: Map<string, string>): void {
+  if (!forwardingEnabled) return;
+  const specs = readProfiles().find((p) => p.id === profileId)?.forwards || [];
+  if (!specs.length) return;
+  const live = [...sshSessionProfiles]
+    .filter(([sid, pid]) => pid === profileId && sshSessions.has(sid) && (!ownerMap || ownerMap.get(sid) === clientId))
+    .map(([sid]) => sid);
+  const target = live[live.length - 1];
+  if (!target) return;
+  const running = live.flatMap((sid) => forwardManager.list(sid));
+  for (const spec of missingRememberedForwards(specs, running)) {
+    forwardManager.add(target, sshSessions.get(target)!.sshClient, spec, { persist: true }).catch(() => {});
   }
 }
 
@@ -406,6 +448,7 @@ export async function addForward(
   data: { sessionId: string; persist?: boolean } & Record<string, unknown>,
   pushEvent: EventPusher,
 ): Promise<ForwardRecord> {
+  if (!forwardingEnabled) throw new Error("Port forwarding is not available in SSH-only mode");
   const session = sshSessions.get(data?.sessionId);
   if (!session) throw new Error("Not an active SSH session");
   const spec = validateForwardSpec(data);
@@ -482,6 +525,7 @@ export async function createSSHSession(
     sshSessionProfiles.delete(sessionId);
     forwardPushers.delete(sessionId);
     if (ownerMap) ownerMap.delete(sessionId);
+    applyRememberedForwards(config.id, clientId, ownerMap);
   });
 
   // Save profile if requested
@@ -514,9 +558,7 @@ export async function createSSHSession(
 
   pushEvent("ssh.statusChange", { sessionId, status: "connected" });
 
-  for (const spec of savedForwards || []) {
-    forwardManager.add(sessionId, session.sshClient, spec, { persist: true }).catch(() => {});
-  }
+  applyRememberedForwards(config.id, clientId, ownerMap);
 
   return { sessionId };
 }

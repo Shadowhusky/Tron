@@ -618,7 +618,7 @@ const AppContent = () => {
         { id: "jump-prev-command", label: "Jump to Previous Command", hint: fmt("jumpPrevCommand"), section: "Terminal", run: evt("tron:jumpCommand", { sessionId: activeSessionId, dir: -1 }) },
         { id: "jump-next-command", label: "Jump to Next Command", hint: fmt("jumpNextCommand"), section: "Terminal", run: evt("tron:jumpCommand", { sessionId: activeSessionId, dir: 1 }) },
       ] : []),
-      ...(activeSessionId && activeSess?.sshProfileId ? [
+      ...(activeSessionId && activeSess?.sshProfileId && !isSshOnly() ? [
         { id: "forward-port", label: "Forward a Port…", section: "Terminal", run: evt("tron:openPortForwards", { sessionId: activeSessionId }) },
       ] : []),
       ...(activeCwd && isElectronApp() && activeSess && !activeSess.sshProfileId && !activeSess.remoteUrl ? [
@@ -1031,7 +1031,7 @@ const AppContent = () => {
                 {!linkForwardable
                   ? "On the SSH host — forwards listen on the Tron server, not this device"
                   : linkExistingForward
-                    ? `via forward → localhost:${linkExistingForward.localPort}`
+                    ? `via forward → 127.0.0.1:${linkExistingForward.localPort}`
                     : `Opens through an SSH forward of port ${linkLoopback.port}`}
               </div>
             )}

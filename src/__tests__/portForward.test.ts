@@ -4,6 +4,7 @@ import {
   rewriteToForward,
   forwardOpensLocally,
   describeForward,
+  forwardLocalAddress,
 } from "../utils/portForward";
 import type { PortForward } from "../types";
 
@@ -36,12 +37,27 @@ describe("parseLoopbackUrl", () => {
 });
 
 describe("rewriteToForward", () => {
-  it("points the URL at the local listener and keeps path, query and hash", () => {
-    expect(rewriteToForward("http://0.0.0.0:3000/a/b?x=1#top", 3001)).toBe("http://localhost:3001/a/b?x=1#top");
+  // The listener binds 127.0.0.1 only; "localhost" may resolve to ::1 first
+  // and reach a different local server on the same port.
+  it("points the URL at the IPv4 loopback listener and keeps path, query and hash", () => {
+    expect(rewriteToForward("http://0.0.0.0:3000/a/b?x=1#top", 3001)).toBe("http://127.0.0.1:3001/a/b?x=1#top");
+    expect(rewriteToForward("http://localhost:5173/", 5174)).toBe("http://127.0.0.1:5174/");
   });
 
   it("keeps https", () => {
-    expect(rewriteToForward("https://127.0.0.1:8443/", 8443)).toBe("https://localhost:8443/");
+    expect(rewriteToForward("https://127.0.0.1:8443/", 8443)).toBe("https://127.0.0.1:8443/");
+  });
+});
+
+describe("forwardLocalAddress", () => {
+  const f = (over: Partial<PortForward>): PortForward => ({
+    id: "1", type: "local", localHost: "127.0.0.1", localPort: 5174,
+    remoteHost: "localhost", remotePort: 5173, status: "active", ...over,
+  });
+
+  it("is an http URL for a local forward and host:port for SOCKS", () => {
+    expect(forwardLocalAddress(f({}))).toBe("http://127.0.0.1:5174");
+    expect(forwardLocalAddress(f({ type: "dynamic", localPort: 1080 }))).toBe("127.0.0.1:1080");
   });
 });
 
@@ -69,10 +85,10 @@ describe("describeForward", () => {
   });
 
   it("reads in the direction traffic flows", () => {
-    expect(describeForward(f({}))).toBe("localhost:5174 → localhost:5173");
+    expect(describeForward(f({}))).toBe("127.0.0.1:5174 → localhost:5173");
     expect(describeForward(f({ type: "remote", remoteHost: "127.0.0.1", remotePort: 9000, localPort: 3000 }))).toBe(
-      "remote 127.0.0.1:9000 → localhost:3000",
+      "remote 127.0.0.1:9000 → 127.0.0.1:3000",
     );
-    expect(describeForward(f({ type: "dynamic", localPort: 1080 }))).toBe("SOCKS5 localhost:1080");
+    expect(describeForward(f({ type: "dynamic", localPort: 1080 }))).toBe("SOCKS5 127.0.0.1:1080");
   });
 });
