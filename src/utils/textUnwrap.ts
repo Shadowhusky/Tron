@@ -4,9 +4,9 @@
  * TUI renderers (Claude Code's ink, aider, etc.) HARD-wrap their output: they
  * write a real newline at the render width and pad lines with literal spaces,
  * so every visual row is a separate buffer line (isWrapped=false). xterm's
- * getSelection() and WebLinksAddon only re-join rows xterm soft-wrapped
+ * getSelection() and link detection only re-join rows xterm soft-wrapped
  * itself, which makes copied paragraphs break mid-sentence (with trailing
- * padding + indents) and splits wrapped URLs into dead fragments. Upstream:
+ * padding + indents) and splits wrapped URLs/paths into dead fragments. Upstream:
  * anthropics/claude-code#48037/#18170/#25861, wavetermdev/waveterm#3288.
  *
  * The core heuristic is the word-wrap invariant: a wrapper only breaks a line
@@ -15,6 +15,7 @@
  * or row i is cut flush at exactly `cols` (mid-word/URL/CJK cut). Everything
  * here is pure and unit-tested.
  */
+import { findLinks, type LinkMatch } from "./terminalLinks";
 
 /** Rough wide-char detection: CJK unified/ext, kana, hangul, fullwidth forms,
  *  CJK punctuation. Enough for width heuristics; not a full wcwidth. */
@@ -90,71 +91,67 @@ export function smartUnwrapSelection(text: string, cols: number): string {
   return out.join("\n");
 }
 
-// ── Hard-wrapped URL joining (for the terminal link provider) ──────────────
+// ── Hard-wrapped link joining (for the terminal link provider) ─────────────
 
-const URL_START_RE = /https?:\/\/[^\s"'`<>{}|\\^]+/gi;
-/** A continuation row's first token must be pure URL-body characters. */
-const URL_BODY_TOKEN_RE = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/;
-const TRAILING_PUNCT_RE = /[.,;:!?)\]}>'"）】〉。，]+$/;
+/** A continuation row's first token must be pure URL/path-body characters. */
+const LINK_BODY_TOKEN_RE = /^[\p{L}\p{N}\-._~:/?#[\]@!$&'()*+,;=%\\]+$/u;
 /** Max continuation rows to absorb — bounds work and false-positive damage. */
-const MAX_URL_CONTINUATION_ROWS = 4;
+const MAX_CONTINUATION_ROWS = 4;
 
-export interface WrappedUrlMatch {
-  /** The reconstructed, punctuation-trimmed URL. */
-  url: string;
-  /** Physical rows the URL spans, counting the origin row. */
+export interface WrappedLinkMatch {
+  /** The reconstructed link; its offsets index the joined text. */
+  link: LinkMatch;
+  /** Physical rows the link spans, counting the origin row (always ≥ 2). */
   rowSpan: number;
-  /** 0-based column of the URL start within rows[0]. */
+  /** 0-based string offset of the link start within rows[0]. */
   startCol: number;
-  /** 0-based EXCLUSIVE end column within the last spanned row. */
+  /** 0-based EXCLUSIVE string offset of the link end within the last row. */
   endColLast: number;
 }
 
 /**
- * Reconstruct a URL that a TUI hard-wrapped across physical rows.
- * `rows[0]` must be the (trimmed) text of the row where the URL starts;
- * subsequent entries are the following physical rows. A row is absorbed only
- * when the URL runs to the end of the current row AND the wrap invariant (or
- * a flush cut) says the break was forced AND the next row's first token is
- * pure URL-body charset — so a complete URL followed by prose never extends.
+ * Reconstruct a URL or file path that a TUI hard-wrapped across physical rows.
+ * `rows[0]` is the row where the link starts; later entries are the following
+ * physical rows. A row is absorbed only when the link runs to the end of the
+ * current row AND the wrap invariant (or a flush cut) says the break was
+ * forced AND the next row's first token is pure link-body charset — so a
+ * complete link followed by prose never extends. Returns null unless the
+ * final link really spans more than one row (single rows are findLinks' job).
  */
-export function joinHardWrappedUrl(rows: string[], cols: number): WrappedUrlMatch | null {
-  if (rows.length === 0) return null;
+export function joinHardWrappedLink(rows: string[], cols: number): WrappedLinkMatch | null {
+  if (rows.length < 2 || !cols) return null;
   const row0 = rows[0].replace(/\s+$/, "");
-  URL_START_RE.lastIndex = 0;
-  let last: RegExpExecArray | null = null;
-  let m: RegExpExecArray | null;
-  while ((m = URL_START_RE.exec(row0)) !== null) last = m;
-  if (!last) return null;
+  const lastToken = /\S+$/.exec(row0)?.[0] ?? "";
+  if (!/[/\\]/.test(lastToken)) return null; // URLs and paths both contain a separator
 
-  const startCol = last.index;
-  let url = last[0];
-  let rowSpan = 1;
-  let endColLast = startCol + url.length;
-
-  // Extend across continuation rows while the break was clearly forced.
-  let prevTrimmed = row0;
-  for (let i = 1; i < rows.length && rowSpan - 1 < MAX_URL_CONTINUATION_ROWS; i++) {
-    // URL must run to the very end of the current row to possibly continue.
-    if (startCol + url.length !== prevTrimmed.length && rowSpan === 1) break;
-    if (rowSpan > 1 && endColLast !== prevTrimmed.length) break;
+  let joined = row0;
+  const rowStarts = [0];
+  const indents = [0];
+  let prev = row0;
+  for (let i = 1; i < rows.length && i <= MAX_CONTINUATION_ROWS; i++) {
     const next = rows[i];
     const nextTrimmed = next.replace(/\s+$/, "");
-    const indentLen = next.length - next.replace(/^\s+/, "").length;
+    const indent = next.length - next.replace(/^\s+/, "").length;
     const token = nextTrimmed.replace(/^\s+/, "").split(/\s+/)[0] ?? "";
-    if (!token || !URL_BODY_TOKEN_RE.test(token)) break;
-    if (!isFlushCut(prevTrimmed, cols) && !wrapInvariant(prevTrimmed, next, cols)) break;
-    url += token;
-    rowSpan = i + 1;
-    endColLast = indentLen + token.length;
-    prevTrimmed = nextTrimmed;
+    if (!token || !LINK_BODY_TOKEN_RE.test(token)) break;
+    if (!isFlushCut(prev, cols) && !wrapInvariant(prev, next, cols)) break;
+    rowStarts.push(joined.length);
+    indents.push(indent);
+    joined += token;
+    // Prose after the token means the link ended on this row.
+    if (indent + token.length !== nextTrimmed.length) break;
+    prev = nextTrimmed;
   }
+  if (rowStarts.length < 2) return null;
 
-  // Trim trailing punctuation that's almost never part of the URL.
-  const cleaned = url.replace(TRAILING_PUNCT_RE, "");
-  endColLast -= url.length - cleaned.length;
-  url = cleaned;
-  if (url.length < 10) return null; // shorter than "https://x."
-
-  return { url, rowSpan, startCol, endColLast };
+  const link = findLinks(joined).find((l) => l.start < row0.length && l.end > row0.length);
+  if (!link) return null;
+  let lastRow = rowStarts.length - 1;
+  while (lastRow > 0 && rowStarts[lastRow] >= link.end) lastRow--;
+  return {
+    link,
+    rowSpan: lastRow + 1,
+    startCol: link.start,
+    endColLast: indents[lastRow] + (link.end - rowStarts[lastRow]),
+  };
 }

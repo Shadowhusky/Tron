@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Save, X, FileCode, ExternalLink, RotateCw } from "lucide-react";
-import CodeMirror from "@uiw/react-codemirror";
+import CodeMirror, { EditorView } from "@uiw/react-codemirror";
+import { EDITOR_REVEAL_EVENT, takeEditorReveal } from "../../services/editorReveal";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { json } from "@codemirror/lang-json";
@@ -85,6 +86,7 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
   const [saving, setSaving] = useState(false);
   const [saveFlash, setSaveFlash] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
 
   const isModified = content !== savedContent;
   const isLight = resolvedTheme === "light";
@@ -118,6 +120,28 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
 
     return () => { cancelled = true; };
   }, [filePath, sourceSessionId]);
+
+  const revealLine = useCallback((view: EditorView, line: number) => {
+    const doc = view.state.doc;
+    const target = doc.line(Math.min(Math.max(1, line), doc.lines));
+    view.dispatch({
+      selection: { anchor: target.from },
+      effects: EditorView.scrollIntoView(target.from, { y: "center" }),
+    });
+    view.focus();
+  }, []);
+
+  // A `file:line` click on an already-open editor jumps straight there.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { filePath?: string; line?: number };
+      if (detail?.filePath !== filePath || !detail.line || !viewRef.current) return;
+      takeEditorReveal(filePath);
+      revealLine(viewRef.current, detail.line);
+    };
+    window.addEventListener(EDITOR_REVEAL_EVENT, handler);
+    return () => window.removeEventListener(EDITOR_REVEAL_EVENT, handler);
+  }, [filePath, revealLine]);
 
   // Save file
   const handleSave = useCallback(async () => {
@@ -255,6 +279,11 @@ const CodeEditorPane: React.FC<CodeEditorPaneProps> = ({ sessionId, filePath, so
               theme={isLight ? "light" : "dark"}
               height="100%"
               style={{ height: "100%", overflow: "auto" }}
+              onCreateEditor={(view) => {
+                viewRef.current = view;
+                const line = takeEditorReveal(filePath);
+                if (line) revealLine(view, line);
+              }}
               basicSetup={{
                 lineNumbers: true,
                 highlightActiveLineGutter: true,

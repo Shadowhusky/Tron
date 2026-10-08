@@ -4,7 +4,7 @@ import {
   firstTokenWidth,
   isBlockStart,
   smartUnwrapSelection,
-  joinHardWrappedUrl,
+  joinHardWrappedLink,
 } from "../utils/textUnwrap";
 
 describe("visualWidth / firstTokenWidth", () => {
@@ -97,51 +97,85 @@ describe("smartUnwrapSelection (claude-code style hard-wrapped output)", () => {
   });
 });
 
-describe("joinHardWrappedUrl", () => {
+describe("joinHardWrappedLink", () => {
   const COLS = 40;
 
   it("joins a URL cut flush at the right edge across two rows", () => {
     const row0 = "see https://github.com/anthropics/cbaa"; // 39 cols, url to edge
     const row1 = "de-code/issues/48037 for details";
-    const res = joinHardWrappedUrl([row0, row1], COLS);
-    expect(res?.url).toBe("https://github.com/anthropics/cbaade-code/issues/48037");
+    const res = joinHardWrappedLink([row0, row1], COLS);
+    expect(res?.link.url).toBe("https://github.com/anthropics/cbaade-code/issues/48037");
     expect(res?.rowSpan).toBe(2);
+    expect(res?.startCol).toBe(4);
+    expect(res?.endColLast).toBe("de-code/issues/48037".length);
   });
 
   it("joins an indented continuation when the wrap invariant holds", () => {
     const row0 = "⏺ Docs: https://example.com/some/very/l"; // 40 cols flush
     const row1 = "  ong/path?query=1&other=2";
-    const res = joinHardWrappedUrl([row0, row1], COLS);
-    expect(res?.url).toBe("https://example.com/some/very/long/path?query=1&other=2");
+    const res = joinHardWrappedLink([row0, row1], COLS);
+    expect(res?.link.url).toBe("https://example.com/some/very/long/path?query=1&other=2");
+    expect(res?.endColLast).toBe(row1.length);
   });
 
   it("does NOT extend when the next row is prose (invariant fails)", () => {
-    const row0 = "see https://example.com/page";
-    const row1 = "and then run the command";
-    const res = joinHardWrappedUrl([row0, row1], COLS);
-    expect(res?.url).toBe("https://example.com/page");
-    expect(res?.rowSpan).toBe(1);
+    expect(joinHardWrappedLink(["see https://example.com/page", "and then run the command"], COLS)).toBeNull();
   });
 
-  it("strips trailing punctuation from the final URL", () => {
-    const res = joinHardWrappedUrl(["read https://example.com/docs)."], COLS);
-    expect(res?.url).toBe("https://example.com/docs");
+  it("strips trailing punctuation from the joined URL", () => {
+    const row0 = "read https://example.com/aaaaaaaaaaaaaaa"; // 40 flush
+    const res = joinHardWrappedLink([row0, "bbb)."], COLS);
+    expect(res?.link.url).toBe("https://example.com/aaaaaaaaaaaaaaabbb");
+    expect(res?.endColLast).toBe(3);
   });
 
-  it("returns null when no URL present", () => {
-    expect(joinHardWrappedUrl(["no links here"], COLS)).toBeNull();
+  it("returns null when no link present", () => {
+    expect(joinHardWrappedLink(["no links here", "at all"], COLS)).toBeNull();
   });
 
   it("caps extension at 4 continuation rows", () => {
     const rows = [
-      "x https://e.co/" + "a".repeat(COLS - 16), // fills to edge
+      "x https://e.co/" + "a".repeat(COLS - 15), // fills to edge
       "b".repeat(COLS),
       "c".repeat(COLS),
       "d".repeat(COLS),
       "e".repeat(COLS),
       "f".repeat(COLS),
     ];
-    const res = joinHardWrappedUrl(rows, COLS);
-    expect(res?.rowSpan).toBeLessThanOrEqual(5); // origin + max 4
+    const res = joinHardWrappedLink(rows, COLS);
+    expect(res?.rowSpan).toBe(5); // origin + max 4
+  });
+
+  it("joins an absolute path cut flush at the edge", () => {
+    const row0 = "⎿  Read /Users/me/projects/tron/src/comp"; // 40 flush
+    const row1 = "onents/layout/TerminalPane.tsx";
+    const res = joinHardWrappedLink([row0, row1], COLS);
+    expect(res?.link).toMatchObject({ kind: "path", path: "/Users/me/projects/tron/src/components/layout/TerminalPane.tsx" });
+    expect(res?.startCol).toBe(row0.indexOf("/Users"));
+    expect(res?.endColLast).toBe(row1.length);
+  });
+
+  it("joins a relative path whose extension landed on the next row", () => {
+    const row0 = "Edit src/components/layout/TerminalPane"; // 39 cols
+    const row1 = ".tsx (12 lines)";
+    const res = joinHardWrappedLink([row0, row1], COLS);
+    expect(res?.link.path).toBe("src/components/layout/TerminalPane.tsx");
+    expect(res?.endColLast).toBe(4);
+  });
+
+  it("does not join a complete short path with the prose below it", () => {
+    expect(joinHardWrappedLink(["changed /Users/me/a.ts", "is the file we need"], COLS)).toBeNull();
+  });
+
+  it("does not join into a box-frame row", () => {
+    const row0 = "│ /Users/me/projects/tron/src/component"; // 40 flush
+    expect(joinHardWrappedLink([row0, "│ next row of the box"], COLS)).toBeNull();
+  });
+
+  it("measures flush cuts in cells when the row has wide chars", () => {
+    const row0 = "路径 /Users/me/projects/tron/src/compone"; // 4 + 1 + 35 = 40 cells
+    const res = joinHardWrappedLink([row0, "nts/a.tsx"], COLS);
+    expect(res?.link.path).toBe("/Users/me/projects/tron/src/components/a.tsx");
+    expect(res?.startCol).toBe(3); // string offset; the provider maps it to cells
   });
 });

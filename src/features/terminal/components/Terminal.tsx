@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Terminal as Xterm } from "@xterm/xterm";
+import { Terminal as Xterm, type IBufferRange, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -15,7 +14,17 @@ import type { ExternalAgentBrand } from "../../../utils/externalAgentStatus";
 import { startBlock, endBlock, appendBlockOutput, clearBlocks } from "../../../services/blocks";
 import { isElectronApp, isMacOS, isTouchDevice, normalizePath } from "../../../utils/platform";
 import { isRemoteSession } from "../../../services/remote-bridge";
-import { smartUnwrapSelection, joinHardWrappedUrl } from "../../../utils/textUnwrap";
+import { smartUnwrapSelection, joinHardWrappedLink } from "../../../utils/textUnwrap";
+import {
+  findLinks,
+  buildLogicalLine,
+  fileUrlToPath,
+  trimPathEnd,
+  EDITOR_EXTS,
+  EDITOR_FILES,
+  type LinkMatch,
+  type LogicalLine,
+} from "../../../utils/terminalLinks";
 import { INPUT_REPORT_RESET, stripInputReportEnables } from "../../../utils/terminalModes";
 import { writeClipboardText } from "../../../utils/clipboard";
 import "@xterm/xterm/css/xterm.css";
@@ -203,104 +212,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     });
 
     const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon((event, uri) => {
-      // Dispatch event so parent can show link popover at click position
-      const me = event as MouseEvent;
-      window.dispatchEvent(new CustomEvent("tron:linkClicked", {
-        detail: { url: uri, x: me.clientX, y: me.clientY, sessionId },
-      }));
-    });
 
     const searchAddon = new SearchAddon();
     const unicodeAddon = new Unicode11Addon();
     const serializeAddon = new SerializeAddon();
     term.loadAddon(fitAddon);
-    // NOTE: webLinksAddon is loaded AFTER the custom link provider below —
-    // xterm drops later-registered providers' links when ranges intersect, and
-    // our wrapped-URL span links must beat the addon's truncated fragments.
     term.loadAddon(searchAddon);
     term.loadAddon(unicodeAddon);
     term.loadAddon(serializeAddon);
     term.unicode.activeVersion = "11";
     searchAddonRef.current = searchAddon;
-
-    // File path link provider — makes file paths clickable in terminal output.
-    // Supports absolute (/foo/bar.ts, C:\foo\bar.ts) and relative paths
-    // (src/components/DataTable.tsx, routes/$id/index.tsx, app/[slug]/page.tsx).
-    // Relative paths resolved against session CWD at click time.
-    //
-    // Segment chars: \w . $ @ + ~ - [ ] ( ) '  — covers Remix ($id), Next.js
-    // ([id]), SvelteKit (+page), route groups ((auth)), scoped pkgs (@foo),
-    // macOS iCloud paths (com~apple~CloudDocs), possessives ("Husky's SSD").
-    // Spaces allowed within interior segments (between two /) but not in the
-    // final segment, to avoid capturing trailing sentence text.
-    const S = "[\\w.$@+~\\-\\[\\]()']"; // path segment char (no space)
-    const interiorSeg = "/" + S + "+(?:\\s+" + S + "+)*(?=/)"; // spaces ok, lookahead for next /
-    const finalSeg = "/" + S + "+"; // no spaces in last segment
-    const absUnixRe  = new RegExp("(?:" + interiorSeg + ")+" + finalSeg + "(?:\\.\\w+)?", "g");
-    const winRe      = new RegExp("[A-Z]:\\\\(?:" + S + "+\\\\)*" + S + "+(?:\\.\\w+)?", "gi");
-    const relRe      = new RegExp("(?:\\.\\/)?(?:" + S + "+\\/){1,}" + S + "+\\.\\w+", "g");
-    // Looser pass: paths in terminals often contain escaped spaces, spaces in
-    // the final filename, or hard-wrapped output. We prefer a wider visual link
-    // and resolve the exact existing path on click.
-    const absUnixLooseRe = /\/(?:[^\s"'`<>|;&]|\s(?!\s)[^\s"'`<>|;&])+/g;
-    const winLooseRe = /[A-Z]:\\(?:[^\s"'`<>|;&]|\s(?!\s)[^\s"'`<>|;&])+/gi;
-    const relLooseRe = /(?:\.{1,2}\/)?(?:[\w.$@+~\-[\]()']+(?:\s(?!\s)[\w.$@+~\-[\]()']+)*\/)+(?:[\w.$@+~\-[\]()']+(?:\s(?!\s)[\w.$@+~\-[\]()']+)*)/g;
-
-    const editorExts = new Set([
-      "js","mjs","cjs","jsx","ts","mts","cts","tsx","py","pyw","json","jsonc",
-      "c","h","cpp","cc","cxx","hpp","hxx","html","htm","svg","xml",
-      "css","scss","less","md","mdx","rs","java","yaml","yml","toml","ini",
-      "cfg","conf","sh","bash","zsh","fish","txt","log","env","sql",
-      "vue","svelte","rb","php","go","swift","kt","kts",
-    ]);
-    const editorFiles = new Set(["Makefile","Dockerfile",".gitignore",".dockerignore"]);
-    const knownExts = new Set([...editorExts, "app","dmg","exe","pkg","deb","rpm","zip","tar","gz","bz2","xz","7z","rar","iso","img","bin","so","dylib","dll","o","a","wasm","map","lock","pid"]);
-
-    /** Strip trailing sentence punctuation that isn't part of a real file extension. */
-    const cleanTrailing = (p: string): string => {
-      // Repeatedly strip trailing punctuation: .  ,  ;  :  !  ?  )
-      // But preserve if the part after last / contains a known extension ending
-      let cleaned = p;
-      while (/[.,;:!?)\]}>]$/.test(cleaned)) {
-        const candidate = cleaned.slice(0, -1);
-        // If stripping would remove a known extension's last char, check if the
-        // original ending is actually part of a valid ext (e.g. "file.app" — don't strip)
-        const ext = cleaned.split(".").pop()?.toLowerCase() || "";
-        if (knownExts.has(ext)) break;
-        cleaned = candidate;
-      }
-      return cleaned;
-    };
-
-    /**
-     * Strip non-path wrapper text from the front of a match.
-     * Handles: "Update(src/..." → "src/...", "(src/..." → "src/...",
-     *          "[text](src/..." → "src/..."
-     * Preserves balanced route groups: "(auth)/page.tsx" stays intact.
-     */
-    const cleanLeading = (p: string): string => {
-      const firstSlash = p.indexOf("/");
-      if (firstSlash <= 0) return p;
-      const prefix = p.slice(0, firstSlash);
-      // Walk backward through prefix to find the last unbalanced ( or [
-      const depth = { paren: 0, bracket: 0 };
-      let cutAt = -1;
-      for (let i = prefix.length - 1; i >= 0; i--) {
-        const ch = prefix[i];
-        if (ch === ")") depth.paren++;
-        else if (ch === "(") {
-          if (depth.paren > 0) depth.paren--;
-          else { cutAt = i; break; }
-        } else if (ch === "]") depth.bracket++;
-        else if (ch === "[") {
-          if (depth.bracket > 0) depth.bracket--;
-          else { cutAt = i; break; }
-        }
-      }
-      if (cutAt >= 0) return p.slice(cutAt + 1);
-      return p;
-    };
 
     const shellEscapedPathCharRe = new RegExp("\\\\([\"'\\\\(){}\\[\\]\\s!#$&*;<>?`|])", "g");
     const unescapeShellPath = (p: string): string => {
@@ -341,7 +262,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       isDirectory: boolean;
       isFile: boolean;
     } | null> => {
-      const cleaned = unescapeShellPath(cleanTrailing(cleanLeading(candidate)).trim());
+      const cleaned = unescapeShellPath(trimPathEnd(candidate.trim()));
       if (!cleaned) return null;
 
       // If the captured text clearly names a file (last segment has an
@@ -355,18 +276,27 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       let current = cleaned;
       while (current.length > 0) {
         attempts.push(current);
-        const next = cleanTrailing(current.replace(/\s+\S+$/, "").trim());
+        const next = trimPathEnd(current.replace(/\s+\S+$/, "").trim());
         if (!next || next === current || !next.includes("/")) break;
         current = next;
       }
+      // Diff headers print "a/src/x.ts" / "b/src/x.ts".
+      if (/^[ab]\//.test(cleaned)) attempts.push(cleaned.slice(2));
 
       for (const attempt of attempts) {
         let resolved = attempt;
-        const isRelative = !resolved.startsWith("/") && !/^[A-Z]:\\/i.test(resolved);
+        const isRelative = !resolved.startsWith("/") && !/^[A-Z]:[\\/]/i.test(resolved);
         if (isRelative) {
           try {
             const cwd = await window.electron?.ipcRenderer?.getCwd?.(sessionId);
-            if (cwd) resolved = normalizePath(cwd.replace(/\/+$/, "") + "/" + resolved);
+            if (cwd && resolved.startsWith("~/")) {
+              // No home-dir IPC (and SSH homes are remote): infer it from the
+              // cwd, the inverse of abbreviateHome().
+              const home = /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)(?=\/|$)/.exec(cwd)?.[1];
+              if (home) resolved = home + resolved.slice(1);
+            } else if (cwd) {
+              resolved = normalizePath(cwd.replace(/\/+$/, "") + "/" + resolved);
+            }
           } catch { /* use as-is */ }
         }
         try {
@@ -391,7 +321,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       return null;
     };
 
-    const activateFilePath = async (filePath: string, event?: MouseEvent) => {
+    const activateFilePath = async (filePath: string, event?: MouseEvent, line?: number, col?: number) => {
       const resolvedCandidate = await resolveCandidatePath(filePath);
       if (!resolvedCandidate) {
         window.dispatchEvent(new CustomEvent("tron:toast", {
@@ -403,7 +333,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       const { displayPath, resolvedPath, isDirectory, isFile } = resolvedCandidate;
       const ext = resolvedPath.split(".").pop()?.toLowerCase() || "";
       const baseName = resolvedPath.split(/[/\\]/).pop() || "";
-      const canEdit = editorExts.has(ext) || editorFiles.has(baseName);
+      const canEdit = EDITOR_EXTS.has(ext) || EDITOR_FILES.has(baseName);
 
       // Dispatch event to show file popover at click position
       window.dispatchEvent(new CustomEvent("tron:fileClicked", {
@@ -416,155 +346,128 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           isFile,
           canEdit,
           sourceSessionId: sessionId,
+          line,
+          col,
         },
       }));
     };
 
+    const activateLink = (link: LinkMatch, event: MouseEvent) => {
+      if (link.kind === "url" && link.url) {
+        window.dispatchEvent(new CustomEvent("tron:linkClicked", {
+          detail: { url: link.url, x: event.clientX, y: event.clientY, sessionId },
+        }));
+      } else if (link.path) {
+        activateFilePath(link.path, event, link.line, link.col);
+      }
+    };
+
+    // OSC 8 hyperlinks (ls --hyperlink, gcc, delta, CLIs that emit them).
+    // Only http(s) and file:// are honoured — arbitrary schemes from program
+    // output are never opened.
+    term.options.linkHandler = {
+      allowNonHttpProtocols: true,
+      activate(event, uri) {
+        const target = uri.trim();
+        if (/^https?:\/\//i.test(target)) {
+          window.dispatchEvent(new CustomEvent("tron:linkClicked", {
+            detail: { url: target, x: event.clientX, y: event.clientY, sessionId },
+          }));
+        } else if (/^file:/i.test(target)) {
+          const filePath = fileUrlToPath(target);
+          if (filePath) activateFilePath(filePath, event);
+        }
+      },
+    };
+
+    // One provider for URLs and paths (src/utils/terminalLinks.ts). Offsets are
+    // mapped through buffer cells so wide CJK/emoji chars don't shift ranges.
     term.registerLinkProvider({
       provideLinks(lineNumber, callback) {
         const buf = term.buffer.active;
-        const cols = term.cols;
-
-        // Gather the logical line: join this row with any continuation rows
-        // that have isWrapped=true. Also track the starting row.
-        let startRow = lineNumber - 1;
-        // Walk backwards to find the first row of this logical line
-        while (startRow > 0) {
-          const prev = buf.getLine(startRow);
-          if (!prev || !prev.isWrapped) break;
-          startRow--;
-        }
-
-        const rowTexts: string[] = [];
-        let row = startRow;
-        do {
-          const rl = buf.getLine(row);
-          if (!rl) break;
-          rowTexts.push(rl.translateToString());
-          row++;
-        } while (row < buf.length && buf.getLine(row)?.isWrapped);
-        const fullText = rowTexts.join("");
-        const totalRows = rowTexts.length;
-
-        // Collect raw matches with character offsets, then deduplicate overlaps
-        const rawMatches: { start: number; end: number; text: string }[] = [];
-        for (const regex of [absUnixLooseRe, winLooseRe, relLooseRe, absUnixRe, winRe, relRe]) {
-          regex.lastIndex = 0;
-          let m: RegExpExecArray | null;
-          while ((m = regex.exec(fullText)) !== null) {
-            let matched = m[0];
-            if (/^https?:\/\//i.test(matched)) continue;
-            matched = cleanTrailing(matched);
-            const lenBeforeLead = matched.length;
-            matched = cleanLeading(matched);
-            const leadStripped = lenBeforeLead - matched.length;
-            if (matched.length < 3) continue;
-            if (regex === relRe) {
-              const ext = matched.split(".").pop()?.toLowerCase() || "";
-              if (!editorExts.has(ext)) continue;
-            }
-            const start = m.index + leadStripped;
-            rawMatches.push({ start, end: start + matched.length, text: matched });
+        const y = lineNumber - 1;
+        const nullCell = buf.getNullCell();
+        const rowCells = (r: number) => {
+          const line = buf.getLine(r);
+          const cells: { chars: string; width: number }[] = [];
+          if (!line) return cells;
+          for (let x = 0; x < line.length; x++) {
+            const cell = line.getCell(x, nullCell);
+            if (!cell) break;
+            cells.push({ chars: cell.getChars(), width: cell.getWidth() });
           }
-        }
-
-        // Deduplicate: when matches overlap, keep the longest one
-        rawMatches.sort((a, b) => a.start - b.start || b.end - a.end);
-        const deduped: typeof rawMatches = [];
-        for (const m of rawMatches) {
-          const prev = deduped[deduped.length - 1];
-          if (prev && m.start < prev.end) {
-            // Overlapping — keep the longer match
-            if (m.end - m.start > prev.end - prev.start) {
-              deduped[deduped.length - 1] = m;
-            }
-          } else {
-            deduped.push(m);
+          return cells;
+        };
+        const rowCache = new Map<number, LogicalLine>();
+        const physicalRow = (r: number) => {
+          let row = rowCache.get(r);
+          if (!row) {
+            row = buildLogicalLine([rowCells(r)]);
+            rowCache.set(r, row);
           }
+          return row;
+        };
+
+        const links: ILink[] = [];
+        const toLink = (match: LinkMatch, range: IBufferRange): ILink => ({
+          range,
+          text: match.text,
+          activate(event) { activateLink(match, event); },
+        });
+
+        // Soft-wrapped logical line (xterm's own wraps, isWrapped=true).
+        let first = y;
+        while (first > 0 && y - first < 20 && buf.getLine(first)?.isWrapped) first--;
+        let last = y;
+        while (last + 1 < buf.length && last - y < 20 && buf.getLine(last + 1)?.isWrapped) last++;
+        const rows: { chars: string; width: number }[][] = [];
+        for (let r = first; r <= last; r++) rows.push(rowCells(r));
+        const logical = buildLogicalLine(rows);
+        for (const match of findLinks(logical.text)) {
+          const range = logical.rangeFor(match.start, match.end);
+          const startY = first + range.start.row + 1;
+          const endY = first + range.end.row + 1;
+          if (lineNumber < startY || lineNumber > endY) continue;
+          links.push(toLink(match, {
+            start: { x: range.start.x, y: startY },
+            end: { x: range.end.x, y: endY },
+          }));
         }
 
-        // Drop file-path candidates that sit INSIDE a URL (e.g. the /path
-        // part of https://host/path). This provider now outranks
-        // WebLinksAddon (registered first — see addon load note), so a bogus
-        // path link here would evict the addon's URL link entirely.
-        const urlSpans: Array<[number, number]> = [];
-        const urlRe = /https?:\/\/[^\s"'`<>{}|\\^]+/gi;
-        let um: RegExpExecArray | null;
-        while ((um = urlRe.exec(fullText)) !== null) {
-          urlSpans.push([um.index, um.index + um[0].length]);
-        }
-        const fileMatches = deduped.filter(
-          (m) => !urlSpans.some(([s, e]) => m.start < e && m.end > s),
-        );
-
-        const links: import("@xterm/xterm").ILink[] = [];
-
-        // ── Hard-wrapped URLs ────────────────────────────────────────────
-        // WebLinksAddon only re-joins rows xterm soft-wrapped (isWrapped), so
-        // a URL that a TUI hard-wrapped (Claude Code's ink renderer) is seen
-        // as two dead fragments. Scan a small window of physical rows around
-        // the queried line; for any row containing a scheme, try to re-join
-        // the URL across forced breaks (word-wrap invariant / flush cut).
-        // Single-row URLs stay with WebLinksAddon (no duplicate links).
-        {
-          const queried = lineNumber - 1;
-          const winStart = Math.max(0, queried - 5);
-          const rowText = (r: number) => buf.getLine(r)?.translateToString(true) ?? "";
-          for (let o = winStart; o <= queried; o++) {
-            const t = rowText(o);
-            if (!/https?:\/\//i.test(t)) continue;
-            const windowRows: string[] = [];
-            for (let r = o; r < Math.min(buf.length, o + 6); r++) windowRows.push(rowText(r));
-            const joined = joinHardWrappedUrl(windowRows, cols);
-            if (!joined || joined.rowSpan < 2) continue;
-            const endRow = o + joined.rowSpan - 1;
-            if (queried < o || queried > endRow) continue;
-            const url = joined.url;
-            try { new URL(url); } catch { continue; }
-            links.push({
-              range: {
-                start: { x: joined.startCol + 1, y: o + 1 },
-                end: { x: joined.endColLast, y: endRow + 1 },
-              },
-              text: url,
-              activate(event) {
-                const me = event as MouseEvent;
-                window.dispatchEvent(new CustomEvent("tron:linkClicked", {
-                  detail: { url, x: me.clientX, y: me.clientY, sessionId },
-                }));
-              },
-            });
-          }
+        // Hard-wrapped links: TUIs (Claude Code's ink renderer) write real
+        // newlines at their render width, so a long URL/path is split across
+        // rows xterm doesn't know are joined. Scan a small window of physical
+        // rows above the queried one for a link that continues onto it.
+        for (let o = Math.max(0, y - 5); o <= y; o++) {
+          if (!/[/\\]/.test(physicalRow(o).text)) continue;
+          const windowRows: string[] = [];
+          for (let r = o; r < Math.min(buf.length, o + 6); r++) windowRows.push(physicalRow(r).text);
+          const joined = joinHardWrappedLink(windowRows, term.cols);
+          if (!joined) continue;
+          const endRow = o + joined.rowSpan - 1;
+          if (y > endRow) continue;
+          const start = physicalRow(o).rangeFor(joined.startCol, joined.startCol + 1).start;
+          const end = physicalRow(endRow).rangeFor(joined.endColLast - 1, joined.endColLast).end;
+          links.push(toLink(joined.link, {
+            start: { x: start.x, y: o + 1 },
+            end: { x: end.x, y: endRow + 1 },
+          }));
         }
 
-        for (const { start: matchStart, end: matchEnd, text: matched } of fileMatches) {
-          if (totalRows === 1) {
-            links.push({
-              range: { start: { x: matchStart + 1, y: lineNumber }, end: { x: matchEnd, y: lineNumber } },
-              text: matched,
-              activate(event) { activateFilePath(matched, event); },
-            });
-          } else {
-            const startY = startRow + 1 + Math.floor(matchStart / cols);
-            const startX = (matchStart % cols) + 1;
-            const endY = startRow + 1 + Math.floor((matchEnd - 1) / cols);
-            const endX = ((matchEnd - 1) % cols) + 1;
-            // Only include links that touch the queried lineNumber
-            if (lineNumber < startY || lineNumber > endY) continue;
-            links.push({
-              range: { start: { x: startX, y: startY }, end: { x: endX, y: endY } },
-              text: matched,
-              activate(event) { activateFilePath(matched, event); },
-            });
-          }
+        // xterm shows one link per cell: keep the longest of overlapping spans
+        // (a hard-wrapped link beats its single-row fragment).
+        const cellIndex = (p: { x: number; y: number }) => p.y * 100_000 + p.x;
+        const span = (l: ILink) => cellIndex(l.range.end) - cellIndex(l.range.start);
+        const kept: ILink[] = [];
+        for (const link of links.sort((a, b) => span(b) - span(a))) {
+          const s0 = cellIndex(link.range.start);
+          const e0 = cellIndex(link.range.end);
+          if (kept.some((k) => s0 <= cellIndex(k.range.end) && e0 >= cellIndex(k.range.start))) continue;
+          kept.push(link);
         }
-        callback(links.length > 0 ? links : undefined);
+        callback(kept.length > 0 ? kept : undefined);
       },
     });
-
-    // Load AFTER the custom provider so wrapped-URL span links take priority
-    // over the addon's single-row fragments (see note at addon creation).
-    term.loadAddon(webLinksAddon);
 
     term.open(el);
 
