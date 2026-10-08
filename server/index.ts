@@ -14,6 +14,9 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 import * as terminal from "./handlers/terminal.js";
 import * as ai from "./handlers/ai.js";
 import * as ssh from "./handlers/ssh.js";
+import { CliAgentManager } from "./handlers/cliAgentCore.js";
+
+const cliAgents = new CliAgentManager();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -634,6 +637,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
     if (activeConnections.get(clientId) !== ws) return;
 
     activeConnections.delete(clientId);
+    // A page refresh loses the renderer's run state, so its CLI runs can't be
+    // picked up again — stop them instead of letting them work unattended.
+    cliAgents.stopAll(clientId);
 
     // Delay cleanup to allow page reload / reconnection within grace period
     pendingCleanups.set(clientId, setTimeout(() => {
@@ -655,6 +661,11 @@ const SSH_ONLY_BLOCKED_CHANNELS = new Set([
   "file.listDir",
   "file.searchDir",
   "log.saveSessionLog",
+  "cliAgent.detect",
+  "cliAgent.start",
+  "cliAgent.respond",
+  "cliAgent.stop",
+  "cliAgent.complete",
 ]);
 
 // Terminal channels that take a sessionId — in SSH-only mode, must be an SSH session
@@ -799,6 +810,16 @@ async function handleInvoke(
       return webSearchImpl(data?.query || "");
     case "web.fetch":
       return webFetchImpl(data?.url || "");
+    case "cliAgent.detect":
+      return cliAgents.detect();
+    case "cliAgent.start":
+      return cliAgents.start(data, (ev) => pushEvent("cliAgent.event", ev), clientId);
+    case "cliAgent.respond":
+      return cliAgents.respond(data);
+    case "cliAgent.stop":
+      return cliAgents.stop(data);
+    case "cliAgent.complete":
+      return cliAgents.complete(data);
     case "skills.discover":
       return discoverSkills(data?.cwd);
     case "skills.read":
@@ -978,6 +999,7 @@ server.listen(PORT, HOST, () => {
 
 // Cleanup on server shutdown
 const shutdownHandler = () => {
+  cliAgents.stopAll();
   ssh.cleanupAllSSHSessions();
   terminal.cleanupAllServerSessions();
   process.exit(0);

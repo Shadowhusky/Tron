@@ -1,6 +1,6 @@
 // --- AI Types ---
 
-export type AIProvider = "ollama" | "lmstudio" | "openai" | "anthropic" | "gemini" | "deepseek" | "kimi" | "qwen" | "glm" | "minimax" | "openai-compat" | "anthropic-compat";
+export type AIProvider = "ollama" | "lmstudio" | "openai" | "anthropic" | "gemini" | "deepseek" | "kimi" | "qwen" | "glm" | "minimax" | "openai-compat" | "anthropic-compat" | "claude-code" | "codex-cli";
 
 export interface AIConfig {
   provider: AIProvider;
@@ -10,6 +10,8 @@ export interface AIConfig {
   contextWindow?: number; // Max context chars, default 16000
   maxAgentSteps?: number; // Max agent loop iterations, default 100
   favoritedModels?: string[]; // Array of explicitly starred model strings
+  /** claude-code: permission mode; codex-cli: sandbox mode (see cliAgent/providers.ts). */
+  cliMode?: string;
 }
 
 export interface AIModel {
@@ -110,7 +112,7 @@ export interface WebServerConfig {
 
 export interface TronConfig {
   ai?: AIConfig;
-  providerConfigs?: Record<string, { model?: string; apiKey?: string; baseUrl?: string }>;
+  providerConfigs?: Record<string, { model?: string; apiKey?: string; baseUrl?: string; cliMode?: string }>;
   theme?: string;
   viewMode?: string;
   configured?: boolean;

@@ -6,6 +6,8 @@ import { formatHotkey } from "../../../hooks/useHotkey";
 import { sectorPath } from "../../../utils/tabWheel";
 import type { AIConfig } from "../../../types";
 import { aiService, getCloudProviderList, providerUsesBaseUrl } from "../../../services/ai";
+import { CLI_AGENT_PROVIDER_IDS, CLI_AGENT_PROVIDERS, isCliAgentProvider } from "../../../services/ai/cliAgent/providers";
+import { CliProviderSettings } from "../../settings/components/CliProviderSettings";
 import { Monitor, Gem, Terminal, Bot, Maximize2, Command, History } from "lucide-react";
 import logoSvg from "../../../assets/logo.svg";
 import {
@@ -379,7 +381,7 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                     setAiConfig((c) => ({
                       ...c,
                       provider: newProvider as any,
-                      model: "",
+                      model: isCliAgentProvider(newProvider) ? "default" : "",
                       baseUrl: providerUsesBaseUrl(newProvider) ? (defaultBaseUrls[newProvider] || "") : undefined,
                     }));
                     setConnectionStatus("idle");
@@ -402,6 +404,11 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                       .map(({ id, info }) => (
                         <option key={id} value={id} className="text-gray-900 bg-white">{info.label}</option>
                       ))}
+                  </optgroup>
+                  <optgroup label="Subscriptions">
+                    {CLI_AGENT_PROVIDER_IDS.map((id) => (
+                      <option key={id} value={id} className="text-gray-900 bg-white">{CLI_AGENT_PROVIDERS[id].label}</option>
+                    ))}
                   </optgroup>
                   <optgroup label="Custom">
                     <option value="openai-compat" className="text-gray-900 bg-white">OpenAI Compatible</option>
@@ -544,6 +551,31 @@ const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
                         );
                       })()}
                     </div>
+                  </motion.div>
+                ) : isCliAgentProvider(aiConfig.provider) ? (
+                  <motion.div
+                    key="cli"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="overflow-hidden"
+                  >
+                    <CliProviderSettings
+                      key={aiConfig.provider}
+                      provider={aiConfig.provider}
+                      model={aiConfig.model}
+                      mode={aiConfig.cliMode}
+                      onChange={(update) => setAiConfig((c) => ({ ...c, ...update }))}
+                      labelClass="text-[13px] font-medium opacity-80"
+                      inputClass={`w-full p-2.5 rounded-lg border outline-none transition-colors text-[12px] ${
+                        resolvedTheme === "light" ? "bg-white border-gray-200 text-gray-900" : "bg-black/20 border-white/10 text-white"
+                      }`}
+                      selectClass={`w-full p-2.5 pr-8 rounded-lg border outline-none appearance-none transition-colors ${
+                        resolvedTheme === "light" ? "bg-white border-gray-200 text-gray-900" : "bg-black/20 border-white/10 text-white"
+                      }`}
+                      mutedClass="opacity-60"
+                    />
                   </motion.div>
                 ) : (
                   <motion.div
