@@ -69,8 +69,10 @@ export function parseSpinnerLine(input: string): {
 
   // Extract elapsed time. Tolerant of seconds (`5s`), minutes+seconds
   // (`1m20s`), and hours (`2h5m10s`). Always returned as total seconds.
+  // The LAST match wins: callers pass lookback text that still holds older
+  // spinner repaints, and the first match would freeze the timer.
   let elapsedSeconds: number | undefined;
-  const elapsedMatch = stripped.match(/(?:(\d+)h)?(?:(\d+)m)?(\d+)s\b/);
+  const elapsedMatch = [...stripped.matchAll(/(?:(\d+)h)?(?:(\d+)m)?(\d+)s\b/g)].at(-1);
   if (elapsedMatch) {
     const h = parseInt(elapsedMatch[1] || "0", 10);
     const m = parseInt(elapsedMatch[2] || "0", 10);
@@ -81,7 +83,7 @@ export function parseSpinnerLine(input: string): {
   // Token count: `↑ 2.3k tokens` or `↑ 800 tokens`. Also accept plain
   // `2.3k tokens` without the ↑ in case the glyph ever changes.
   let tokens: number | undefined;
-  const tokenMatch = stripped.match(/(?:↑\s*)?(\d+(?:\.\d+)?)([kKmM]?)\s*tokens/);
+  const tokenMatch = [...stripped.matchAll(/(?:↑\s*)?(\d+(?:\.\d+)?)([kKmM]?)\s*tokens/g)].at(-1);
   if (tokenMatch) {
     const num = parseFloat(tokenMatch[1]);
     const suffix = tokenMatch[2].toLowerCase();

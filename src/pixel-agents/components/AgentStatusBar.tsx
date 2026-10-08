@@ -3,6 +3,7 @@ import { useConfig } from "../../contexts/ConfigContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import type { LayoutNode } from "../../types";
 import { themeClass } from "../../utils/theme";
+import { formatElapsed } from "../../utils/agentStatusDisplay";
 import { useAgentStatuses, type AgentStatus } from "../hooks/useTronAgentBridge";
 
 /** Tool → display label */
@@ -26,6 +27,9 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+// Every chip is equal-width (flex-basis 0) and its status/elapsed slots are
+// fixed-width, so text updates never move anything — only adding or removing
+// an agent reflows the bar.
 function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resolvedTheme: string; onClick?: () => void }) {
   const statusText = agent.permission
     ? "needs approval"
@@ -33,21 +37,18 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
       ? (agent.tool ? TOOL_LABEL[agent.tool] || agent.tool : "working")
       : "idle";
 
-  // Tokens / elapsed are surfaced when an external agent (Claude Code etc.)
-  // is currently working — they come from the spinner suffix.
+  const elapsed = agent.active && agent.elapsedSeconds != null ? formatElapsed(agent.elapsedSeconds) : "";
   const meta: string[] = [];
   if (agent.active && agent.elapsedSeconds != null) meta.push(`${agent.elapsedSeconds}s`);
   if (agent.active && agent.tokens != null) meta.push(`${formatTokens(agent.tokens)} tok`);
-  const metaText = meta.length > 0 ? ` · ${meta.join(" · ")}` : "";
-
-  const tooltip = `${agent.label}: ${statusText}${metaText} — click to switch`;
+  const tooltip = `${agent.label}: ${statusText}${meta.length ? ` · ${meta.join(" · ")}` : ""} — click to switch`;
 
   return (
     <span
       data-testid={`agent-dot-${agent.sessionId}`}
       data-status={agent.permission ? "needs-approval" : agent.active ? "active" : "idle"}
       data-tool={agent.tool ?? ""}
-      className={`inline-flex items-center gap-1 font-mono text-[10px] leading-none whitespace-nowrap shrink-0 transition-colors duration-300 cursor-pointer rounded px-1 -mx-1 ${
+      className={`flex min-w-0 max-w-[280px] flex-1 basis-0 items-center gap-1.5 font-mono text-[10px] leading-none whitespace-nowrap transition-colors duration-300 cursor-pointer rounded px-1 ${
         themeClass(resolvedTheme, {
           dark: "hover:bg-white/5",
           light: "hover:bg-gray-200/60",
@@ -71,23 +72,21 @@ function AgentDot({ agent, resolvedTheme, onClick }: { agent: AgentStatus; resol
           ? `${themeClass(resolvedTheme, { dark: "bg-green-400", light: "bg-green-500", modern: "bg-green-300" })} animate-pulse`
           : themeClass(resolvedTheme, { dark: "bg-white/20", light: "bg-gray-300", modern: "bg-white/25" })
       }`} />
-      <span className={`max-w-[150px] truncate ${agent.permission ? "text-yellow-300" : themeClass(resolvedTheme, {
+      <span className={`min-w-0 flex-1 truncate ${agent.permission ? "text-yellow-300" : themeClass(resolvedTheme, {
         dark: "text-white/30",
         light: "text-gray-500",
         modern: "text-white/30",
       })}`}>
         {agent.label}
       </span>
-      <span>{statusText}</span>
-      {metaText && (
-        <span className={themeClass(resolvedTheme, {
-          dark: "text-white/25",
-          light: "text-gray-400",
-          modern: "text-white/30",
-        })}>
-          {metaText}
-        </span>
-      )}
+      <span className="w-[14ch] shrink-0 truncate">{statusText}</span>
+      <span className={`w-[4ch] shrink-0 text-right tabular-nums ${themeClass(resolvedTheme, {
+        dark: "text-white/25",
+        light: "text-gray-400",
+        modern: "text-white/30",
+      })}`}>
+        {elapsed}
+      </span>
     </span>
   );
 }
@@ -104,8 +103,9 @@ export default function AgentStatusBar() {
   const { tabs, selectTab } = useLayout();
   const statuses = useAgentStatuses();
 
+  // Stays mounted while enabled, even with no agents: mounting/unmounting a
+  // 21px bar above the workspace resized every terminal.
   if (!config.showAgentStatusBar) return null;
-  if (statuses.length === 0) return null;
 
   const switchToAgent = (sessionId: string) => {
     const tab = tabs.find(t => treeHasSession(t.root, sessionId));
@@ -124,18 +124,23 @@ export default function AgentStatusBar() {
         },
       )}`}
     >
-      {[...statuses].sort((a, b) => {
-        const aScore = a.permission ? 2 : a.active ? 1 : 0;
-        const bScore = b.permission ? 2 : b.active ? 1 : 0;
-        return bScore - aScore;
-      }).map(agent => (
-        <AgentDot
-          key={agent.sessionId}
-          agent={agent}
-          resolvedTheme={resolvedTheme}
-          onClick={() => switchToAgent(agent.sessionId)}
-        />
-      ))}
+      {statuses.length === 0 ? (
+        <span
+          data-testid="agent-status-empty"
+          className={`text-[10px] ${themeClass(resolvedTheme, { dark: "text-white/20", light: "text-gray-400", modern: "text-white/25" })}`}
+        >
+          no agents
+        </span>
+      ) : (
+        statuses.map(agent => (
+          <AgentDot
+            key={agent.sessionId}
+            agent={agent}
+            resolvedTheme={resolvedTheme}
+            onClick={() => switchToAgent(agent.sessionId)}
+          />
+        ))
+      )}
     </div>
   );
 }

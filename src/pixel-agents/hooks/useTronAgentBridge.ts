@@ -3,10 +3,16 @@ import { AgentContext } from "../../contexts/AgentContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import { IPC } from "../../constants/ipc";
 import type { AgentStep, Tab, LayoutNode } from "../../types";
-import { detectExternalAgentSignal } from "../../utils/externalAgentStatus";
+import {
+  detectAgentBrand,
+  detectExternalAgentSignal,
+  type ExternalAgentBrand,
+} from "../../utils/externalAgentStatus";
+import { layoutSessionOrder, resolveAgentLabel } from "../../utils/agentStatusDisplay";
 import {
   readScreenBuffer,
   isAlternateBuffer,
+  readAltScreenTitle,
 } from "../../services/terminalBuffer";
 
 /** Agent status for a single terminal session */
@@ -127,6 +133,8 @@ export function useAgentStatuses(): AgentStatus[] {
   const terminalElapsed = useRef(new Map<string, number>());
   /** Per-session ring of recent stripped data, for cross-chunk pattern match. */
   const lookbackRing = useRef(new Map<string, string>());
+  /** Last agent CLI identified on screen — names the pane before the CLI titles it. */
+  const terminalBrand = useRef(new Map<string, ExternalAgentBrand>());
 
   // Track which sessions have an actively running agent (via tron:agent-activity events)
   const agentRunning = useRef(new Set<string>());
@@ -304,7 +312,11 @@ export function useAgentStatuses(): AgentStatus[] {
     const now = Date.now();
 
     const result: AgentStatus[] = [];
-    for (const [id] of sessions) {
+    // On-screen order, never by state — re-sorting on every status change made
+    // items jump around the bar.
+    const inLayout = layoutSessionOrder(tabs).filter((id) => sessions.has(id));
+    const ordered = [...inLayout, ...[...sessions.keys()].filter((id) => !inLayout.includes(id))];
+    for (const id of ordered) {
       if (id === "settings" || id.startsWith("ssh-connect") || id.startsWith("browser-") || id.startsWith("editor-") || id.startsWith("pixel-agents")) continue;
 
       // Periodic screen-buffer scan. The chunk-based detector only fires
@@ -324,6 +336,8 @@ export function useAgentStatuses(): AgentStatus[] {
         ? null
         : readScreenBuffer(id, skipDeepPoll ? PERMISSION_FRAME_LINES : 40);
       if (screenScan) {
+        const brand = detectAgentBrand(screenScan);
+        if (brand) terminalBrand.current.set(id, brand);
         const inAlt = isAlternateBuffer(id);
         const sig2 = detectExternalAgentSignal(screenScan, {
           allowTersePermission: everHadAgent.current.has(id),
@@ -360,9 +374,13 @@ export function useAgentStatuses(): AgentStatus[] {
         }
       }
 
-      // Use tab title as label (#4), fall back to session title
-      const tabTitle = findTabTitle(tabs, id);
-      const label = tabTitle || sessions.get(id)?.title || "Terminal";
+      const session = sessions.get(id);
+      const label = resolveAgentLabel({
+        cliTitle: readAltScreenTitle(id),
+        brand: terminalBrand.current.get(id),
+        cwd: session?.cwd,
+        tabTitle: findTabTitle(tabs, id) || session?.title,
+      });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const agentState = allStates.get(id) as any;

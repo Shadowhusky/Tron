@@ -21,6 +21,16 @@ describe("parseSpinnerLine", () => {
     expect(out!.tokens).toBe(2300);
   });
 
+  it("reports the latest elapsed/tokens when older repaints are still in the text", () => {
+    // The status bridge scans a lookback ring holding earlier spinner frames.
+    const out = parseSpinnerLine(
+      "✻ Cogitating… (5s · ↑ 900 tokens · esc to interrupt)\n" +
+        "✻ Cogitating… (12s · ↑ 2.3k tokens · esc to interrupt)",
+    );
+    expect(out!.elapsedSeconds).toBe(12);
+    expect(out!.tokens).toBe(2300);
+  });
+
   it("recognises any of Claude Code's spinner glyphs", () => {
     for (const g of ["·", "✢", "✳", "✶", "✻", "✽", "*"]) {
       const out = parseSpinnerLine(`${g} Crafting… (12s · esc to interrupt)`);

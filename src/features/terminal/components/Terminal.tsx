@@ -8,7 +8,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
-import { readScreenBuffer, registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader } from "../../../services/terminalBuffer";
+import { readScreenBuffer, registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader, recordTerminalTitle } from "../../../services/terminalBuffer";
 import { classifyTerminalOutput } from "../../../utils/terminalState";
 import { detectResumableAgent, extractResumeFragments, buildResumeCommand } from "../../../utils/agentRecovery";
 import type { ExternalAgentBrand } from "../../../utils/externalAgentStatus";
@@ -636,6 +636,10 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
       return false;
     });
+
+    term.onTitleChange((title) =>
+      recordTerminalTitle(sessionId, title, term.buffer.active.type === "alternate"),
+    );
 
     // Register screen buffer reader so the agent can read rendered TUI content
     registerScreenBufferReader(sessionId, (lines: number) => {

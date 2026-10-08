@@ -14,10 +14,10 @@ test.describe("Agent Status Bar", () => {
     await page.waitForSelector(sel.tabBar, { timeout: 15_000 });
   });
 
-  test("status bar hidden when no agents are active", async ({ page }) => {
-    const bar = page.locator(sel.agentStatusBar);
-    // No agents running → bar should not be visible
-    await expect(bar).not.toBeVisible({ timeout: 3_000 });
+  test("status bar stays mounted with an empty state when no agents are active", async ({ page }) => {
+    // Mounting/unmounting the bar resized every terminal, so it stays put.
+    await expect(page.locator(sel.agentStatusBar)).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator('[data-testid="agent-status-empty"]')).toBeVisible();
   });
 
   test("built-in agent: status bar shows active when agent starts", async ({ page }) => {

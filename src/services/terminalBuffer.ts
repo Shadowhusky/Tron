@@ -100,3 +100,18 @@ export function getTerminalSelection(sessionId: string): string {
   if (!reader) return "";
   return reader();
 }
+
+// --- Agent CLI titles ---
+// Only titles set while a TUI owns the alternate screen are kept: that's where
+// Claude Code / Codex run, and it ignores the shell retitling the pane after
+// the CLI exits. Kept across remounts — CLIs only re-send the title on change.
+
+const altScreenTitles = new Map<string, string>();
+
+export function recordTerminalTitle(sessionId: string, title: string, inAlternateBuffer: boolean) {
+  if (inAlternateBuffer) altScreenTitles.set(sessionId, title);
+}
+
+export function readAltScreenTitle(sessionId: string): string | null {
+  return altScreenTitles.get(sessionId) ?? null;
+}
