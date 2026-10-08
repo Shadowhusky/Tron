@@ -67,6 +67,11 @@ describe("findLinks — URLs", () => {
     expect(urls("ipv6 [::1]:5000")).toEqual(["http://[::1]:5000"]);
   });
 
+  it("ignores local addresses with an out-of-range port", () => {
+    expect(urls("listening on localhost:99999")).toEqual([]);
+    expect(urls("listening on localhost:65535")).toEqual(["http://localhost:65535"]);
+  });
+
   it("rewrites a 0.0.0.0 host in a full URL to localhost", () => {
     const l = only("Uvicorn running on http://0.0.0.0:8080/ (Press CTRL+C)");
     expect(l.url).toBe("http://localhost:8080/");
@@ -181,6 +186,18 @@ describe("findLinks — paths", () => {
 
   it("links single-segment absolute paths only when they have an extension", () => {
     expect(paths("cat /etc/hosts /foo.txt /tmp")).toEqual(["/etc/hosts", "/foo.txt"]);
+  });
+
+  it("does not mistake IPs, hosts or versions with a :number for file locations", () => {
+    for (const text of [
+      "connect to 192.168.1.10:3000 now",
+      "git@github.com:22 refused",
+      "fetching example.com:443",
+      "release 1.2.3:4",
+      "pi is 3.14:2",
+    ]) {
+      expect(paths(text), text).toEqual([]);
+    }
   });
 
   it("does not link bare filenames without a location", () => {

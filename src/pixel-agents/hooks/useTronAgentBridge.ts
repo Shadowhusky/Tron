@@ -8,11 +8,17 @@ import {
   detectExternalAgentSignal,
   type ExternalAgentBrand,
 } from "../../utils/externalAgentStatus";
-import { agentTransition, layoutSessionOrder, resolveAgentLabel } from "../../utils/agentStatusDisplay";
+import {
+  layoutSessionOrder,
+  resolveAgentLabel,
+  stepAgentWatch,
+  titleActivity,
+  type AgentWatch,
+} from "../../utils/agentStatusDisplay";
 import {
   readScreenBuffer,
   isAlternateBuffer,
-  readAltScreenTitle,
+  readAgentTitle,
 } from "../../services/terminalBuffer";
 
 /** Agent status for a single terminal session */
@@ -135,8 +141,8 @@ export function useAgentStatuses(): AgentStatus[] {
   const lookbackRing = useRef(new Map<string, string>());
   /** Last agent CLI identified on screen — names the pane before the CLI titles it. */
   const terminalBrand = useRef(new Map<string, ExternalAgentBrand>());
-  /** Previous external-agent state + when `active` last flipped, for notifications. */
-  const prevExternal = useRef(new Map<string, { active: boolean; permission: boolean; since: number }>());
+  /** Per-session turn tracking for finished / needs-approval notifications. */
+  const prevExternal = useRef(new Map<string, AgentWatch>());
 
   // Track which sessions have an actively running agent (via tron:agent-activity events)
   const agentRunning = useRef(new Set<string>());
@@ -379,7 +385,7 @@ export function useAgentStatuses(): AgentStatus[] {
 
       const session = sessions.get(id);
       const label = resolveAgentLabel({
-        cliTitle: readAltScreenTitle(id),
+        cliTitle: readAgentTitle(id),
         brand: terminalBrand.current.get(id),
         cwd: session?.cwd,
         tabTitle: findTabTitle(tabs, id) || session?.title,
@@ -416,6 +422,20 @@ export function useAgentStatuses(): AgentStatus[] {
         terminalTokens.current.delete(id);
         terminalElapsed.current.delete(id);
         lookbackRing.current.delete(id);
+      }
+
+      // The CLI's own title, when it sets one, is the most direct signal —
+      // it overrides the screen heuristics either way.
+      const titleAct = titleActivity(readAgentTitle(id) ?? "");
+      if (titleAct === "working") {
+        everHadAgent.current.add(id);
+        terminalSpinnerSeen.current.set(id, now);
+        if (!terminalDetectedTool.current.get(id)) terminalDetectedTool.current.set(id, "thinking");
+      } else if (titleAct === "idle") {
+        terminalSpinnerSeen.current.delete(id);
+        terminalDetectedTool.current.delete(id);
+        terminalTokens.current.delete(id);
+        terminalElapsed.current.delete(id);
       }
 
       // External agent (Claude Code CLI etc.) is "active" if its spinner
@@ -475,16 +495,11 @@ export function useAgentStatuses(): AgentStatus[] {
         prevExternal.current.delete(s.sessionId);
         continue;
       }
-      const prev = prevExternal.current.get(s.sessionId) ?? { active: false, permission: false, since: now };
-      const kind = agentTransition(prev, s, now - prev.since);
-      if (kind) {
-        window.dispatchEvent(new CustomEvent("tron:externalAgent", { detail: { sessionId: s.sessionId, kind, label: s.label } }));
+      const { watch, event } = stepAgentWatch(prevExternal.current.get(s.sessionId), s, now);
+      prevExternal.current.set(s.sessionId, watch);
+      if (event) {
+        window.dispatchEvent(new CustomEvent("tron:externalAgent", { detail: { sessionId: s.sessionId, kind: event, label: s.label } }));
       }
-      prevExternal.current.set(s.sessionId, {
-        active: s.active,
-        permission: s.permission,
-        since: prev.active === s.active ? prev.since : now,
-      });
     }
 
     setStatuses(prev => {

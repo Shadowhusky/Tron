@@ -14,6 +14,7 @@ import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
 import logoSvg from "../../assets/logo.svg";
 import { useHotkey, formatHotkey, matchesHotkey } from "../../hooks/useHotkey";
+import { isSshOnly } from "../../services/mode";
 import { useConfig } from "../../contexts/ConfigContext";
 import { subtreeContainsSession, countLeaves } from "../../utils/paneNav";
 import { usePanelChrome } from "../../hooks/usePanelChrome";
@@ -293,15 +294,17 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     return () => window.removeEventListener("tron:togglePanelRegion", handler);
   }, [sessionId, stableToggleChrome, toggleAllChrome]);
 
-  // Jump between shell commands on the focused pane. Not useHotkey: it would
-  // swallow ⌘↑/⌘↓ inside a multi-line SmartInput, where they move the caret.
+  // Jump between shell commands. Not useHotkey: ⌘↑/⌘↓ must stay caret
+  // movement everywhere else — editor panes, form fields, a multi-line
+  // SmartInput — so only the terminal or a single-line SmartInput of THIS
+  // pane triggers it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (getFocusedSession() !== sessionId) return;
       const dir = matchesHotkey(e, hotkeys.jumpPrevCommand) ? -1 : matchesHotkey(e, hotkeys.jumpNextCommand) ? 1 : 0;
       if (!dir) return;
       const t = e.target;
-      if (t instanceof HTMLTextAreaElement && !t.classList.contains("xterm-helper-textarea") && t.value.includes("\n")) return;
+      if (!(t instanceof HTMLTextAreaElement) || !paneRootRef.current?.contains(t)) return;
+      if (!t.classList.contains("xterm-helper-textarea") && t.value.includes("\n")) return;
       e.preventDefault();
       window.dispatchEvent(new CustomEvent("tron:jumpCommand", { detail: { sessionId, dir } }));
     };
@@ -1082,7 +1085,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         : <Maximize2 className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: () => { focusSession(sessionId); toggleMaximizePane(sessionId); },
     }] : []),
-    ...(isSSH ? [{
+    ...(isSSH && !isSshOnly() ? [{
       label: "Forward a Port…",
       icon: <ArrowLeftRight className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: () => {

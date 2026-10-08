@@ -7,7 +7,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useConfig } from "../../../contexts/ConfigContext";
 import { IPC, terminalEchoChannel } from "../../../constants/ipc";
-import { readScreenBuffer, registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader, recordTerminalTitle } from "../../../services/terminalBuffer";
+import { readScreenBuffer, registerScreenBufferReader, unregisterScreenBufferReader, registerSelectionReader, unregisterSelectionReader, registerViewportTextReader, unregisterViewportTextReader, registerAlternateBufferReader, unregisterAlternateBufferReader, recordTerminalTitle, clearAgentTitle } from "../../../services/terminalBuffer";
 import { classifyTerminalOutput } from "../../../utils/terminalState";
 import { detectResumableAgent, extractResumeFragments, buildResumeCommand } from "../../../utils/agentRecovery";
 import type { ExternalAgentBrand } from "../../../utils/externalAgentStatus";
@@ -542,6 +542,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             const exitCode = parseInt(parts[3], 10);
             const cwd = decodeURIComponent(parts.slice(4).join(";"));
             endBlock(sessionId, blockId, isNaN(exitCode) ? -1 : exitCode, cwd);
+            // The foreground command (possibly an agent CLI) is gone.
+            clearAgentTitle(sessionId);
             const marker = commandMarks.get(blockId);
             if (marker && !marker.isDisposed) {
               term.registerDecoration({

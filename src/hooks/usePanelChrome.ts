@@ -11,6 +11,18 @@ import type { PanelChromeRegion, PanelChromeState } from "../types";
 // Collapsible animates height for 200ms; without this the terminal's
 // ResizeObserver fits (and SIGWINCHes the PTY) several times mid-animation.
 const COLLAPSE_SETTLE_MS = 260;
+// Shared across panes: overlapping toggles extend ONE deferral window instead
+// of the first one's end firing a resize mid-way through the second animation.
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function deferTerminalResize() {
+  if (!settleTimer) window.dispatchEvent(new Event("tron:splitDragStart"));
+  else clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    window.dispatchEvent(new Event("tron:splitDragEnd"));
+  }, COLLAPSE_SETTLE_MS);
+}
 
 /**
  * Resolves the visibility of a terminal panel's three collapsible chrome
@@ -54,9 +66,8 @@ export function usePanelChrome(sessionId: string, panelHeight: number) {
   // settles, then resize once.
   const applyOverride = useCallback(
     (next: PanelChromeState) => {
-      window.dispatchEvent(new Event("tron:splitDragStart"));
+      deferTerminalResize();
       setPanelChrome(next);
-      setTimeout(() => window.dispatchEvent(new Event("tron:splitDragEnd")), COLLAPSE_SETTLE_MS);
     },
     [setPanelChrome],
   );

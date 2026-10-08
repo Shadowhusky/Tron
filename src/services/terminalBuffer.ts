@@ -7,6 +7,7 @@
  *
  * Terminal.tsx registers a reader on mount; useAgentRunner reads from it.
  */
+import { isAgentTitle } from "../utils/agentStatusDisplay";
 
 export type ScreenBufferReader = (lines: number) => string;
 
@@ -102,16 +103,22 @@ export function getTerminalSelection(sessionId: string): string {
 }
 
 // --- Agent CLI titles ---
-// Only titles set while a TUI owns the alternate screen are kept: that's where
-// Claude Code / Codex run, and it ignores the shell retitling the pane after
-// the CLI exits. Kept across remounts — CLIs only re-send the title on change.
+// The pane's agent session name. Only agent titles are kept (`isAgentTitle`),
+// so the shell retitling the pane doesn't rename it; cleared when the CLI
+// blanks its title or the command ends. Kept across remounts — CLIs only
+// re-send the title on change.
 
-const altScreenTitles = new Map<string, string>();
+const agentTitles = new Map<string, string>();
 
 export function recordTerminalTitle(sessionId: string, title: string, inAlternateBuffer: boolean) {
-  if (inAlternateBuffer) altScreenTitles.set(sessionId, title);
+  if (!title.trim()) agentTitles.delete(sessionId);
+  else if (isAgentTitle(title, inAlternateBuffer)) agentTitles.set(sessionId, title);
 }
 
-export function readAltScreenTitle(sessionId: string): string | null {
-  return altScreenTitles.get(sessionId) ?? null;
+export function clearAgentTitle(sessionId: string) {
+  agentTitles.delete(sessionId);
+}
+
+export function readAgentTitle(sessionId: string): string | null {
+  return agentTitles.get(sessionId) ?? null;
 }

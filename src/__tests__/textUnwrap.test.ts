@@ -163,6 +163,28 @@ describe("joinHardWrappedLink", () => {
     expect(res?.endColLast).toBe(4);
   });
 
+  it("does not fuse a list of relative paths in a narrow pane (rg -l)", () => {
+    const rows = [
+      "src/features/terminal/components/SmartInput.tsx",
+      "src/features/terminal/components/Terminal.tsx",
+    ];
+    expect(joinHardWrappedLink(rows, 60)).toBeNull();
+  });
+
+  it("does not fuse a list of absolute paths", () => {
+    const rows = [
+      "/Users/me/projects/tron/src/components/layout/TerminalPane.tsx",
+      "/Users/me/projects/tron/src/App.tsx",
+    ];
+    expect(joinHardWrappedLink(rows, 80)).toBeNull();
+  });
+
+  it("still joins a flush cut that lands right before a slash", () => {
+    const row0 = "⎿  Read /Users/me/projects/tron/src/comp"; // 40 flush
+    const res = joinHardWrappedLink([row0, "/layout/TerminalPane.tsx"], COLS);
+    expect(res?.link.path).toBe("/Users/me/projects/tron/src/comp/layout/TerminalPane.tsx");
+  });
+
   it("does not join a complete short path with the prose below it", () => {
     expect(joinHardWrappedLink(["changed /Users/me/a.ts", "is the file we need"], COLS)).toBeNull();
   });

@@ -109,6 +109,23 @@ const NAV_SECTIONS = isElectronApp()
   ? NAV_SECTIONS_BASE
   : NAV_SECTIONS_BASE.filter((s) => !ELECTRON_ONLY_SECTIONS.has(s.id));
 
+/** Browsers need an explicit, user-initiated grant (Electron allows by default). */
+function BrowserNotificationPermission() {
+  const [permission, setPermission] = useState(() =>
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+  );
+  if (isElectronApp() || permission !== "default") return null;
+  return (
+    <button
+      type="button"
+      onClick={() => Notification.requestPermission().then(setPermission)}
+      className="mt-1 text-[11px] text-blue-500 hover:underline"
+    >
+      Allow notifications in this browser
+    </button>
+  );
+}
+
 // --- SSH Profiles Sub-component ---
 function SSHProfilesSection({ cardClass, t, resolvedTheme }: {
   cardClass: string;
@@ -1973,6 +1990,7 @@ const SettingsPane = () => {
                     <div>
                       <label className={`text-xs font-medium ${t.textMuted}`}>Desktop Notifications</label>
                       <p className={`text-[11px] ${t.textFaint} mt-0.5`}>While Tron is in the background, notify when a long command or an agent (Tron, Claude Code, Codex) finishes or needs approval</p>
+                      <BrowserNotificationPermission />
                     </div>
                     <button
                       role="switch"

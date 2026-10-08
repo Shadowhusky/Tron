@@ -187,6 +187,7 @@ function urlCandidates(text: string): Candidate[] {
     out.push({ match: { start, end, kind: "url", text: raw, url: normalizeLocalHost(raw) }, priority: 1 });
   }
   for (const m of text.matchAll(LOCAL_ADDR_RE)) {
+    if (Number(m[2]) > 65535) continue;
     const raw = trimUrlEnd(m[0]);
     const start = m.index!;
     const host = m[1].toLowerCase() === "0.0.0.0" ? "localhost" : m[1];
@@ -243,8 +244,18 @@ function pathCandidates(text: string): Candidate[] {
   for (const m of text.matchAll(ABS_RE)) push(pathCandidate(text, m.index!, m[0], false));
   for (const m of text.matchAll(WIN_RE)) push(pathCandidate(text, m.index!, m[0], false));
   for (const m of text.matchAll(REL_RE)) push(pathCandidate(text, m.index!, m[0], true));
-  for (const m of text.matchAll(BARE_RE)) push(pathCandidate(text, m.index!, m[0], false));
+  for (const m of text.matchAll(BARE_RE)) {
+    if (isBareFileName(m[0])) push(pathCandidate(text, m.index!, m[0], false));
+  }
   return out;
+}
+
+const HOST_TLDS = new Set(["com", "org", "net", "io", "dev", "ai", "co", "edu", "gov", "local", "internal", "lan"]);
+
+/** Hosts, IPs and versions look like "name.ext:N" too — `example.com:443`, `10.0.0.1:80`, `1.2.3:4`. */
+function isBareFileName(name: string): boolean {
+  const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+  return /[a-z]/.test(ext) && !name.includes("@") && !HOST_TLDS.has(ext);
 }
 
 /**

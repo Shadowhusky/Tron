@@ -97,6 +97,23 @@ export function smartUnwrapSelection(text: string, cols: number): string {
 const LINK_BODY_TOKEN_RE = /^[\p{L}\p{N}\-._~:/?#[\]@!$&'()*+,;=%\\]+$/u;
 /** Max continuation rows to absorb — bounds work and false-positive damage. */
 const MAX_CONTINUATION_ROWS = 4;
+/** A row that starts like a fresh link (`~/`, `./`, `C:\`, `scheme://`) is a new entry, not a continuation. */
+const NEW_LINK_START_RE = /^(~\/|\.{1,2}\/|[A-Za-z]:[\\/]|[a-z][\w+.-]*:\/\/)/i;
+/** The previous row's token already ends like a whole file name. */
+const COMPLETE_FILE_END_RE = /\.[A-Za-z0-9]{1,8}$/;
+
+/**
+ * Whether `token` on the next row continues the link at the end of `prevToken`.
+ * Without these checks a narrow pane listing paths (`rg -l`, `find`) passes
+ * the word-wrap length rule and fuses separate entries into one bad link. A
+ * leading `/` only continues on a flush cut — TUIs may break right before it.
+ */
+function continuesLink(prevToken: string, token: string, flush: boolean): boolean {
+  if (NEW_LINK_START_RE.test(token)) return false;
+  if (token.startsWith("/") && !flush) return false;
+  if (COMPLETE_FILE_END_RE.test(prevToken) && !/^[?#&]/.test(token)) return false;
+  return true;
+}
 
 export interface WrappedLinkMatch {
   /** The reconstructed link; its offsets index the joined text. */
@@ -134,7 +151,9 @@ export function joinHardWrappedLink(rows: string[], cols: number): WrappedLinkMa
     const indent = next.length - next.replace(/^\s+/, "").length;
     const token = nextTrimmed.replace(/^\s+/, "").split(/\s+/)[0] ?? "";
     if (!token || !LINK_BODY_TOKEN_RE.test(token)) break;
-    if (!isFlushCut(prev, cols) && !wrapInvariant(prev, next, cols)) break;
+    const flush = isFlushCut(prev, cols);
+    if (!flush && !wrapInvariant(prev, next, cols)) break;
+    if (!continuesLink(/\S+$/.exec(prev)?.[0] ?? "", token, flush)) break;
     rowStarts.push(joined.length);
     indents.push(indent);
     joined += token;
