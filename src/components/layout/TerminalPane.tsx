@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, Reorder, useDragControls } from "framer-motion";
 import * as Popover from "@radix-ui/react-popover";
-import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, SquareSplitHorizontal, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search, Maximize2, Minimize2, GripVertical, Play, CornerRightUp, ImageIcon } from "lucide-react";
+import { X, Bot, ChevronRight, ChevronUp, Folder, Columns2, Rows2, SquareSplitHorizontal, Copy, ClipboardPaste, TextCursorInput, TextSelect, Check, Monitor, Search, Maximize2, Minimize2, GripVertical, Play, CornerRightUp, ImageIcon, ArrowLeftRight } from "lucide-react";
 import Terminal from "../../features/terminal/components/Terminal";
 import SmartInput from "../../features/terminal/components/SmartInput";
 import AgentOverlay from "../../features/agent/components/AgentOverlay";
@@ -28,6 +28,9 @@ import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platform";
 import type { AttachedImage, SSHConnectionStatus } from "../../types";
 import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
+import { PortForwardsChip } from "../../features/ssh/components/PortForwardsChip";
+import { usePortForwards } from "../../hooks/usePortForwards";
+import { forwardOpensLocally } from "../../utils/portForward";
 import TuiKeyToolbar from "../../features/terminal/components/TuiKeyToolbar";
 import { useAllConfiguredModels } from "../../hooks/useModels";
 import { readScreenBuffer, getTerminalSelection, readViewportText } from "../../services/terminalBuffer";
@@ -450,6 +453,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const [sshStatus, setSshStatus] = useState<SSHConnectionStatus>(
     isSSH ? "connected" : "disconnected",
   );
+
+  const portForwards = usePortForwards(sessionId, isSSH);
+  const forwardsOpenLocally = forwardOpensLocally({
+    isElectron: isElectronApp(),
+    locationHostname: window.location.hostname,
+    sessionRemote: !!session?.remoteUrl,
+  });
 
   useEffect(() => {
     if (!isSSH) return;
@@ -1056,6 +1066,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
         : <Maximize2 className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
       action: () => { focusSession(sessionId); toggleMaximizePane(sessionId); },
     }] : []),
+    ...(isSSH ? [{
+      label: "Forward a Port…",
+      icon: <ArrowLeftRight className="h-3.5 w-3.5 opacity-60" strokeWidth={1.5} />,
+      action: () => {
+        // Next frame: let this menu finish closing before the ports popover opens.
+        requestAnimationFrame(() =>
+          window.dispatchEvent(new CustomEvent("tron:openPortForwards", { detail: { sessionId } })),
+        );
+      },
+    }] : []),
     { separator: true as const },
     {
       label: "Close Pane",
@@ -1140,12 +1160,20 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             )}`}
           >
             {isSSH && (
-              <SSHStatusBadge
-                status={sshStatus}
-                label={session?.title || "SSH"}
-                resolvedTheme={resolvedTheme}
-                onReconnect={() => reconnectSSH(sessionId)}
-              />
+              <>
+                <SSHStatusBadge
+                  status={sshStatus}
+                  label={session?.title || "SSH"}
+                  resolvedTheme={resolvedTheme}
+                  onReconnect={() => reconnectSSH(sessionId)}
+                />
+                <PortForwardsChip
+                  sessionId={sessionId}
+                  resolvedTheme={resolvedTheme}
+                  forwards={portForwards}
+                  canOpenLocally={forwardsOpenLocally}
+                />
+              </>
             )}
             {!isSSH && session?.remoteUrl && (
               <span className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${themeClass(resolvedTheme, {
@@ -1403,6 +1431,17 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
               >
                 ↓ Scroll to bottom
               </button>
+            )}
+            {isSSH && !selectionMode && !isConnectPane && (
+              <div className={`absolute top-2 z-20 ${canMaximize || isMaximized ? "right-11" : "right-2"}`}>
+                <PortForwardsChip
+                  sessionId={sessionId}
+                  resolvedTheme={resolvedTheme}
+                  forwards={portForwards}
+                  canOpenLocally={forwardsOpenLocally}
+                  className="h-7 shadow-lg"
+                />
+              </div>
             )}
             {/* Maximize / restore pane — hover chrome, always visible while maximized */}
             {(canMaximize || isMaximized) && !selectionMode && !isConnectPane && (

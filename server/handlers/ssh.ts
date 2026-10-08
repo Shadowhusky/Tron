@@ -3,6 +3,14 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { EventPusher, pushSessionData } from "./terminal.js";
+import {
+  ForwardManager,
+  sameForwardSpec,
+  toPersistedSpec,
+  validateForwardSpec,
+  type ForwardRecord,
+  type ForwardSpec,
+} from "./sshForward.js";
 
 // --- Types ---
 
@@ -34,6 +42,7 @@ export interface SSHProfile {
   savedPassphrase?: string;  // only stored if saveCredentials is true
   fingerprint?: string;
   lastConnected?: number;
+  forwards?: ForwardSpec[];
 }
 
 // --- PtyLike interface for SSH sessions ---
@@ -343,6 +352,14 @@ export const sshSessionIds = new Set<string>();
 // Map of session ID → SSHSession instance (for SSH-specific operations)
 export const sshSessions = new Map<string, SSHSession>();
 
+// sessionId → SSH profile id (forwards are remembered per profile) and the
+// owning client's latest event pusher (updated on every forward call).
+const sshSessionProfiles = new Map<string, string>();
+const forwardPushers = new Map<string, EventPusher>();
+const forwardManager = new ForwardManager((sessionId, forwards: ForwardRecord[]) => {
+  forwardPushers.get(sessionId)?.("ssh.forwardsChanged", { sessionId, forwards });
+});
+
 // --- SSH Profile Persistence ---
 
 function getProfilesPath(): string {
@@ -375,6 +392,48 @@ export function writeProfiles(profiles: SSHProfile[]): boolean {
   }
 }
 
+function updateProfileForwards(sessionId: string, update: (forwards: ForwardSpec[]) => ForwardSpec[]): void {
+  const profileId = sshSessionProfiles.get(sessionId);
+  if (!profileId) return;
+  const profiles = readProfiles();
+  const profile = profiles.find((p) => p.id === profileId);
+  if (!profile) return;
+  profile.forwards = update(profile.forwards || []);
+  writeProfiles(profiles);
+}
+
+export async function addForward(
+  data: { sessionId: string; persist?: boolean } & Record<string, unknown>,
+  pushEvent: EventPusher,
+): Promise<ForwardRecord> {
+  const session = sshSessions.get(data?.sessionId);
+  if (!session) throw new Error("Not an active SSH session");
+  const spec = validateForwardSpec(data);
+  if (typeof spec === "string") throw new Error(spec);
+  forwardPushers.set(data.sessionId, pushEvent);
+  const record = await forwardManager.add(data.sessionId, session.sshClient, spec, { persist: data.persist });
+  if (data.persist && record.status === "active") {
+    const saved = toPersistedSpec(record);
+    updateProfileForwards(data.sessionId, (list) => [...list.filter((f) => !sameForwardSpec(f, saved)), saved]);
+  }
+  return record;
+}
+
+export function removeForward(data: { sessionId: string; id: string }, pushEvent: EventPusher): boolean {
+  const record = forwardManager.list(data?.sessionId).find((f) => f.id === data?.id);
+  if (!record) return false;
+  forwardPushers.set(data.sessionId, pushEvent);
+  if (record.persist) {
+    const saved = toPersistedSpec(record);
+    updateProfileForwards(data.sessionId, (list) => list.filter((f) => !sameForwardSpec(f, saved)));
+  }
+  return forwardManager.remove(data.sessionId, data.id);
+}
+
+export function listForwards(sessionId: string): ForwardRecord[] {
+  return forwardManager.list(sessionId);
+}
+
 // --- SSH Session Creation & Management ---
 
 export async function createSSHSession(
@@ -393,6 +452,8 @@ export async function createSSHSession(
   // Register in tracking maps
   sshSessionIds.add(sessionId);
   sshSessions.set(sessionId, session);
+  sshSessionProfiles.set(sessionId, config.id);
+  forwardPushers.set(sessionId, pushEvent);
 
   // Store in same session map as local PTY (PtyLike duck type)
   sessionMap.set(sessionId, session as PtyLike);
@@ -413,17 +474,21 @@ export async function createSSHSession(
   session.onExit(() => {
     pushEvent("terminal.exit", { id: sessionId, exitCode: 0 });
     pushEvent("ssh.statusChange", { sessionId, status: "disconnected" });
+    forwardManager.closeSession(sessionId);
     sessionMap.delete(sessionId);
     historyMap.delete(sessionId);
     sshSessionIds.delete(sessionId);
     sshSessions.delete(sessionId);
+    sshSessionProfiles.delete(sessionId);
+    forwardPushers.delete(sessionId);
     if (ownerMap) ownerMap.delete(sessionId);
   });
 
   // Save profile if requested
+  const profiles = readProfiles();
+  const existingIdx = profiles.findIndex((p) => p.id === config.id);
+  const savedForwards = existingIdx >= 0 ? profiles[existingIdx].forwards : undefined;
   if (config.saveCredentials || config.name) {
-    const profiles = readProfiles();
-    const existingIdx = profiles.findIndex((p) => p.id === config.id);
     const profile: SSHProfile = {
       id: config.id,
       name: config.name || `${config.username}@${config.host}`,
@@ -437,6 +502,7 @@ export async function createSSHSession(
       savedPassphrase: config.saveCredentials ? config.passphrase : undefined,
       fingerprint: config.fingerprint,
       lastConnected: Date.now(),
+      forwards: savedForwards,
     };
     if (existingIdx >= 0) {
       profiles[existingIdx] = profile;
@@ -447,6 +513,10 @@ export async function createSSHSession(
   }
 
   pushEvent("ssh.statusChange", { sessionId, status: "connected" });
+
+  for (const spec of savedForwards || []) {
+    forwardManager.add(sessionId, session.sshClient, spec, { persist: true }).catch(() => {});
+  }
 
   return { sessionId };
 }
@@ -526,6 +596,7 @@ export function cleanupClientSSHSessions(
 
 /** Clean up all SSH sessions. */
 export function cleanupAllSSHSessions() {
+  for (const sessionId of sshSessions.keys()) forwardManager.closeSession(sessionId);
   for (const [, session] of sshSessions) {
     try { session.kill(); } catch { /* ignore */ }
   }

@@ -49,9 +49,13 @@ export const IPC = {
   SSH_DISCONNECT: "ssh.disconnect",
   SSH_PROFILES_READ: "ssh.profiles.read",
   SSH_PROFILES_WRITE: "ssh.profiles.write",
+  SSH_FORWARD_ADD: "ssh.forward.add",
+  SSH_FORWARD_REMOVE: "ssh.forward.remove",
+  SSH_FORWARD_LIST: "ssh.forward.list",
 
   // SSH — main→renderer events
   SSH_STATUS_CHANGE: "ssh.statusChange",
+  SSH_FORWARDS_CHANGED: "ssh.forwardsChanged",
 
   // Menu — main→renderer events
   MENU_CREATE_TAB: "menu.createTab",

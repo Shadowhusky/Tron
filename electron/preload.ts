@@ -39,6 +39,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   "ssh.disconnect",
   "ssh.profiles.read",
   "ssh.profiles.write",
+  "ssh.forward.add",
+  "ssh.forward.remove",
+  "ssh.forward.list",
   "remote.profiles.read",
   "remote.profiles.write",
   "savedTabs.read",
@@ -82,6 +85,7 @@ const ALLOWED_RECEIVE_CHANNELS = [
   "window.confirmClose",
   "window.forceClose",
   "ssh.statusChange",
+  "ssh.forwardsChanged",
   "updater.status",
   "updater.downloadProgress",
 ] as const;

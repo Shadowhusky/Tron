@@ -744,6 +744,19 @@ async function handleInvoke(
       return ssh.readProfiles();
     case "ssh.profiles.write":
       return ssh.writeProfiles(data);
+    case "ssh.forward.add":
+    case "ssh.forward.remove":
+    case "ssh.forward.list": {
+      // Forwards open loopback listeners on THIS machine — only the client that
+      // owns the SSH session may manage them.
+      const sid = typeof data === "string" ? data : data?.sessionId;
+      if (!sid || terminal.getSessionOwners().get(sid) !== clientId) {
+        throw new Error("Not your SSH session");
+      }
+      if (channel === "ssh.forward.add") return ssh.addForward(data, pushEvent);
+      if (channel === "ssh.forward.remove") return ssh.removeForward(data, pushEvent);
+      return ssh.listForwards(sid);
+    }
     case "savedTabs.read":
       try {
         if (!fs.existsSync(savedTabsFile)) return [];

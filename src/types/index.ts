@@ -151,9 +151,32 @@ export interface SSHConnectionConfig {
   saveCredentials?: boolean; // whether to persist password/passphrase
   fingerprint?: string;      // cached host key fingerprint
   lastConnected?: number;
+  forwards?: PortForwardSpec[]; // re-applied on every connect
 }
 
 export type SSHConnectionStatus = "connected" | "disconnected" | "connecting" | "reconnecting";
+
+/** local = -L (local listener → remote target), remote = -R, dynamic = -D (SOCKS5). */
+export type PortForwardType = "local" | "remote" | "dynamic";
+
+export interface PortForwardSpec {
+  type: PortForwardType;
+  localPort?: number;
+  remoteHost?: string;
+  remotePort?: number;
+}
+
+export interface PortForward {
+  id: string;
+  type: PortForwardType;
+  localHost: string;
+  localPort: number;
+  remoteHost: string;
+  remotePort: number;
+  status: "active" | "error";
+  error?: string;
+  persist?: boolean;
+}
 
 // --- Remote Server Types ---
 
