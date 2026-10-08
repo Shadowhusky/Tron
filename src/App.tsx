@@ -31,6 +31,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { isSshOnly } from "./services/mode";
 import { getActiveRemoteConnections, disconnectRemote } from "./services/remote-bridge";
 import { isTouchDevice, isElectronApp } from "./utils/platform";
+import { requestEditorReveal } from "./services/editorReveal";
 import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye, Columns2 } from "lucide-react";
 import AgentStatusBar from "./pixel-agents/components/AgentStatusBar";
 
@@ -152,7 +153,7 @@ const AppContent = () => {
       getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: linkPopover.x, y: linkPopover.y }),
     };
   }
-  const [filePopover, setFilePopover] = useState<{ filePath: string; displayPath: string; x: number; y: number; isDirectory: boolean; isFile: boolean; canEdit: boolean; sourceSessionId: string } | null>(null);
+  const [filePopover, setFilePopover] = useState<{ filePath: string; displayPath: string; x: number; y: number; isDirectory: boolean; isFile: boolean; canEdit: boolean; sourceSessionId: string; line?: number; col?: number } | null>(null);
   const fileAnchorRef = useRef<{ getBoundingClientRect: () => DOMRect }>({
     getBoundingClientRect: () => DOMRect.fromRect({ width: 0, height: 0, x: 0, y: 0 }),
   });
@@ -1033,6 +1034,7 @@ const AppContent = () => {
               resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"
             }`}>
               {filePopover?.displayPath}
+              {filePopover?.line ? `:${filePopover.line}${filePopover.col ? `:${filePopover.col}` : ""}` : ""}
             </div>
             <div className={`my-0.5 h-px ${resolvedTheme === "light" ? "bg-gray-200" : "bg-white/10"}`} />
             {/* Open in Editor — only for editable files */}
@@ -1043,6 +1045,7 @@ const AppContent = () => {
                 }`}
                 onClick={() => {
                   if (filePopover) {
+                    if (filePopover.line) requestEditorReveal(filePopover.filePath, filePopover.line);
                     window.dispatchEvent(new CustomEvent("tron:openEditorTab", {
                       detail: { filePath: filePopover.filePath, sourceSessionId: filePopover.sourceSessionId },
                     }));
@@ -1062,6 +1065,7 @@ const AppContent = () => {
                 }`}
                 onClick={() => {
                   if (filePopover) {
+                    if (filePopover.line) requestEditorReveal(filePopover.filePath, filePopover.line);
                     openEditorSplit(filePopover.filePath, filePopover.sourceSessionId);
                   }
                   setFilePopover(null);
