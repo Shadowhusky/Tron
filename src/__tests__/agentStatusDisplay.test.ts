@@ -4,6 +4,7 @@ import {
   resolveAgentLabel,
   formatElapsed,
   layoutSessionOrder,
+  agentTransition,
 } from "../utils/agentStatusDisplay";
 import type { Tab } from "../types";
 
@@ -105,5 +106,34 @@ describe("layoutSessionOrder", () => {
 
   it("lists sessions by tab, then pane position", () => {
     expect(layoutSessionOrder(tabs)).toEqual(["a", "b", "c", "d"]);
+  });
+});
+
+describe("agentTransition", () => {
+  const idle = { active: false, permission: false };
+  const working = { active: true, permission: false };
+  const asking = { active: true, permission: true };
+
+  it("reports a finished turn after real work", () => {
+    expect(agentTransition(working, idle, 12_000)).toBe("finished");
+  });
+
+  it("ignores blips shorter than the minimum working time", () => {
+    expect(agentTransition(working, idle, 2_000)).toBeNull();
+  });
+
+  it("reports a new approval request immediately", () => {
+    expect(agentTransition(working, asking, 500)).toBe("needs-approval");
+    expect(agentTransition(idle, asking, 0)).toBe("needs-approval");
+  });
+
+  it("stays quiet while nothing meaningful changes", () => {
+    expect(agentTransition(asking, asking, 30_000)).toBeNull();
+    expect(agentTransition(working, working, 30_000)).toBeNull();
+    expect(agentTransition(idle, working, 0)).toBeNull();
+  });
+
+  it("does not report a finish when the approval prompt is answered", () => {
+    expect(agentTransition(asking, working, 20_000)).toBeNull();
   });
 });

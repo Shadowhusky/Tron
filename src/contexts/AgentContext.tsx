@@ -10,6 +10,10 @@ import React, {
 } from "react";
 import type { AgentStep, PanelChromeState } from "../types";
 import { IPC } from "../constants/ipc";
+import { notifyDesktop } from "../services/desktopNotify";
+
+/** False when the user is in another app — then even visible panes count as unseen. */
+const appFocused = () => typeof document !== "undefined" && document.hasFocus();
 
 interface AgentState {
   agentThread: AgentStep[];
@@ -74,11 +78,23 @@ class AgentStore {
           | undefined;
         if (!d) return;
         const hiddenSession = !this.activeSessionIdsForNotifs.has(d.sessionId);
-        if (!hiddenSession && !document.hidden) return;
+        if (!hiddenSession && appFocused()) return;
         const secs = Math.round(d.durationMs / 1000);
         const dur = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
         const mark = d.exitCode === 0 ? "✓" : `✗ (exit ${d.exitCode})`;
         this.pushNotification(d.sessionId, `${mark} ${d.command.slice(0, 60)} — ${dur}`);
+      });
+      // Claude Code / Codex panes (detected by the status-bar bridge).
+      window.addEventListener("tron:externalAgent", (e: Event) => {
+        const d = (e as CustomEvent).detail as
+          | { sessionId: string; kind: "finished" | "needs-approval"; label: string }
+          | undefined;
+        if (!d) return;
+        if (this.activeSessionIdsForNotifs.has(d.sessionId) && appFocused()) return;
+        this.pushNotification(
+          d.sessionId,
+          d.kind === "needs-approval" ? `⚠ ${d.label} needs approval` : `✓ ${d.label} finished`,
+        );
       });
     }
   }
@@ -88,6 +104,7 @@ class AgentStore {
     const id = ++this.notifId;
     this.notifications = [...this.notifications, { id, sessionId, message, timestamp: Date.now() }];
     this.notifyNotifications();
+    notifyDesktop(message, sessionId);
     setTimeout(() => this.dismissNotification(id), 8000);
   };
 
@@ -150,7 +167,7 @@ class AgentStore {
     // Notification logic
     const wasRunning = this.prevRunning.get(sessionId) ?? false;
     const isRunning = next.isAgentRunning;
-    if (wasRunning && !isRunning && !this.activeSessionIdsForNotifs.has(sessionId)) {
+    if (wasRunning && !isRunning && (!this.activeSessionIdsForNotifs.has(sessionId) || !appFocused())) {
       const lastStep = next.agentThread[next.agentThread.length - 1];
       const msg = lastStep
         ? lastStep.step === "done" || lastStep.step === "success"

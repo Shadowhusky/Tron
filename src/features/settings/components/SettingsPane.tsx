@@ -84,6 +84,8 @@ const HOTKEY_LABELS: Record<string, string> = {
   togglePanelHints: "Toggle Hints Bar",
   togglePanelFooter: "Toggle Footer Bar",
   togglePanelChrome: "Hide / Show All Bottom Bars",
+  jumpPrevCommand: "Jump to Previous Command",
+  jumpNextCommand: "Jump to Next Command",
 };
 
 const NAV_SECTIONS_BASE = [
@@ -1928,6 +1930,28 @@ const SettingsPane = () => {
                     >
                       <span
                         className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${appConfig.showAgentStatusBar ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                <div className={cardClass}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className={`text-xs font-medium ${t.textMuted}`}>Desktop Notifications</label>
+                      <p className={`text-[11px] ${t.textFaint} mt-0.5`}>While Tron is in the background, notify when a long command or an agent (Tron, Claude Code, Codex) finishes or needs approval</p>
+                    </div>
+                    <button
+                      role="switch"
+                      aria-checked={appConfig.desktopNotifications !== false}
+                      onClick={() => updateAppConfig({ desktopNotifications: appConfig.desktopNotifications === false })}
+                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${appConfig.desktopNotifications !== false
+                        ? "bg-blue-500"
+                        : resolvedTheme === "light" ? "bg-gray-300" : "bg-white/20"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${appConfig.desktopNotifications !== false ? "translate-x-[18px]" : "translate-x-[3px]"}`}
                       />
                     </button>
                   </div>

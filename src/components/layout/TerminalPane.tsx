@@ -13,7 +13,7 @@ import { useAgentRunner } from "../../hooks/useAgentRunner";
 import { useAgent } from "../../contexts/AgentContext";
 import { themeClass } from "../../utils/theme";
 import logoSvg from "../../assets/logo.svg";
-import { useHotkey, formatHotkey } from "../../hooks/useHotkey";
+import { useHotkey, formatHotkey, matchesHotkey } from "../../hooks/useHotkey";
 import { useConfig } from "../../contexts/ConfigContext";
 import { subtreeContainsSession, countLeaves } from "../../utils/paneNav";
 import { usePanelChrome } from "../../hooks/usePanelChrome";
@@ -292,6 +292,22 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     window.addEventListener("tron:togglePanelRegion", handler);
     return () => window.removeEventListener("tron:togglePanelRegion", handler);
   }, [sessionId, stableToggleChrome, toggleAllChrome]);
+
+  // Jump between shell commands on the focused pane. Not useHotkey: it would
+  // swallow ⌘↑/⌘↓ inside a multi-line SmartInput, where they move the caret.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (getFocusedSession() !== sessionId) return;
+      const dir = matchesHotkey(e, hotkeys.jumpPrevCommand) ? -1 : matchesHotkey(e, hotkeys.jumpNextCommand) ? 1 : 0;
+      if (!dir) return;
+      const t = e.target;
+      if (t instanceof HTMLTextAreaElement && !t.classList.contains("xterm-helper-textarea") && t.value.includes("\n")) return;
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("tron:jumpCommand", { detail: { sessionId, dir } }));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sessionId, hotkeys.jumpPrevCommand, hotkeys.jumpNextCommand]);
 
   // Stable callback refs for SmartInput memo (assigned after functions are defined below)
   const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => {});

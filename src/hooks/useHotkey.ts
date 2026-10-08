@@ -110,6 +110,10 @@ export function formatHotkey(combo: string): string {
       if (p === "enter") return "↵";
       if (p === "escape") return "Esc";
       if (p === "tab") return "Tab";
+      if (p === "arrowup") return "↑";
+      if (p === "arrowdown") return "↓";
+      if (p === "arrowleft") return "←";
+      if (p === "arrowright") return "→";
       if (p === ",") return ",";
       if (p === ".") return ".";
       return p.toUpperCase();

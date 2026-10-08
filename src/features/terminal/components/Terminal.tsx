@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Terminal as Xterm, type IBufferRange, type ILink } from "@xterm/xterm";
+import { Terminal as Xterm, type IBufferRange, type ILink, type IMarker } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -12,6 +12,7 @@ import { classifyTerminalOutput } from "../../../utils/terminalState";
 import { detectResumableAgent, extractResumeFragments, buildResumeCommand } from "../../../utils/agentRecovery";
 import type { ExternalAgentBrand } from "../../../utils/externalAgentStatus";
 import { startBlock, endBlock, appendBlockOutput, clearBlocks } from "../../../services/blocks";
+import { nextCommandLine } from "../../../utils/commandMarks";
 import { isElectronApp, isMacOS, isTouchDevice, normalizePath } from "../../../utils/platform";
 import { isRemoteSession } from "../../../services/remote-bridge";
 import { smartUnwrapSelection, joinHardWrappedLink } from "../../../utils/textUnwrap";
@@ -59,18 +60,21 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
     foreground: "#e5e7eb",
     cursor: "#e5e7eb",
     selectionBackground: "#ffffff40",
+    overviewRulerBorder: "#00000000",
   },
   modern: {
     background: "rgba(9, 13, 24, 0.5)",
     foreground: "#d4d4e0",
     cursor: "#60a5fa",
     selectionBackground: "#3b82f640",
+    overviewRulerBorder: "#00000000",
   },
   light: {
     background: "#f9fafb",
     foreground: "#1f2937",
     cursor: "#1f2937",
     selectionBackground: "#3b82f640",
+    overviewRulerBorder: "#00000000",
     black: "#1f2937",
     red: "#dc2626",
     green: "#16a34a",
@@ -207,6 +211,8 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       // the top and decrements ydisp. With only 1000 lines, ydisp reaches 0
       // in seconds of fast output, snapping the viewport to the top.
       scrollback: isTouch ? 5000 : 10000,
+      // Exit-status ticks for shell-integrated commands, drawn by the scrollbar.
+      overviewRuler: { width: 14 },
       // macOS Option key → Meta so Alt+Arrow sends proper escape sequences
       ...(isMacOS() ? { macOptionIsMeta: true } : {}),
     });
@@ -506,6 +512,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // xterm's parser strips the OSC sequence so it never renders as text.
     // The handler returns true to claim ownership; false would let xterm's
     // default OSC handling (none for 1337) print it.
+    // Markers on each command's line (preexec fires after the shell echoed the
+    // newline, so the command sits one row above the cursor). They drive the
+    // ⌘↑/⌘↓ jumps and anchor the overview-ruler exit ticks; xterm disposes
+    // them when their line scrolls out of the scrollback.
+    const commandMarks = new Map<string, IMarker>();
     term.parser.registerOscHandler(1337, (data: string) => {
       try {
         if (data.startsWith("TronBlockStart;")) {
@@ -515,6 +526,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             const blockId = `${parts[1]}-${parts[2]}`;
             const cmd = decodeURIComponent(parts.slice(3).join(";"));
             startBlock(sessionId, blockId, cmd);
+            const marker = term.registerMarker(-1);
+            if (marker) {
+              commandMarks.set(blockId, marker);
+              marker.onDispose(() => commandMarks.delete(blockId));
+            }
           }
           return true;
         }
@@ -526,6 +542,16 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             const exitCode = parseInt(parts[3], 10);
             const cwd = decodeURIComponent(parts.slice(4).join(";"));
             endBlock(sessionId, blockId, isNaN(exitCode) ? -1 : exitCode, cwd);
+            const marker = commandMarks.get(blockId);
+            if (marker && !marker.isDisposed) {
+              term.registerDecoration({
+                marker,
+                overviewRulerOptions: {
+                  color: exitCode === 0 ? "rgba(48, 209, 88, 0.75)" : "rgba(255, 69, 58, 0.9)",
+                  position: "right",
+                },
+              });
+            }
           }
           // A command just finished and the shell prompt is back — clear any
           // mouse/focus report modes the command left enabled (covers
@@ -1061,6 +1087,18 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       }
     };
     window.addEventListener("tron:scrollTermToBottom", handleScrollToBottom);
+
+    // ⌘↑/⌘↓ (dispatched by TerminalPane for the focused pane): scroll to the
+    // previous/next shell command. Past the last one, snap back to the bottom.
+    const handleJumpCommand = (e: Event) => {
+      const d = (e as CustomEvent).detail as { sessionId?: string; dir?: -1 | 1 } | undefined;
+      if (d?.sessionId !== sessionId || !d.dir || term.buffer.active.type !== "normal") return;
+      const lines = [...commandMarks.values()].map((m) => m.line);
+      const target = nextCommandLine(lines, term.buffer.active.viewportY, d.dir);
+      if (target !== null) term.scrollToLine(target);
+      else if (d.dir > 0) term.scrollToBottom();
+    };
+    window.addEventListener("tron:jumpCommand", handleJumpCommand);
 
     // Resize Logic — syncs xterm dimensions to backend PTY.
     // During reconnect settling, ResizeObserver resizes are deferred to avoid
@@ -1609,6 +1647,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       disposableOnScroll.dispose();
       disposableOnLineFeed.dispose();
       window.removeEventListener("tron:scrollTermToBottom", handleScrollToBottom);
+      window.removeEventListener("tron:jumpCommand", handleJumpCommand);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       el.removeEventListener("paste", onPaste, true);

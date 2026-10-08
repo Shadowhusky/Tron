@@ -32,6 +32,8 @@ import { isSshOnly } from "./services/mode";
 import { getActiveRemoteConnections, disconnectRemote } from "./services/remote-bridge";
 import { isTouchDevice, isElectronApp } from "./utils/platform";
 import { requestEditorReveal } from "./services/editorReveal";
+import { setDesktopNotificationsEnabled } from "./services/desktopNotify";
+import { layoutSessionOrder } from "./utils/agentStatusDisplay";
 import { ExternalLink, PanelRight, FileText, FolderOpen, Copy, Eye, Columns2, ArrowLeftRight } from "lucide-react";
 import { forwardOpensLocally, parseLoopbackUrl, rewriteToForward } from "./utils/portForward";
 import { ensureLocalForward, openUrlExternally } from "./services/portForwards";
@@ -317,6 +319,21 @@ const AppContent = () => {
     return () => window.removeEventListener("tron:toast", handler);
   }, []);
 
+  useEffect(() => {
+    setDesktopNotificationsEnabled(config.desktopNotifications !== false);
+  }, [config.desktopNotifications]);
+
+  // Desktop notification clicked → bring that session's tab forward.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const sessionId = (e as CustomEvent).detail?.sessionId;
+      const tab = tabs.find((t) => layoutSessionOrder([t]).includes(sessionId));
+      if (tab) selectTab(tab.id);
+    };
+    window.addEventListener("tron:focusSession", handler);
+    return () => window.removeEventListener("tron:focusSession", handler);
+  }, [tabs, selectTab]);
+
   // Listen for link clicks — show popover at click position
   // Defer by one frame so the originating click finishes before Radix Popover
   // installs its pointer-down-outside listener (otherwise it closes immediately).
@@ -598,6 +615,8 @@ const AppContent = () => {
         { id: "toggle-hints", label: "Toggle Hints Bar", hint: fmt("togglePanelHints"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "hints" }) },
         { id: "toggle-footer", label: "Toggle Footer Bar", hint: fmt("togglePanelFooter"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "footer" }) },
         { id: "toggle-chrome", label: "Hide / Show All Bottom Bars", hint: fmt("togglePanelChrome"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "all" }) },
+        { id: "jump-prev-command", label: "Jump to Previous Command", hint: fmt("jumpPrevCommand"), section: "Terminal", run: evt("tron:jumpCommand", { sessionId: activeSessionId, dir: -1 }) },
+        { id: "jump-next-command", label: "Jump to Next Command", hint: fmt("jumpNextCommand"), section: "Terminal", run: evt("tron:jumpCommand", { sessionId: activeSessionId, dir: 1 }) },
       ] : []),
       ...(activeSessionId && activeSess?.sshProfileId ? [
         { id: "forward-port", label: "Forward a Port…", section: "Terminal", run: evt("tron:openPortForwards", { sessionId: activeSessionId }) },

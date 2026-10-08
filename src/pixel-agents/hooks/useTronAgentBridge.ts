@@ -8,7 +8,7 @@ import {
   detectExternalAgentSignal,
   type ExternalAgentBrand,
 } from "../../utils/externalAgentStatus";
-import { layoutSessionOrder, resolveAgentLabel } from "../../utils/agentStatusDisplay";
+import { agentTransition, layoutSessionOrder, resolveAgentLabel } from "../../utils/agentStatusDisplay";
 import {
   readScreenBuffer,
   isAlternateBuffer,
@@ -135,6 +135,8 @@ export function useAgentStatuses(): AgentStatus[] {
   const lookbackRing = useRef(new Map<string, string>());
   /** Last agent CLI identified on screen — names the pane before the CLI titles it. */
   const terminalBrand = useRef(new Map<string, ExternalAgentBrand>());
+  /** Previous external-agent state + when `active` last flipped, for notifications. */
+  const prevExternal = useRef(new Map<string, { active: boolean; permission: boolean; since: number }>());
 
   // Track which sessions have an actively running agent (via tron:agent-activity events)
   const agentRunning = useRef(new Set<string>());
@@ -312,6 +314,7 @@ export function useAgentStatuses(): AgentStatus[] {
     const now = Date.now();
 
     const result: AgentStatus[] = [];
+    const externalIds = new Set<string>();
     // On-screen order, never by state — re-sorting on every status change made
     // items jump around the bar.
     const inLayout = layoutSessionOrder(tabs).filter((id) => sessions.has(id));
@@ -445,6 +448,7 @@ export function useAgentStatuses(): AgentStatus[] {
           tokens: terminalTokens.current.get(id),
           elapsedSeconds: terminalElapsed.current.get(id),
         });
+        externalIds.add(id);
         continue;
       }
 
@@ -460,7 +464,27 @@ export function useAgentStatuses(): AgentStatus[] {
       // Only show sessions that have had agent activity at some point
       if (everHadAgent.current.has(id)) {
         result.push({ sessionId: id, label, active: false, tool: null, permission: false });
+        externalIds.add(id);
       }
+    }
+
+    // Claude Code / Codex finishing a turn or asking for approval. Tron's own
+    // agent is excluded — AgentStore already notifies for it.
+    for (const s of result) {
+      if (!externalIds.has(s.sessionId)) {
+        prevExternal.current.delete(s.sessionId);
+        continue;
+      }
+      const prev = prevExternal.current.get(s.sessionId) ?? { active: false, permission: false, since: now };
+      const kind = agentTransition(prev, s, now - prev.since);
+      if (kind) {
+        window.dispatchEvent(new CustomEvent("tron:externalAgent", { detail: { sessionId: s.sessionId, kind, label: s.label } }));
+      }
+      prevExternal.current.set(s.sessionId, {
+        active: s.active,
+        permission: s.permission,
+        since: prev.active === s.active ? prev.since : now,
+      });
     }
 
     setStatuses(prev => {

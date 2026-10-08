@@ -39,6 +39,25 @@ export function formatElapsed(seconds: number): string {
   return `${h}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}`;
 }
 
+export type AgentTransition = "finished" | "needs-approval";
+
+/** A turn shorter than this is a detection blip, not work worth a notification. */
+export const MIN_WORKING_MS = 5000;
+
+/**
+ * Notification-worthy changes of an external agent CLI's state. `workedMs` is
+ * how long it has been continuously active.
+ */
+export function agentTransition(
+  prev: { active: boolean; permission: boolean },
+  next: { active: boolean; permission: boolean },
+  workedMs: number,
+): AgentTransition | null {
+  if (next.permission && !prev.permission) return "needs-approval";
+  if (prev.active && !prev.permission && !next.active && workedMs >= MIN_WORKING_MS) return "finished";
+  return null;
+}
+
 /** Session ids in on-screen order: tab order, then depth-first pane order. */
 export function layoutSessionOrder(tabs: Tab[]): string[] {
   const out: string[] = [];

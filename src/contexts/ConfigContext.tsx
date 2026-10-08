@@ -50,6 +50,8 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   togglePanelHints: "meta+shift+j",
   togglePanelFooter: "meta+shift+u",
   togglePanelChrome: "meta+shift+h",
+  jumpPrevCommand: "meta+arrowup",
+  jumpNextCommand: "meta+arrowdown",
   maximizePane: "meta+shift+m",
 };
 

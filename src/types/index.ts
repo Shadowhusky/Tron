@@ -96,6 +96,8 @@ export interface HotkeyMap {
   togglePanelHints: string;
   togglePanelFooter: string;
   togglePanelChrome: string;
+  jumpPrevCommand: string;
+  jumpNextCommand: string;
   maximizePane: string;
   [key: string]: string;
 }
@@ -118,6 +120,8 @@ export interface TronConfig {
   webServer?: WebServerConfig;
   autoUpdate?: boolean;
   showAgentStatusBar?: boolean;
+  /** OS notifications while the window is unfocused (default on). */
+  desktopNotifications?: boolean;
   /** Global master-hide for the per-panel input box. When true, hidden in
    *  ALL panels regardless of per-panel state. */
   hidePanelInput?: boolean;
