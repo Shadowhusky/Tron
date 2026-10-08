@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { pushSessionData } from "./terminal.js";
+import { ForwardManager, missingRememberedForwards, preserveProfileForwards, sameForwardSpec, toPersistedSpec, validateForwardSpec, } from "./sshForward.js";
 // --- Friendly error messages ---
 function friendlySSHError(err, config) {
     const msg = err.message || "";
@@ -268,6 +269,26 @@ export class SSHSession {
 export const sshSessionIds = new Set();
 // Map of session ID → SSHSession instance (for SSH-specific operations)
 export const sshSessions = new Map();
+// sessionId → SSH profile id (forwards are remembered per profile) and the
+// owning client's latest event pusher (updated on every forward call).
+const sshSessionProfiles = new Map();
+const forwardPushers = new Map();
+const forwardManager = new ForwardManager((sessionId, forwards) => {
+    forwardPushers.get(sessionId)?.("ssh.forwardsChanged", { sessionId, forwards });
+});
+// Off in SSH-only (gateway) mode: listeners and -R targets would sit on the
+// gateway host's own loopback, shared by every user.
+let forwardingEnabled = true;
+export function disableForwarding() {
+    forwardingEnabled = false;
+}
+/** After a WebSocket reconnect, send forward changes to the client's new socket. */
+export function updateClientForwardPushers(clientId, pushEvent, ownerMap) {
+    for (const [sessionId, owner] of ownerMap) {
+        if (owner === clientId && sshSessionIds.has(sessionId))
+            forwardPushers.set(sessionId, pushEvent);
+    }
+}
 // --- SSH Profile Persistence ---
 function getProfilesPath() {
     const homeDir = os.homedir();
@@ -289,6 +310,10 @@ export function readProfiles() {
         return [];
     }
 }
+/** Profile saves from a client — keeps remembered forwards the client didn't send. */
+export function writeClientProfiles(profiles) {
+    return writeProfiles(preserveProfileForwards(readProfiles(), profiles));
+}
 export function writeProfiles(profiles) {
     try {
         const filePath = getProfilesPath();
@@ -299,6 +324,70 @@ export function writeProfiles(profiles) {
         return false;
     }
 }
+/**
+ * Run a profile's remembered forwards on one of the owning client's live
+ * sessions (the newest) — once per profile, so splits and duplicate tabs don't
+ * each grab a port. Called on connect and when a session ends (hand-over).
+ */
+function applyRememberedForwards(profileId, clientId, ownerMap) {
+    if (!forwardingEnabled)
+        return;
+    const specs = readProfiles().find((p) => p.id === profileId)?.forwards || [];
+    if (!specs.length)
+        return;
+    const live = [...sshSessionProfiles]
+        .filter(([sid, pid]) => pid === profileId && sshSessions.has(sid) && (!ownerMap || ownerMap.get(sid) === clientId))
+        .map(([sid]) => sid);
+    const target = live[live.length - 1];
+    if (!target)
+        return;
+    const running = live.flatMap((sid) => forwardManager.list(sid));
+    for (const spec of missingRememberedForwards(specs, running)) {
+        forwardManager.add(target, sshSessions.get(target).sshClient, spec, { persist: true }).catch(() => { });
+    }
+}
+function updateProfileForwards(sessionId, update) {
+    const profileId = sshSessionProfiles.get(sessionId);
+    if (!profileId)
+        return;
+    const profiles = readProfiles();
+    const profile = profiles.find((p) => p.id === profileId);
+    if (!profile)
+        return;
+    profile.forwards = update(profile.forwards || []);
+    writeProfiles(profiles);
+}
+export async function addForward(data, pushEvent) {
+    if (!forwardingEnabled)
+        throw new Error("Port forwarding is not available in SSH-only mode");
+    const session = sshSessions.get(data?.sessionId);
+    if (!session)
+        throw new Error("Not an active SSH session");
+    const spec = validateForwardSpec(data);
+    if (typeof spec === "string")
+        throw new Error(spec);
+    forwardPushers.set(data.sessionId, pushEvent);
+    const record = await forwardManager.add(data.sessionId, session.sshClient, spec, { persist: data.persist });
+    if (data.persist && record.status === "active") {
+        const saved = toPersistedSpec(record);
+        updateProfileForwards(data.sessionId, (list) => [...list.filter((f) => !sameForwardSpec(f, saved)), saved]);
+    }
+    return record;
+}
+export function removeForward(data, pushEvent) {
+    const record = forwardManager.list(data?.sessionId).find((f) => f.id === data?.id);
+    if (!record)
+        return false;
+    forwardPushers.set(data.sessionId, pushEvent);
+    if (record.persist) {
+        const saved = toPersistedSpec(record);
+        updateProfileForwards(data.sessionId, (list) => list.filter((f) => !sameForwardSpec(f, saved)));
+    }
+    return forwardManager.remove(data.sessionId, data.id);
+}
+export function listForwards(sessionId) {
+    return forwardManager.list(sessionId);
+}
 // --- SSH Session Creation & Management ---
 export async function createSSHSession(config, clientId, pushEvent, sessionMap, historyMap, ownerMap) {
     const session = new SSHSession();
@@ -307,6 +396,8 @@ export async function createSSHSession(config, clientId, pushEvent, sessionMap, 
     // Register in tracking maps
     sshSessionIds.add(sessionId);
     sshSessions.set(sessionId, session);
+    sshSessionProfiles.set(sessionId, config.id);
+    forwardPushers.set(sessionId, pushEvent);
     // Store in same session map as local PTY (PtyLike duck type)
     sessionMap.set(sessionId, session);
     historyMap.set(sessionId, "");
@@ -326,17 +417,22 @@ export async function createSSHSession(config, clientId, pushEvent, sessionMap, 
     session.onExit(() => {
         pushEvent("terminal.exit", { id: sessionId, exitCode: 0 });
         pushEvent("ssh.statusChange", { sessionId, status: "disconnected" });
+        forwardManager.closeSession(sessionId);
         sessionMap.delete(sessionId);
         historyMap.delete(sessionId);
         sshSessionIds.delete(sessionId);
         sshSessions.delete(sessionId);
+        sshSessionProfiles.delete(sessionId);
+        forwardPushers.delete(sessionId);
         if (ownerMap)
             ownerMap.delete(sessionId);
+        applyRememberedForwards(config.id, clientId, ownerMap);
     });
     // Save profile if requested
+    const profiles = readProfiles();
+    const existingIdx = profiles.findIndex((p) => p.id === config.id);
+    const savedForwards = existingIdx >= 0 ? profiles[existingIdx].forwards : undefined;
     if (config.saveCredentials || config.name) {
-        const profiles = readProfiles();
-        const existingIdx = profiles.findIndex((p) => p.id === config.id);
         const profile = {
             id: config.id,
             name: config.name || `${config.username}@${config.host}`,
@@ -350,6 +446,7 @@ export async function createSSHSession(config, clientId, pushEvent, sessionMap, 
             savedPassphrase: config.saveCredentials ? config.passphrase : undefined,
             fingerprint: config.fingerprint,
             lastConnected: Date.now(),
+            forwards: savedForwards,
         };
         if (existingIdx >= 0) {
             profiles[existingIdx] = profile;
@@ -360,6 +457,7 @@ export async function createSSHSession(config, clientId, pushEvent, sessionMap, 
         writeProfiles(profiles);
     }
     pushEvent("ssh.statusChange", { sessionId, status: "connected" });
+    applyRememberedForwards(config.id, clientId, ownerMap);
     return { sessionId };
 }
 export async function testConnection(config) {
@@ -427,6 +525,8 @@ export function cleanupClientSSHSessions(clientId, ownerMap) {
 }
 /** Clean up all SSH sessions. */
 export function cleanupAllSSHSessions() {
+    for (const sessionId of sshSessions.keys())
+        forwardManager.closeSession(sessionId);
     for (const [, session] of sshSessions) {
         try {
             session.kill();

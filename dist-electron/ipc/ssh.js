@@ -9,6 +9,7 @@ exports.cleanupAllSSHSessions = cleanupAllSSHSessions;
 const electron_1 = require("electron");
 const ssh2_1 = require("ssh2");
 const terminal_1 = require("./terminal");
+const sshForward_1 = require("./sshForward");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
@@ -253,6 +254,10 @@ class SSHSession {
 // --- Tracking ---
 exports.sshSessionIds = new Set();
 exports.sshSessions = new Map();
+/** sessionId → SSH profile id, so forwards can be remembered per profile. */
+const sshSessionProfiles = new Map();
+let emitForwards = () => { };
+const forwardManager = new sshForward_1.ForwardManager((sessionId, forwards) => emitForwards(sessionId, forwards));
 // --- Profile Persistence ---
 function getProfilesPath() {
     const dir = path_1.default.join(electron_1.app.getPath("userData"), "ssh-profiles");
@@ -280,8 +285,42 @@ function writeProfiles(profiles) {
         return false;
     }
 }
+/**
+ * Run a profile's remembered forwards on one of its live sessions (the newest)
+ * — once per profile, so splits and duplicate tabs don't each grab a port.
+ * Called on connect and when a session ends, which hands the forwards over.
+ */
+function applyRememberedForwards(profileId) {
+    const specs = readProfiles().find((p) => p.id === profileId)?.forwards || [];
+    if (!specs.length)
+        return;
+    const live = [...sshSessionProfiles].filter(([sid, pid]) => pid === profileId && exports.sshSessions.has(sid)).map(([sid]) => sid);
+    const target = live[live.length - 1];
+    if (!target)
+        return;
+    const running = live.flatMap((sid) => forwardManager.list(sid));
+    for (const spec of (0, sshForward_1.missingRememberedForwards)(specs, running)) {
+        forwardManager.add(target, exports.sshSessions.get(target).sshClient, spec, { persist: true }).catch(() => { });
+    }
+}
+function updateProfileForwards(sessionId, update) {
+    const profileId = sshSessionProfiles.get(sessionId);
+    if (!profileId)
+        return;
+    const profiles = readProfiles();
+    const profile = profiles.find((p) => p.id === profileId);
+    if (!profile)
+        return;
+    profile.forwards = update(profile.forwards || []);
+    writeProfiles(profiles);
+}
 // --- Register IPC Handlers ---
 function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
+    emitForwards = (sessionId, forwards) => {
+        const win = getMainWindow();
+        if (win && !win.isDestroyed())
+            win.webContents.send("ssh.forwardsChanged", { sessionId, forwards });
+    };
     electron_1.ipcMain.handle("ssh.connect", async (_event, config) => {
         const session = new SSHSession();
         const sessionId = config.sessionId || `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -289,6 +328,7 @@ function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
         // Register in tracking
         exports.sshSessionIds.add(sessionId);
         exports.sshSessions.set(sessionId, session);
+        sshSessionProfiles.set(sessionId, config.id);
         const sessions = getSessions();
         const history = getSessionHistory();
         sessions.set(sessionId, session);
@@ -318,15 +358,19 @@ function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
                 mainWindow.webContents.send("terminal.exit", { id: sessionId, exitCode: 0 });
                 mainWindow.webContents.send("ssh.statusChange", { sessionId, status: "disconnected" });
             }
+            forwardManager.closeSession(sessionId);
             sessions.delete(sessionId);
             history.delete(sessionId);
             exports.sshSessionIds.delete(sessionId);
             exports.sshSessions.delete(sessionId);
+            sshSessionProfiles.delete(sessionId);
+            applyRememberedForwards(config.id);
         });
         // Save profile
+        const profiles = readProfiles();
+        const existingIdx = profiles.findIndex((p) => p.id === config.id);
+        const savedForwards = existingIdx >= 0 ? profiles[existingIdx].forwards : undefined;
         if (config.saveCredentials || config.name) {
-            const profiles = readProfiles();
-            const existingIdx = profiles.findIndex((p) => p.id === config.id);
             const profile = {
                 id: config.id,
                 name: config.name || `${config.username}@${config.host}`,
@@ -340,6 +384,7 @@ function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
                 savedPassphrase: config.saveCredentials ? config.passphrase : undefined,
                 fingerprint: config.fingerprint,
                 lastConnected: Date.now(),
+                forwards: savedForwards,
             };
             if (existingIdx >= 0)
                 profiles[existingIdx] = profile;
@@ -350,8 +395,34 @@ function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send("ssh.statusChange", { sessionId, status: "connected" });
         }
+        applyRememberedForwards(config.id);
         return { sessionId };
     });
+    electron_1.ipcMain.handle("ssh.forward.add", async (_event, data) => {
+        const session = exports.sshSessions.get(data?.sessionId);
+        if (!session)
+            throw new Error("Not an active SSH session");
+        const spec = (0, sshForward_1.validateForwardSpec)(data);
+        if (typeof spec === "string")
+            throw new Error(spec);
+        const record = await forwardManager.add(data.sessionId, session.sshClient, spec, { persist: data.persist });
+        if (data.persist && record.status === "active") {
+            const saved = (0, sshForward_1.toPersistedSpec)(record);
+            updateProfileForwards(data.sessionId, (list) => [...list.filter((f) => !(0, sshForward_1.sameForwardSpec)(f, saved)), saved]);
+        }
+        return record;
+    });
+    electron_1.ipcMain.handle("ssh.forward.remove", (_event, data) => {
+        const record = forwardManager.list(data?.sessionId).find((f) => f.id === data?.id);
+        if (!record)
+            return false;
+        if (record.persist) {
+            const saved = (0, sshForward_1.toPersistedSpec)(record);
+            updateProfileForwards(data.sessionId, (list) => list.filter((f) => !(0, sshForward_1.sameForwardSpec)(f, saved)));
+        }
+        return forwardManager.remove(data.sessionId, data.id);
+    });
+    electron_1.ipcMain.handle("ssh.forward.list", (_event, sessionId) => forwardManager.list(sessionId));
     electron_1.ipcMain.handle("ssh.testConnection", async (_event, config) => {
         const client = new ssh2_1.Client();
         const connectConfig = {
@@ -410,10 +481,12 @@ function registerSSHHandlers(getMainWindow, getSessions, getSessionHistory) {
         return readProfiles();
     });
     electron_1.ipcMain.handle("ssh.profiles.write", (_event, profiles) => {
-        return writeProfiles(profiles);
+        return writeProfiles((0, sshForward_1.preserveProfileForwards)(readProfiles(), profiles));
     });
 }
 function cleanupAllSSHSessions() {
+    for (const sessionId of exports.sshSessions.keys())
+        forwardManager.closeSession(sessionId);
     for (const [, session] of exports.sshSessions) {
         try {
             session.kill();

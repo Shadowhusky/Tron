@@ -39,6 +39,9 @@ const ALLOWED_INVOKE_CHANNELS = [
     "ssh.disconnect",
     "ssh.profiles.read",
     "ssh.profiles.write",
+    "ssh.forward.add",
+    "ssh.forward.remove",
+    "ssh.forward.list",
     "remote.profiles.read",
     "remote.profiles.write",
     "savedTabs.read",
@@ -63,6 +66,11 @@ const ALLOWED_INVOKE_CHANNELS = [
     "skills.discover",
     "skills.read",
     "agent.findResumeSession",
+    "cliAgent.detect",
+    "cliAgent.start",
+    "cliAgent.respond",
+    "cliAgent.stop",
+    "cliAgent.complete",
 ];
 const ALLOWED_SEND_CHANNELS = [
     "terminal.write",
@@ -80,8 +88,10 @@ const ALLOWED_RECEIVE_CHANNELS = [
     "window.confirmClose",
     "window.forceClose",
     "ssh.statusChange",
+    "ssh.forwardsChanged",
     "updater.status",
     "updater.downloadProgress",
+    "cliAgent.event",
 ];
 const invokeSet = new Set(ALLOWED_INVOKE_CHANNELS);
 const sendSet = new Set(ALLOWED_SEND_CHANNELS);

@@ -48,6 +48,7 @@ const updater_1 = require("./ipc/updater");
 const web_1 = require("./ipc/web");
 const skills_1 = require("./ipc/skills");
 const agentSessions_1 = require("./ipc/agentSessions");
+const cliAgent_1 = require("./ipc/cliAgent");
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
     electron_1.app.quit();
@@ -228,6 +229,7 @@ const createWindow = () => {
         }
     });
     mainWindow.on("closed", () => {
+        (0, cliAgent_1.cleanupAllCliAgentRuns)();
         (0, ssh_1.cleanupAllSSHSessions)();
         (0, terminal_1.cleanupAllSessions)();
         mainWindow = null;
@@ -302,6 +304,7 @@ electron_1.ipcMain.handle("clipboard.readFilePaths", async () => {
 (0, web_1.registerWebHandlers)();
 (0, skills_1.registerSkillsHandlers)();
 (0, agentSessions_1.registerAgentSessionHandlers)();
+(0, cliAgent_1.registerCliAgentHandlers)();
 (0, updater_1.registerUpdaterHandlers)(() => mainWindow, () => { forceQuit = true; });
 // --- Window close response from renderer ---
 electron_1.ipcMain.on("window.closeConfirmed", () => {
@@ -374,6 +377,7 @@ electron_1.app.whenReady().then(async () => {
     }
 });
 electron_1.app.on("window-all-closed", () => {
+    (0, cliAgent_1.cleanupAllCliAgentRuns)();
     (0, terminal_1.cleanupAllSessions)();
     // Synchronous shutdown — async stopWebServer can be aborted by Electron's
     // quit sequence, orphaning the child and leaving the port bound for the
@@ -385,6 +389,7 @@ electron_1.app.on("window-all-closed", () => {
 electron_1.app.on("before-quit", (e) => {
     if (forceQuit) {
         // Already confirmed or force-closing — proceed with cleanup
+        (0, cliAgent_1.cleanupAllCliAgentRuns)();
         (0, ssh_1.cleanupAllSSHSessions)();
         (0, terminal_1.cleanupAllSessions)();
         // See note above — sync variant survives Electron tearing down before

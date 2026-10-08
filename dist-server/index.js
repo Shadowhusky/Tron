@@ -14,6 +14,8 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 import * as terminal from "./handlers/terminal.js";
 import * as ai from "./handlers/ai.js";
 import * as ssh from "./handlers/ssh.js";
+import { CliAgentManager } from "./handlers/cliAgentCore.js";
+const cliAgents = new CliAgentManager();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.TRON_PORT) || 3888;
@@ -572,6 +574,11 @@ wss.on("connection", (ws, req) => {
     }
     // Mark this as the active connection for this client
     activeConnections.set(clientId, ws);
+    // CLI agent runs are bound to the socket that started them (events go to its
+    // pushEvent, the page holds their state). A new connection means that page
+    // reloaded or reconnected — on a refresh the old socket's close can arrive
+    // after this, and its stale-close guard would skip the cleanup below.
+    cliAgents.stopAll(clientId);
     // Immediately tell client which mode and restrictions we're running with
     if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "mode", mode: serverMode, sshOnly }));
@@ -585,6 +592,7 @@ wss.on("connection", (ws, req) => {
     // Update pushEvent for all existing sessions owned by this client
     // (handles WS reconnect without page reload — e.g., mobile sleep/wake)
     terminal.updateClientPushEvent(clientId, pushEvent);
+    ssh.updateClientForwardPushers(clientId, pushEvent, terminal.getSessionOwners());
     ws.on("message", async (raw) => {
         let msg;
         try {
@@ -617,6 +625,9 @@ wss.on("connection", (ws, req) => {
         if (activeConnections.get(clientId) !== ws)
             return;
         activeConnections.delete(clientId);
+        // A page refresh loses the renderer's run state, so its CLI runs can't be
+        // picked up again — stop them instead of letting them work unattended.
+        cliAgents.stopAll(clientId);
         // Delay cleanup to allow page reload / reconnection within grace period
         pendingCleanups.set(clientId, setTimeout(() => {
             ssh.cleanupClientSSHSessions(clientId, terminal.getSessionOwners());
@@ -636,7 +647,19 @@ const SSH_ONLY_BLOCKED_CHANNELS = new Set([
     "file.listDir",
     "file.searchDir",
     "log.saveSessionLog",
+    "cliAgent.detect",
+    "cliAgent.start",
+    "cliAgent.respond",
+    "cliAgent.stop",
+    "cliAgent.complete",
+    // Forward listeners and -R targets would live on the gateway's own loopback,
+    // shared by every user of the gateway.
+    "ssh.forward.add",
+    "ssh.forward.remove",
+    "ssh.forward.list",
 ]);
+if (sshOnly)
+    ssh.disableForwarding();
 // Terminal channels that take a sessionId — in SSH-only mode, must be an SSH session
 const SSH_ONLY_SESSION_CHANNELS = new Set([
     "terminal.exec",
@@ -711,7 +734,22 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
         case "ssh.profiles.read":
             return ssh.readProfiles();
         case "ssh.profiles.write":
-            return ssh.writeProfiles(data);
+            return ssh.writeClientProfiles(data);
+        case "ssh.forward.add":
+        case "ssh.forward.remove":
+        case "ssh.forward.list": {
+            // Forwards open loopback listeners on THIS machine — only the client that
+            // owns the SSH session may manage them.
+            const sid = typeof data === "string" ? data : data?.sessionId;
+            if (!sid || terminal.getSessionOwners().get(sid) !== clientId) {
+                throw new Error("Not your SSH session");
+            }
+            if (channel === "ssh.forward.add")
+                return ssh.addForward(data, pushEvent);
+            if (channel === "ssh.forward.remove")
+                return ssh.removeForward(data, pushEvent);
+            return ssh.listForwards(sid);
+        }
         case "savedTabs.read":
             try {
                 if (!fs.existsSync(savedTabsFile))
@@ -768,6 +806,16 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
             return webSearchImpl(data?.query || "");
         case "web.fetch":
             return webFetchImpl(data?.url || "");
+        case "cliAgent.detect":
+            return cliAgents.detect(data === true);
+        case "cliAgent.start":
+            return cliAgents.start(data, (ev) => pushEvent("cliAgent.event", ev), clientId);
+        case "cliAgent.respond":
+            return cliAgents.respond(data);
+        case "cliAgent.stop":
+            return cliAgents.stop(data);
+        case "cliAgent.complete":
+            return cliAgents.complete(data);
         case "skills.discover":
             return discoverSkills(data?.cwd);
         case "skills.read":
@@ -959,6 +1007,7 @@ server.listen(PORT, HOST, () => {
 });
 // Cleanup on server shutdown
 const shutdownHandler = () => {
+    cliAgents.stopAll();
     ssh.cleanupAllSSHSessions();
     terminal.cleanupAllServerSessions();
     process.exit(0);
