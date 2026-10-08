@@ -95,6 +95,7 @@ export interface HotkeyMap {
   togglePanelInput: string;
   togglePanelHints: string;
   togglePanelFooter: string;
+  togglePanelChrome: string;
   maximizePane: string;
   [key: string]: string;
 }

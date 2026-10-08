@@ -3,9 +3,14 @@ import { useConfig } from "../contexts/ConfigContext";
 import { useAgent } from "../contexts/AgentContext";
 import {
   resolvePanelChrome,
+  toggleAllOverride,
   toggleRegionOverride,
 } from "../utils/panelChrome";
-import type { PanelChromeRegion } from "../types";
+import type { PanelChromeRegion, PanelChromeState } from "../types";
+
+// Collapsible animates height for 200ms; without this the terminal's
+// ResizeObserver fits (and SIGWINCHes the PTY) several times mid-animation.
+const COLLAPSE_SETTLE_MS = 260;
 
 /**
  * Resolves the visibility of a terminal panel's three collapsible chrome
@@ -45,14 +50,30 @@ export function usePanelChrome(sessionId: string, panelHeight: number) {
     [globals],
   );
 
+  // Same deferral as pane maximize: terminals hold fit() until the collapse
+  // settles, then resize once.
+  const applyOverride = useCallback(
+    (next: PanelChromeState) => {
+      window.dispatchEvent(new Event("tron:splitDragStart"));
+      setPanelChrome(next);
+      setTimeout(() => window.dispatchEvent(new Event("tron:splitDragEnd")), COLLAPSE_SETTLE_MS);
+    },
+    [setPanelChrome],
+  );
+
   const toggle = useCallback(
     (region: PanelChromeRegion) => {
       // No-op when globally hidden — the master switch wins.
       if (globallyHidden[region]) return;
-      setPanelChrome(toggleRegionOverride(region, visible[region], panelChrome));
+      applyOverride(toggleRegionOverride(region, visible[region], panelChrome));
     },
-    [globallyHidden, setPanelChrome, visible, panelChrome],
+    [globallyHidden, applyOverride, visible, panelChrome],
   );
+
+  /** Hide every region if any is showing, otherwise show them all. */
+  const toggleAll = useCallback(() => {
+    applyOverride(toggleAllOverride(visible, panelChrome, globallyHidden));
+  }, [applyOverride, visible, panelChrome, globallyHidden]);
 
   /** Force-show every region that isn't globally hidden (restore-all). */
   const showAll = useCallback(() => {
@@ -60,11 +81,11 @@ export function usePanelChrome(sessionId: string, panelHeight: number) {
     (["input", "hints", "footer"] as PanelChromeRegion[]).forEach((r) => {
       if (!globallyHidden[r]) next[r] = true;
     });
-    setPanelChrome(next);
-  }, [globallyHidden, panelChrome, setPanelChrome]);
+    applyOverride(next);
+  }, [globallyHidden, panelChrome, applyOverride]);
 
   /** True when at least one region is hidden (so a restore affordance shows). */
   const anyHidden = !visible.input || !visible.hints || !visible.footer;
 
-  return { visible, toggle, showAll, anyHidden, globallyHidden };
+  return { visible, toggle, toggleAll, showAll, anyHidden, globallyHidden };
 }

@@ -559,6 +559,7 @@ const AppContent = () => {
         { id: "toggle-input", label: "Toggle Input Box", hint: fmt("togglePanelInput"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "input" }) },
         { id: "toggle-hints", label: "Toggle Hints Bar", hint: fmt("togglePanelHints"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "hints" }) },
         { id: "toggle-footer", label: "Toggle Footer Bar", hint: fmt("togglePanelFooter"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "footer" }) },
+        { id: "toggle-chrome", label: "Hide / Show All Bottom Bars", hint: fmt("togglePanelChrome"), section: "Terminal", run: evt("tron:togglePanelRegion", { sessionId: activeSessionId, region: "all" }) },
       ] : []),
       ...(activeCwd && isElectronApp() && activeSess && !activeSess.sshProfileId && !activeSess.remoteUrl ? [
         // Local sessions in the desktop app only: an SSH/remote cwd is a path

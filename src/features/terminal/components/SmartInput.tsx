@@ -74,6 +74,8 @@ interface SmartInputProps {
   hintsVisible?: boolean;
   /** Toggle a panel-chrome region (input / hints / footer). */
   onToggleRegion?: (region: PanelChromeRegion) => void;
+  /** Hide (or show) all three bottom bars at once. */
+  onToggleAllChrome?: () => void;
   /** Steer the RUNNING agent with a mid-task message (Option+Enter). */
   onSteer?: (text: string) => void;
   /** Number of queued prompts (for hints + Esc-pop). */
@@ -231,6 +233,7 @@ const SmartInput: React.FC<SmartInputProps> = ({
   inputVisible = true,
   hintsVisible = true,
   onToggleRegion,
+  onToggleAllChrome,
   onSteer,
   queuedCount = 0,
   onPopQueued,
@@ -2335,33 +2338,16 @@ const SmartInput: React.FC<SmartInputProps> = ({
                 <span className="mx-1 opacity-40">·</span>
                 <span>{formatHotkey(hotkeys.splitHorizontal)} split</span>
               </div>
-              {onToggleRegion && (
-                <div className="flex shrink-0 items-center gap-0.5">
+              {onToggleAllChrome && (
+                <div className="flex shrink-0 items-center">
                   <span className="mx-1 opacity-40">·</span>
                   <button
                     type="button"
-                    onClick={() => onToggleRegion("input")}
-                    title={`Hide input (${formatHotkey(hotkeys.togglePanelInput)})`}
+                    onClick={onToggleAllChrome}
+                    title={`Hide all bottom bars (${formatHotkey(hotkeys.togglePanelChrome)})`}
                     className="opacity-70 transition-opacity hover:opacity-100"
                   >
-                    {formatHotkey(hotkeys.togglePanelInput)} input
-                  </button>
-                  <span className="mx-1 opacity-40">·</span>
-                  <button
-                    type="button"
-                    onClick={() => onToggleRegion("footer")}
-                    title={`Hide bar (${formatHotkey(hotkeys.togglePanelFooter)})`}
-                    className="opacity-70 transition-opacity hover:opacity-100"
-                  >
-                    {formatHotkey(hotkeys.togglePanelFooter)} bar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onToggleRegion("hints")}
-                    title={`Hide hints (${formatHotkey(hotkeys.togglePanelHints)})`}
-                    className="ml-1.5 opacity-60 transition-opacity hover:opacity-100"
-                  >
-                    ✕
+                    {formatHotkey(hotkeys.togglePanelChrome)} hide
                   </button>
                 </div>
               )}

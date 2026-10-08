@@ -83,6 +83,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   togglePanelInput: "Toggle Input Box",
   togglePanelHints: "Toggle Hints Bar",
   togglePanelFooter: "Toggle Footer Bar",
+  togglePanelChrome: "Hide / Show All Bottom Bars",
 };
 
 const NAV_SECTIONS_BASE = [

@@ -3,6 +3,7 @@ import {
   resolvePanelChrome,
   resolveRegionVisible,
   toggleRegionOverride,
+  toggleAllOverride,
   autoVisible,
 } from "../utils/panelChrome";
 
@@ -66,3 +67,45 @@ describe("panelChrome resolution", () => {
     expect(v).toEqual({ input: true, hints: true, footer: true });
   });
 });
+
+describe("toggleAllOverride", () => {
+  const none = { input: false, hints: false, footer: false };
+  const shown = { input: true, hints: true, footer: true };
+
+  it("hides every region when all are showing", () => {
+    expect(toggleAllOverride(shown, undefined, none)).toEqual({
+      input: false,
+      hints: false,
+      footer: false,
+    });
+  });
+
+  it("hides every region when only some are showing", () => {
+    // footer auto-hidden on a short pane, input + hints still up → one press hides the rest
+    expect(
+      toggleAllOverride({ input: true, hints: true, footer: false }, undefined, none),
+    ).toEqual({ input: false, hints: false, footer: false });
+  });
+
+  it("shows every region when all are hidden", () => {
+    expect(
+      toggleAllOverride(
+        { input: false, hints: false, footer: false },
+        { input: false, hints: false, footer: false },
+        none,
+      ),
+    ).toEqual({ input: true, hints: true, footer: true });
+  });
+
+  it("leaves globally hidden regions out of the override", () => {
+    // footer hidden in Settings for all panels — it can't be shown per-panel,
+    // and it mustn't count as "something still showing" either
+    const next = toggleAllOverride(
+      { input: false, hints: false, footer: false },
+      { input: false, hints: false },
+      { input: false, hints: false, footer: true },
+    );
+    expect(next).toEqual({ input: true, hints: true });
+  });
+});
+

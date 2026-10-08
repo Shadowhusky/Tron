@@ -49,6 +49,7 @@ export const DEFAULT_HOTKEYS: HotkeyMap = {
   togglePanelInput: "meta+shift+i",
   togglePanelHints: "meta+shift+j",
   togglePanelFooter: "meta+shift+u",
+  togglePanelChrome: "meta+shift+h",
   maximizePane: "meta+shift+m",
 };
 

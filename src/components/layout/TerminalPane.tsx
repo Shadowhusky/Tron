@@ -251,6 +251,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const {
     visible: chromeVisible,
     toggle: toggleChrome,
+    toggleAll: toggleAllChrome,
     showAll: showAllChrome,
     anyHidden: chromeAnyHidden,
   } = usePanelChrome(sessionId, panelHeight);
@@ -270,17 +271,24 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   useHotkey("togglePanelInput", () => toggleRegionIfFocused("input"), [toggleRegionIfFocused]);
   useHotkey("togglePanelHints", () => toggleRegionIfFocused("hints"), [toggleRegionIfFocused]);
   useHotkey("togglePanelFooter", () => toggleRegionIfFocused("footer"), [toggleRegionIfFocused]);
+  useHotkey(
+    "togglePanelChrome",
+    () => { if (getFocusedSession() === sessionId) toggleAllChrome(); },
+    [sessionId, toggleAllChrome],
+  );
 
   // Command-palette entry point: toggle a chrome region on a SPECIFIC pane
   // (the palette targets the active session; hotkeys target the focused one).
   useEffect(() => {
     const handler = (e: Event) => {
-      const d = (e as CustomEvent).detail as { sessionId?: string; region?: PanelChromeRegion };
-      if (d?.sessionId === sessionId && d.region) stableToggleChrome(d.region);
+      const d = (e as CustomEvent).detail as { sessionId?: string; region?: PanelChromeRegion | "all" };
+      if (d?.sessionId !== sessionId || !d.region) return;
+      if (d.region === "all") toggleAllChrome();
+      else stableToggleChrome(d.region);
     };
     window.addEventListener("tron:togglePanelRegion", handler);
     return () => window.removeEventListener("tron:togglePanelRegion", handler);
-  }, [sessionId, stableToggleChrome]);
+  }, [sessionId, stableToggleChrome, toggleAllChrome]);
 
   // Stable callback refs for SmartInput memo (assigned after functions are defined below)
   const wrappedHandleCommandRef = useRef<(cmd: string) => void>(() => {});
@@ -1534,14 +1542,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
       </AnimatePresence>
 
       <div
-        className={`relative shrink-0 ${(chromeVisible.input || chromeVisible.hints) ? "border-t p-2" : ""} ${pendingCommand ? "z-0" : "z-20"} ${themeClass(
+        className={`relative shrink-0 border-t transition-[padding,border-color] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)] ${pendingCommand ? "z-0" : "z-20"} ${themeClass(
           resolvedTheme,
           {
-            dark: "border-white/5 bg-[#0a0a0a]",
-            modern: "border-white/[0.08] bg-[#070b14]/70 backdrop-blur-xl backdrop-saturate-150",
-            light: "border-gray-200 bg-gray-50",
+            dark: "bg-[#0a0a0a]",
+            modern: "bg-[#070b14]/70 backdrop-blur-xl backdrop-saturate-150",
+            light: "bg-gray-50",
           },
-        )}`}
+        )} ${(chromeVisible.input || chromeVisible.hints)
+          ? `p-2 ${themeClass(resolvedTheme, { dark: "border-white/5", modern: "border-white/[0.08]", light: "border-gray-200" })}`
+          : "p-0 border-transparent"}`}
       >
         <SmartInput
           onSend={stableOnSend}
@@ -1570,6 +1580,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           inputVisible={chromeVisible.input}
           hintsVisible={chromeVisible.hints}
           onToggleRegion={stableToggleChrome}
+          onToggleAllChrome={toggleAllChrome}
         />
       </div>
       <Collapsible visible={chromeVisible.footer}>
@@ -1583,27 +1594,28 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           />
         </div>
       </Collapsible>
-      {/* Restore strip — appears when any chrome region is hidden. A slim
-          hover-expand bar that brings everything back (also via hotkeys). */}
+      {/* Restore pill — absolutely positioned so hovering it never resizes the
+          terminal (an in-flow strip that grew on hover SIGWINCHed TUIs). */}
       {chromeAnyHidden && (
-        <button
-          type="button"
-          onClick={showAllChrome}
-          title="Show hidden panel areas"
-          className={`group/restore relative flex h-1.5 w-full shrink-0 items-center justify-center overflow-hidden transition-all duration-200 hover:h-5 ${themeClass(
-            resolvedTheme,
-            {
-              dark: "bg-white/[0.03] hover:bg-white/[0.06] text-gray-500",
-              modern: "bg-white/[0.03] hover:bg-white/[0.07] backdrop-blur-xl text-gray-400",
-              light: "bg-gray-100 hover:bg-gray-200 text-gray-500",
-            },
-          )}`}
-        >
-          <span className="flex items-center gap-1 text-[11px] opacity-0 transition-opacity duration-200 group-hover/restore:opacity-100">
+        <div className="group/restore absolute inset-x-0 bottom-0 z-30 flex h-2 justify-center">
+          <button
+            type="button"
+            onClick={showAllChrome}
+            title={`Show bars (${formatHotkey(hotkeys.togglePanelChrome)})`}
+            className={`pointer-events-none absolute bottom-1.5 flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] opacity-0 shadow-sm transition-opacity duration-150 group-hover/restore:pointer-events-auto group-hover/restore:opacity-100 ${themeClass(
+              resolvedTheme,
+              {
+                dark: "border-white/10 bg-[#1a1a1a] text-gray-300 hover:text-white",
+                modern: "border-white/[0.12] bg-[#121826]/95 text-gray-300 hover:text-white",
+                light: "border-gray-200 bg-white text-gray-600 hover:text-gray-900",
+              },
+            )}`}
+          >
             <ChevronUp className="h-2.5 w-2.5" />
-            show panel
-          </span>
-        </button>
+            Show bars
+            <span className="opacity-50">{formatHotkey(hotkeys.togglePanelChrome)}</span>
+          </button>
+        </div>
       )}
 
       {isConnectPane && (

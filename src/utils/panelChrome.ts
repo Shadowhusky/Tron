@@ -94,3 +94,20 @@ export function toggleRegionOverride(
 ): PanelChromeState {
   return { ...(perPanel || {}), [region]: !currentlyVisible };
 }
+
+/**
+ * One press for the whole bottom chrome: if anything is showing, hide it all;
+ * otherwise show it all. Globally hidden regions get no override — the master
+ * switch already decides them.
+ */
+export function toggleAllOverride(
+  visible: Record<PanelChromeRegion, boolean>,
+  perPanel: PanelChromeState | undefined,
+  globallyHidden: Record<PanelChromeRegion, boolean>,
+): PanelChromeState {
+  const togglable = PANEL_CHROME_REGIONS.filter((r) => !globallyHidden[r]);
+  const show = !togglable.some((r) => visible[r]);
+  const next: PanelChromeState = { ...(perPanel || {}) };
+  for (const r of togglable) next[r] = show;
+  return next;
+}
