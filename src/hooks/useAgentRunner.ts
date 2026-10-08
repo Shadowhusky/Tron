@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, startTransition } from "react";
-import type { TerminalSession, AttachedImage } from "../types";
+import type { TerminalSession, AttachedImage, AIConfig } from "../types";
 import { aiService, type AgentContinuation } from "../services/ai";
 import { useHistory } from "../contexts/HistoryContext";
 import { useAgent } from "../contexts/AgentContext";
@@ -13,6 +13,10 @@ import { classifyCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
 import { readScreenBuffer, isAlternateBuffer } from "../services/terminalBuffer";
 import { getRemoteConnection } from "../services/remote-bridge";
+import { CLI_AGENT_PROVIDERS, isCliAgentProvider, resolveCliMode, type CliAgentProvider } from "../services/ai/cliAgent/providers";
+import { describePermission, runCliAgent, type CliPermissionRequest } from "../services/ai/cliAgent/runner";
+import { applyCliEvent } from "../services/ai/cliAgent/thread";
+import type { CliAgentEvent } from "../services/ai/cliAgent/normalize";
 
 /**
  * Extracts agent orchestration logic from the terminal pane component.
@@ -50,6 +54,8 @@ export function useAgentRunner(
     thinkingEnabled,
     setThinkingEnabled,
     registerAbortController,
+    cliSession,
+    setCliSession,
   } = useAgent(sessionId);
 
   // Model capabilities state — null means "unknown" (cloud providers), [] means "known but none"
@@ -339,6 +345,120 @@ export function useAgentRunner(
   // Cooldown ref to prevent rapid-fire agent runs (e.g. on error loops)
   const lastAgentRunRef = useRef(0);
 
+  /** One turn on a Claude Code / Codex backend — the CLI owns the agent loop;
+   *  Tron renders its events, answers its permission prompts and stops it. */
+  const runCliAgentTurn = async (
+    cfg: AIConfig,
+    provider: CliAgentProvider,
+    prompt: string,
+    images: AttachedImage[] | undefined,
+    controller: AbortController,
+    shouldGenerateTitle: boolean,
+  ) => {
+    const label = CLI_AGENT_PROVIDERS[provider].shortLabel;
+    const finish = () => {
+      setIsAgentRunning(false);
+      setIsThinking(false);
+      window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
+    };
+    const fail = (message: string) => {
+      setAgentThread((prev) => [...prev.filter((s) => s.step !== "streaming"), { step: "error", output: message }]);
+      finish();
+    };
+    if (session?.sshProfileId || session?.remoteUrl) {
+      fail(`${label} runs on this computer, so it can't work in a remote pane. Pick another provider for this pane, or use a local tab.`);
+      return;
+    }
+    if (sessionId) addInteraction(sessionId, { role: "user", content: prompt, timestamp: Date.now() });
+
+    let cwd = "";
+    try {
+      cwd = (await window.electron?.ipcRenderer?.invoke(IPC.TERMINAL_GET_CWD, sessionId)) || "";
+    } catch { /* fall back to the session's last known cwd */ }
+    cwd = cwd || session?.cwd || "";
+    const screen = readScreenBuffer(sessionId, 40)?.trim();
+    const fullPrompt = [
+      `[Sent from the Tron terminal app. The user's pane is at: ${cwd || "unknown"}]`,
+      screen ? `Recent output in that pane:\n\`\`\`\n${screen.slice(-4000)}\n\`\`\`` : "",
+      prompt,
+    ].filter(Boolean).join("\n\n");
+
+    // Token deltas are batched (~10 renders/s); structural events flush at once.
+    let pending: CliAgentEvent[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (!pending.length) return;
+      const batch = pending;
+      pending = [];
+      startTransition(() => setAgentThread((prev) => batch.reduce(applyCliEvent, prev)));
+    };
+    const onEvent = (ev: CliAgentEvent) => {
+      if (ev.type === "session") {
+        setCliSession({ provider, id: ev.id });
+        return;
+      }
+      if (ev.type === "permission") return;
+      if (ev.type === "thinking_start" || ev.type === "thinking_delta") setIsThinking(true);
+      else if (ev.type === "thinking_end" || ev.type === "text_delta" || ev.type === "tool_start") setIsThinking(false);
+      pending.push(ev);
+      if (ev.type === "text_delta" || ev.type === "thinking_delta") {
+        if (!timer) timer = setTimeout(flush, 100);
+      } else {
+        flush();
+      }
+    };
+    const requestPermission = async (req: CliPermissionRequest) => {
+      const needsPrompt = req.tool === "Bash"
+        ? requiresPrompt(String(req.input.command ?? ""))
+        : !alwaysAllowRef.current;
+      if (!needsPrompt) return true;
+      flush();
+      setPendingCommand(describePermission(provider, req));
+      const allowed = await new Promise<boolean>((resolve) => setPermissionResolve(resolve));
+      setPendingCommand(null);
+      setPermissionResolve(null);
+      return allowed;
+    };
+
+    try {
+      const result = await runCliAgent({
+        provider,
+        prompt: fullPrompt,
+        cwd,
+        mode: resolveCliMode(
+          provider,
+          cfg.cliMode ?? (aiService.getConfig().provider === provider ? aiService.getConfig().cliMode : undefined),
+        ),
+        model: cfg.model,
+        resumeId: cliSession?.provider === provider ? cliSession.id : undefined,
+        images: images?.map((img) => ({ base64: img.base64, mediaType: img.mediaType })),
+        signal: controller.signal,
+        onEvent,
+        requestPermission,
+      });
+      flush();
+      if (result.sessionId) setCliSession({ provider, id: result.sessionId });
+      if (result.aborted) return; // stopAgent() already recorded the stop
+      finish();
+      if (sessionId && result.text) {
+        addInteraction(sessionId, { role: "agent", content: result.text, timestamp: Date.now() });
+      }
+      if (shouldGenerateTitle && !result.isError && !isTabTitleLocked(sessionId)) {
+        aiService.generateTabTitle(`${prompt}\n[AGENT RESPONSE]: ${result.text.slice(0, 200)}`, cfg).then((t) => {
+          if (t && !isTabTitleLocked(sessionId)) {
+            renameTab(sessionId, t);
+            lockTabTitle(sessionId);
+          }
+        });
+      }
+    } catch (err: unknown) {
+      flush();
+      if (controller.signal.aborted) return;
+      fail(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   /** Returns true when the prompt was accepted (queued or a run started).
    *  False = silently rejected (empty / throttled) — callers draining a queue
    *  MUST re-queue the item instead of letting it drop. */
@@ -395,6 +515,12 @@ export function useAgentRunner(
 
     // Tab title will be generated after agent finishes (local models can't handle concurrent requests)
     const shouldGenerateTitle = !isTabTitleLocked(sessionId) && sessionId && prompt.trim() && aiBehavior.aiTabTitles;
+
+    const cliConfig = session?.aiConfig ?? aiService.getConfig();
+    if (isCliAgentProvider(cliConfig.provider)) {
+      await runCliAgentTurn(cliConfig, cliConfig.provider, prompt, images, controller, !!shouldGenerateTitle);
+      return true;
+    }
 
     // --- Image analysis shortcut: bypass agent loop entirely ---
     if (images && images.length > 0) {

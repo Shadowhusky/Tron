@@ -63,6 +63,11 @@ const ALLOWED_INVOKE_CHANNELS = [
   "skills.discover",
   "skills.read",
   "agent.findResumeSession",
+  "cliAgent.detect",
+  "cliAgent.start",
+  "cliAgent.respond",
+  "cliAgent.stop",
+  "cliAgent.complete",
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -84,6 +89,7 @@ const ALLOWED_RECEIVE_CHANNELS = [
   "ssh.statusChange",
   "updater.status",
   "updater.downloadProgress",
+  "cliAgent.event",
 ] as const;
 
 type InvokeChannel = (typeof ALLOWED_INVOKE_CHANNELS)[number];

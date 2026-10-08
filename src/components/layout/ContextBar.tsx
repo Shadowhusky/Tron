@@ -750,7 +750,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                             };
                             const globalCfg = aiService.getConfig();
                             let providerCfg:
-                              | { apiKey?: string; baseUrl?: string }
+                              | { apiKey?: string; baseUrl?: string; cliMode?: string }
                               | undefined;
                             try {
                               providerCfg = (appConfig.providerConfigs || {} as any)[m.provider];
@@ -768,6 +768,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
                             if (apiKey) update.apiKey = apiKey;
                             if (providerUsesBaseUrl(m.provider) && baseUrl)
                               update.baseUrl = baseUrl;
+                            if (providerCfg?.cliMode) update.cliMode = providerCfg.cliMode;
                             updateSessionConfig(sessionId, update);
                             setShowModelMenu(false);
                             setSearchQuery("");

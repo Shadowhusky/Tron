@@ -9,6 +9,11 @@ import React, {
   useMemo,
 } from "react";
 import type { AgentStep, PanelChromeState } from "../types";
+
+export interface CliSession {
+  provider: string;
+  id: string;
+}
 import { IPC } from "../constants/ipc";
 
 interface AgentState {
@@ -30,6 +35,8 @@ interface AgentState {
   scrollPosition?: number;
   /** Per-panel collapsible-chrome overrides (input / hints / footer). */
   panelChrome?: PanelChromeState;
+  /** Claude Code / Codex conversation this pane continues on follow-ups. */
+  cliSession?: CliSession;
 }
 
 const defaultState: AgentState = {
@@ -172,7 +179,8 @@ class AgentStore {
   setAgentThread = (sessionId: string, threadOrUpdater: AgentStep[] | ((prev: AgentStep[]) => AgentStep[])) => {
     const current = this.states.get(sessionId) || defaultState;
     const newThread = typeof threadOrUpdater === "function" ? threadOrUpdater(current.agentThread) : threadOrUpdater;
-    this.updateState(sessionId, { agentThread: newThread });
+    // Clearing the thread starts a fresh CLI conversation too.
+    this.updateState(sessionId, newThread.length === 0 ? { agentThread: newThread, cliSession: undefined } : { agentThread: newThread });
   }
 
   registerAbortController = (sessionId: string, controller: AbortController) => {
@@ -337,7 +345,7 @@ class AgentStore {
 
 const AgentContext = createContext<AgentStore | null>(null);
 
-type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number; isOverlayVisible?: boolean; panelChrome?: PanelChromeState };
+type PersistedSession = { agentThread: AgentStep[]; overlayHeight?: number; draftInput?: string; thinkingEnabled?: boolean; scrollPosition?: number; isOverlayVisible?: boolean; panelChrome?: PanelChromeState; cliSession?: CliSession };
 
 function parsePersistedData(parsed: Record<string, PersistedSession>): Map<string, AgentState> {
   const map = new Map<string, AgentState>();
@@ -376,6 +384,7 @@ function parsePersistedData(parsed: Record<string, PersistedSession>): Map<strin
         thinkingEnabled: data.thinkingEnabled ?? defaultState.thinkingEnabled,
         scrollPosition: data.scrollPosition,
         panelChrome: data.panelChrome,
+        cliSession: data.cliSession,
       });
     }
   }
@@ -442,6 +451,7 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({
           ...(typeof state.scrollPosition === "number" ? { scrollPosition: state.scrollPosition } : {}),
           isOverlayVisible: state.isOverlayVisible,
           ...(hasChrome ? { panelChrome: state.panelChrome } : {}),
+          ...(state.cliSession ? { cliSession: state.cliSession } : {}),
         };
       }
     }
@@ -560,6 +570,8 @@ export const useAgent = (sessionId: string) => {
     setScrollPosition: (pos: number | undefined) => store.updateState(sessionId, { scrollPosition: pos }),
     panelChrome: state.panelChrome,
     setPanelChrome: (chrome: PanelChromeState | undefined) => store.updateState(sessionId, { panelChrome: chrome }),
+    cliSession: state.cliSession,
+    setCliSession: (cliSession: CliSession | undefined) => store.updateState(sessionId, { cliSession }),
     registerAbortController: (controller: AbortController) => store.registerAbortController(sessionId, controller),
     stopAgent: () => store.stopAgent(sessionId),
     resetSession: () => store.resetSession(sessionId),

@@ -16,6 +16,7 @@ import { registerUpdaterHandlers, autoCheckForUpdates } from "./ipc/updater";
 import { registerWebHandlers } from "./ipc/web";
 import { registerSkillsHandlers } from "./ipc/skills";
 import { registerAgentSessionHandlers } from "./ipc/agentSessions";
+import { registerCliAgentHandlers, cleanupAllCliAgentRuns } from "./ipc/cliAgent";
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -209,6 +210,7 @@ const createWindow = () => {
   });
 
   mainWindow.on("closed", () => {
+    cleanupAllCliAgentRuns();
     cleanupAllSSHSessions();
     cleanupAllSessions();
     mainWindow = null;
@@ -278,6 +280,7 @@ registerWebServerHandlers();
 registerWebHandlers();
 registerSkillsHandlers();
 registerAgentSessionHandlers();
+registerCliAgentHandlers(() => mainWindow);
 registerUpdaterHandlers(() => mainWindow, () => { forceQuit = true; });
 
 // --- Window close response from renderer ---
@@ -346,6 +349,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  cleanupAllCliAgentRuns();
   cleanupAllSessions();
   // Synchronous shutdown — async stopWebServer can be aborted by Electron's
   // quit sequence, orphaning the child and leaving the port bound for the
@@ -357,6 +361,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", (e) => {
   if (forceQuit) {
     // Already confirmed or force-closing — proceed with cleanup
+    cleanupAllCliAgentRuns();
     cleanupAllSSHSessions();
     cleanupAllSessions();
     // See note above — sync variant survives Electron tearing down before

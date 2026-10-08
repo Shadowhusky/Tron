@@ -43,6 +43,15 @@ export const IPC = {
   AI_TEST_CONNECTION: "ai.testConnection",
   AGENT_FIND_RESUME_SESSION: "agent.findResumeSession",
 
+  // CLI agent backends (Claude Code / Codex) — invoke
+  CLI_AGENT_DETECT: "cliAgent.detect",
+  CLI_AGENT_START: "cliAgent.start",
+  CLI_AGENT_RESPOND: "cliAgent.respond",
+  CLI_AGENT_STOP: "cliAgent.stop",
+  CLI_AGENT_COMPLETE: "cliAgent.complete",
+  // CLI agent — main→renderer events
+  CLI_AGENT_EVENT: "cliAgent.event",
+
   // SSH — invoke
   SSH_CONNECT: "ssh.connect",
   SSH_TEST_CONNECTION: "ssh.testConnection",

@@ -30,6 +30,8 @@ import { searchQualityHint } from "../../utils/searchQuality";
 import { describeSearchFailure, type SearchFailure } from "../../utils/searchFailure";
 import { smartQuotePaths } from "../../utils/commandClassifier";
 import { AGENT_TOOLS, AGENT_TOOL_NAMES, ToolCallAssembler, missingToolArgs, type OpenAITool } from "./toolSchemas";
+import { CLI_AGENT_PROVIDERS, isCliAgentProvider } from "./cliAgent/providers";
+import { cliComplete } from "./cliAgent/runner";
 
 export interface AgentContinuation {
   history: any[];
@@ -235,6 +237,8 @@ export function isProviderUsable(
   cfg: { apiKey?: string; baseUrl?: string },
 ): boolean {
   if (provider === "ollama" || provider === "lmstudio") return true;
+  // Claude Code / Codex carry their own subscription login.
+  if (isCliAgentProvider(provider)) return true;
   if (provider === "openai-compat" || provider === "anthropic-compat")
     return !!cfg.baseUrl;
   return !!cfg.apiKey; // Cloud providers need apiKey
@@ -510,6 +514,8 @@ class AIService {
   ): Promise<string[]> {
     const effectiveApiKey = apiKey ?? this.config.apiKey;
 
+    if (isCliAgentProvider(provider)) return ["vision"];
+
     // LM Studio: fetch capabilities from /api/v1/models
     if (provider === "lmstudio") {
       try {
@@ -641,6 +647,14 @@ class AIService {
   ): Promise<AIModel[]> {
     const provider = providerOverride || this.config.provider;
     const effectiveApiKey = apiKey ?? this.config.apiKey;
+
+    if (isCliAgentProvider(provider)) {
+      const names = [...CLI_AGENT_PROVIDERS[provider].models];
+      if (provider === this.config.provider && this.config.model && !names.includes(this.config.model)) {
+        names.push(this.config.model);
+      }
+      return names.map((name) => ({ name, provider, capabilities: ["vision"] }));
+    }
 
     // Ollama
     if (provider === "ollama" || !provider) {
@@ -876,6 +890,8 @@ class AIService {
         ? Math.round(history.length * 0.5)
         : Math.round(history.length * 0.7);
     const prompt = `Summarize the following terminal session history into at most ${charLimit} characters (~${level === "brief" ? "30" : level === "moderate" ? "50" : "70"}% of original length). Retain key actions, file changes, errors, and current state. Omit repetitive output and verbose logs.\n\n${history}`;
+
+    if (isCliAgentProvider(provider)) return (await cliComplete(provider, prompt)) || history;
 
     try {
       if (provider === "ollama") {
@@ -1451,6 +1467,12 @@ Give the command that DIRECTLY answers what the user asked. NOT prerequisite/ins
 Omit COMMAND line if no command applies (greetings, conceptual questions).
 NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 15 words.`;
 
+    if (isCliAgentProvider(provider)) {
+      const text = (await cliComplete(provider, `${systemPrompt}\n\nUser request: ${prompt}`)) || "";
+      if (text) onToken?.(text);
+      return text;
+    }
+
     try {
       if (provider === "ollama") {
         const controller = new AbortController();
@@ -1595,6 +1617,8 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     const apiKey = cfg.apiKey || this.config.apiKey;
     const baseUrl = providerUsesBaseUrl(provider) ? cfg.baseUrl : undefined;
     if (!model) return "";
+    // Spawning a CLI on every typing pause is too slow and burns plan usage.
+    if (isCliAgentProvider(provider)) return "";
 
     const systemPrompt = `You predict what the user will type next in a terminal. Based on the recent terminal output, suggest a short one-line command or action. Output ONLY the suggestion text, nothing else. Do not use backticks. Keep it under 60 characters. If unsure, output an empty string.`;
     const userContent = `Recent terminal output:\n${context.slice(-500)}`;
@@ -1756,6 +1780,10 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
       return text.length >= 2 && text.length <= 30 ? text : "";
     };
 
+    if (isCliAgentProvider(provider)) {
+      return cleanTitle((await cliComplete(provider, `${systemPrompt}\n\n${prompt}`)) || "");
+    }
+
     const abortCtrl = new AbortController();
     const timeout = setTimeout(() => abortCtrl.abort(), 30000);
     const messages = [
@@ -1877,6 +1905,11 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     const systemPrompt = `Based on the terminal history below, generate a short descriptive tab name (2-4 words, max 25 chars). Output ONLY the name, no quotes, no punctuation. Examples: "Node Server", "Git Rebase", "Docker Build", "Python Tests".`;
     const userContent = context.slice(-500);
     const signal = AbortSignal.timeout(10000);
+
+    if (isCliAgentProvider(provider)) {
+      const name = ((await cliComplete(provider, `${systemPrompt}\n\nTerminal history:\n${userContent}`)) || "").trim();
+      return name.length <= 25 ? name.replace(/^["'`]+|["'`.]+$/g, "") : "";
+    }
 
     try {
       if (provider === "ollama") {

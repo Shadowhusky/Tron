@@ -38,11 +38,13 @@ import {
   HardDrive,
 } from "lucide-react";
 import Modal from "../../../components/ui/Modal";
+import { CliProviderSettings } from "./CliProviderSettings";
+import { CLI_AGENT_PROVIDER_IDS, CLI_AGENT_PROVIDERS, isCliAgentProvider } from "../../../services/ai/cliAgent/providers";
 import type { ResolvedTheme } from "../../../contexts/ThemeContext";
 
 
 // Per-provider saved configs (model, apiKey, baseUrl)
-type ProviderCache = Record<string, { model?: string; apiKey?: string; baseUrl?: string }>;
+type ProviderCache = Record<string, { model?: string; apiKey?: string; baseUrl?: string; cliMode?: string }>;
 
 const HOTKEY_LABELS: Record<string, string> = {
   newTab: "New Tab",
@@ -1039,6 +1041,7 @@ const SettingsPane = () => {
       model: config.model,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
+      ...(config.cliMode ? { cliMode: config.cliMode } : {}),
     };
     updateAppConfig({ providerConfigs: { ...cache } });
 
@@ -1052,7 +1055,8 @@ const SettingsPane = () => {
     const newConfig = {
       ...config,
       provider: newProvider as AIProvider,
-      model: cached?.model || providerInfo?.defaultModels?.[0] || "",
+      model: cached?.model || providerInfo?.defaultModels?.[0] || (isCliAgentProvider(newProvider) ? "default" : ""),
+      cliMode: cached?.cliMode,
       apiKey: cached?.apiKey || "",
       baseUrl: providerUsesBaseUrl(newProvider)
         ? (cached?.baseUrl || defaultBaseUrls[newProvider] || "")
@@ -1083,6 +1087,7 @@ const SettingsPane = () => {
         if (session.aiConfig?.provider === configToSave.provider) {
           update.apiKey = configToSave.apiKey;
           update.baseUrl = configToSave.baseUrl;
+          if (configToSave.cliMode) update.cliMode = configToSave.cliMode;
         }
 
         if (Object.keys(update).length > 0) {
@@ -1099,6 +1104,7 @@ const SettingsPane = () => {
       model: config.model,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
+      ...(config.cliMode ? { cliMode: config.cliMode } : {}),
     };
     updateAppConfig({ providerConfigs: { ...cache } });
 
@@ -1140,6 +1146,7 @@ const SettingsPane = () => {
         if (session.aiConfig?.provider === configToSave.provider) {
           update.apiKey = configToSave.apiKey;
           update.baseUrl = configToSave.baseUrl;
+          if (configToSave.cliMode) update.cliMode = configToSave.cliMode;
         }
 
         if (Object.keys(update).length > 0) {
@@ -1282,6 +1289,11 @@ const SettingsPane = () => {
                             .map(({ id, info }) => (
                               <option key={id} value={id}>{info.label}</option>
                             ))}
+                        </optgroup>
+                        <optgroup label="Subscriptions">
+                          {CLI_AGENT_PROVIDER_IDS.map((id) => (
+                            <option key={id} value={id}>{CLI_AGENT_PROVIDERS[id].label}</option>
+                          ))}
                         </optgroup>
                         <optgroup label="Custom">
                           <option value="openai-compat">OpenAI Compatible</option>
@@ -1449,6 +1461,27 @@ const SettingsPane = () => {
                             </button>
                           </div>
                         </div>
+                      </motion.div>
+                    ) : isCliAgentProvider(config.provider) ? (
+                      <motion.div
+                        key="cli-settings"
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                      >
+                        <CliProviderSettings
+                          key={config.provider}
+                          provider={config.provider}
+                          model={config.model}
+                          mode={config.cliMode}
+                          onChange={(update) => setConfig({ ...config, ...update })}
+                          labelClass={labelClass}
+                          inputClass={inputClass}
+                          selectClass={selectClass}
+                          mutedClass={t.textFaint}
+                        />
                       </motion.div>
                     ) : (
                       <motion.div
