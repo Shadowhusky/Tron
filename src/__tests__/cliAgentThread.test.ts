@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import claudeBash from "./fixtures/cli-agent/claude-bash.jsonl?raw";
 import claudePermission from "./fixtures/cli-agent/claude-permission.jsonl?raw";
 import codexCommand from "./fixtures/cli-agent/codex-command.jsonl?raw";
-import { applyCliEvent } from "../services/ai/cliAgent/thread";
+import { applyCliEvent, closeOpenSteps } from "../services/ai/cliAgent/thread";
 import { createClaudeNormalizer, createCodexNormalizer, type CliAgentEvent } from "../services/ai/cliAgent/normalize";
 import type { AgentStep } from "../types";
 
@@ -30,10 +30,10 @@ describe("applyCliEvent — real runs", () => {
     expect(thread[2]).toEqual({ step: "done", output: "done" });
   });
 
-  it("renders a codex run with its intermediate message as a thought", () => {
+  it("keeps a codex run's intermediate message as a durable message", () => {
     const n = createCodexNormalizer();
     const thread = fold(fixture("codex-command.jsonl").flatMap((m) => n(m)));
-    expect(thread.map((s) => s.step)).toEqual(["separator", "thought", "executed", "done"]);
+    expect(thread.map((s) => s.step)).toEqual(["separator", "message", "executed", "done"]);
     expect(thread[1].output).toBe("I’ll run the command.");
     expect(thread[3].output).toBe("done");
   });
@@ -55,7 +55,8 @@ describe("applyCliEvent — individual events", () => {
       { type: "text_delta", text: "Look" },
       { type: "text_delta", text: "ing" },
     ]);
-    expect(t.at(-1)).toEqual({ step: "streaming", output: "Looking" });
+    // Plain text, not a JSON tool call: the overlay shows it instead of a heat bar.
+    expect(t.at(-1)).toEqual({ step: "streaming", output: "Looking", payload: { plainText: true } });
     const after = applyCliEvent(t, { type: "tool_start", id: "x", name: "Read", input: { file_path: "/a.ts" } });
     expect(after.map((s) => s.step)).toEqual(["separator", "executing"]);
     expect(after.at(-1)).toMatchObject({ output: "Reading file: /a.ts", payload: { tool: "read_file", path: "/a.ts", toolUseId: "x" } });
@@ -95,6 +96,22 @@ describe("applyCliEvent — individual events", () => {
     expect(t.map((s) => s.step)).toEqual(["separator", "done"]);
   });
 
+  it("shows notices as system lines", () => {
+    expect(applyCliEvent(start, { type: "notice", text: "Reconnecting… 1/5" }).at(-1)).toEqual({ step: "system", output: "Reconnecting… 1/5" });
+  });
+
+  it("persists only the tool fields its labels need", () => {
+    const t = applyCliEvent(start, {
+      type: "tool_start",
+      id: "w",
+      name: "Write",
+      input: { file_path: "/a.ts", content: "x".repeat(50_000) },
+    });
+    expect(JSON.stringify(t.at(-1)!.payload).length).toBeLessThan(300);
+    const done = applyCliEvent(t, { type: "tool_end", id: "w", output: "", isError: false });
+    expect(done.at(-1)!.output).toBe("Wrote file: /a.ts");
+  });
+
   it("never touches steps from earlier runs", () => {
     const prior: AgentStep[] = [
       { step: "separator", output: "old" },
@@ -102,5 +119,24 @@ describe("applyCliEvent — individual events", () => {
       { step: "separator", output: "new" },
     ];
     expect(applyCliEvent(prior, { type: "tool_end", id: "a", output: "x", isError: false })).toBe(prior);
+  });
+});
+
+describe("closeOpenSteps", () => {
+  it("fails running tools and drops live streaming/thinking in the current run only", () => {
+    const thread: AgentStep[] = [
+      { step: "separator", output: "old" },
+      { step: "executing", output: "stale but not ours" },
+      { step: "separator", output: "new" },
+      { step: "executing", output: "npm test" },
+      { step: "thinking", output: "" },
+      { step: "streaming", output: "Look", payload: { plainText: true } },
+    ];
+    expect(closeOpenSteps(thread)).toEqual([
+      { step: "separator", output: "old" },
+      { step: "executing", output: "stale but not ours" },
+      { step: "separator", output: "new" },
+      { step: "failed", output: "npm test" },
+    ]);
   });
 });

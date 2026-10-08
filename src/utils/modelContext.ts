@@ -73,6 +73,10 @@ export function contextCharsFor(
   if (configured && configured > 0) return configured;
   const tokens = inferContextTokens(model);
   if (!tokens) return DEFAULT_CONTEXT_CHARS;
+  return tokensToChars(tokens);
+}
+
+export function tokensToChars(tokens: number): number {
   return Math.round(tokens * CHARS_PER_TOKEN);
 }
 

@@ -75,6 +75,11 @@ describe("claude normalizer (real captures)", () => {
     expect(out).toEqual([{ type: "tool_end", id: "t9", output: "a\nb", isError: true }]);
   });
 
+  it("turns a cancelled permission request into permission_cancel", () => {
+    const n = createClaudeNormalizer();
+    expect(n({ type: "control_cancel_request", request_id: "perm-1" })).toEqual([{ type: "permission_cancel", requestId: "perm-1" }]);
+  });
+
   it("reports an error result with its error text", () => {
     const n = createClaudeNormalizer();
     expect(n({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["boom"], session_id: "s" })).toEqual([
@@ -108,6 +113,15 @@ describe("codex normalizer (real capture)", () => {
     expect(n({ type: "turn.failed", error: { message: "rate limited" } })).toEqual([
       expect.objectContaining({ type: "result", isError: true, text: "rate limited" }),
     ]);
+  });
+
+  it("shows transient reconnects as notices, real errors as errors", () => {
+    const n = createCodexNormalizer();
+    expect(n({ type: "error", message: "Reconnecting... 2/5" })).toEqual([{ type: "notice", text: "Reconnecting... 2/5" }]);
+    expect(n({ type: "error", message: "Reconnecting… 2/5 (stream disconnected)" })).toEqual([
+      { type: "notice", text: "Reconnecting… 2/5 (stream disconnected)" },
+    ]);
+    expect(n({ type: "error", message: "unauthorized" })).toEqual([{ type: "error", message: "unauthorized" }]);
   });
 
   it("flags non-zero command exits as errors", () => {

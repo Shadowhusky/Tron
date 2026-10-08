@@ -589,6 +589,11 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
 
   // Mark this as the active connection for this client
   activeConnections.set(clientId, ws);
+  // CLI agent runs are bound to the socket that started them (events go to its
+  // pushEvent, the page holds their state). A new connection means that page
+  // reloaded or reconnected — on a refresh the old socket's close can arrive
+  // after this, and its stale-close guard would skip the cleanup below.
+  cliAgents.stopAll(clientId);
 
   // Immediately tell client which mode and restrictions we're running with
   if (ws.readyState === WebSocket.OPEN) {
@@ -818,7 +823,7 @@ async function handleInvoke(
     case "web.fetch":
       return webFetchImpl(data?.url || "");
     case "cliAgent.detect":
-      return cliAgents.detect();
+      return cliAgents.detect(data === true);
     case "cliAgent.start":
       return cliAgents.start(data, (ev) => pushEvent("cliAgent.event", ev), clientId);
     case "cliAgent.respond":

@@ -8,13 +8,9 @@ import React, {
   useSyncExternalStore,
   useMemo,
 } from "react";
-import type { AgentStep, PanelChromeState } from "../types";
-
-export interface CliSession {
-  provider: string;
-  id: string;
-}
+import type { AgentStep, CliSession, PanelChromeState } from "../types";
 import { IPC } from "../constants/ipc";
+import { threadAfterStop } from "../utils/threadAfterStop";
 import { notifyDesktop } from "../services/desktopNotify";
 
 /** False when the user is in another app — then even visible panes count as unseen. */
@@ -241,24 +237,7 @@ class AgentStore {
       pendingCommand: null,
       permissionResolve: null,
       isOverlayVisible: true,
-      agentThread: (() => {
-        const inflightSteps = ["executing", "streaming", "streaming_thinking", "streaming_response", "thinking"];
-        const removeOnStop = ["streaming_thinking", "streaming_response", "thinking", "thought"];
-        const hadInflight = current.agentThread.some(
-          (s) => inflightSteps.includes(s.step)
-        );
-        // Remove transient thinking/streaming steps, convert executing/streaming to stopped
-        const cleaned = current.agentThread
-          .filter((s) => !removeOnStop.includes(s.step))
-          .map((s) =>
-            s.step === "executing" || s.step === "streaming"
-              ? { ...s, step: "stopped" as const }
-              : s
-          );
-        return hadInflight
-          ? cleaned
-          : [...cleaned, { step: "stopped", output: "Stopped" }];
-      })(),
+      agentThread: threadAfterStop(current.agentThread),
     });
 
     // Notify external trackers (AgentStatusBar) that the agent stopped.

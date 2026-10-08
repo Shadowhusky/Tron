@@ -6,7 +6,8 @@ import { detectCliAgents, type CliDetection } from "../../../services/ai/cliAgen
 // Detection spawns `--version` / auth checks — do it once per app session.
 let detectionCache: Promise<Awaited<ReturnType<typeof detectCliAgents>>> | null = null;
 function detect(force = false) {
-  if (!detectionCache || force) detectionCache = detectCliAgents();
+  // force also makes the backend re-resolve the binaries (installed since start).
+  if (!detectionCache || force) detectionCache = detectCliAgents(force);
   return detectionCache;
 }
 

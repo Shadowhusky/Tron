@@ -47,7 +47,7 @@ export const CLI_AGENT_PROVIDERS: Record<CliAgentProvider, CliAgentProviderInfo>
     models: ["default"],
     modes: [
       { id: "read-only", label: "Read only", hint: "Reads files and runs read-only commands." },
-      { id: "workspace-write", label: "Workspace write", hint: "Edits files in the pane's folder; no network access." },
+      { id: "workspace-write", label: "Workspace write", hint: "Edits files in the pane's folder; no network access. Run from your home folder, that's all of it." },
       { id: "danger-full-access", label: "Full access", hint: "No sandbox. Only for throwaway environments." },
     ],
     defaultMode: "workspace-write",
@@ -57,6 +57,10 @@ export const CLI_AGENT_PROVIDERS: Record<CliAgentProvider, CliAgentProviderInfo>
 };
 
 export const CLI_AGENT_PROVIDER_IDS = Object.keys(CLI_AGENT_PROVIDERS) as CliAgentProvider[];
+
+/** Both CLIs' models have ~200k-token windows. The presets ("sonnet",
+ *  "default") name no size, so the context gauge would assume a tiny 16k. */
+export const CLI_CONTEXT_TOKENS = 200_000;
 
 export function isCliAgentProvider(provider: string | undefined | null): provider is CliAgentProvider {
   return !!provider && provider in CLI_AGENT_PROVIDERS;

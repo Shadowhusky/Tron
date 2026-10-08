@@ -41,6 +41,15 @@ export interface AgentTodo {
   status: "pending" | "in_progress" | "completed";
 }
 
+/** The Claude Code / Codex conversation a pane continues on follow-ups. */
+export interface CliSession {
+  provider: string;
+  id: string;
+  /** Folder it was started in — Claude keeps transcripts per project folder,
+   *  so it can't be resumed from another one. */
+  cwd?: string;
+}
+
 export interface AttachedImage {
   base64: string;      // raw base64 data (no data: prefix)
   mediaType: string;   // image/jpeg, image/png, image/webp, image/gif

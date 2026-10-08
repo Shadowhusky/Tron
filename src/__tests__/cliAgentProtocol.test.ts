@@ -9,10 +9,14 @@ import {
   buildClaudeUserMessage,
   buildCompleteArgs,
   extractCompletion,
+  isTrustedDir,
   JsonLineSplitter,
   parseClaudeAuth,
   parseCodexLogin,
+  parseCommandV,
   parseVersion,
+  pickWindowsBinary,
+  quoteCmdArg,
   validateControlResponse,
   validateStartOptions,
 } from "../../electron/ipc/cliAgentProtocol";
@@ -57,7 +61,7 @@ describe("validateStartOptions", () => {
 
 describe("buildClaudeArgs", () => {
   it("runs headless stream-json with Tron answering permission prompts", () => {
-    const args = buildClaudeArgs({ mode: "default" });
+    const args = buildClaudeArgs({ mode: "default", trusted: true });
     expect(args.slice(0, 1)).toEqual(["-p"]);
     expect(args.join(" ")).toContain("--output-format stream-json --input-format stream-json --verbose");
     expect(args).toContain("--include-partial-messages");
@@ -67,13 +71,83 @@ describe("buildClaudeArgs", () => {
     expect(args).not.toContain("--resume");
   });
 
+  it("keeps Claude asking in text instead of the invisible AskUserQuestion tool", () => {
+    expect(buildClaudeArgs({ mode: "default", trusted: true }).join(" ")).toContain("--disallowedTools AskUserQuestion");
+  });
+
+  it("loads only user settings in a folder Claude Code doesn't trust", () => {
+    // -p skips the trust dialog, so project hooks would otherwise run unprompted.
+    expect(buildClaudeArgs({ mode: "default", trusted: false }).join(" ")).toContain("--setting-sources user");
+    expect(buildClaudeArgs({ mode: "default", trusted: true })).not.toContain("--setting-sources");
+  });
+
   it("omits --model for the CLI default and passes others", () => {
-    expect(buildClaudeArgs({ mode: "plan", model: "default" })).not.toContain("--model");
-    expect(buildClaudeArgs({ mode: "plan", model: "sonnet" }).join(" ")).toContain("--model sonnet");
+    expect(buildClaudeArgs({ mode: "plan", model: "default", trusted: true })).not.toContain("--model");
+    expect(buildClaudeArgs({ mode: "plan", model: "sonnet", trusted: true }).join(" ")).toContain("--model sonnet");
   });
 
   it("resumes a session", () => {
-    expect(buildClaudeArgs({ mode: "acceptEdits", resumeId: UUID }).join(" ")).toContain(`--resume ${UUID}`);
+    expect(buildClaudeArgs({ mode: "acceptEdits", resumeId: UUID, trusted: true }).join(" ")).toContain(`--resume ${UUID}`);
+  });
+});
+
+describe("isTrustedDir", () => {
+  const projects = {
+    "/Users/me/code/tron": { hasTrustDialogAccepted: true },
+    "/Users/me/scratch": { hasTrustDialogAccepted: false },
+    "C:\\code": { hasTrustDialogAccepted: true },
+  };
+
+  it("trusts an accepted folder and anything inside it", () => {
+    expect(isTrustedDir(projects, "/Users/me/code/tron")).toBe(true);
+    expect(isTrustedDir(projects, "/Users/me/code/tron/src/")).toBe(true);
+    expect(isTrustedDir(projects, "C:\\code\\api")).toBe(true);
+  });
+
+  it("does not trust unknown, declined or sibling folders", () => {
+    expect(isTrustedDir(projects, "/Users/me/scratch/x")).toBe(false);
+    expect(isTrustedDir(projects, "/Users/me/code/tron-website")).toBe(false);
+    expect(isTrustedDir(projects, "/tmp")).toBe(false);
+    expect(isTrustedDir(undefined, "/Users/me/code/tron")).toBe(false);
+  });
+});
+
+describe("parseCommandV", () => {
+  it("accepts an absolute path", () => {
+    expect(parseCommandV("/Users/me/.local/bin/claude", "/Users/me")).toBe("/Users/me/.local/bin/claude");
+  });
+
+  it("resolves the legacy alias install", () => {
+    expect(parseCommandV("alias claude='~/.claude/local/claude'", "/Users/me")).toBe("/Users/me/.claude/local/claude");
+    expect(parseCommandV("alias claude=/opt/claude/bin/claude", "/Users/me")).toBe("/opt/claude/bin/claude");
+  });
+
+  it("rejects functions, builtins and empty output", () => {
+    expect(parseCommandV("claude", "/Users/me")).toBeNull();
+    expect(parseCommandV("", "/Users/me")).toBeNull();
+  });
+});
+
+describe("Windows spawning", () => {
+  it("prefers a real .exe from `where` output", () => {
+    const out = "C:\\Users\\me\\AppData\\Roaming\\npm\\codex\r\nC:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd\r\nC:\\tools\\codex.exe\r\n";
+    expect(pickWindowsBinary(out)).toEqual({ path: "C:\\tools\\codex.exe", viaShell: false });
+  });
+
+  it("falls back to a .cmd shim, which needs cmd.exe", () => {
+    expect(pickWindowsBinary("C:\\npm\\codex\r\nC:\\npm\\codex.cmd\r\n")).toEqual({ path: "C:\\npm\\codex.cmd", viaShell: true });
+  });
+
+  it("treats `where` failure text as not installed", () => {
+    expect(pickWindowsBinary("INFO: Could not find files for the given pattern(s).")).toBeNull();
+    expect(pickWindowsBinary("")).toBeNull();
+  });
+
+  it("quotes arguments for cmd.exe, keeping empty ones", () => {
+    expect(quoteCmdArg("")).toBe('""');
+    expect(quoteCmdArg("C:\\Temp\\my img.png")).toBe('"C:\\Temp\\my img.png"');
+    expect(quoteCmdArg('sandbox_mode="read-only"')).toBe('"sandbox_mode=""read-only"""');
+    expect(() => quoteCmdArg("%PATH%")).toThrow();
   });
 });
 
@@ -171,6 +245,11 @@ describe("detection parsing", () => {
   it("reads codex login status", () => {
     expect(parseCodexLogin("Logged in using ChatGPT\n", 0)).toEqual({ loggedIn: true, authMethod: "ChatGPT" });
     expect(parseCodexLogin("Not logged in\n", 1)).toEqual({ loggedIn: false, authMethod: null });
+  });
+
+  it("never shows an API key from codex login status", () => {
+    const out = parseCodexLogin("Logged in using an API key - sk-proj-abcdef1234567890\n", 0);
+    expect(out).toEqual({ loggedIn: true, authMethod: "API key" });
   });
 });
 

@@ -9,7 +9,8 @@ import { Folder, X, Loader2, Trash2, Search, Settings, ChevronDown } from "lucid
 import { useAgent } from "../../contexts/AgentContext";
 import { IPC } from "../../constants/ipc";
 import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platform";
-import { contextCharsFor } from "../../utils/modelContext";
+import { contextCharsFor, tokensToChars } from "../../utils/modelContext";
+import { CLI_CONTEXT_TOKENS, isCliAgentProvider } from "../../services/ai/cliAgent/providers";
 import { themeClass } from "../../utils/theme";
 import { stripAnsi } from "../../utils/contextCleaner";
 import { classifyTerminalOutput, detectTuiProgram } from "../../utils/terminalState";
@@ -90,13 +91,16 @@ const ContextBar: React.FC<ContextBarProps> = ({
   const session = sessions.get(sessionId);
   const cwd = session?.cwd || "~/";
   const rawModel = session?.aiConfig?.model || aiService.getConfig().model;
+  // Claude Code / Codex manage their own context: Tron never sends this
+  // terminal context to them, so summarizing it would only spend plan quota.
+  const isCliProvider = isCliAgentProvider(session?.aiConfig?.provider || aiService.getConfig().provider);
   // Derived from the model when the user hasn't pinned a value, so the gauge
   // (and the 90% auto-summarize trigger) reflect the model's real headroom
   // instead of a flat 16k for everything.
-  const maxContext = contextCharsFor(
-    rawModel,
-    session?.aiConfig?.contextWindow || aiService.getConfig().contextWindow,
-  );
+  const configuredWindow = session?.aiConfig?.contextWindow || aiService.getConfig().contextWindow;
+  const maxContext = isCliProvider && !configuredWindow
+    ? tokensToChars(CLI_CONTEXT_TOKENS)
+    : contextCharsFor(rawModel, configuredWindow);
 
   // Poll for context length (history size)
   const [contextLength, setContextLength] = useState(0);
@@ -314,7 +318,7 @@ const ContextBar: React.FC<ContextBarProps> = ({
         // summarizing while a TUI constantly refreshes causes compaction loops.
         // Only auto-summarize after user has sent at least one prompt in this session.
         // For fresh context: check raw percent. For already-summarized: check effective context.
-        const shouldAutoSummarize = hasUserPromptedRef.current && !tuiProgram && !isSummarizingRef.current && (
+        const shouldAutoSummarize = !isCliProvider && hasUserPromptedRef.current && !tuiProgram && !isSummarizingRef.current && (
           (!isSummarizedRef.current && rawPercent > 90) ||
           (isSummarizedRef.current && session?.contextSummary && (() => {
             const newOutput = terminalText.trim();

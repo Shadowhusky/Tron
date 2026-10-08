@@ -20,6 +20,10 @@ export type CliAgentEvent =
   | { type: "tool_end"; id: string; output: string; isError: boolean }
   | { type: "todos"; todos: AgentTodo[] }
   | { type: "permission"; requestId: string; tool: string; input: Record<string, unknown>; description?: string }
+  /** The CLI withdrew a permission request (e.g. the tool call was cancelled). */
+  | { type: "permission_cancel"; requestId: string }
+  /** Informational line, not an error (e.g. codex reconnecting). */
+  | { type: "notice"; text: string }
   | { type: "result"; text: string; isError: boolean; sessionId?: string; costUsd?: number; usage?: Record<string, unknown> }
   | { type: "error"; message: string };
 
@@ -96,6 +100,8 @@ export function createClaudeNormalizer() {
         if (r.subtype !== "can_use_tool") return [];
         return [{ type: "permission", requestId: m.request_id, tool: r.tool_name, input: r.input ?? {}, description: r.description }];
       }
+      case "control_cancel_request":
+        return typeof m.request_id === "string" ? [{ type: "permission_cancel", requestId: m.request_id }] : [];
       case "result": {
         const errText = Array.isArray(m.errors) ? m.errors.join("; ") : "";
         return [{
@@ -190,8 +196,11 @@ export function createCodexNormalizer() {
       }
       case "turn.failed":
         return [{ type: "result", text: String(e.error?.message ?? "Codex turn failed"), isError: true, sessionId }];
-      case "error":
-        return [{ type: "error", message: String(e.message ?? "Codex error") }];
+      case "error": {
+        const message = String(e.message ?? "Codex error");
+        // Transient stream retries ("Reconnecting… 2/5") aren't failures.
+        return /^Reconnecting/i.test(message) ? [{ type: "notice", text: message }] : [{ type: "error", message }];
+      }
       default:
         return [];
     }

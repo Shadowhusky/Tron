@@ -76,7 +76,7 @@ export function validateStartOptions(raw: unknown): CliStartOptions {
 
 const withModel = (model?: string) => (model && model !== "default" ? ["--model", model] : []);
 
-export function buildClaudeArgs(o: { mode: string; model?: string; resumeId?: string }): string[] {
+export function buildClaudeArgs(o: { mode: string; model?: string; resumeId?: string; trusted: boolean }): string[] {
   return [
     "-p",
     "--output-format", "stream-json",
@@ -85,9 +85,51 @@ export function buildClaudeArgs(o: { mode: string; model?: string; resumeId?: st
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
     "--permission-mode", o.mode,
+    // Tron can't render its questions; Claude asks in plain text instead.
+    "--disallowedTools", "AskUserQuestion",
+    // -p skips the trust dialog, so an untrusted folder's hooks would run
+    // unprompted (verified on 2.1.294) — load only the user's own settings.
+    ...(o.trusted ? [] : ["--setting-sources", "user"]),
     ...withModel(o.model),
     ...(o.resumeId ? ["--resume", o.resumeId] : []),
   ];
+}
+
+/** Claude Code trusts a folder once its trust dialog was accepted there or in a parent. */
+export function isTrustedDir(projects: unknown, dir: string): boolean {
+  if (!projects || typeof projects !== "object") return false;
+  const p = projects as Record<string, { hasTrustDialogAccepted?: unknown } | undefined>;
+  let d = dir.replace(/[\\/]+$/, "");
+  while (d) {
+    if (p[d]?.hasTrustDialogAccepted === true) return true;
+    const parent = d.replace(/[\\/][^\\/]*$/, "");
+    if (parent === d) break;
+    d = parent;
+  }
+  return false;
+}
+
+/** `command -v` output → an absolute binary path (handles the legacy `alias claude=…` install). */
+export function parseCommandV(out: string, home: string): string | null {
+  const line = out.trim().split("\n")[0]?.trim() ?? "";
+  const alias = /^alias\s+[\w.-]+=(['"]?)(.+)\1$/.exec(line);
+  const target = (alias ? alias[2].trim().split(/\s+/)[0] : line).replace(/^~(?=\/)/, home);
+  return target.startsWith("/") ? target : null;
+}
+
+/** Pick a spawnable binary from `where` output: a real .exe, else a .cmd/.bat shim (needs cmd.exe). */
+export function pickWindowsBinary(whereOut: string): { path: string; viaShell: boolean } | null {
+  const lines = whereOut.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^[A-Za-z]:[\\/]/.test(l));
+  const exe = lines.find((l) => /\.exe$/i.test(l));
+  if (exe) return { path: exe, viaShell: false };
+  const shim = lines.find((l) => /\.(cmd|bat)$/i.test(l));
+  return shim ? { path: shim, viaShell: true } : null;
+}
+
+/** Quote one argument for a cmd.exe command line. `%` would expand even inside quotes, so refuse it. */
+export function quoteCmdArg(arg: string): string {
+  if (/[%\r\n]/.test(arg)) throw new Error("Argument can't be passed through cmd.exe safely");
+  return `"${arg.replace(/"/g, '""')}"`;
 }
 
 export function buildCodexArgs(o: { mode: string; model?: string; resumeId?: string; imagePaths?: string[] }): string[] {
@@ -191,8 +233,10 @@ export function parseClaudeAuth(out: string): { loggedIn: boolean; authMethod: s
 
 export function parseCodexLogin(out: string, exitCode: number | null): { loggedIn: boolean; authMethod: string | null } {
   const m = out.match(/Logged in using (.+)/i);
-  if (exitCode === 0 && m) return { loggedIn: true, authMethod: m[1].trim() };
-  return { loggedIn: false, authMethod: null };
+  if (exitCode !== 0 || !m) return { loggedIn: false, authMethod: null };
+  // "an API key - sk-…" must never reach the UI.
+  const method = /api key/i.test(m[1]) ? "API key" : m[1].trim();
+  return { loggedIn: true, authMethod: method };
 }
 
 /** One-shot, tool-less completion — advice mode, tab titles, summaries. */

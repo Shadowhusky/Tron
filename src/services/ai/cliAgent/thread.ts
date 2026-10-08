@@ -60,6 +60,20 @@ function describeDone(name: string, input: Input): string {
   }
 }
 
+const LABEL_KEYS = ["file_path", "notebook_path", "path", "command", "pattern", "query", "url", "description", "paths"];
+
+/** Only what the labels read — a Write's content or an Edit's strings would
+ *  bloat the persisted session file. */
+function labelInput(input: Input): Input {
+  const out: Input = {};
+  for (const k of LABEL_KEYS) {
+    const v = input[k];
+    if (typeof v === "string") out[k] = v.slice(0, 1000);
+    else if (Array.isArray(v)) out[k] = v.slice(0, 50).filter((x) => typeof x === "string");
+  }
+  return out;
+}
+
 function truncate(text: string): string {
   if (text.length <= MAX_TOOL_OUTPUT) return text;
   return `${text.slice(0, MAX_TOOL_OUTPUT)}\n… (${text.length - MAX_TOOL_OUTPUT} more chars truncated)`;
@@ -110,15 +124,22 @@ export function applyCliEvent(thread: AgentStep[], ev: CliAgentEvent): AgentStep
     case "thought":
       return ev.text ? [...thread, { step: "thought", output: ev.text }] : thread;
     case "text_delta": {
+      // plainText: the overlay shows the words (built-in agent streams JSON tool calls → heat bar).
       const last = thread.at(-1);
-      if (last?.step === "streaming") return [...thread.slice(0, -1), { step: "streaming", output: last.output + ev.text }];
-      return [...thread, { step: "streaming", output: ev.text }];
+      if (last?.step === "streaming") {
+        return [...thread.slice(0, -1), { step: "streaming", output: last.output + ev.text, payload: { plainText: true } }];
+      }
+      return [...thread, { step: "streaming", output: ev.text, payload: { plainText: true } }];
     }
     case "text": {
+      // "message", not "thought": the CLI's own words between tool calls are
+      // durable — Stop clears transient thoughts but keeps these.
       const cleaned = withoutStreaming(thread);
       const text = ev.text.trim();
-      return text ? [...cleaned, { step: "thought", output: text }] : cleaned;
+      return text ? [...cleaned, { step: "message", output: text }] : cleaned;
     }
+    case "notice":
+      return [...thread, { step: "system", output: ev.text }];
     case "tool_start":
       return [
         ...closeThinking(withoutStreaming(thread)),
@@ -129,7 +150,7 @@ export function applyCliEvent(thread: AgentStep[], ev: CliAgentEvent): AgentStep
             tool: toolKey(ev.name),
             toolUseId: ev.id,
             cliTool: ev.name,
-            input: ev.input,
+            input: labelInput(ev.input),
             ...(ev.name === "Bash" ? { command: str(ev.input.command) } : {}),
             ...(filePath(ev.input) ? { path: filePath(ev.input) } : {}),
             ...(str(ev.input.query) ? { query: str(ev.input.query) } : {}),
@@ -157,7 +178,7 @@ export function applyCliEvent(thread: AgentStep[], ev: CliAgentEvent): AgentStep
       const text = ev.text.trim() || (ev.isError ? "Task failed" : "Done");
       if (ev.isError) return [...cleaned, { step: "failed", output: text }];
       const last = cleaned.at(-1);
-      if (last?.step === "thought" && last.output === text) return [...cleaned.slice(0, -1), { step: "done", output: text }];
+      if (last?.step === "message" && last.output === text) return [...cleaned.slice(0, -1), { step: "done", output: text }];
       return [...cleaned, { step: "done", output: text }];
     }
     case "error":
@@ -165,4 +186,13 @@ export function applyCliEvent(thread: AgentStep[], ev: CliAgentEvent): AgentStep
     default:
       return thread;
   }
+}
+
+/** A run that died mid-way: running tools become failed, live streaming and
+ *  thinking go away. Only the current run is touched. */
+export function closeOpenSteps(thread: AgentStep[]): AgentStep[] {
+  const from = runStart(thread);
+  const current = closeThinking(withoutStreaming(thread)).slice(from)
+    .map((s) => (s.step === "executing" ? { ...s, step: "failed" } : s));
+  return [...thread.slice(0, from), ...current];
 }

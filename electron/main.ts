@@ -280,7 +280,7 @@ registerWebServerHandlers();
 registerWebHandlers();
 registerSkillsHandlers();
 registerAgentSessionHandlers();
-registerCliAgentHandlers(() => mainWindow);
+registerCliAgentHandlers();
 registerUpdaterHandlers(() => mainWindow, () => { forceQuit = true; });
 
 // --- Window close response from renderer ---

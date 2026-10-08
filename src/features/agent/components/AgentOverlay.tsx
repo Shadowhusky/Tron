@@ -2377,6 +2377,14 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                           />
                         ) : isStreamingStep ? (
                           (() => {
+                            // Claude Code / Codex stream plain prose — show it.
+                            if (step.payload?.plainText && step.output) {
+                              return (
+                                <div className={`text-[11px] leading-relaxed whitespace-pre-wrap ${isLight ? "text-gray-700" : "text-gray-300"}`}>
+                                  {step.output.slice(-2000)}
+                                </div>
+                              );
+                            }
                             // Show detail if available (only when JSON fully parsed — e.g. command preview)
                             if (streamInfo?.detail) {
                               return (
@@ -2398,7 +2406,7 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
                             }
                             return null;
                           })()
-                        ) : isDone || isSystem || isQuestion || isSummarized || isSteered ? (
+                        ) : isDone || isSystem || isQuestion || isSummarized || isSteered || step.step === "message" ? (
                           <LinkifiedDoneContent
                             content={step.output}
                             className={`text-[11px] leading-relaxed ${isLight ? "markdown-light text-gray-700" : "text-gray-300"}`}

@@ -15,7 +15,7 @@ import { readScreenBuffer, isAlternateBuffer } from "../services/terminalBuffer"
 import { getRemoteConnection } from "../services/remote-bridge";
 import { CLI_AGENT_PROVIDERS, isCliAgentProvider, resolveCliMode, type CliAgentProvider } from "../services/ai/cliAgent/providers";
 import { describePermission, runCliAgent, type CliPermissionRequest } from "../services/ai/cliAgent/runner";
-import { applyCliEvent } from "../services/ai/cliAgent/thread";
+import { applyCliEvent, closeOpenSteps } from "../services/ai/cliAgent/thread";
 import type { CliAgentEvent } from "../services/ai/cliAgent/normalize";
 
 /**
@@ -362,7 +362,7 @@ export function useAgentRunner(
       window.dispatchEvent(new CustomEvent("tron:agent-activity", { detail: { sessionId, running: false } }));
     };
     const fail = (message: string) => {
-      setAgentThread((prev) => [...prev.filter((s) => s.step !== "streaming"), { step: "error", output: message }]);
+      setAgentThread((prev) => [...closeOpenSteps(prev), { step: "error", output: message }]);
       finish();
     };
     if (session?.sshProfileId || session?.remoteUrl) {
@@ -384,21 +384,27 @@ export function useAgentRunner(
     ].filter(Boolean).join("\n\n");
 
     // Token deltas are batched (~10 renders/s); structural events flush at once.
+    // After Stop nothing is applied: stopAgent() already closed the thread.
     let pending: CliAgentEvent[] = [];
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const stopped = () => controller.signal.aborted;
     const flush = () => {
       if (timer) { clearTimeout(timer); timer = null; }
-      if (!pending.length) return;
+      if (!pending.length || stopped()) {
+        pending = [];
+        return;
+      }
       const batch = pending;
       pending = [];
       startTransition(() => setAgentThread((prev) => batch.reduce(applyCliEvent, prev)));
     };
     const onEvent = (ev: CliAgentEvent) => {
+      if (stopped()) return;
       if (ev.type === "session") {
-        setCliSession({ provider, id: ev.id });
+        setCliSession({ provider, id: ev.id, cwd });
         return;
       }
-      if (ev.type === "permission") return;
+      if (ev.type === "permission" || ev.type === "permission_cancel") return;
       if (ev.type === "thinking_start" || ev.type === "thinking_delta") setIsThinking(true);
       else if (ev.type === "thinking_end" || ev.type === "text_delta" || ev.type === "tool_start") setIsThinking(false);
       pending.push(ev);
@@ -408,18 +414,26 @@ export function useAgentRunner(
         flush();
       }
     };
-    const requestPermission = async (req: CliPermissionRequest) => {
-      const needsPrompt = req.tool === "Bash"
-        ? requiresPrompt(String(req.input.command ?? ""))
-        : !alwaysAllowRef.current;
+    const requestPermission = async (req: CliPermissionRequest, signal?: AbortSignal) => {
+      // Approving a plan starts implementation — never implied by "always allow".
+      const needsPrompt = req.tool === "ExitPlanMode"
+        || (req.tool === "Bash" ? requiresPrompt(String(req.input.command ?? "")) : !alwaysAllowRef.current);
       if (!needsPrompt) return true;
       flush();
       setPendingCommand(describePermission(provider, req));
-      const allowed = await new Promise<boolean>((resolve) => setPermissionResolve(resolve));
+      const allowed = await new Promise<boolean>((resolve) => {
+        setPermissionResolve(resolve);
+        // The CLI withdrew the request — take the prompt down.
+        signal?.addEventListener("abort", () => resolve(false), { once: true });
+      });
       setPendingCommand(null);
       setPermissionResolve(null);
       return allowed;
     };
+
+    // Claude keeps transcripts per project folder, so a conversation started in
+    // another directory can't be resumed from this one.
+    const resumeId = cliSession?.provider === provider && cliSession.cwd === cwd ? cliSession.id : undefined;
 
     try {
       const result = await runCliAgent({
@@ -431,15 +445,19 @@ export function useAgentRunner(
           cfg.cliMode ?? (aiService.getConfig().provider === provider ? aiService.getConfig().cliMode : undefined),
         ),
         model: cfg.model,
-        resumeId: cliSession?.provider === provider ? cliSession.id : undefined,
+        resumeId,
         images: images?.map((img) => ({ base64: img.base64, mediaType: img.mediaType })),
         signal: controller.signal,
         onEvent,
         requestPermission,
       });
+      if (result.aborted) {
+        flush(); // drops anything batched — stopAgent() already recorded the stop
+        if (result.sessionId) setCliSession({ provider, id: result.sessionId, cwd });
+        return;
+      }
       flush();
-      if (result.sessionId) setCliSession({ provider, id: result.sessionId });
-      if (result.aborted) return; // stopAgent() already recorded the stop
+      if (result.sessionId) setCliSession({ provider, id: result.sessionId, cwd });
       finish();
       if (sessionId && result.text) {
         addInteraction(sessionId, { role: "agent", content: result.text, timestamp: Date.now() });
@@ -455,7 +473,12 @@ export function useAgentRunner(
     } catch (err: unknown) {
       flush();
       if (controller.signal.aborted) return;
-      fail(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      // A resume that dies without a result (transcript gone, folder moved)
+      // would fail every later turn too — start fresh next time.
+      const resumeFailed = !!resumeId && /without finishing/.test(message);
+      if (resumeFailed) setCliSession(undefined);
+      fail(`${label}: ${message}${resumeFailed ? "\n\nThe previous conversation couldn't be continued — your next message starts a new one." : ""}`);
     }
   };
 
