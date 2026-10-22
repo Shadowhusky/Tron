@@ -330,9 +330,11 @@ class RemoteConnection {
       this.eventListeners.set(channel, new Set());
     }
     this.eventListeners.get(channel)!.add(func);
-    return () => {
-      this.eventListeners.get(channel)?.delete(func);
-    };
+    return () => this.off(channel, func);
+  }
+
+  off(channel: string, func: Listener): void {
+    this.eventListeners.get(channel)?.delete(func);
   }
 
   disconnect(): void {
@@ -420,12 +422,18 @@ const connections = new Map<string, RemoteConnection>();
 /** Map of sessionId → connectionId (routes IPC to the right remote server) */
 const sessionRoutes = new Map<string, string>();
 
+/** Listeners registered through the routed ipcRenderer.on. They join every
+ *  connection, including ones opened later — a pane restored while its server
+ *  was unreachable must still receive its output once reconnected. */
+const routedListeners = new Set<{ channel: string; func: Listener }>();
+
 /** Connect to a remote Tron server. Returns a connection ID. */
 export async function connectRemote(serverUrl: string): Promise<string> {
   const connectionId = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
   const conn = new RemoteConnection(serverUrl);
   await conn.connect();
   connections.set(connectionId, conn);
+  for (const { channel, func } of routedListeners) conn.on(channel, func);
   return connectionId;
 }
 
@@ -696,11 +704,14 @@ export function installRemoteRouting(): void {
   // Wrap on — listen on both local and all remote connections
   wrapped.on = (channel: string, func: Listener): (() => void) => {
     const localCleanup = original.on(channel, func);
-    const remoteCleanups: (() => void)[] = [];
-    for (const conn of connections.values()) {
-      remoteCleanups.push(conn.on(channel, func));
-    }
-    return () => { localCleanup(); remoteCleanups.forEach(c => c()); };
+    const entry = { channel, func };
+    routedListeners.add(entry);
+    for (const conn of connections.values()) conn.on(channel, func);
+    return () => {
+      localCleanup();
+      routedListeners.delete(entry);
+      for (const conn of connections.values()) conn.off(channel, func);
+    };
   };
 
   // Wrap typed helpers that bypass invoke

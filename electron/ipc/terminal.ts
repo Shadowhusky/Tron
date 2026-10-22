@@ -224,7 +224,7 @@ function persistSessionHistory(sessionId: string) {
   }
 }
 
-function loadPersistedHistory(sessionId: string): string {
+export function loadPersistedHistory(sessionId: string): string {
   try {
     return fs.readFileSync(path.join(historyDir, `${sessionId}.txt`), "utf-8");
   } catch {
@@ -745,9 +745,10 @@ export function registerTerminalHandlers(
     if (session) {
       session.kill();
       sessions.delete(id);
-      sessionHistory.delete(id);
-      removePersistedHistory(id);
     }
+    // Also for panes with no live session (dropped / never-reconnected SSH)
+    sessionHistory.delete(id);
+    removePersistedHistory(id);
   });
 
   ipcMain.handle("terminal.checkCommand", async (_event, data) => {
@@ -958,7 +959,9 @@ export function registerTerminalHandlers(
   );
 
   ipcMain.handle("terminal.getHistory", (_event, sessionId: string) => {
-    const raw = sessionHistory.get(sessionId) || "";
+    // A restored pane whose SSH host is unreachable has no live session yet —
+    // show its output from the previous run.
+    const raw = sessionHistory.get(sessionId) ?? loadPersistedHistory(sessionId);
     return stripSentinels(raw);
   });
 

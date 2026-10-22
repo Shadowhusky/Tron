@@ -26,7 +26,7 @@ export const HistoryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     useEffect(() => {
-        localStorage.setItem(STORAGE_KEYS.GLOBAL_HISTORY, JSON.stringify(history));
+        try { localStorage.setItem(STORAGE_KEYS.GLOBAL_HISTORY, JSON.stringify(history)); } catch { /* quota / private mode */ }
     }, [history]);
 
     const addToHistory = (command: string) => {

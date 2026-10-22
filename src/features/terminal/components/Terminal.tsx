@@ -28,6 +28,7 @@ import {
 } from "../../../utils/terminalLinks";
 import { INPUT_REPORT_RESET, stripInputReportEnables } from "../../../utils/terminalModes";
 import { writeClipboardText } from "../../../utils/clipboard";
+import { serializeWithinBudget, termSnapshotKey } from "../../../utils/termSnapshot";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -41,6 +42,8 @@ interface TerminalProps {
   stopAgent?: () => void;
   focusTarget?: "input" | "terminal";
   isReconnected?: boolean;
+  /** Restored pane whose SSH/remote backend is unreachable — show its last snapshot. */
+  isDisconnected?: boolean;
   /** Saved terminal history to write directly to xterm on mount (loaded sync tabs). */
   pendingHistory?: string;
   /** Called when user scrolls up/down — true = scrolled up from bottom */
@@ -94,7 +97,7 @@ const THEMES: Record<string, Xterm["options"]["theme"]> = {
   },
 };
 
-const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, pendingHistory, onScrolledUpChange, selectionMode }) => {
+const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, onFirstCommand, isActive, isAgentRunning = false, stopAgent, focusTarget, isReconnected, isDisconnected, pendingHistory, onScrolledUpChange, selectionMode }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
 
   const xtermRef = useRef<Xterm | null>(null);
@@ -1090,6 +1093,14 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     };
     window.addEventListener("tron:scrollTermToBottom", handleScrollToBottom);
 
+    // A remote pane reconnected under the same id — its new SSH channel /
+    // remote PTY starts at 80x30, so push the real size.
+    const handleReattached = (e: Event) => {
+      if ((e as CustomEvent).detail?.sessionId !== sessionId) return;
+      window.electron?.ipcRenderer?.send(IPC.TERMINAL_RESIZE, { id: sessionId, cols: term.cols, rows: term.rows });
+    };
+    window.addEventListener("tron:terminalReattached", handleReattached);
+
     // ⌘↑/⌘↓ (dispatched by TerminalPane for the focused pane): scroll to the
     // previous/next shell command. Past the last one, snap back to the bottom.
     const handleJumpCommand = (e: Event) => {
@@ -1273,7 +1284,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
         );
       }
 
-      const SNAPSHOT_KEY = `tron:termSnapshot:${sessionId}`;
+      const SNAPSHOT_KEY = termSnapshotKey(sessionId);
 
       const finishSetup = (history?: string, knownReconnect = false) => {
           if (!mounted) return;
@@ -1317,7 +1328,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
           // but replaying them into a shell view silently re-arms mouse/focus
           // reporting with no program to own it (a live TUI re-enables via its
           // own output). Left unfixed, mouse moves leak `<..M` onto the prompt.
-          if (knownReconnect && snapshotData) {
+          if ((knownReconnect || isDisconnected) && snapshotData) {
             term.resize(snapshotData.cols, snapshotData.rows);
             term.write(stripInputReportEnables(snapshotData.data));
             usedSnapshot = true;
@@ -1427,7 +1438,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
             // page-refresh reconnect, not a saved-tab load). One check per
             // session per app run — remounts of live sessions must never
             // type a resume command into an already-running CLI.
-            if (!pendingHistory && history && history.length > 0 && !attemptedAgentResume.has(sessionId)) {
+            if (!pendingHistory && !isDisconnected && history && history.length > 0 && !attemptedAgentResume.has(sessionId)) {
               attemptedAgentResume.add(sessionId);
               const brand = detectResumableAgent(history);
               if (brand) {
@@ -1570,18 +1581,27 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
     // Periodically snapshot the terminal state via SerializeAddon so
     // reconnect can restore a clean visual state instead of replaying raw
     // PTY escape sequences (which garble cursor-positioned TUI output).
+    // Only re-serialize after new output, and never store an alt-buffer (TUI)
+    // frame — restore ignores those, so they'd just burn quota.
+    let snapshotDirty = true;
+    const disposableSnapshotDirty = term.onWriteParsed(() => { snapshotDirty = true; });
     const saveSnapshot = () => {
+      if (!snapshotDirty) return;
+      snapshotDirty = false;
+      const key = termSnapshotKey(sessionId);
       try {
-        const serialized = serializeAddon.serialize();
-        if (serialized) {
-          localStorage.setItem(`tron:termSnapshot:${sessionId}`, JSON.stringify({
-            data: serialized,
-            cols: term.cols,
-            rows: term.rows,
-            inAltBuffer: term.buffer.active.type === "alternate",
-          }));
+        const data = term.buffer.active.type === "alternate"
+          ? null
+          : serializeWithinBudget((scrollback) => serializeAddon.serialize({ scrollback }));
+        if (!data) {
+          localStorage.removeItem(key);
+          return;
         }
-      } catch { /* non-critical */ }
+        localStorage.setItem(key, JSON.stringify({ data, cols: term.cols, rows: term.rows }));
+      } catch {
+        // Quota: drop it rather than leave a stale snapshot to be restored
+        try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
+      }
     };
     const snapshotTimer = setInterval(saveSnapshot, 10000);
     window.addEventListener("beforeunload", saveSnapshot);
@@ -1618,6 +1638,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       // Save final snapshot before unmount — must run BEFORE term.dispose()
       try { saveSnapshot(); } catch { /* term may already be disposed */ }
       clearInterval(snapshotTimer);
+      disposableSnapshotDirty.dispose();
       window.removeEventListener("beforeunload", saveSnapshot);
       // Flush any pending batched output before disposal
       if (batchRaf !== null) { cancelAnimationFrame(batchRaf); batchRaf = null; }
@@ -1649,6 +1670,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       disposableOnScroll.dispose();
       disposableOnLineFeed.dispose();
       window.removeEventListener("tron:scrollTermToBottom", handleScrollToBottom);
+      window.removeEventListener("tron:terminalReattached", handleReattached);
       window.removeEventListener("tron:jumpCommand", handleJumpCommand);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);

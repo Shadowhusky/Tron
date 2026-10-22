@@ -492,6 +492,13 @@ export async function createSSHSession(
 
   await session.connect(config, config.cols || 80, config.rows || 30);
 
+  // Reconnecting a pane in place: retire whatever is still registered under its id
+  const stale = sshSessions.get(sessionId);
+  if (stale) {
+    forwardManager.closeSession(sessionId);
+    stale.kill();
+  }
+
   // Register in tracking maps
   sshSessionIds.add(sessionId);
   sshSessions.set(sessionId, session);
@@ -500,7 +507,7 @@ export async function createSSHSession(
 
   // Store in same session map as local PTY (PtyLike duck type)
   sessionMap.set(sessionId, session as PtyLike);
-  historyMap.set(sessionId, "");
+  historyMap.set(sessionId, historyMap.get(sessionId) ?? "");
   if (ownerMap) ownerMap.set(sessionId, clientId);
 
   // Wire up data/exit events — route through display buffer for sentinel stripping
@@ -515,6 +522,7 @@ export async function createSSHSession(
   });
 
   session.onExit(() => {
+    if (sshSessions.get(sessionId) !== session) return; // replaced by an in-place reconnect
     pushEvent("terminal.exit", { id: sessionId, exitCode: 0 });
     pushEvent("ssh.statusChange", { sessionId, status: "disconnected" });
     forwardManager.closeSession(sessionId);

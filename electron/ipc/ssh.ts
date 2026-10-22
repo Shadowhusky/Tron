@@ -1,6 +1,6 @@
 import { ipcMain, BrowserWindow, app } from "electron";
 import { Client, ConnectConfig } from "ssh2";
-import { bufferIfExecActive } from "./terminal";
+import { bufferIfExecActive, loadPersistedHistory } from "./terminal";
 import {
   ForwardManager,
   missingRememberedForwards,
@@ -376,6 +376,13 @@ export function registerSSHHandlers(
 
     await session.connect(config, config.cols || 80, config.rows || 30);
 
+    // Reconnecting a pane in place: retire whatever is still registered under its id
+    const stale = sshSessions.get(sessionId);
+    if (stale) {
+      forwardManager.closeSession(sessionId);
+      stale.kill();
+    }
+
     // Register in tracking
     sshSessionIds.add(sessionId);
     sshSessions.set(sessionId, session);
@@ -384,7 +391,8 @@ export function registerSSHHandlers(
     const sessions = getSessions();
     const history = getSessionHistory();
     sessions.set(sessionId, session);
-    history.set(sessionId, "");
+    // Same-id reconnect keeps the pane's earlier output
+    history.set(sessionId, history.get(sessionId) ?? loadPersistedHistory(sessionId));
 
     const mainWindow = getMainWindow();
 
@@ -407,13 +415,15 @@ export function registerSSHHandlers(
     });
 
     session.onExit(() => {
+      if (sshSessions.get(sessionId) !== session) return; // replaced by an in-place reconnect
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("terminal.exit", { id: sessionId, exitCode: 0 });
         mainWindow.webContents.send("ssh.statusChange", { sessionId, status: "disconnected" });
       }
       forwardManager.closeSession(sessionId);
       sessions.delete(sessionId);
-      history.delete(sessionId);
+      // History is kept: the pane outlives the drop, an in-place reconnect
+      // continues it, and terminal.close clears it.
       sshSessionIds.delete(sessionId);
       sshSessions.delete(sessionId);
       sshSessionProfiles.delete(sessionId);

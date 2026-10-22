@@ -18,6 +18,9 @@ import { matchesHotkey } from "../hooks/useHotkey";
 import { selectTabByIndex } from "../utils/tabSwitcher";
 import { removePaneFromTree, subtreeContainsSession, countLeaves } from "../utils/paneNav";
 import { useConfig } from "./ConfigContext";
+import { useInheritPanelChrome } from "./AgentContext";
+import { pruneTermSnapshots, setItemEvictingSnapshots } from "../utils/termSnapshot";
+import { cleanConnectError, isPermanentConnectError, reconnectDelay } from "../utils/reconnect";
 import { isElectronApp } from "../utils/platform";
 import { connectRemote, createRemotePTY, getRemoteConnectionId, getActiveRemoteConnections, reviveRemoteSession, unregisterRemoteSession } from "../services/remote-bridge";
 
@@ -114,6 +117,10 @@ interface LayoutContextType {
   refreshCwd: (sessionId?: string) => Promise<void>;
   /** Reconnect a disconnected SSH session using its stored profile. */
   reconnectSSH: (sessionId: string) => Promise<void>;
+  /** Retry a disconnected SSH/remote pane now, even one held for manual retry. */
+  reconnectSession: (sessionId: string) => Promise<void>;
+  /** Retry every disconnected SSH/remote pane now. */
+  reconnectAll: () => void;
   /** Respawn the PTY of a pane whose shell process died (keeps the same session id). */
   restartShell: (sessionId: string) => Promise<void>;
 }
@@ -134,6 +141,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
   const [sessions, setSessions] = useState<Map<string, TerminalSession>>(
     new Map(),
   );
+  const inheritPanelChrome = useInheritPanelChrome();
 
   // Expose sessions for E2E tests
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -261,6 +269,17 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Flag to disable auto-save when user chose "Exit Without Saving"
   const skipSaveRef = useRef(false);
+  // Disconnected SSH/remote panes: consecutive failures + when the next auto-retry is due
+  const reconnectFailuresRef = useRef(new Map<string, { failures: number; nextAt: number }>());
+  const reconnectInFlightRef = useRef(new Set<string>());
+
+  /** Count a failed connect for a disconnected pane and return its new `disconnected` state. */
+  const recordConnectFailure = (sessionId: string, err: unknown): NonNullable<TerminalSession["disconnected"]> => {
+    const error = cleanConnectError(err instanceof Error ? err.message : String(err));
+    const failures = (reconnectFailuresRef.current.get(sessionId)?.failures ?? 0) + 1;
+    reconnectFailuresRef.current.set(sessionId, { failures, nextAt: Date.now() + reconnectDelay(failures) });
+    return { error, manualOnly: isPermanentConnectError(error) };
+  };
   // Guard: prevent save effect from running before init has read saved state
   const initDoneRef = useRef(false);
   // Guard: prevent double-init from React StrictMode (effects fire twice in dev)
@@ -376,7 +395,11 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         ),
         savedAt: Date.now(),
       };
-      localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(state));
+      pruneTermSnapshots(localStorage, new Set(sessions.keys()));
+      if (!setItemEvictingSnapshots(localStorage, STORAGE_KEYS.LAYOUT, JSON.stringify(state))) {
+        // Still over quota: drop the stale copy so hydration uses the file backup below
+        try { localStorage.removeItem(STORAGE_KEYS.LAYOUT); } catch { /* storage unavailable */ }
+      }
       // Async backup to file (survives localStorage loss, private mode, etc.)
       window.electron?.ipcRenderer?.writeSessions?.({ _layout: state })?.catch?.(() => { });
     }
@@ -428,6 +451,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     };
 
     const init = async () => {
+      let fileLayout: string | null = null;
       // Check file-based discard flag (written by "Exit Without Saving")
       // This is reliable because fs.writeFileSync guarantees it's on disk
       try {
@@ -445,11 +469,12 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         // Only use the file when localStorage is empty (private mode, storage
         // cleared, first launch after migration, etc.).
         if (!localStorage.getItem(STORAGE_KEYS.LAYOUT) && sessionsData && (sessionsData as any)._layout) {
-          localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify((sessionsData as any)._layout));
+          fileLayout = JSON.stringify((sessionsData as any)._layout);
+          setItemEvictingSnapshots(localStorage, STORAGE_KEYS.LAYOUT, fileLayout);
         }
       } catch { /* ignore — continue with normal hydration */ }
 
-      const saved = localStorage.getItem(STORAGE_KEYS.LAYOUT);
+      const saved = localStorage.getItem(STORAGE_KEYS.LAYOUT) ?? fileLayout;
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
@@ -485,6 +510,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
               const titleLocked = (parsed.sessionTitleLocked || {})[oldId] ?? false;
 
               let newId: string;
+              let disconnected: TerminalSession["disconnected"];
               const savedTitle = (parsed.sessionTitles || {})[oldId];
               let sessionTitle = savedTitle || "Terminal";
 
@@ -498,8 +524,10 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                   sessionTitle = new URL(remoteUrl).host || "Remote";
                   console.log(`Reconnected remote session: ${oldId} → ${newId} (${remoteUrl})`);
                 } catch (err: any) {
-                  console.warn(`Failed to reconnect remote session ${oldId}:`, err.message);
-                  return null; // Drop this leaf — remote reconnect failed
+                  // Keep the pane with its last output; it retries in the background
+                  console.warn(`Remote session ${oldId} unreachable, will retry:`, err.message);
+                  newId = oldId;
+                  disconnected = recordConnectFailure(oldId, err);
                 }
               } else if (sshProfileId) {
                 // SSH session — reconnect via profile
@@ -517,13 +545,17 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                     passphrase: profile.savedPassphrase,
                     cols: 80,
                     rows: 30,
+                    // Same id: the pane keeps its persisted history and snapshot
+                    sessionId: oldId,
                   });
                   newId = result.sessionId;
                   sessionTitle = profile.name || `${profile.username}@${profile.host}`;
                   console.log(`Reconnected SSH session: ${oldId} → ${newId}`);
                 } catch (err: any) {
-                  console.warn(`Failed to reconnect SSH session ${oldId}:`, err.message);
-                  return null; // Drop this leaf — SSH reconnect failed
+                  // Keep the pane with its last output; it retries in the background
+                  console.warn(`SSH session ${oldId} unreachable, will retry:`, err.message);
+                  newId = oldId;
+                  disconnected = recordConnectFailure(oldId, err);
                 }
               } else if (isSshOnly()) {
                 // Non-SSH session in SSH-only mode — cannot reconnect
@@ -549,6 +581,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
                 dirty: false, // Reset on reconnect — user hasn't interacted yet
                 sshProfileId,
                 remoteUrl,
+                disconnected,
                 // Mark as reconnected only if we reattached to a live PTY
                 // (server confirmed the PTY was still alive). This avoids false
                 // positives when a fresh PTY is created with the same session ID
@@ -1220,6 +1253,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         ...(newSshProfileId ? { sshProfileId: newSshProfileId } : {}),
       }),
     );
+    inheritPanelChrome(tab.activeSessionId, newSessionId);
 
     // Recursive function to find and split the active leaf
     const splitNode = (node: LayoutNode, targetId: string): LayoutNode => {
@@ -1495,14 +1529,19 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
 
   /** Respawn a dead pane's PTY under the SAME session id — the mounted
    *  Terminal keeps its buffer and IPC wiring; the new shell's prompt simply
-   *  appends. Local panes only (SSH/remote have their own reconnect paths). */
+   *  appends. SSH panes have their own reconnect path. */
   const restartShell = async (sessionId: string) => {
     const session = sessions.get(sessionId);
-    if (!session || session.sshProfileId || session.remoteUrl) return;
+    if (!session || session.sshProfileId) return;
     try {
-      const newId = await createPTY(session.cwd, sessionId);
+      const connId = session.remoteUrl ? getRemoteConnectionId(sessionId) : null;
+      if (session.remoteUrl && !connId) return;
+      const newId = connId
+        ? (await createRemotePTY(connId, 80, 30, session.cwd, sessionId)).sessionId
+        : await createPTY(session.cwd, sessionId);
       if (newId === sessionId) {
         updateSession(sessionId, { exited: null, reconnected: false });
+        window.dispatchEvent(new CustomEvent("tron:terminalReattached", { detail: { sessionId } }));
       }
     } catch (err) {
       console.warn(`[Layout] restartShell failed for ${sessionId.slice(0, 8)}:`, err);
@@ -1938,61 +1977,139 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  /** Reconnect a disconnected SSH session using its stored profile. */
-  const reconnectSSH = useCallback(async (sessionId: string) => {
+  /** Swap a pane's session id in place (sessions map + every tab's layout). */
+  const swapSessionId = (oldId: string, newId: string, patch: Partial<TerminalSession> = {}) => {
+    setSessions((prev) => {
+      const session = prev.get(oldId);
+      if (!session) return prev;
+      const next = new Map(prev);
+      next.delete(oldId);
+      next.set(newId, { ...session, ...patch, id: newId });
+      return next;
+    });
+    const replaceNode = (node: LayoutNode): LayoutNode => {
+      if (node.type === "leaf") return node.sessionId === oldId ? { ...node, sessionId: newId } : node;
+      return { ...node, children: node.children.map(replaceNode) };
+    };
+    setTabs((prev) =>
+      prev.map((tab) =>
+        subtreeContainsSession(tab.root, oldId)
+          ? {
+            ...tab,
+            root: replaceNode(tab.root),
+            activeSessionId: tab.activeSessionId === oldId ? newId : tab.activeSessionId,
+            maximizedSessionId: tab.maximizedSessionId === oldId ? newId : tab.maximizedSessionId,
+          }
+          : tab,
+      ),
+    );
+  };
+
+  /** Reconnect an SSH pane under its SAME id — the mounted Terminal keeps its buffer. */
+  const connectSSHInPlace = async (sessionId: string): Promise<string> => {
     const session = sessionsRef.current.get(sessionId);
-    if (!session?.sshProfileId) return;
     const ipc = window.electron?.ipcRenderer;
-    if (!ipc) return;
+    if (!session?.sshProfileId || !ipc) throw new Error("Not an SSH session");
+    const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
+    const profiles: SSHConnectionConfig[] = await readFn() || [];
+    const profile = profiles.find((p) => p.id === session.sshProfileId) as
+      | (SSHConnectionConfig & { savedPassword?: string; savedPassphrase?: string })
+      | undefined;
+    if (!profile) throw new Error("SSH profile not found");
+    const connectFn = (ipc as any)?.connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
+    const result = await connectFn({
+      ...profile,
+      password: profile.savedPassword,
+      passphrase: profile.savedPassphrase,
+      cols: 80,
+      rows: 30,
+      sessionId,
+    });
+    return result.sessionId;
+  };
+
+  /** Re-create a remote-server pane's PTY, asking the server to keep its id. */
+  const connectRemoteInPlace = async (sessionId: string): Promise<string> => {
+    const url = sessionsRef.current.get(sessionId)?.remoteUrl;
+    if (!url) throw new Error("Not a remote session");
+    const connId = getRemoteConnectionId(sessionId)
+      ?? getActiveRemoteConnections().find((c) => c.url === url)?.id
+      ?? await connectRemote(url);
+    const result = await createRemotePTY(connId, 80, 30, sessionsRef.current.get(sessionId)?.cwd, sessionId);
+    return result.sessionId;
+  };
+
+  /** One reconnect attempt for a disconnected pane. Auto-retries skip manual-only panes. */
+  const attemptReconnect = useCallback(async (sessionId: string, manual = false) => {
+    const session = sessionsRef.current.get(sessionId);
+    const state = session?.disconnected;
+    if (!state || reconnectInFlightRef.current.has(sessionId) || (state.manualOnly && !manual)) return;
+    reconnectInFlightRef.current.add(sessionId);
+    updateSession(sessionId, { disconnected: { ...state, connecting: true } });
     try {
-      const readFn = (ipc as any)?.readSSHProfiles || (() => ipc.invoke("ssh.profiles.read"));
-      const profiles: SSHConnectionConfig[] = await readFn() || [];
-      const profile = profiles.find((p) => p.id === session.sshProfileId);
-      if (!profile) throw new Error("SSH profile not found");
-      const connectFn = (ipc as any)?.connectSSH || ((c: any) => ipc.invoke("ssh.connect", c));
-      const result = await connectFn({
-        ...profile,
-        password: (profile as any).savedPassword,
-        passphrase: (profile as any).savedPassphrase,
-        cols: 80,
-        rows: 30,
-      });
-      const newId = result.sessionId;
-      const newTitle = profile.name || `${(profile as any).username}@${(profile as any).host}`;
-      // Replace the old session with the new one, preserving config
-      setSessions((prev) => {
-        const next = new Map(prev);
-        next.delete(sessionId);
-        next.set(newId, {
-          id: newId,
-          title: session.title || newTitle,
-          titleLocked: session.titleLocked,
-          cwd: session.cwd,
-          aiConfig: session.aiConfig || aiService.getConfig(),
-          sshProfileId: session.sshProfileId,
-        });
-        return next;
-      });
-      // Update the layout tree to use the new session ID
-      setTabs((prev) =>
-        prev.map((tab) => {
-          const replaceNode = (node: LayoutNode): LayoutNode => {
-            if (node.type === "leaf") {
-              return node.sessionId === sessionId ? { ...node, sessionId: newId } : node;
-            }
-            return { ...node, children: node.children.map(replaceNode) };
-          };
-          const newRoot = replaceNode(tab.root);
-          const newActiveId = tab.activeSessionId === sessionId ? newId : tab.activeSessionId;
-          return newRoot !== tab.root || newActiveId !== tab.activeSessionId
-            ? { ...tab, root: newRoot, activeSessionId: newActiveId }
-            : tab;
-        }),
+      const liveId = await withTimeout(
+        session.sshProfileId ? connectSSHInPlace(sessionId) : connectRemoteInPlace(sessionId),
+        20_000,
+        "Reconnect",
       );
+      reconnectFailuresRef.current.delete(sessionId);
+      if (liveId === sessionId) {
+        updateSession(sessionId, { disconnected: null });
+        window.dispatchEvent(new CustomEvent("tron:terminalReattached", { detail: { sessionId } }));
+      } else {
+        swapSessionId(sessionId, liveId, { disconnected: null });
+      }
+    } catch (err) {
+      console.warn(`[Layout] Reconnect failed for ${sessionId.slice(0, 12)}:`, err);
+      updateSession(sessionId, { disconnected: recordConnectFailure(sessionId, err) });
+    } finally {
+      reconnectInFlightRef.current.delete(sessionId);
+    }
+  }, []);
+
+  const reconnectSession = useCallback((sessionId: string) => attemptReconnect(sessionId, true), [attemptReconnect]);
+
+  const reconnectAll = useCallback(() => {
+    for (const [id, session] of sessionsRef.current) {
+      if (session.disconnected) attemptReconnect(id, true);
+    }
+  }, [attemptReconnect]);
+
+  // Background retry for disconnected panes: exponential backoff per pane,
+  // and an immediate round when the network comes back.
+  const hasDisconnected = Array.from(sessions.values()).some((s) => s.disconnected);
+  useEffect(() => {
+    if (!hasDisconnected) return;
+    const tick = () => {
+      const now = Date.now();
+      for (const [id, session] of sessionsRef.current) {
+        if (session.disconnected && now >= (reconnectFailuresRef.current.get(id)?.nextAt ?? 0)) {
+          attemptReconnect(id);
+        }
+      }
+    };
+    const onOnline = () => {
+      for (const entry of reconnectFailuresRef.current.values()) entry.nextAt = 0;
+      tick();
+    };
+    const timer = setInterval(tick, 2500);
+    window.addEventListener("online", onOnline);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [hasDisconnected, attemptReconnect]);
+
+  /** Reconnect an SSH session using its stored profile (same session id). */
+  const reconnectSSH = useCallback(async (sessionId: string) => {
+    if (sessionsRef.current.get(sessionId)?.disconnected) return attemptReconnect(sessionId, true);
+    try {
+      await connectSSHInPlace(sessionId);
+      window.dispatchEvent(new CustomEvent("tron:terminalReattached", { detail: { sessionId } }));
     } catch (err: any) {
       console.warn(`Failed to reconnect SSH session ${sessionId}:`, err.message);
     }
-  }, []);
+  }, [attemptReconnect]);
 
   const responsiveCheckInFlightRef = useRef(new Set<string>());
   const responsiveCheckLastAtRef = useRef(new Map<string, number>());
@@ -2001,7 +2118,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
     const sid = sessionId || activeSessionIdRef.current;
     if (!sid || sid === "settings" || sid.startsWith("ssh-connect") || sid.startsWith("browser-") || sid.startsWith("editor-") || sid.startsWith("pixel-agents")) return;
     const session = sessionsRef.current.get(sid);
-    if (!session) return;
+    if (!session || session.disconnected) return; // retry loop owns disconnected panes
     if (!session.remoteUrl && !session.sshProfileId) return;
 
     const now = Date.now();
@@ -2211,6 +2328,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({
         setConfirmHandler,
         refreshCwd,
         reconnectSSH,
+        reconnectSession,
+        reconnectAll,
         restartShell,
       }}
     >

@@ -30,6 +30,7 @@ import { abbreviateHome, isElectronApp, isTouchDevice } from "../../utils/platfo
 import type { AttachedImage, SSHConnectionStatus } from "../../types";
 import SSHStatusBadge from "../../features/ssh/components/SSHStatusBadge";
 import { PortForwardsChip } from "../../features/ssh/components/PortForwardsChip";
+import { DisconnectedBanner } from "./DisconnectedBanner";
 import { usePortForwards } from "../../hooks/usePortForwards";
 import { forwardOpensLocally } from "../../utils/portForward";
 import TuiKeyToolbar from "../../features/terminal/components/TuiKeyToolbar";
@@ -164,6 +165,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
     closePane,
     serverDisconnected,
     reconnectSSH,
+    reconnectSession,
+    reconnectAll,
     restartShell,
     toggleMaximizePane,
   } = useLayout();
@@ -1165,6 +1168,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
           </div>
         </div>
       )}
+      {session?.disconnected && !serverDisconnected && (
+        <DisconnectedBanner
+          state={session.disconnected}
+          label={session.title || "remote host"}
+          disconnectedCount={Array.from(sessions.values()).filter((s) => s.disconnected).length}
+          resolvedTheme={resolvedTheme}
+          onReconnect={() => reconnectSession(sessionId)}
+          onReconnectAll={reconnectAll}
+        />
+      )}
       {isAgentMode ? (
         <>
           {/* Agent View Mode: info header + full-height overlay */}
@@ -1181,7 +1194,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
             {isSSH && (
               <>
                 <SSHStatusBadge
-                  status={sshStatus}
+                  status={session?.disconnected ? (session.disconnected.connecting ? "reconnecting" : "disconnected") : sshStatus}
                   label={session?.title || "SSH"}
                   resolvedTheme={resolvedTheme}
                   onReconnect={() => reconnectSSH(sessionId)}
@@ -1316,6 +1329,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                   stopAgent={stableStopAgent}
                   focusTarget={focusTarget}
                   isReconnected={session?.reconnected}
+                  isDisconnected={!!session?.disconnected}
                   pendingHistory={session?.pendingHistory}
                   onScrolledUpChange={stableOnScrolledUpChange}
                   selectionMode={selectionMode}
@@ -1401,6 +1415,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 stopAgent={stableStopAgent}
                 focusTarget={focusTarget}
                 isReconnected={session?.reconnected}
+                isDisconnected={!!session?.disconnected}
                 onScrolledUpChange={stableOnScrolledUpChange}
                 selectionMode={selectionMode}
               />

@@ -218,6 +218,9 @@ export interface TerminalSession {
   reconnected?: boolean; // true if session was reconnected to an existing PTY (page refresh)
   /** Exit code of a shell that died mid-session — pane shows a restart overlay. Cleared on restart. */
   exited?: number | null;
+  /** Restored SSH/remote pane whose backend couldn't be reached. It keeps its last
+   *  output and retries in the background; `manualOnly` (e.g. bad credentials) stops auto-retry. */
+  disconnected?: { error?: string; connecting?: boolean; manualOnly?: boolean } | null;
   /** Saved terminal history to restore when loading a saved tab. Written to xterm on mount. */
   pendingHistory?: string;
   interactions?: {

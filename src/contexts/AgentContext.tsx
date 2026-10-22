@@ -292,6 +292,12 @@ class AgentStore {
     this.notify(toSessionId);
   }
 
+  /** A pane split off another starts with the same hidden-chrome overrides. */
+  inheritPanelChrome = (fromSessionId: string, toSessionId: string) => {
+    const chrome = this.states.get(fromSessionId)?.panelChrome;
+    if (chrome && Object.keys(chrome).length > 0) this.updateState(toSessionId, { panelChrome: { ...chrome } });
+  };
+
   /** Extract persistable agent state for saving a tab snapshot. */
   getSessionPersistable = (sessionId: string): {
     agentThread: AgentStep[];
@@ -527,6 +533,13 @@ export const useAgentContext = () => {
     restoreAgentSession: store.restoreSession,
     stopAgentForSession: store.stopAgent,
   };
+};
+
+/** Store action only — no subscription, so the layout doesn't re-render on agent updates. */
+export const useInheritPanelChrome = () => {
+  const store = useContext(AgentContext);
+  if (!store) throw new Error("useInheritPanelChrome must be used within an AgentProvider");
+  return store.inheritPanelChrome;
 };
 
 export const useAgent = (sessionId: string) => {
