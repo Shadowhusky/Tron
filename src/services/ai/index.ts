@@ -21,15 +21,29 @@ import {
   isFirstCapCross,
   isNovelAction,
   isUselessFetchResult,
-  parseBracketToolCall,
-  inferToolFromShape,
-  parseXmlToolCall,
   looksLikeToolCallText,
 } from "../../utils/agentLoop";
 import { searchQualityHint } from "../../utils/searchQuality";
+import { looksDegenerate } from "../../utils/degeneration";
 import { describeSearchFailure, type SearchFailure } from "../../utils/searchFailure";
 import { smartQuotePaths } from "../../utils/commandClassifier";
 import { AGENT_TOOLS, AGENT_TOOL_NAMES, ToolCallAssembler, missingToolArgs, type OpenAITool } from "./toolSchemas";
+import { parseAction } from "./agent/parse";
+import { createSessionLog, type SessionLog } from "./agent/events";
+import { createRunStateView, seedFromContinuation } from "./agent/derive";
+import {
+  isTerminalTool,
+  buildActionKey,
+  buildCoarseKey,
+  coarseArgsOf,
+  maxConsecutiveFor,
+  isConsecutiveRepeat,
+  isAlternatingRepeat,
+  isSemanticRepeat,
+} from "./agent/guards";
+
+/** Every tool the agent protocol accepts; used for dispatch validation. */
+const TOOL_NAMES = new Set(AGENT_TOOL_NAMES);
 
 export interface AgentContinuation {
   history: any[];
@@ -1227,6 +1241,7 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
     baseUrl?: string,
     thinking?: boolean,
     tools?: OpenAITool[],
+    maxTokens?: number,
   ): Promise<{ content: string; thinking: string }> {
     const useResponses = isResponsesModel(model);
     const useCompletions = !useResponses && isCompletionsModel(model);
@@ -1256,6 +1271,15 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
     // `tool_calls`, which parseOpenAIStream folds back into agent JSON.
     if (!useCompletions && !useResponses && tools && tools.length > 0) {
       body.tools = tools;
+    }
+
+    // Bound generation. Without a cap a model that falls into a repetition
+    // loop generates until it exhausts its own context — minutes of garbage at
+    // local-inference speeds, then five silent parse retries doing the same.
+    // That is what "the agent is stuck" looked like.
+    if (maxTokens && maxTokens > 0) {
+      if (useResponses) body.max_output_tokens = maxTokens;
+      else body.max_tokens = maxTokens;
     }
 
     // Enable reasoning/thinking for providers that support it
@@ -1289,7 +1313,7 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
         // "not a chat model" → learn this model needs Responses API, retry automatically
         if (/not a chat model/i.test(errMsg) && !isResponsesModel(model)) {
           responsesModelCache.add(model.toLowerCase());
-          return this.streamOpenAIChat(provider, model, apiKey, messages, onToken, signal, responseFormat, baseUrl, thinking, tools);
+          return this.streamOpenAIChat(provider, model, apiKey, messages, onToken, signal, responseFormat, baseUrl, thinking, tools, maxTokens);
         }
         throw new Error(`API Error: ${errMsg}`);
       }
@@ -1331,11 +1355,26 @@ Reply with ONLY a single JSON object on one line, no markdown, no explanation:
     let buffer = "";
     let currentEventType = ""; // Track SSE event type for Responses API
     const toolCalls = new ToolCallAssembler(); // native tool_calls → agent JSON
+    let nextDegenerationCheck = 800;
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+
+      // Abandon a model that has locked into repetition instead of waiting for
+      // it to fill its whole context window (observed: "}Now:{" … "}EMIT:{" …
+      // repeating forever). Checked periodically — the scan is O(tail), and a
+      // locked cycle is still unmistakable a few hundred characters later.
+      if (fullText.length >= nextDegenerationCheck) {
+        nextDegenerationCheck = fullText.length + 800;
+        if (looksDegenerate(fullText)) {
+          await reader.cancel().catch(() => {});
+          throw new Error(
+            "Model degeneration: the model locked into repeating output and was stopped.",
+          );
+        }
+      }
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
@@ -2118,25 +2157,24 @@ NEVER wrap commands in backticks or quotes. NEVER use markdown. Keep TEXT under 
     // detection, not a hard step count (complex tasks legitimately need many
     // steps). Step limit only catches runaway cases arbiter also misses.
     const maxSteps = sessionConfig?.maxAgentSteps || 300;
+    /** Hard ceiling on one model response. A tool call is small; the headroom
+     *  is for write_file bodies. Without any cap a repetition loop runs until
+     *  the context window is full. */
+    const AGENT_MAX_TOKENS = 8192;
 
     // Initialize state — resume from continuation or start fresh
     let history: any[];
-    let executedCommands: Set<string>;
-    let lastWriteDir: string;
-    let usedScaffold: boolean;
-    let wroteFiles: boolean;
-    let usedWebTools: boolean; // web_search/web_fetch count as "action taken" for lazy completion guard
+    /** Append-only record of what this run did; guard state is a fold of it. */
+    let runLog: SessionLog;
+    /** Live PTY state — deliberately NOT derived: it is set before an await
+     *  and cleared in catches, not a fold over completed work. */
     let terminalBusy: boolean;
 
     if (continuation) {
       // Resume after ask_question — restore full conversation and tracking state
       history = continuation.history;
       history.push({ role: "user", content: prompt });
-      executedCommands = new Set(continuation.executedCommands);
-      lastWriteDir = continuation.lastWriteDir;
-      usedScaffold = continuation.usedScaffold;
-      wroteFiles = continuation.wroteFiles;
-      usedWebTools = continuation.usedWebTools ?? false;
+      runLog = createSessionLog(seedFromContinuation(continuation));
       terminalBusy = continuation.terminalBusy;
     } else {
       // Discover Agent Skills under the session's cwd + ~. Skills are
@@ -2402,13 +2440,12 @@ ${agentPrompt}
       } else {
         history.push({ role: "user", content: prompt });
       }
-      executedCommands = new Set<string>();
-      lastWriteDir = "";
-      usedScaffold = false;
-      wroteFiles = false;
-      usedWebTools = false;
+      runLog = createSessionLog();
       terminalBusy = false;
     }
+
+    /** Memoized projection of the log — the state every guard reads. */
+    const runState = createRunStateView(runLog);
 
     // Detect terminal state by reading recent output.
     // If terminal is in alternate buffer, a TUI app (Claude Code, vim, etc.)
@@ -2566,7 +2603,7 @@ ${agentPrompt}
      *  plans do NOT count. Used to reset the cross-turn escalation counter so a
      *  genuinely productive turn is never force-terminated. */
     const madeProgressThisRun = () =>
-      commandsSucceeded > 0 || wroteFiles || nonEmptyWebThisRun;
+      commandsSucceeded > 0 || runState().wroteFiles || nonEmptyWebThisRun;
 
     /** Continuation fields that must ride along on EVERY question continuation so
      *  dead-source and escalation state survives a user nudge. escalations is
@@ -2603,11 +2640,11 @@ ${agentPrompt}
         type: "question",
         continuation: {
           history: [...history],
-          executedCommands: [...executedCommands],
-          usedScaffold,
-          wroteFiles,
-          usedWebTools,
-          lastWriteDir,
+          executedCommands: [...runState().executedCommands],
+          usedScaffold: runState().usedScaffold,
+          wroteFiles: runState().wroteFiles,
+          usedWebTools: runState().usedWebTools,
+          lastWriteDir: runState().lastWriteDir,
           terminalBusy,
           agentTodos: planForCont.length > 0 ? [...planForCont] : undefined,
           agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
@@ -2743,7 +2780,7 @@ ${agentPrompt}
       // never cost the whole run, so it is reported to the model as a tool
       // error and the loop carries on — bounded by MAX_UNEXPECTED_ERRORS.
       // NOTE: the body below is deliberately NOT re-indented into this try,
-      // so that this safety net reads as a small diff rather than burying it
+      // so that this safety net reads as a 2-line diff rather than burying it
       // in a 3000-line whitespace change.
       try {
       if (signal?.aborted) {
@@ -2783,7 +2820,7 @@ ${agentPrompt}
         // blocked. executedCommands is deliberately NOT cleared: it is the "work
         // was done" evidence for the final_answer guards, and wiping it made every
         // later final_answer bounce as "executed 0 commands".
-        usedScaffold = false;
+        runLog.append({ type: "guards/scaffold-reset" });
         history.push({
           role: "user",
           content:
@@ -3166,6 +3203,9 @@ ${agentPrompt}
             baseUrl,
             thinkingEnabled,
             useNativeTools ? AGENT_TOOLS : undefined,
+            // Generous enough for a large write_file, bounded enough that a
+            // degenerating model fails in seconds rather than minutes.
+            AGENT_MAX_TOKENS,
           );
           responseText = oaiThinkAcc.value ? oaiContentAcc.value : result.content;
           thinkingText = result.thinking || oaiThinkAcc.value;
@@ -3226,8 +3266,14 @@ ${agentPrompt}
           /context (size|length|window)|exceed(s|ed)? .*context|maximum context|too many tokens|prompt is too long|input is too long/i.test(
             safeErrMsg,
           );
-        if (apiErrors >= MAX_API_ERRORS || isContextOverflow) {
-          const hint = isContextOverflow
+        // Degeneration is a property of the model, not a transient fault —
+        // retrying it just repeats the same repetition loop. Fail once, with
+        // advice the user can act on.
+        const isDegeneration = /Model degeneration:/i.test(safeErrMsg);
+        if (apiErrors >= MAX_API_ERRORS || isContextOverflow || isDegeneration) {
+          const hint = isDegeneration
+            ? " — this usually means the model is too small or too heavily quantized for tool-calling. Try a larger model, a less aggressive quantization, or lower the temperature."
+            : isContextOverflow
             ? " — the prompt does not fit this model's context window. Load the model with a larger context or use a model with a bigger window."
             : isNativeToolCallMismatch
               ? " — the server still couldn't parse this model's tool-call output even with tools declared; try a different model."
@@ -3246,275 +3292,11 @@ ${agentPrompt}
       // Strip any remaining thinking tags from response text (providers that embed them inline)
       responseText = responseText.replace(/<(think|thinking|thought)>[\s\S]*?<\/(think|thinking|thought)>/gi, "").trim();
 
-      // 2. Parse Tool Call — try content first, then extract from thinking
-      let action: any;
-      // Convert \xHH escapes (invalid JSON) to \u00HH (valid JSON) inside strings
-      const fixJsonEscapes = (raw: string): string =>
-        raw.replace(/\\x([0-9a-fA-F]{2})/g, "\\u00$1");
-
-      /** Escape bare newlines/tabs inside JSON string values (not structural whitespace). */
-      const escapeNewlinesInStrings = (text: string): string => {
-        let result = "";
-        let inStr = false;
-        let esc = false;
-        for (let i = 0; i < text.length; i++) {
-          const ch = text[i];
-          if (esc) { result += ch; esc = false; continue; }
-          if (ch === "\\") { result += ch; esc = true; continue; }
-          if (ch === '"') { inStr = !inStr; result += ch; continue; }
-          if (inStr) {
-            if (ch === "\n") { result += "\\n"; continue; }
-            if (ch === "\r") { result += "\\r"; continue; }
-            if (ch === "\t") { result += "\\t"; continue; }
-          }
-          result += ch;
-        }
-        return result;
-      };
-
-      // Known tool names — used to normalize {"tool_name": {...}} into {"tool": "tool_name", ...}
-      const TOOL_NAMES = new Set(AGENT_TOOL_NAMES);
-
-      // If the model used a tool name as a top-level key (e.g. {"final_answer": {"content":"..."}})
-      // restructure it into {"tool": "final_answer", "content": "..."}
-      const normalizeToolKey = (obj: any): any => {
-        // Some models wrap tool calls in an array, e.g. [{"tool":"execute_command","command":"..."}]
-        if (Array.isArray(obj)) {
-          if (obj.length > 0 && typeof obj[0] === "object") return normalizeToolKey(obj[0]);
-          return obj;
-        }
-        if (!obj || typeof obj !== "object" || obj.tool) return obj;
-        const keys = Object.keys(obj);
-        const toolKey = keys.find((k) => TOOL_NAMES.has(k));
-        if (toolKey) {
-          const val = obj[toolKey];
-          const { [toolKey]: _, ...rest } = obj;
-          if (typeof val === "string") {
-            // e.g. {"final_answer": "Done."} → {"tool":"final_answer","content":"Done."}
-            // Tools that expect a "command" property need it mapped correctly
-            const COMMAND_TOOLS = new Set(["execute_command", "run_in_terminal"]);
-            const prop = COMMAND_TOOLS.has(toolKey) ? "command" : "content";
-            return { tool: toolKey, [prop]: val, ...rest };
-          }
-          if (typeof val === "object" && val !== null) {
-            // e.g. {"final_answer": {"content":"Done."}} → {"tool":"final_answer","content":"Done."}
-            return { tool: toolKey, ...val, ...rest };
-          }
-          return obj;
-        }
-        // Handle model-specific {"cmd":["bash","-lc","actual_command"]} format (e.g. gpt-oss-120b)
-        if (obj.cmd) {
-          const command = Array.isArray(obj.cmd)
-            ? obj.cmd[obj.cmd.length - 1]
-            : typeof obj.cmd === "string"
-              ? obj.cmd
-              : null;
-          if (typeof command === "string") {
-            return { tool: "execute_command", command };
-          }
-        }
-        // Bare tool ARGUMENTS with no tool name at all — tool-trained models
-        // (qwen3-style) leak their native format into text, e.g. {"todos":[...]}
-        // instead of {"tool":"todo_write","todos":[...]}. Infer from the
-        // argument-key shape (pure helper, unambiguous signatures only).
-        const inferred = inferToolFromShape(obj);
-        if (inferred) return inferred;
-        return obj;
-      };
-
-      const tryParseJson = (text: string): any => {
-        if (!text.trim()) return null;
-
-        // 1. Try direct parse first (with \x escape fix)
-        try {
-          return normalizeToolKey(JSON.parse(fixJsonEscapes(text)));
-        } catch { }
-
-        // 1b. Repair bare newlines inside JSON strings (common in write_file content)
-        try {
-          return normalizeToolKey(JSON.parse(escapeNewlinesInStrings(fixJsonEscapes(text))));
-        } catch { }
-
-        // 2. Markdown code block extraction (handles ```json, ```JSON, ```, etc.)
-        const mdMatch = text.match(/```\w*\s*([\s\S]*?)```/);
-        if (mdMatch) {
-          try {
-            return normalizeToolKey(JSON.parse(fixJsonEscapes(mdMatch[1].trim())));
-          } catch { }
-        }
-
-        // 3. Extract JSON from model-specific token-wrapped responses
-        // Some models wrap output in <|channel|>...<|message|>{...} format
-        const lastTokenIdx = text.lastIndexOf("<|");
-        if (lastTokenIdx >= 0) {
-          const closingIdx = text.indexOf("|>", lastTokenIdx);
-          if (closingIdx >= 0) {
-            const afterLastToken = text.slice(closingIdx + 2).trim();
-            if (afterLastToken.startsWith("{")) {
-              try {
-                return normalizeToolKey(
-                  JSON.parse(fixJsonEscapes(afterLastToken)),
-                );
-              } catch { }
-            }
-          }
-        }
-
-        // 4. Robust extraction: scan for balanced {} objects and try each
-        let searchFrom = 0;
-        while (searchFrom < text.length) {
-          const openIdx = text.indexOf("{", searchFrom);
-          if (openIdx === -1) break;
-
-          let balance = 0;
-          let inStr = false;
-          let esc = false;
-          let endIdx = -1;
-
-          for (let i = openIdx; i < text.length; i++) {
-            const char = text[i];
-            if (esc) {
-              esc = false;
-              continue;
-            }
-            if (char === "\\") {
-              esc = true;
-              continue;
-            }
-            if (char === '"') {
-              inStr = !inStr;
-              continue;
-            }
-            if (!inStr) {
-              if (char === "{") balance++;
-              else if (char === "}") {
-                balance--;
-                if (balance === 0) {
-                  endIdx = i;
-                  break;
-                }
-              }
-            }
-          }
-
-          if (endIdx === -1) break; // unbalanced — stop
-
-          const candidate = fixJsonEscapes(text.slice(openIdx, endIdx + 1));
-          try {
-            const obj = normalizeToolKey(JSON.parse(candidate));
-            if (obj.tool || obj.content) return obj;
-          } catch {
-            // Try repairing bare newlines inside strings
-            try {
-              const obj = normalizeToolKey(JSON.parse(escapeNewlinesInStrings(candidate)));
-              if (obj.tool || obj.content) return obj;
-            } catch { }
-            // Try fixing trailing commas: ,} → }
-            const fixed = candidate
-              .replace(/,\s*}/g, "}")
-              .replace(/,\s*]/g, "]");
-            try {
-              const obj = normalizeToolKey(JSON.parse(fixed));
-              if (obj.tool || obj.content) return obj;
-            } catch { }
-          }
-
-          // This {} didn't match — continue searching after it
-          searchFrom = endIdx + 1;
-        }
-
-        return null;
-      };
-
-      action = tryParseJson(responseText);
-      // Fallback: model may put JSON in thinking instead of content
-      if (!action?.tool && !action?._plan && thinkingText) {
-        action = tryParseJson(thinkingText);
-      }
-
-      // Plan responses don't need a tool — they'll be handled before tool dispatch
-      if (action && action._plan) {
-        // pass through to plan handler below
-      } else if (!action || !action.tool) {
-      // Coerce tool-less objects or plain conversational text into proper tool calls
-        if (!action) {
-          const trimmed = (responseText || "").trim();
-
-          // Detect bracket-style tool invocations that non-JSON models emit in
-          // many shapes — [read_terminal], [read_terminal(lines=50)],
-          // [execute_command ls], [execute_command(ls)], [execute_command] ls.
-          // The previous regex only matched the last form, so
-          // "[read_terminal(lines=50)]" fell through and became a bogus "done"
-          // final_answer (observed in log ce6d216e7e). parseBracketToolCall
-          // (pure + unit-tested) handles all shapes.
-          // Hermes/qwen-style XML tool calls emitted as plain text
-          // (<function=search_dir><parameter=path>...) — parse them instead of
-          // letting the coercion below turn them into a bogus final_answer
-          // (observed in log d3f522fd6d: run ended "done" with raw XML).
-          const xmlAction = parseXmlToolCall(trimmed, (n) => TOOL_NAMES.has(n));
-          const bracketAction = xmlAction ? null : parseBracketToolCall(trimmed, (n) => TOOL_NAMES.has(n));
-          if (xmlAction) {
-            action = xmlAction;
-          } else if (bracketAction) {
-            action = bracketAction;
-          } else if (trimmed && !trimmed.includes("{")) {
-            // Plain text without JSON braces.
-            // Guard: a bracketed token whose name is a KNOWN tool but that
-            // somehow reached here must NOT become a final answer (that's the
-            // bogus-"done" bug). Force a parse retry + correction instead.
-            const btool = trimmed.match(/^\[\s*(\w+)/);
-            const looksLikeBracketToolCall = !!(btool && TOOL_NAMES.has(btool[1]));
-            if (looksLikeBracketToolCall || looksLikeToolCallText(trimmed)) {
-              action = null;
-            } else {
-              action = {};
-              if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(trimmed) || trimmed.includes("?")) {
-                action.tool = "ask_question";
-                action.question = trimmed;
-              } else if (trimmed.length < 500) {
-                action.tool = "final_answer";
-                action.content = trimmed;
-              } else {
-                action = null; // Too long, let it fail
-              }
-            }
-          }
-        } else if (typeof action.command === "string") {
-          action.tool = "execute_command";
-        } else if (typeof action.question === "string") {
-          action.tool = "ask_question";
-        } else if (typeof action.error === "string") {
-          if (/\b(clarify|understand|help with|what|how|please)\b/i.test(action.error) || action.error.includes("?")) {
-            action.tool = "ask_question";
-            action.question = action.error;
-          } else {
-            action.tool = "final_answer";
-            action.content = action.error;
-          }
-        } else if (typeof action.content === "string") {
-          if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(action.content.trim()) || action.content.includes("?")) {
-            action.tool = "ask_question";
-            action.question = action.content;
-          } else {
-            action.tool = "final_answer";
-          }
-        } else {
-          // Small models often use non-standard keys like "answer", "response", "text", "message", "result", "reply", "output"
-          const answerKey = ["answer", "response", "text", "message", "result", "reply", "output"].find(
-            (k) => typeof action[k] === "string"
-          );
-          if (answerKey) {
-            const val = action[answerKey] as string;
-            if (/^(please clarify|what|how|can you|could you|would you)\b/i.test(val.trim()) || val.includes("?")) {
-              action.tool = "ask_question";
-              action.question = val;
-            } else {
-              action.tool = "final_answer";
-              action.content = val;
-            }
-          }
-        }
-      }
+      // 2. Parse Tool Call — content first, then reasoning text, then coercion.
+      // The whole recovery stack (escape repair, markdown fences, balanced
+      // scan, bare-argument inference, XML/bracket calls) lives in
+      // ./agent/parse — pure and unit-tested.
+      let action: any = parseAction(responseText, thinkingText);
 
       if ((!action || !action.tool) && !(action && action._plan)) {
         parseFailures++;
@@ -3542,7 +3324,7 @@ ${agentPrompt}
             // app scaffolded, files written, dev server running, then
             // the model fell silent and we surfaced "model failed").
             const workComplete =
-              wroteFiles || executedCommands.size > 0 || usedWebTools;
+              runState().wroteFiles || runState().executedCommands.size > 0 || runState().usedWebTools;
             if (workComplete) {
               history.push({
                 role: "user",
@@ -3575,7 +3357,7 @@ ${agentPrompt}
               fallbackText,
             );
           const didAnyWork =
-            wroteFiles || executedCommands.size > 0 || usedWebTools;
+            runState().wroteFiles || runState().executedCommands.size > 0 || runState().usedWebTools;
           if (looksLikeFalseDone && !didAnyWork) {
             return {
               success: false,
@@ -3595,16 +3377,16 @@ ${agentPrompt}
         // are true post-success-side-effect; surfacing "model failed" then
         // is straightforwardly wrong (observed in log 4304fe81c5.json).
         const workComplete =
-          wroteFiles || executedCommands.size > 0 || usedWebTools;
+          runState().wroteFiles || runState().executedCommands.size > 0 || runState().usedWebTools;
         if (workComplete) {
           const summaryParts: string[] = [];
-          if (wroteFiles) summaryParts.push("wrote project files");
-          if (executedCommands.size > 0) {
+          if (runState().wroteFiles) summaryParts.push("wrote project files");
+          if (runState().executedCommands.size > 0) {
             summaryParts.push(
-              `ran ${executedCommands.size} command${executedCommands.size === 1 ? "" : "s"}`,
+              `ran ${runState().executedCommands.size} command${runState().executedCommands.size === 1 ? "" : "s"}`,
             );
           }
-          if (usedWebTools) summaryParts.push("looked up docs online");
+          if (runState().usedWebTools) summaryParts.push("looked up docs online");
           markPlanCompleteOnFinish();
           return {
             success: true,
@@ -3650,43 +3432,13 @@ ${agentPrompt}
 
       history.push({ role: "assistant", content: JSON.stringify(action) });
 
-      // Terminal tools are exempt from loop detection: their repetition is
-      // governed by the guard-rejection cap in their handlers. Loop-blocking a
-      // final_answer while telling the model to "use final_answer" is a
-      // deadlock by construction (fd5977963a.json).
-      const isTerminalTool =
-        action.tool === "final_answer" || action.tool === "ask_question";
-      if (!isTerminalTool) {
+      const actionIsTerminal = isTerminalTool(action.tool);
+      if (!actionIsTerminal) {
         // Loop detection: heuristics flag suspicion; an LLM arbiter confirms
         // whether the agent is actually stuck. Arbiter-confirmed loops redirect
         // with concrete suggestions; 3 confirmations terminate the agent.
-        // For file edits we hash the full edit payload (search/replace/content)
-        // so identical re-emissions are blocked even when only the path is the
-        // same. Without this, agents loop "edit_file foo.ts" with the same
-        // search/replace pair indefinitely (the actionKey would be identical
-        // for any-content match but only-path was being recorded, so the
-        // duplicate-suppression branch never fired). Hash to keep the key
-        // bounded for large payloads.
-        const hashContent = (s: string | undefined): string | undefined => {
-          if (typeof s !== "string" || s.length === 0) return s;
-          if (s.length <= 64) return s;
-          let h = 0;
-          for (let i = 0; i < s.length; i++) {
-            h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-          }
-          return `${s.length}#${h}`;
-        };
-        const actionKey = JSON.stringify({
-          tool: action.tool,
-          path: action.path,
-          command: action.command,
-          text: action.text,
-          query: action.query,
-          url: action.url,
-          search: hashContent(action.search),
-          replace: hashContent(action.replace),
-          content: hashContent(action.content),
-        });
+        // Key construction and the heuristics live in ./agent/guards.
+        const actionKey = buildActionKey(action);
 
         // Block the most recently *arbiter-confirmed* looped action — cleared
         // once the agent actually tries something different
@@ -3719,56 +3471,21 @@ ${agentPrompt}
         if (actionKey) recentActions.push(actionKey);
         if (recentActions.length > 8) recentActions.shift();
 
-        // Consecutive suspicion: same exact action N times in a row.
-        // Tools that legitimately repeat (send_text for menu nav, read_terminal
-        // for monitoring) get a higher tolerance. Everything else (exec, edits,
-        // file reads) is suspicious on the *second* identical call — re-running
-        // the same `sed` or `edit_file` back-to-back is almost always a model
-        // glitch (observed pattern: model emits the same command twice in
-        // consecutive responses without learning from the first result).
-        const maxConsecutive = action.tool === "send_text" ? 5 : action.tool === "read_terminal" ? 5 : 2;
-        let isConsecutiveSuspicion = false;
-        if (actionKey != null && recentActions.length >= maxConsecutive) {
-          isConsecutiveSuspicion = true;
-          for (let i = 1; i <= maxConsecutive; i++) {
-            if (recentActions[recentActions.length - i] !== actionKey) {
-              isConsecutiveSuspicion = false;
-              break;
-            }
-          }
-        }
+        const isConsecutiveSuspicion = isConsecutiveRepeat(
+          recentActions,
+          actionKey,
+          maxConsecutiveFor(action.tool),
+        );
 
-        // Alternating suspicion: A→B→A→B→A→B pattern
-        const isAlternatingSuspicion =
-          recentActions.length >= 6 &&
-          recentActions[recentActions.length - 1] ===
-          recentActions[recentActions.length - 3] &&
-          recentActions[recentActions.length - 3] ===
-          recentActions[recentActions.length - 5] &&
-          recentActions[recentActions.length - 2] ===
-          recentActions[recentActions.length - 4] &&
-          recentActions[recentActions.length - 4] ===
-          recentActions[recentActions.length - 6];
+        const isAlternatingSuspicion = isAlternatingRepeat(recentActions);
 
-        // Semantic suspicion: coarse-prefix match catches minor-variation probes
-        // (different python one-liners, grep patterns, JSON paths) all doing the
-        // same diagnostic work. For file edits, include a short prefix of the
-        // search/replace/content so we don't flag legitimate "5 different edits
-        // to the same file" as semantically repeated — only re-emissions of
-        // the same edit (which the exact-string consecutive check above also
-        // catches) and minor reword-only reattempts.
-        const coarseArgs = action.command || action.query || action.path || action.url || "";
-        const fileEditFingerprint = action.tool === "write_file" || action.tool === "edit_file"
-          ? `:${(action.search || action.content || "").slice(0, 30)}>${(action.replace || "").slice(0, 30)}`
-          : "";
-        const coarseKey = action.tool === "write_file" || action.tool === "edit_file"
-          ? `${action.tool}:${action.path || ""}${fileEditFingerprint}`
-          : `${action.tool}:${coarseArgs.slice(0, 50)}`;
+        // Semantic suspicion catches minor-variation probes doing the same
+        // diagnostic work; see ./agent/guards for the shaping rules.
+        const coarseArgs = coarseArgsOf(action);
+        const coarseKey = buildCoarseKey(action);
         recentCoarseKeys.push(coarseKey);
         if (recentCoarseKeys.length > 12) recentCoarseKeys.shift();
-        const coarseThreshold = action.tool === "read_terminal" || action.tool === "send_text" ? 8 : 5;
-        const coarseCount = recentCoarseKeys.filter((k) => k === coarseKey).length;
-        const isSemanticSuspicion = coarseCount >= coarseThreshold;
+        const isSemanticSuspicion = isSemanticRepeat(recentCoarseKeys, coarseKey, action.tool);
 
         // Cumulative shape count across the whole task (arbiter-independent).
         const coarseTotal = (coarseKeyTotals.get(coarseKey) ?? 0) + 1;
@@ -3924,7 +3641,7 @@ ${agentPrompt}
 
       // A non-terminal action made it past every loop guard: the model is
       // following the protocol again, so the bounce counters start fresh.
-      if (!isTerminalTool) {
+      if (!actionIsTerminal) {
         apiErrors = 0;
         terminalAttempts = 0;
         cappedRepeats = 0;
@@ -3950,7 +3667,7 @@ ${agentPrompt}
         delete action._plan;
         delete action.steps;
       }
-      if (action._plan && executedCommands.size === 0 && !wroteFiles) {
+      if (action._plan && runState().executedCommands.size === 0 && !runState().wroteFiles) {
         // Extract steps: prefer explicit array, fallback to parsing numbered lines from content
         let planSteps: string[] = Array.isArray(action.steps) ? action.steps : [];
         if (planSteps.length === 0 && typeof action.content === "string") {
@@ -4240,7 +3957,7 @@ ${agentPrompt}
         // echoes an error) must not spin to maxSteps — after the cap, resolve
         // honestly: fail if nothing was done, else surface its best answer.
         if (++terminalAttempts > MAX_TERMINAL_REJECTIONS) {
-          const didWork = executedCommands.size > 0 || wroteFiles || usedWebTools;
+          const didWork = runState().executedCommands.size > 0 || runState().wroteFiles || runState().usedWebTools;
           if (!didWork) {
             return {
               success: false,
@@ -4282,7 +3999,7 @@ ${agentPrompt}
         }
 
         // Reject premature completion: scaffolded a project but never wrote any code
-        if (usedScaffold && !wroteFiles) {
+        if (runState().usedScaffold && !runState().wroteFiles) {
           history.push({
             role: "user",
             content: `Error: You scaffolded a project template but did NOT write any code yet. A template is just boilerplate — you must now use write_file to implement the actual features the user requested (e.g. game logic, UI components, styles). Do NOT give final_answer until you have written the real code.`,
@@ -4292,7 +4009,7 @@ ${agentPrompt}
 
         // Reject if dev server is not running (for web projects)
         // If we scaffolded and wrote files (e.g. a web app), we expect a running app.
-        if (usedScaffold && wroteFiles && !terminalBusy) {
+        if (runState().usedScaffold && runState().wroteFiles && !terminalBusy) {
           const state = await detectTerminalState();
           // Only fail if it's explicitly idle. If "server" or "busy", assume it's fine.
           if (state === "idle") {
@@ -4397,9 +4114,9 @@ ${agentPrompt}
           !trimmedAnswer.includes("!") &&
           !/^(I |The |It |Yes|No |Done|Here|Sure|OK|Thank|Note)/i.test(trimmedAnswer) &&
           /^[a-z][\w./-]*(\s+\S+)*$/i.test(trimmedAnswer) && // command-like pattern
-          executedCommands.size === 0 &&
-          !wroteFiles &&
-          !usedWebTools &&
+          runState().executedCommands.size === 0 &&
+          !runState().wroteFiles &&
+          !runState().usedWebTools &&
           !terminalBusy &&
           !loopBreaks;
         if (looksLikeBareCommand && !isShortAck) {
@@ -4422,7 +4139,7 @@ ${agentPrompt}
         const isGenericCompletion = genericCompletionPatterns.test(trimmedAnswer);
         if (isGenericCompletion && !isShortAck) {
           const didWork =
-            executedCommands.size > 0 || wroteFiles || usedWebTools;
+            runState().executedCommands.size > 0 || runState().wroteFiles || runState().usedWebTools;
           if (didWork) {
             history.push({
               role: "user",
@@ -4451,9 +4168,9 @@ ${agentPrompt}
           !isShortAck &&
           !isLikelyQuestion &&
           agentUsedTools &&
-          executedCommands.size === 0 &&
-          !wroteFiles &&
-          !usedWebTools &&
+          runState().executedCommands.size === 0 &&
+          !runState().wroteFiles &&
+          !runState().usedWebTools &&
           !terminalBusy
         ) {
           // Silent retry — don't show guard rejection to user
@@ -4501,7 +4218,7 @@ ${agentPrompt}
         // Bounded: past the cap the model clearly won't act on its own — let the
         // question through rather than bounce forever.
         const pastRejectionCap = ++terminalAttempts > MAX_TERMINAL_REJECTIONS;
-        if (!pastRejectionCap && !isCredentialQuestion && !isPreferenceQuestion && executedCommands.size === 0 && !wroteFiles && !usedWebTools) {
+        if (!pastRejectionCap && !isCredentialQuestion && !isPreferenceQuestion && runState().executedCommands.size === 0 && !runState().wroteFiles && !runState().usedWebTools) {
           history.push({
             role: "user",
             content: `REJECTED: Do NOT ask the user — you haven't tried anything yet. Be autonomous: use execute_command to check system state (system_profiler, diskutil, ps, lsof, ls, find, which, curl). Discover the answer yourself first. Only ask_question if you truly cannot determine the answer after trying.`,
@@ -4547,11 +4264,11 @@ ${agentPrompt}
           type: "question",
           continuation: {
             history: [...history],
-            executedCommands: [...executedCommands],
-            usedScaffold,
-            wroteFiles,
-            usedWebTools,
-            lastWriteDir,
+            executedCommands: [...runState().executedCommands],
+            usedScaffold: runState().usedScaffold,
+            wroteFiles: runState().wroteFiles,
+            usedWebTools: runState().usedWebTools,
+            lastWriteDir: runState().lastWriteDir,
             terminalBusy,
             agentTodos: agentTodos.length > 0 ? [...agentTodos] : undefined,
             agentMemory: agentMemory.length > 0 ? [...agentMemory] : undefined,
@@ -4736,7 +4453,7 @@ ${agentPrompt}
               terminalBusy = false;
               const finishedOutput = await readTerminal(15);
               const nudge =
-                usedScaffold && !wroteFiles
+                runState().usedScaffold && !runState().wroteFiles
                   ? `\nThe scaffold/install is complete. Now use write_file to implement the user's requested features. Do NOT run ls, mkdir, or any scaffold commands.`
                   : "";
               history.push({
@@ -4747,13 +4464,13 @@ ${agentPrompt}
           }
 
           let runCmd = action.command;
-          executedCommands.add(runCmd);
+          runLog.append({ type: "command/executed", command: runCmd });
           const isScaffoldCmd = /\b(create|init)\b/i.test(runCmd);
 
           // After scaffolding, nudge agent toward write_file but don't block reads
           if (
-            (usedScaffold || isScaffoldCmd) &&
-            !wroteFiles &&
+            (runState().usedScaffold || isScaffoldCmd) &&
+            !runState().wroteFiles &&
             /^\s*(mkdir)\b/.test(runCmd)
           ) {
             onUpdate(
@@ -4771,8 +4488,8 @@ ${agentPrompt}
 
           // Block dev server launch if code hasn't been written yet
           if (
-            usedScaffold &&
-            !wroteFiles &&
+            runState().usedScaffold &&
+            !runState().wroteFiles &&
             /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(dev|start)\b/.test(runCmd)
           ) {
             // Silent retry — don't show guard rejection to user
@@ -4785,7 +4502,7 @@ ${agentPrompt}
           }
 
           // Auto-prepend cd if agent wrote files to a project dir but forgot to cd
-          runCmd = autoCdCommand(runCmd, lastWriteDir);
+          runCmd = autoCdCommand(runCmd, runState().lastWriteDir);
           // Use \r (carriage return) — that's what Enter sends in a PTY
           // checkPermission=true so user is prompted before execution
           terminalBusy = true; // Set BEFORE await — reset in catch if it fails
@@ -4803,7 +4520,7 @@ ${agentPrompt}
               snapshot || "",
             )
           ) {
-            usedScaffold = true;
+            runLog.append({ type: "command/scaffold" });
           }
           onUpdate(
             "executed",
@@ -5121,7 +4838,7 @@ ${agentPrompt}
         const content = action.content;
 
         // Guard: block rewrites after server is running with files already written
-        if (terminalBusy && wroteFiles && identicalReadCount >= 1) {
+        if (terminalBusy && runState().wroteFiles && identicalReadCount >= 1) {
           history.push({
             role: "user",
             content: `STOP: A dev server is already running and you have already written code. The task is COMPLETE — the server will hot-reload your changes automatically. Do NOT rewrite files. Use final_answer NOW to report success.`,
@@ -5168,14 +4885,13 @@ ${agentPrompt}
                 `\n... (${content.length - MAX_PREVIEW} more characters)`
                 : content;
             onUpdate("executed", `Wrote file: ${filePath}\n---\n${preview}`, action);
-            wroteFiles = true;
             consecutiveGuardBlocks = 0;
             breakerTrips = 0;
-            // Track project root — use the shallowest (shortest) directory written to
-            const dir = filePath.substring(0, filePath.lastIndexOf("/"));
-            if (dir && (!lastWriteDir || dir.length < lastWriteDir.length)) {
-              lastWriteDir = dir;
-            }
+            // The fold keeps the shallowest directory as the project root.
+            runLog.append({
+              type: "file/written",
+              dir: filePath.substring(0, filePath.lastIndexOf("/")) || undefined,
+            });
             history.push({
               role: "user",
               content: result.existed
@@ -5299,14 +5015,13 @@ ${agentPrompt}
               `Edited file: ${filePath} (${result.replacements} replacements)\n---\n${truncatedDiff}`,
               action
             );
-            wroteFiles = true;
             consecutiveGuardBlocks = 0;
             breakerTrips = 0;
-            // Track project root — use the shallowest directory
-            const dir = filePath.substring(0, filePath.lastIndexOf("/"));
-            if (dir && (!lastWriteDir || dir.length < lastWriteDir.length)) {
-              lastWriteDir = dir;
-            }
+            // The fold keeps the shallowest directory as the project root.
+            runLog.append({
+              type: "file/written",
+              dir: filePath.substring(0, filePath.lastIndexOf("/")) || undefined,
+            });
             history.push({
               role: "user",
               content: `(File edited successfully: ${filePath}. Made ${result.replacements} replacements.)`,
@@ -5478,7 +5193,7 @@ ${agentPrompt}
               ? `\n\n${qualityHint}`
               : "\n\nUse these results to answer the user's question. You may web_fetch any URL above for more details.";
             history.push({ role: "user", content: `Web search results for "${query}":\n\n${formatted}${guidance}` });
-            usedWebTools = true;
+            runLog.append({ type: "web/used" });
             // Off-topic results aren't real progress — only count a relevant hit.
             if (!qualityHint) nonEmptyWebThisRun = true;
           }
@@ -5533,12 +5248,12 @@ ${agentPrompt}
                 role: "user",
                 content: `web_fetch of ${url} returned almost no readable text (${content.length} chars) — the page is likely JS-rendered or blocks scraping. Do NOT re-fetch it. Try a different source, or if you already have enough information, answer now with final_answer.`,
               });
-              usedWebTools = true;
+              runLog.append({ type: "web/used" });
             } else {
               const truncated = content.length > 12000 ? content.slice(0, 12000) + "\n\n[Content truncated — 12KB limit]" : content;
               onUpdate("executed", `Fetched ${url.slice(0, 60)} (${content.length} chars)`, action);
               history.push({ role: "user", content: `Content from ${url}:\n\n${truncated}` });
-              usedWebTools = true;
+              runLog.append({ type: "web/used" });
               nonEmptyWebThisRun = true;
             }
           }
@@ -5579,7 +5294,7 @@ ${agentPrompt}
         const isInteractive = chainedCommands.some((part: string) => INTERACTIVE_CMD_RE.test(part));
 
         if (isInteractive) {
-          if (usedScaffold) {
+          if (runState().usedScaffold) {
             // Project already scaffolded — redirect to write_file, NOT run_in_terminal (which would also block)
             onUpdate(
               "failed",
@@ -5771,7 +5486,7 @@ ${agentPrompt}
             terminalBusy = false;
             const finishedOutput = await readTerminal(15);
             const nudge =
-              usedScaffold && !wroteFiles
+              runState().usedScaffold && !runState().wroteFiles
                 ? `\nThe scaffold/install is complete. Now use write_file to implement the user's requested features. Do NOT run ls, mkdir, or any scaffold commands.`
                 : "";
             history.push({
@@ -5791,7 +5506,7 @@ ${agentPrompt}
         const quotedCommand = smartQuotePaths(action.command);
 
         // Auto-prepend cd if agent wrote files to a project dir but forgot to cd
-        let cmd = autoCdCommand(quotedCommand, lastWriteDir);
+        let cmd = autoCdCommand(quotedCommand, runState().lastWriteDir);
 
         // Guard: block recursive ls/find on broad directories to prevent massive output
         const cmdForCheck = cmd
@@ -5814,7 +5529,7 @@ ${agentPrompt}
             );
             history.push({
               role: "user",
-              content: `Error: "ls -R" on the current/home directory produces massive output (recursively lists everything including node_modules). Specify the exact project directory path: "ls -R /absolute/path/to/project"${lastWriteDir ? ` (project directory: "${lastWriteDir}")` : ""}. Or use "ls" (non-recursive) to see what's in the current directory.`,
+              content: `Error: "ls -R" on the current/home directory produces massive output (recursively lists everything including node_modules). Specify the exact project directory path: "ls -R /absolute/path/to/project"${runState().lastWriteDir ? ` (project directory: "${runState().lastWriteDir}")` : ""}. Or use "ls" (non-recursive) to see what's in the current directory.`,
             });
             consecutiveGuardBlocks++;
             continue;
@@ -5823,8 +5538,8 @@ ${agentPrompt}
 
         // After scaffolding, only block mkdir (write_file handles directories)
         if (
-          usedScaffold &&
-          !wroteFiles &&
+          runState().usedScaffold &&
+          !runState().wroteFiles &&
           /^\s*(mkdir)\b/.test(cmd.replace(/^cd\s+[^\s&;|]+\s*(?:&&|;)\s*/, ""))
         ) {
           onUpdate(
@@ -5841,12 +5556,12 @@ ${agentPrompt}
         }
 
         // Block rm -rf on the project directory after code has been written
-        if (wroteFiles && lastWriteDir && /\brm\s+(-\w+\s+)*/.test(cmd)) {
+        if (runState().wroteFiles && runState().lastWriteDir && /\brm\s+(-\w+\s+)*/.test(cmd)) {
           const rmTargetMatch = cmd.match(/\brm\s+(?:-\w+\s+)*([^\s&;|]+)/);
           if (
             rmTargetMatch &&
-            (rmTargetMatch[1].startsWith(lastWriteDir) ||
-              lastWriteDir.startsWith(rmTargetMatch[1]))
+            (rmTargetMatch[1].startsWith(runState().lastWriteDir) ||
+              runState().lastWriteDir.startsWith(rmTargetMatch[1]))
           ) {
             onUpdate(
               "failed",
@@ -5855,7 +5570,7 @@ ${agentPrompt}
             );
             history.push({
               role: "user",
-              content: `Error: You CANNOT delete the project directory "${lastWriteDir}" — you already wrote code there. Use write_file to modify files instead.`,
+              content: `Error: You CANNOT delete the project directory "${runState().lastWriteDir}" — you already wrote code there. Use write_file to modify files instead.`,
             });
             consecutiveGuardBlocks++;
             continue;
@@ -5900,7 +5615,7 @@ ${agentPrompt}
           }
         }
 
-        executedCommands.add(cmd);
+        runLog.append({ type: "command/executed", command: cmd });
 
         onUpdate("executing", cmd, action);
         try {
@@ -5927,7 +5642,7 @@ ${agentPrompt}
           breakerTrips = 0;
           // Track mkdir as project dir
           const mkdirMatch = cmd.match(/\bmkdir\s+(?:-p\s+)?([^\s&;|]+)/);
-          if (mkdirMatch) lastWriteDir = mkdirMatch[1];
+          if (mkdirMatch) runLog.append({ type: "dir/created", dir: mkdirMatch[1] });
           onUpdate("executed", cmd + "\n---\n" + output, action);
           const serverNote = stoppedServerForExec
             ? "\n\n⚠️ NOTE: A dev server was automatically stopped to run this command. If you need the server running again, restart it with run_in_terminal.\n⚠️ IMPORTANT: All previous terminal output (including any error messages from the old server) is STALE. Only trust output from THIS command and future commands."

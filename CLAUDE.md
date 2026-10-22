@@ -129,6 +129,42 @@ e2e/                  # Playwright E2E test suite
 
 The agent loop (`runAgent`) drives multi-step task execution via tool calls:
 
+### Session log + derived state (`src/services/ai/agent/`)
+
+Adapted from DeepSeek Harness's session-log architecture (the package itself is
+a Node-only Cordis plugin tree and can't be embedded — see
+`docs/superpowers/specs/2026-08-20-agent-session-log-design.md`). The idea taken
+is: **facts are appended once, and the state the guards read is a projection of
+them.**
+
+- **`events.ts`** — `SessionEvent` union + `createSessionLog()`. Records what a
+  run *did*: `command/executed`, `command/scaffold`, `file/written`,
+  `dir/created`, `web/used`, `guards/scaffold-reset`.
+- **`derive.ts`** — `deriveRunState()` folds the log into the five flags the
+  guards used to read from mutable locals (`executedCommands`, `usedScaffold`,
+  `wroteFiles`, `usedWebTools`, `lastWriteDir`), plus `hasDoneWork()` and
+  `seedFromContinuation()` for `ask_question` resume. `createRunStateView()`
+  memoizes on event count. **`terminalBusy` is deliberately NOT derived** — it's
+  live PTY state (set before an await, cleared in catches across 21 sites), not
+  a fold over completed work, so the loop still owns it explicitly.
+  - `lastWriteDir` semantics differ per event and must stay that way:
+    `file/written` keeps the **shallowest** dir (project-root heuristic);
+    `dir/created` (mkdir) overwrites unconditionally.
+- **`parse.ts`** — the whole tool-call recovery stack, pure: `\xHH` repair, bare
+  newlines in JSON strings, markdown fences, `<|channel|>` wrappers, balanced
+  brace scan, trailing-comma repair, `normalizeToolKey` (array wrapper, tool-name
+  key, gpt-oss `{cmd:[...]}`, bare-argument inference), then coercion. Text that
+  *looks* like an attempted tool call is never coerced into a final answer.
+- **`guards.ts`** — pure repetition detection: `buildActionKey` (hashes edit
+  payloads so re-emitted edits are caught), `buildCoarseKey`, consecutive /
+  alternating / semantic / hard-cap signals, and `isTerminalTool` (final_answer
+  and ask_question are exempt — blocking one while demanding it is a deadlock).
+
+Tests: `agentParse`, `agentDerive`, `agentGuards` (pure units) and
+`agentRunState` (end-to-end through `runAgent`, using `isSSH: true` so file ops
+route through the stubbable exec callback). These were **mutation-tested** —
+deliberately breaking each fold and guard fails at least one test.
+
 ### Tool Dispatch
 - `execute_command` — sentinel-based exec via `execInTerminal` IPC, returns output. Rejects interactive/scaffold commands.
 - `run_in_terminal` — writes to PTY directly, sets `terminalBusy`. Agent must poll with `read_terminal`.

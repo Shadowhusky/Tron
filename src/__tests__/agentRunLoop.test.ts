@@ -815,3 +815,21 @@ describe("runAgent — read_history recall (log ddb57d1bbd)", () => {
     expect(seen.some((m) => /found no earlier turn matching/.test(m))).toBe(true);
   });
 });
+
+describe("runAgent — model degeneration", () => {
+  it("stops once, with actionable advice, instead of retrying a repetition loop", async () => {
+    let calls = 0;
+    svc.arbitrateAgentLoop = async () => ({ stuck: false, suggestion: "" });
+    (svc as unknown as { streamOpenAIChat: () => Promise<unknown> }).streamOpenAIChat = async () => {
+      calls++;
+      throw new Error("Model degeneration: the model locked into repeating output and was stopped.");
+    };
+    const { result, steps } = await run("build something", async () => "");
+    expect(result.success).toBe(false);
+    // Deterministic failure — must NOT burn the 3 API-error retries.
+    expect(calls).toBe(1);
+    expect(result.message).toMatch(/degeneration/i);
+    expect(result.message).toMatch(/larger model|quantization/i);
+    expect(steps.some((s) => s.step === "error")).toBe(true);
+  });
+});
