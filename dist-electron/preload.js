@@ -30,6 +30,7 @@ const ALLOWED_INVOKE_CHANNELS = [
     "file.listDir",
     "file.searchDir",
     "shell.openExternal",
+    "browser.probe",
     "shell.openPath",
     "shell.showItemInFolder",
     "system.flushStorage",

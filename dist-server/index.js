@@ -15,6 +15,7 @@ import * as terminal from "./handlers/terminal.js";
 import * as ai from "./handlers/ai.js";
 import * as ssh from "./handlers/ssh.js";
 import { CliAgentManager } from "./handlers/cliAgentCore.js";
+import { probeBrowserUrl } from "./handlers/browserProbe.js";
 const cliAgents = new CliAgentManager();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -89,50 +90,6 @@ app.use(compression({
     },
 }));
 const server = http.createServer(app);
-// ---------------------------------------------------------------------------
-// Frame-check endpoint — HEAD request to detect X-Frame-Options / CSP
-// frame-ancestors. Used by BrowserPane to avoid CSP console errors.
-// ---------------------------------------------------------------------------
-app.get("/api/frame-check", async (req, res) => {
-    // Allow cross-origin requests (Electron embedded server on localhost)
-    res.set("Access-Control-Allow-Origin", "*");
-    const url = req.query.url;
-    if (!url) {
-        res.json({ embeddable: false });
-        return;
-    }
-    try {
-        const parsed = new URL(url);
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-            res.json({ embeddable: false });
-            return;
-        }
-        const resp = await fetch(url, {
-            method: "HEAD",
-            redirect: "follow",
-            signal: AbortSignal.timeout(5000),
-        });
-        const xfo = (resp.headers.get("x-frame-options") || "").toLowerCase();
-        if (xfo === "deny" || xfo === "sameorigin") {
-            res.json({ embeddable: false });
-            return;
-        }
-        const csp = resp.headers.get("content-security-policy") || "";
-        const fa = csp.match(/frame-ancestors\s+([^;]+)/i);
-        if (fa) {
-            const val = fa[1].trim().toLowerCase();
-            if (val === "'none'" || val === "'self'") {
-                res.json({ embeddable: false });
-                return;
-            }
-        }
-        res.json({ embeddable: true });
-    }
-    catch {
-        // Can't reach or timeout — let iframe try
-        res.json({ embeddable: true });
-    }
-});
 const _stripTags = (s) => s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
@@ -640,6 +597,8 @@ wss.on("connection", (ws, req) => {
 // Channels completely blocked in SSH-only mode (no local PTY or filesystem)
 const SSH_ONLY_BLOCKED_CHANNELS = new Set([
     "terminal.create",
+    // Fetches arbitrary URLs from the gateway host — would reach its internal network.
+    "browser.probe",
     "terminal.scanCommands",
     "file.writeFile",
     "file.readFile",
@@ -935,6 +894,8 @@ async function handleInvoke(channel, data, clientId, pushEvent) {
         }
         case "system.selectFolder":
             return null; // Not available in web mode
+        case "browser.probe":
+            return probeBrowserUrl(String(data));
         case "shell.openExternal":
             return; // No-op in web mode
         case "shell.openPath":

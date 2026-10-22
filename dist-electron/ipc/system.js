@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerSystemHandlers = registerSystemHandlers;
 const electron_1 = require("electron");
 const path_1 = __importDefault(require("path"));
+const browserProbe_1 = require("./browserProbe");
 /** Cross-platform absolute path check (Unix / and Windows C:\ or UNC \\). */
 function isAbsolutePath(p) {
     return path_1.default.isAbsolute(p);
@@ -24,6 +25,7 @@ function registerSystemHandlers() {
             return null;
         return result.filePaths[0];
     });
+    electron_1.ipcMain.handle("browser.probe", (_event, url) => (0, browserProbe_1.probeBrowserUrl)(String(url)));
     electron_1.ipcMain.handle("shell.openExternal", async (_event, url) => {
         if (typeof url !== "string")
             return;

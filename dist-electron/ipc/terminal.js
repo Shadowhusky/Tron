@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.loadPersistedHistory = loadPersistedHistory;
 exports.persistAllHistory = persistAllHistory;
 exports.getPersistedHistoryStats = getPersistedHistoryStats;
 exports.clearAllPersistedHistory = clearAllPersistedHistory;
@@ -771,9 +772,10 @@ function registerTerminalHandlers(getMainWindow) {
         if (session) {
             session.kill();
             sessions.delete(id);
-            sessionHistory.delete(id);
-            removePersistedHistory(id);
         }
+        // Also for panes with no live session (dropped / never-reconnected SSH)
+        sessionHistory.delete(id);
+        removePersistedHistory(id);
     });
     electron_1.ipcMain.handle("terminal.checkCommand", async (_event, data) => {
         // Support both old (string) and new (object with sessionId) formats
@@ -965,7 +967,9 @@ function registerTerminalHandlers(getMainWindow) {
         }
     });
     electron_1.ipcMain.handle("terminal.getHistory", (_event, sessionId) => {
-        const raw = sessionHistory.get(sessionId) || "";
+        // A restored pane whose SSH host is unreachable has no live session yet —
+        // show its output from the previous run.
+        const raw = sessionHistory.get(sessionId) ?? loadPersistedHistory(sessionId);
         return stripSentinels(raw);
     });
     // Inject saved terminal history into a session (used when loading sync tabs)
