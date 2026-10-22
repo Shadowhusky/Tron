@@ -8,6 +8,7 @@ import { useConfig } from "../contexts/ConfigContext";
 import { IPC } from "../constants/ipc";
 import { cleanContextForAI } from "../utils/contextCleaner";
 import { buildOlderConversation } from "../utils/agentContext";
+import { finalizeThinking, retractThought } from "../utils/agentThread";
 import { contextCharsFor, conversationBudgetChars } from "../utils/modelContext";
 import { classifyCommand } from "../utils/dangerousCommand";
 import { isWindows } from "../utils/platform";
@@ -1003,31 +1004,13 @@ ${prompt}
           flushStreamBuffer();
 
           if (step === "thinking_complete") {
-            // Replace the last thinking entry with finalized thought (search backwards)
-            setAgentThread((prev) => {
-              const updated = [...prev];
-              for (let i = updated.length - 1; i >= 0; i--) {
-                if (updated[i].step === "thinking") {
-                  updated[i] = { step: "thought", output };
-                  return updated;
-                }
-              }
-              return [...prev, { step: "thought", output }];
-            });
+            // Bounded to the current run — see finalizeThinking.
+            setAgentThread((prev) => finalizeThinking(prev, output));
             setIsThinking(false);
           } else if (step === "retract_thought") {
             // Parse failed — remove the thought that was just emitted so it doesn't
             // accumulate in the overlay during silent retries.
-            setAgentThread((prev) => {
-              for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].step === "thought" || prev[i].step === "thinking") {
-                  const updated = [...prev];
-                  updated.splice(i, 1);
-                  return updated;
-                }
-              }
-              return prev;
-            });
+            setAgentThread((prev) => retractThought(prev));
             setIsThinking(false);
           } else if (step === "thinking_done") {
             // No thinking content produced — remove placeholder thinking entry and clear state
