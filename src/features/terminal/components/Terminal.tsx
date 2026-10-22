@@ -107,6 +107,11 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // The search bar owns the pane's top-right corner while open — TerminalPane
+  // hides its floating controls there.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("tron:termSearch", { detail: { sessionId, visible: searchVisible } }));
+  }, [sessionId, searchVisible]);
 
   // Loading overlay — for web mode reconnected/restored sessions to mask
   // flicker from history replay / TUI redraw. Electron restores instantly.
@@ -1813,7 +1818,7 @@ const Terminal: React.FC<TerminalProps> = ({ className, sessionId, onActivity, o
       {/* Terminal search bar */}
       {searchVisible && (
         <div
-          className="absolute top-1 right-2 z-20 flex items-center gap-1 rounded-lg px-2 py-1 shadow-lg border"
+          className="absolute top-1 right-[18px] z-20 flex items-center gap-1 rounded-lg px-2 py-1 shadow-lg border"
           style={{
             // Floating over terminal text — must stay near-opaque even when
             // the modern theme's terminal background is translucent.

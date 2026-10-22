@@ -67,6 +67,23 @@ describe("findLinks — URLs", () => {
     expect(urls("ipv6 [::1]:5000")).toEqual(["http://[::1]:5000"]);
   });
 
+  it("links scheme-less web addresses as https URLs, not file paths", () => {
+    expect(urls("see github.com/anthropics/claude-code for details")).toEqual(["https://github.com/anthropics/claude-code"]);
+    expect(urls("open example.com/path/page.html")).toEqual(["https://example.com/path/page.html"]);
+    expect(paths("open example.com/path/page.html")).toEqual([]);
+    expect(urls("docs at www.example.com/guide.")).toEqual(["https://www.example.com/guide"]);
+    expect(urls("visit www.example.com today")).toEqual(["https://www.example.com"]);
+  });
+
+  it("leaves bare domains, emails and real paths alone", () => {
+    expect(urls("hosted on github.com")).toEqual([]);
+    expect(urls("mail user@example.com/x")).toEqual([]);
+    expect(urls("see /srv/example.com/index.html")).toEqual([]);
+    expect(paths("see /srv/example.com/index.html")).toEqual(["/srv/example.com/index.html"]);
+    expect(urls("open Tron.app/Contents/Info.plist")).toEqual([]);
+    expect(urls("bad example.community/x")).toEqual([]);
+  });
+
   it("ignores local addresses with an out-of-range port", () => {
     expect(urls("listening on localhost:99999")).toEqual([]);
     expect(urls("listening on localhost:65535")).toEqual(["http://localhost:65535"]);

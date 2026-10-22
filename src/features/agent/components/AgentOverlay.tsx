@@ -1479,10 +1479,10 @@ const AgentOverlay: React.FC<AgentOverlayProps> = ({
 
   return (
     <>
-      {/* Toast stack — top right of session */}
+      {/* Toast stack — top right, below the pane controls (maximize / ports) */}
       <AnimatePresence>
         {toasts.length > 0 && (
-          <div className="absolute top-2 right-2 z-30 flex flex-col gap-1.5 pointer-events-auto">
+          <div className="absolute top-11 right-[18px] z-30 flex flex-col gap-1.5 pointer-events-auto">
             {toasts.slice(-4).map((t) => (
               <motion.div
                 key={t.id}

@@ -33,6 +33,7 @@ export const IPC = {
   // System — invoke
   SYSTEM_SELECT_FOLDER: "system.selectFolder",
   SHELL_OPEN_EXTERNAL: "shell.openExternal",
+  BROWSER_PROBE: "browser.probe",
   SHELL_OPEN_PATH: "shell.openPath",
   SHELL_SHOW_ITEM: "shell.showItemInFolder",
 
