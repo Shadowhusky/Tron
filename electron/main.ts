@@ -4,6 +4,7 @@ import {
   Menu,
   MenuItemConstructorOptions,
   ipcMain,
+  shell,
 } from "electron";
 import path from "path";
 import { registerTerminalHandlers, cleanupAllSessions, persistAllHistory, getSessions, getSessionHistory } from "./ipc/terminal";
@@ -181,6 +182,23 @@ const createWindow = () => {
   });
 
   createMenu(mainWindow);
+
+  // Links that escape the renderer's own handlers (target=_blank, window.open,
+  // a stray <a href>, popups from the browser pane's iframe) must never open a
+  // bare child window or navigate the app away from itself — they go to the
+  // system browser instead.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    // The app is a single page: the only legitimate navigation is to itself
+    // (a dropped file:// would otherwise replace the whole UI too).
+    const page = (u: string) => u.split(/[?#]/)[0];
+    if (page(url) === page(mainWindow?.webContents.getURL() ?? "")) return;
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+  });
 
   // Show window once content is painted — avoids blank window flash on Windows
   if (!shouldHide) {

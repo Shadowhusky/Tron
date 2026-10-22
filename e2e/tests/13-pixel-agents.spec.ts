@@ -119,7 +119,7 @@ test.describe("Agent Status Bar", () => {
     const dot = page.locator(`[data-testid="agent-dot-${sessionId}"]`);
     await expect(dot).toBeVisible({ timeout: 3_000 });
     await expect(dot).toHaveAttribute("data-tool", "execute_command");
-    await expect(dot).toContainText("running cmd");
+    await expect(dot).toContainText("running");
   });
 
   test("built-in agent: status bar shows reading output", async ({ page }) => {
@@ -150,7 +150,7 @@ test.describe("Agent Status Bar", () => {
     const dot = page.locator(`[data-testid="agent-dot-${sessionId}"]`);
     await expect(dot).toBeVisible({ timeout: 3_000 });
     await expect(dot).toHaveAttribute("data-tool", "read_terminal");
-    await expect(dot).toContainText("reading output");
+    await expect(dot).toContainText("watching");
   });
 
   test("built-in agent: status bar shows needs approval for pending command", async ({ page }) => {
@@ -180,7 +180,7 @@ test.describe("Agent Status Bar", () => {
     const dot = page.locator(`[data-testid="agent-dot-${sessionId}"]`);
     await expect(dot).toBeVisible({ timeout: 3_000 });
     await expect(dot).toHaveAttribute("data-status", "needs-approval");
-    await expect(dot).toContainText("needs approval");
+    await expect(dot).toContainText("approval");
   });
 
   test("built-in agent: status bar shows idle after agent completes (done step)", async ({ page }) => {

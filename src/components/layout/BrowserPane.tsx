@@ -1,87 +1,112 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, X, Globe } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, X, Globe, AlertTriangle } from "lucide-react";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useLayout } from "../../contexts/LayoutContext";
 import { themeClass } from "../../utils/theme";
+import { normalizeBrowserInput, isMixedContentBlocked, httpFallback } from "../../utils/browserUrl";
+import { IPC } from "../../constants/ipc";
 
 interface BrowserPaneProps {
   sessionId: string;
   initialUrl: string;
 }
 
-/**
- * Check if a URL can be embedded in an iframe by inspecting response headers
- * via the server's /api/frame-check endpoint (avoids CORS from renderer).
- * Falls back to allowing embed if the check can't be performed.
- */
-async function canEmbed(targetUrl: string): Promise<boolean> {
+type ProbeResult =
+  | { ok: true; embeddable: boolean; status: number }
+  | { ok: false; kind: "not-found" | "refused" | "tls" | "http-only" | "timeout" | "error"; message: string };
+
+type PageError = { title: string; message: string; offerHttp: boolean };
+
+/** Past this the pane offers the system browser — some pages never fire onLoad in a frame. */
+const SLOW_LOAD_MS = 20_000;
+
+/** The iframe can't report failures (it just stays blank), so ask main / the server first. */
+async function probe(url: string): Promise<ProbeResult | null> {
   try {
-    // In web mode, use relative URL so it works from any hostname.
-    // In Electron mode, use the embedded web server on localhost.
-    let checkUrl: string;
-    if (!(window as any)._electronBridge) {
-      // Web mode — relative fetch goes to the same origin
-      checkUrl = `/api/frame-check?url=${encodeURIComponent(targetUrl)}`;
-    } else {
-      const port = (window as any).__tronWebServerPort || 3888;
-      checkUrl = `http://localhost:${port}/api/frame-check?url=${encodeURIComponent(targetUrl)}`;
-    }
-    const res = await fetch(checkUrl, {
-      signal: AbortSignal.timeout(4000),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data.embeddable !== false;
-    }
-  } catch { /* server not available */ }
-  // Can't check — allow iframe attempt
-  return true;
+    return (await window.electron?.ipcRenderer?.invoke?.(IPC.BROWSER_PROBE, url)) ?? null;
+  } catch {
+    return null; // probe unavailable (e.g. SSH-only gateway) — let the frame try
+  }
 }
+
+const ERROR_TITLES: Record<string, string> = {
+  "not-found": "Site not found",
+  refused: "Can't connect",
+  tls: "Certificate not trusted",
+  "http-only": "This server doesn't support HTTPS",
+  error: "Couldn't load this page",
+};
 
 const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
   const { resolvedTheme } = useTheme();
   const { closePane } = useLayout();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [url, setUrl] = useState(initialUrl);
+  const [autoScheme, setAutoScheme] = useState(false);
   const [inputUrl, setInputUrl] = useState(initialUrl);
-  const [loading, setLoading] = useState(true);
-  const [blocked, setBlocked] = useState(false);
-  const [checked, setChecked] = useState(false);
+  const [phase, setPhase] = useState<"checking" | "loading" | "loaded" | "error">("checking");
+  const [error, setError] = useState<PageError | null>(null);
+  const [slow, setSlow] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const urlRef = useRef(initialUrl);
 
   urlRef.current = url;
 
-  // Pre-check if URL allows embedding before rendering iframe
   useEffect(() => {
-    setLoading(true);
-    setBlocked(false);
-    setChecked(false);
     let cancelled = false;
-    canEmbed(url).then((ok) => {
+    setPhase("checking");
+    setError(null);
+    setSlow(false);
+    const fail = (e: PageError) => { if (!cancelled) { setError(e); setPhase("error"); } };
+
+    if (isMixedContentBlocked(window.location.protocol, url)) {
+      fail({
+        title: "Insecure page blocked",
+        message: "Tron is open over HTTPS, so the browser won't show this http:// page inside it.",
+        offerHttp: false,
+      });
+      return () => { cancelled = true; };
+    }
+
+    probe(url).then((r) => {
       if (cancelled) return;
-      if (!ok) {
-        setBlocked(true);
-        setLoading(false);
+      if (!r || r.ok || r.kind === "timeout") {
+        if (r?.ok && !r.embeddable) {
+          fail({ title: "This site can't be shown inside Tron", message: "Its security policy forbids being displayed in a frame.", offerHttp: false });
+          return;
+        }
+        setPhase("loading");
+        return;
       }
-      setChecked(true);
+      const fallback = httpFallback(url);
+      // Tron guessed https for a bare address — the server may only speak http.
+      if (autoScheme && fallback && (r.kind === "refused" || r.kind === "tls" || r.kind === "http-only")) {
+        setAutoScheme(false);
+        setUrl(fallback);
+        setInputUrl(fallback);
+        return;
+      }
+      fail({
+        title: ERROR_TITLES[r.kind] ?? ERROR_TITLES.error,
+        message: r.message,
+        offerHttp: !!fallback && (r.kind === "refused" || r.kind === "tls" || r.kind === "http-only"),
+      });
     });
     return () => { cancelled = true; };
-  }, [url]);
+  }, [url, autoScheme, attempt]);
 
-  const navigate = useCallback((newUrl: string) => {
-    let normalized = newUrl.trim();
-    if (!/^https?:\/\//i.test(normalized)) {
-      // Looks like a URL: has a dot with TLD, or localhost, or IP address, or has a port
-      if (/^([a-z0-9-]+\.)+[a-z]{2,}/i.test(normalized) ||
-          /^localhost([:\/]|$)/i.test(normalized) ||
-          /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}([:\/]|$)/.test(normalized)) {
-        normalized = `https://${normalized}`;
-      } else {
-        normalized = `https://www.google.com/search?q=${encodeURIComponent(normalized)}`;
-      }
-    }
-    setUrl(normalized);
-    setInputUrl(normalized);
+  useEffect(() => {
+    if (phase !== "loading") return;
+    const timer = setTimeout(() => setSlow(true), SLOW_LOAD_MS);
+    return () => clearTimeout(timer);
+  }, [phase, attempt]);
+
+  const navigate = useCallback((input: string) => {
+    const next = normalizeBrowserInput(input);
+    setAutoScheme(next.autoScheme);
+    setUrl(next.url);
+    setInputUrl(next.url);
+    setAttempt((n) => n + 1);
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -89,7 +114,8 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
   };
 
   const handleLoad = () => {
-    setLoading(false);
+    setPhase("loaded");
+    setSlow(false);
     try {
       const iframeUrl = iframeRef.current?.contentWindow?.location.href;
       if (iframeUrl && iframeUrl !== "about:blank") {
@@ -106,17 +132,21 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
     }
   }, []);
 
-  const doReload = useCallback(() => {
-    setLoading(true);
-    setBlocked(false);
-    setChecked(false);
-    canEmbed(url).then((ok) => {
-      if (!ok) { setBlocked(true); setLoading(false); }
-      setChecked(true);
-    });
-  }, [url]);
+  const doReload = useCallback(() => setAttempt((n) => n + 1), []);
+
+  const tryHttp = useCallback(() => {
+    const fallback = httpFallback(urlRef.current);
+    if (!fallback) return;
+    setAutoScheme(false);
+    setUrl(fallback);
+    setInputUrl(fallback);
+  }, []);
 
   const t = themeClass;
+  const navButton = `p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`;
+  const actionButton = `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+    resolvedTheme === "light" ? "bg-gray-200 hover:bg-gray-300 text-gray-700" : "bg-white/10 hover:bg-white/15 text-gray-300"
+  }`;
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -133,21 +163,18 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
       >
         <button
           onClick={() => { try { iframeRef.current?.contentWindow?.history.back(); } catch { /* cross-origin */ } }}
-          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
+          className={navButton}
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </button>
         <button
           onClick={() => { try { iframeRef.current?.contentWindow?.history.forward(); } catch { /* cross-origin */ } }}
-          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
+          className={navButton}
         >
           <ArrowRight className="h-3.5 w-3.5" />
         </button>
-        <button
-          onClick={doReload}
-          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
-        >
-          <RotateCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+        <button onClick={doReload} className={navButton}>
+          <RotateCw className={`h-3.5 w-3.5 ${phase === "checking" || phase === "loading" ? "animate-spin" : ""}`} />
         </button>
 
         {/* URL bar */}
@@ -170,65 +197,88 @@ const BrowserPane: React.FC<BrowserPaneProps> = ({ sessionId, initialUrl }) => {
           />
         </div>
 
-        <button
-          onClick={openExternal}
-          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
-          title="Open in system browser"
-        >
+        <button onClick={openExternal} className={navButton} title="Open in system browser">
           <ExternalLink className="h-3.5 w-3.5" />
         </button>
 
-        <button
-          onClick={() => closePane(sessionId)}
-          className={`p-1 rounded ${t(resolvedTheme, { dark: "hover:bg-white/10 text-gray-400", modern: "hover:bg-white/10 text-gray-300", light: "hover:bg-gray-200 text-gray-600" })}`}
-        >
+        <button onClick={() => closePane(sessionId)} className={navButton}>
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
 
       {/* Content */}
       <div className="flex-1 relative min-h-0">
-        {loading && !blocked && (
+        {phase === "checking" && (
           <div className={`absolute inset-0 z-10 flex items-center justify-center ${
             resolvedTheme === "light" ? "bg-gray-50" : "bg-[#0a0a0a]"
           }`}>
             <RotateCw className={`h-5 w-5 animate-spin ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`} />
           </div>
         )}
-        {blocked && (
-          <div className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 ${t(
-            resolvedTheme,
-            {
-              dark: "bg-[#0a0a0a] text-gray-400",
-              modern: "bg-[#0b0e16]/70 backdrop-blur-xl backdrop-saturate-150 text-gray-300",
-              light: "bg-gray-50 text-gray-600",
-            },
-          )}`}>
-            <Globe className="h-8 w-8 opacity-40" />
-            <p className="text-sm">This site cannot be embedded</p>
-            <p className="text-xs opacity-60 max-w-[280px] text-center">The site&apos;s security policy prevents it from being displayed in a frame.</p>
-            <button
-              onClick={openExternal}
-              className={`mt-1 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                resolvedTheme === "light"
-                  ? "bg-gray-200 hover:bg-gray-300 text-gray-700"
-                  : "bg-white/10 hover:bg-white/15 text-gray-300"
-              }`}
-            >
-              <ExternalLink className="h-3 w-3" />
-              Open in Browser
-            </button>
+        {phase === "error" && error && (
+          <div
+            data-testid="browser-error"
+            className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 ${t(
+              resolvedTheme,
+              {
+                dark: "bg-[#0a0a0a] text-gray-400",
+                modern: "bg-[#0b0e16]/70 backdrop-blur-xl backdrop-saturate-150 text-gray-300",
+                light: "bg-gray-50 text-gray-600",
+              },
+            )}`}
+          >
+            <AlertTriangle className="h-8 w-8 opacity-40" />
+            <p className="text-sm">{error.title}</p>
+            <p className="text-xs opacity-60 max-w-[320px] text-center">{error.message}</p>
+            <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+              <button onClick={doReload} className={actionButton}>
+                <RotateCw className="h-3 w-3" />
+                Try again
+              </button>
+              {error.offerHttp && (
+                <button onClick={tryHttp} className={actionButton}>
+                  Try http://
+                </button>
+              )}
+              <button onClick={openExternal} className={actionButton}>
+                <ExternalLink className="h-3 w-3" />
+                Open in Browser
+              </button>
+            </div>
           </div>
         )}
-        {checked && !blocked && (
-          <iframe
-            ref={iframeRef}
-            src={url}
-            onLoad={handleLoad}
-            className="w-full h-full border-0"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-            allow="clipboard-read; clipboard-write"
-          />
+        {(phase === "loading" || phase === "loaded") && (
+          <>
+            {phase === "loading" && (
+              <div className={`absolute inset-0 flex items-center justify-center pointer-events-none ${
+                resolvedTheme === "light" ? "bg-gray-50" : "bg-[#0a0a0a]"
+              }`}>
+                <RotateCw className={`h-5 w-5 animate-spin ${resolvedTheme === "light" ? "text-gray-400" : "text-gray-500"}`} />
+              </div>
+            )}
+            <iframe
+              key={`${url}#${attempt}`}
+              ref={iframeRef}
+              src={url}
+              onLoad={handleLoad}
+              className={`relative w-full h-full border-0 ${phase === "loading" ? "opacity-0" : ""}`}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+              allow="clipboard-read; clipboard-write"
+            />
+            {slow && phase === "loading" && (
+              <div className={`absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs shadow-lg ${t(
+                resolvedTheme,
+                {
+                  dark: "bg-[#1a1a1a] border-white/10 text-gray-300",
+                  modern: "bg-[#121826] border-white/[0.12] text-gray-300",
+                  light: "bg-white border-gray-200 text-gray-600",
+                },
+              )}`}>
+                Still loading…
+                <button onClick={openExternal} className="text-blue-500 hover:underline">Open in Browser</button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

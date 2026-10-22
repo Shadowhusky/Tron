@@ -182,6 +182,15 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
   const isMaximized = paneTab?.maximizedSessionId === sessionId;
   const canMaximize = !!paneTab && countLeaves(paneTab.root) > 1;
   const maximizeTitle = `${isMaximized ? "Restore pane" : "Maximize pane"} (${formatHotkey(hotkeys.maximizePane)})`;
+  const [termSearchOpen, setTermSearchOpen] = useState(false);
+  useEffect(() => {
+    const onSearch = (e: Event) => {
+      const d = (e as CustomEvent).detail as { sessionId?: string; visible?: boolean };
+      if (d?.sessionId === sessionId) setTermSearchOpen(!!d.visible);
+    };
+    window.addEventListener("tron:termSearch", onSearch);
+    return () => window.removeEventListener("tron:termSearch", onSearch);
+  }, [sessionId]);
   const [showSSHModal, setShowSSHModal] = useState(false);
   const [connectToast, setConnectToast] = useState(false);
   const connectToastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -1466,35 +1475,40 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ sessionId }) => {
                 ↓ Scroll to bottom
               </button>
             )}
-            {isSSH && !selectionMode && !isConnectPane && (
-              <div className={`absolute top-2 z-20 ${canMaximize || isMaximized ? "right-11" : "right-2"}`}>
-                <PortForwardsChip
-                  sessionId={sessionId}
-                  resolvedTheme={resolvedTheme}
-                  forwards={portForwards}
-                  canOpenLocally={forwardsOpenLocally}
-                  className="h-7 shadow-lg"
-                />
+            {/* Top-right pane controls — one flex row so they never overlap
+                each other; inset past the scrollbar; yields to the search bar,
+                which takes this corner while open. */}
+            {!selectionMode && !isConnectPane && !termSearchOpen && (isSSH || canMaximize || isMaximized) && (
+              <div className="absolute top-2 right-[18px] z-20 flex items-center gap-1.5">
+                {isSSH && (
+                  <PortForwardsChip
+                    sessionId={sessionId}
+                    resolvedTheme={resolvedTheme}
+                    forwards={portForwards}
+                    canOpenLocally={forwardsOpenLocally}
+                    className="h-7 shadow-lg"
+                  />
+                )}
+                {/* Maximize / restore pane — hover chrome, always visible while maximized */}
+                {(canMaximize || isMaximized) && (
+                  <button
+                    onClick={() => toggleMaximizePane(sessionId)}
+                    title={maximizeTitle}
+                    aria-label={maximizeTitle}
+                    className={`flex h-7 w-7 items-center justify-center rounded-md border shadow-lg transition-opacity ${
+                      isMaximized ? "opacity-80" : "opacity-0 group-hover/pane:opacity-80 focus-visible:opacity-80"
+                    } hover:opacity-100 ${themeClass(resolvedTheme, {
+                      dark: "bg-gray-800/90 hover:bg-gray-700/90 text-gray-200 border-gray-600/50",
+                      modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border-white/10",
+                      light: "bg-white/90 hover:bg-gray-100/90 text-gray-700 border-gray-300",
+                    })}`}
+                  >
+                    {isMaximized
+                      ? <Minimize2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+                      : <Maximize2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
+                  </button>
+                )}
               </div>
-            )}
-            {/* Maximize / restore pane — hover chrome, always visible while maximized */}
-            {(canMaximize || isMaximized) && !selectionMode && !isConnectPane && (
-              <button
-                onClick={() => toggleMaximizePane(sessionId)}
-                title={maximizeTitle}
-                aria-label={maximizeTitle}
-                className={`absolute top-2 right-2 z-20 flex h-7 w-7 items-center justify-center rounded-md border shadow-lg transition-opacity ${
-                  isMaximized ? "opacity-80" : "opacity-0 group-hover/pane:opacity-80 focus-visible:opacity-80"
-                } hover:opacity-100 ${themeClass(resolvedTheme, {
-                  dark: "bg-gray-800/90 hover:bg-gray-700/90 text-gray-200 border-gray-600/50",
-                  modern: "bg-gray-900/90 hover:bg-gray-800/90 text-gray-200 border-white/10",
-                  light: "bg-white/90 hover:bg-gray-100/90 text-gray-700 border-gray-300",
-                })}`}
-              >
-                {isMaximized
-                  ? <Minimize2 className="h-3.5 w-3.5" strokeWidth={1.5} />
-                  : <Maximize2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
-              </button>
             )}
           </div>
 

@@ -1,5 +1,6 @@
 import { ipcMain, dialog, shell, BrowserWindow } from "electron";
 import path from "path";
+import { probeBrowserUrl } from "./browserProbe";
 
 /** Cross-platform absolute path check (Unix / and Windows C:\ or UNC \\). */
 function isAbsolutePath(p: string): boolean {
@@ -18,6 +19,8 @@ export function registerSystemHandlers() {
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
   });
+
+  ipcMain.handle("browser.probe", (_event, url: string) => probeBrowserUrl(String(url)));
 
   ipcMain.handle("shell.openExternal", async (_event, url: string) => {
     if (typeof url !== "string") return;

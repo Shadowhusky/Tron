@@ -40,6 +40,14 @@ const KNOWN_EXTS = new Set([
 // quotes without a separate exclusion list.
 const URL_CHARS = "A-Za-z0-9\\-._~:/?#\\[\\]@!$&()*+,;=%";
 const URL_RE = new RegExp(`(?<![A-Za-z0-9+.\\-])(?:https?|ftp|file):\\/\\/[${URL_CHARS}]*`, "gi");
+// Scheme-less web address: "github.com/org/repo", "www.example.com". Only
+// common web TLDs (not .app — macOS bundles), and only with a path or "www."
+// — otherwise "example.com/page.html" fell through to the file-path detector.
+const WEB_TLDS = "com|org|net|io|dev|ai|co|gg|sh|me|xyz|so|tv|us|uk|de|fr|jp|cn|in|ca|au|edu|gov|info|tech|cloud";
+const WEB_RE = new RegExp(
+  `(?<![A-Za-z0-9.\\-_/:@~\\\\])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+(?:${WEB_TLDS}))(?![A-Za-z0-9\\-])(\\/[${URL_CHARS}]*)?`,
+  "gi",
+);
 const LOCAL_ADDR_RE = new RegExp(
   `(?<![A-Za-z0-9.\\-_/:@\\[])(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\]):(\\d{2,5})(?!\\d)((?:\\/[${URL_CHARS}]*)?)`,
   "gi",
@@ -185,6 +193,12 @@ function urlCandidates(text: string): Candidate[] {
     }
     if (!/^[a-z]+:\/\/[^/?#]+/i.test(raw)) continue; // needs a host
     out.push({ match: { start, end, kind: "url", text: raw, url: normalizeLocalHost(raw) }, priority: 1 });
+  }
+  for (const m of text.matchAll(WEB_RE)) {
+    const raw = trimUrlEnd(m[0]);
+    if (!m[2] && !/^www\./i.test(raw)) continue; // a bare "github.com" is prose
+    const start = m.index!;
+    out.push({ match: { start, end: start + raw.length, kind: "url", text: raw, url: `https://${raw}` }, priority: 2 });
   }
   for (const m of text.matchAll(LOCAL_ADDR_RE)) {
     if (Number(m[2]) > 65535) continue;
